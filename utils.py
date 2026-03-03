@@ -72,39 +72,3 @@ def get_stockfish_engine(
     }
     engine.configure(options)
     return engine
-
-
-def get_games_between_dates(conn: duckdb.Connection, start_date: datetime.date, end_date: datetime.date):
-    """Get games between two dates."""
-    return conn.sql(f"""
-        SELECT * FROM games
-        WHERE utc_datetime BETWEEN '{start_date}' AND '{end_date}'
-    """).df()
-
-def get_endgame_positions(conn: duckdb.Connection):
-    """Get endgame positions."""
-    return conn.sql(f"""
-        SELECT * FROM core.moves m
-        JOIN games g ON m.gid = g.gid
-        WHERE length(regexp_replace(m.board_position, '[^a-zA-Z]', '', 'g')) BETWEEN 6 AND 8
-        AND g.initial_clock >= 300
-        AND g.white_elo >= 1500
-        AND g.black_elo >= 1500;
-    """).df()
-
-
-def evaluate_position(board: chess.Board, engine, *, depth: int = 18, time_limit: float | None = None):
-    """
-    Run Stockfish on a position and return the analysis info dict.
-
-    Args:
-        board: Position to analyse.
-        engine: Stockfish engine from get_stockfish_engine().
-        depth: Search depth (plies). Ignored if time_limit is set.
-        time_limit: If set, limit search by time in seconds instead of depth.
-
-    Returns:
-        Engine analysis dict with at least "score" and optionally "pv", "depth", etc.
-    """
-    limit = chess.engine.Limit(time=time_limit) if time_limit else chess.engine.Limit(depth=depth)
-    return engine.analyse(board, limit)
