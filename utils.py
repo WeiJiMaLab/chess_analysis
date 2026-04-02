@@ -12,9 +12,9 @@ import chess.engine
 from IPython.display import SVG, display
 import duckdb
 
-STOCKFISH_SF14_PATH = "/home/hl4291/Stockfish-sf_14/src/stockfish"
-STOCKFISH_SF15_PATH = "/home/hl4291/Stockfish-sf_15/src/stockfish"
-STOCKFISH_SF15_DIR  = "/home/hl4291/Stockfish-sf_15/src"
+STOCKFISH_SF14_PATH = "/scratch/hl4291/Stockfish-sf_14/src/stockfish"
+STOCKFISH_SF15_PATH = "/scratch/hl4291/Stockfish-sf_15/src/stockfish"
+STOCKFISH_SF15_DIR  = "/scratch/hl4291/Stockfish-sf_15/src"
 NNUE_SF15           = "nn-6877cd24400e.nnue"
 
 # Keep old names pointing at SF15 for backward compat
