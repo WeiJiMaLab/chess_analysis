@@ -1,4 +1,3 @@
-#%%
 import pandas as pd
 import chess
 from chess.engine import EngineTerminatedError
@@ -6,213 +5,205 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 from utils import get_db_connection, get_stockfish_engine
+import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+import seaborn as sns
+from joblib import Parallel, delayed
+import os
 
-# --- Database setup ---
-conn = get_db_connection(threads=10)
-start_date = "2023-12-01"
-end_date = "2023-12-02"
-
-db_path = '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db'
-try:
-    conn.execute(f"ATTACH '{db_path}' AS core (READ_ONLY)")
-except Exception as e:
-    print(f"Warning attaching database: {e}")
-
-#%%
-# Sample 1000 random midgame positions from rapid/classical games between strong players.
-# Random ordering via RANDOM() ensures we don't accidentally oversample any particular
-# opening or time period.
-positions = conn.sql(f"""
-    SELECT m.gid, m.board_position, m.move_time, m.move_ply, m.player_white,
-           g.white_elo, g.black_elo, g.initial_clock
-    FROM core.moves m
-    JOIN core.games g ON m.gid = g.gid
-    WHERE g.utc_datetime BETWEEN '{start_date}' AND '{end_date}'
-      AND g.initial_clock >= 300
-      AND m.move_ply BETWEEN 15 AND 75
-      AND m.move_time > 0
-      AND g.white_elo >= 2000
-      AND g.black_elo >= 2000
-    ORDER BY RANDOM()
-    LIMIT 2000
-""").df()
-
-#%%
 SHALLOW_DEPTH = 1   # proxy for "no computation" — what you'd play immediately
-DEEP_DEPTH = 15     # proxy for "full computation" — Russek's deep search depth
-TIME_LIMIT = 10.0   # hard ceiling per analysis call to prevent engine hangs
+DEEP_DEPTH = 15     # proxy for "full computation" — Russek at depth 15
+TIME_LIMIT = 5.0   # hard ceiling per analysis call to prevent engine hangs
 
-engine = get_stockfish_engine()
-engine.configure({"Skill Level": 5}) 
-data = []
-
-for i in tqdm(range(500)):
-    position = positions.iloc[i]
-    board = chess.Board(position.board_position)
-    ply = board.ply()  # needed for WDL calibration — win prob varies with game phase
-
+def score_to_wp(score, board_after):
+    """Convert score to win probability from the original player's perspective.
+    After pushing a move, board_after.turn is the opponent.
+    So original player's turn = not board_after.turn.
+    """
     try:
-        # --- Step 1: Stream depth-1 through depth-15 ---
-        # We collect every move that was ever the best move at any depth.
-        # This gives us the candidate set for re-evaluation.
-        # We also record the depth-1 best move specifically as our "shallow" move.
-        candidate_moves = set()
-        shallow_move = None
+        wdl = score.white().wdl(ply=board_after.ply())
+        wp_white = wdl.wins / 1000.0
+        return wp_white if not board_after.turn == chess.WHITE else 1.0 - wp_white
+    except:
+        return None
 
-        # Clear hash BEFORE streaming so each position starts fresh.
-        # This prevents contamination from previous positions.
+def compute_voc(board, engine, candidate_moves, deep_depth, time_limit):
+    """
+    Compute VOC by evaluating each candidate move's resulting position independently.
+    Matches Russek et al.'s approach: push move, evaluate resulting position at depth-15,
+    negate score to get value from original player's perspective.
+    """
+    scores = {}
+    for move in candidate_moves:
+        # push move to get resulting position
+        board_after = board.copy()
+        board_after.push(move)
+
+        # skip if resulting position is stalemate (score is 0 by definition)
+        if board_after.is_stalemate():
+            scores[move] = 0.5
+            continue
+
+        # clear hash before each candidate — independent evaluation, no interference
         engine.configure({"Clear Hash": True})
-        with engine.analysis(
-            board,
-            chess.engine.Limit(depth=DEEP_DEPTH, time=TIME_LIMIT)
-        ) as analysis:
-            for info in analysis:
-                pv = info.get("pv")
-                if not pv:
-                    continue
-                depth = info.get("depth")
-                candidate_moves.add(pv[0])
-                if depth == SHALLOW_DEPTH:
-                    shallow_move = pv[0]
+        try: info = engine.analyse(board_after, chess.engine.Limit(depth=deep_depth, time=time_limit))
+        except Exception: continue
+        wp = score_to_wp(info["score"], board_after)
+        if wp is not None: scores[move] = wp
+    return scores
 
-        if shallow_move is None or len(candidate_moves) == 0:
-            continue
 
-        # --- Step 2: Re-evaluate all candidates at depth-15 ---
-        # Do NOT clear hash here — we want to reuse the search tree
-        # from Step 1, which already explored these lines.
-        # multipv lets us score all candidates in one pass.
-        infos = engine.analyse(
-            board,
-            chess.engine.Limit(depth=DEEP_DEPTH, time=TIME_LIMIT),
-            multipv=len(candidate_moves),
-            root_moves=list(candidate_moves)
-        )
 
-        # --- Step 3: Convert scores to win probability via WDL ---
-        # wdl(ply=ply) uses Stockfish's built-in calibration which accounts
-        # for game phase — early positions have more uncertain outcomes than
-        # late positions with the same centipawn score.
-        # We always work from the active player's perspective so VOC is
-        # always a gain (never negative by construction).
-        scores = {}
-        for info in infos:
-            pv = info.get("pv")
-            if not pv:
-                continue
-            score = info["score"]
-            # Use active player's perspective so VOC = improvement for the player to move
-            wdl = score.white().wdl(ply=ply) if board.turn == chess.WHITE \
-                  else score.black().wdl(ply=ply)
-            scores[pv[0]] = wdl.wins / 1000.0
+def analyze_position(position):
+    engine = None
+    try:
+        engine = get_stockfish_engine(version=14)
+        board = chess.Board(position.board_position)
+        # 1. Get top 5 moves at depth 1 (consideration set)
+        info_shallow = engine.analyse(board, chess.engine.Limit(depth=SHALLOW_DEPTH), multipv=5)
+        candidate_moves = [entry["pv"][0] for entry in info_shallow]
+        shallow_move = candidate_moves[0]  # The move played at depth 1 (no computation/baseline)
 
-        if shallow_move not in scores or not scores:
-            continue
+        # 2. Evaluate all 5 candidates at depth 15 (deep search)
+        scores = compute_voc(board, engine, candidate_moves, DEEP_DEPTH, TIME_LIMIT)
+        
+        if shallow_move not in scores or len(scores) == 0:
+            return None
 
-        # --- Step 4: Compute VOC ---
-        # v_shallow: how good is the depth-1 move when evaluated deeply?
-        # v_deep: how good is the best move found by deep search?
-        # VOC = the gain from thinking deeper. Should always be >= 0.
-        v_shallow = scores[shallow_move]
-        v_deep = max(scores.values())
-        voc = max(v_deep - v_shallow, 0.0)  # clip tiny negative values from numerical noise
+        # 3. VOC = max(deep evaluation of top 5 depth-1 moves) - deep evaluation of move 1
+        voc = max(scores.values()) - scores[shallow_move]
+        if voc is None:
+            return None
 
-        data.append(pd.Series({
+        return pd.Series({
             "board_position": position.board_position,
             "player_white":   position.player_white,
-            "score_shallow":  v_shallow,
-            "score_deep":     v_deep,
             "voc":            voc,
             "move_time":      position.move_time,
             "elo":            position.white_elo if position.player_white else position.black_elo,
-            "n_candidates":   len(candidate_moves),  # useful diagnostic
-            "ply":            ply
-        }))
+            "n_candidates":   len(candidate_moves),
+            "ply":            board.ply()
+        })
 
     except EngineTerminatedError:
-        print(f"Engine crashed on position {i}: {position.board_position}")
-        try:
-            engine.quit()
-        except Exception:
-            pass
-        engine = get_stockfish_engine()
-
+        print(f"Engine crashed on position {position.board_position}")
+        return None
     except Exception as e:
-        print(f"Skipping position {i}: {e}")
-        continue
+        print(f"Skipping position {position.board_position}: {e}")
+        return None
+    finally:
+        if engine is not None:
+            try:
+                engine.quit()
+            except Exception:
+                pass
 
-engine.quit()
+def analyze_data(df):
+    print(f"\nComputed VOC for {len(df)} positions")
+    print(df[["voc", "move_time", "elo", "n_candidates"]].describe())
 
-df = pd.DataFrame(data)
-print(f"\nComputed VOC for {len(df)} positions")
-print(df[["voc", "move_time", "elo", "n_candidates"]].describe())
+    m_full = smf.ols("move_time ~ voc", data=df).fit()
+    print(f"Full data R²: {m_full.rsquared:.4f}")
+    print(f"VOC coef: {m_full.params['voc']:.4f}, p={m_full.pvalues['voc']:.4f}")
 
-import statsmodels.formula.api as smf
+    m_sqrt = smf.ols("move_time ~ voc_sqrt", data=df).fit()
+    print(f"\nSqrt VOC R²: {m_sqrt.rsquared:.4f}")
+    print(f"VOC_sqrt coef: {m_sqrt.params['voc_sqrt']:.4f}, p={m_sqrt.pvalues['voc_sqrt']:.4f}")
 
-# R-squared on full data
-m_full = smf.ols("move_time ~ voc", data=df).fit()
-print(f"Full data R²: {m_full.rsquared:.4f}")
-print(f"VOC coef: {m_full.params['voc']:.4f}, p={m_full.pvalues['voc']:.4f}")
+    df_nonzero = df[df["voc"] > 0].copy()
+    m_nonzero = smf.ols("move_time ~ voc_sqrt", data=df_nonzero).fit()
+    print(f"\nNonzero only R²: {m_nonzero.rsquared:.4f} (n={len(df_nonzero)})")
+    print(f"VOC_sqrt coef: {m_nonzero.params['voc_sqrt']:.4f}, p={m_nonzero.pvalues['voc_sqrt']:.4f}")
 
-# R-squared with sqrt VOC (Russek's preferred form)
-df["voc_sqrt"] = np.sqrt(df["voc"])
-m_sqrt = smf.ols("move_time ~ voc_sqrt", data=df).fit()
-print(f"\nSqrt VOC R²: {m_sqrt.rsquared:.4f}")
-print(f"VOC_sqrt coef: {m_sqrt.params['voc_sqrt']:.4f}, p={m_sqrt.pvalues['voc_sqrt']:.4f}")
+    print(f"\nDelta AIC (linear - sqrt): {m_full.aic - m_sqrt.aic:.2f}")
 
-# R-squared on nonzero VOC only
-df_nonzero = df[df["voc"] > 0].copy()
-df_nonzero["voc_sqrt"] = np.sqrt(df_nonzero["voc"])
-m_nonzero = smf.ols("move_time ~ voc_sqrt", data=df_nonzero).fit()
-print(f"\nNonzero only R²: {m_nonzero.rsquared:.4f} (n={len(df_nonzero)})")
-print(f"VOC_sqrt coef: {m_nonzero.params['voc_sqrt']:.4f}, p={m_nonzero.pvalues['voc_sqrt']:.4f}")
+    return df
 
-# Delta AIC between linear and sqrt
-print(f"\nDelta AIC (linear - sqrt): {m_full.aic - m_sqrt.aic:.2f}")
+def plot_data(df):
+    sns.set(style="whitegrid")
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
-
-#%% Plot sqrt(VOC) vs Move Time with regression stats
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-sns.set(style="whitegrid")
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-
-# Color scheme
-scatter_color = "blue"
-line_color = "red"
-
-# --- Subplot 1: All positions ---
-sns.scatterplot(x="voc_sqrt", y="move_time", data=df, alpha=0.6, color=scatter_color, ax=axes[0])
-sns.regplot(x="voc_sqrt", y="move_time", data=df, scatter=False, color=line_color, ax=axes[0])
-
-# Regression stats
-r2_full = m_sqrt.rsquared
-coef_full = m_sqrt.params["voc_sqrt"]
-axes[0].text(0.05, 0.95, f"R² = {r2_full:.3f}\nCoef = {coef_full:.3f}", 
-             transform=axes[0].transAxes, fontsize=12, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.7))
-axes[0].set_xlabel("sqrt(VOC)")
-axes[0].set_ylabel("Move time (s)")
-axes[0].set_title("All positions")
-
-# --- Subplot 2: Nonzero VOC only ---
-sns.scatterplot(x="voc_sqrt", y="move_time", data=df_nonzero, alpha=0.6, color=scatter_color, ax=axes[1])
-sns.regplot(x="voc_sqrt", y="move_time", data=df_nonzero, scatter=False, color=line_color, ax=axes[1])
-
-# Regression stats
-r2_nonzero = m_nonzero.rsquared
-coef_nonzero = m_nonzero.params["voc_sqrt"]
-axes[1].text(0.05, 0.95, f"R² = {r2_nonzero:.3f}\nCoef = {coef_nonzero:.3f}", 
-             transform=axes[1].transAxes, fontsize=12, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.7))
-axes[1].set_xlabel("sqrt(VOC)")
-axes[1].set_title("Nonzero VOC only")
-
-plt.suptitle("Move time vs sqrt(VOC) with regression stats", fontsize=16)
-plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.savefig("voc_sqrt_vs_move_time.png", dpi=300)
-plt.close()
-
-print("Plot saved: voc_sqrt_vs_move_time.png")
+    # --- Plot 1: Russek Figure 1b replication — binned mean move time ---
+    df_plot = df.copy()
+    df_plot["voc_bin"] = pd.cut(df_plot["voc"], bins=10)
+    binned = df_plot.groupby("voc_bin")["move_time"].agg(["mean", "count"])
+    axes[0].plot(range(len(binned)), binned["mean"].values, marker="o", color="black")
+    axes[0].set_xlabel("VOC bin (equal-width, low → high)")
+    axes[0].set_ylabel("Mean move time (s)")
+    axes[0].set_title("Russek Fig 1b replication")
+    # annotate bin counts so you can see how sparse the tail is
+    for j, (mean, count) in enumerate(zip(binned["mean"], binned["count"])):
+        if not np.isnan(mean):
+            axes[0].annotate(f"n={int(count)}", (j, mean), textcoords="offset points",
+                            xytext=(0, 6), ha="center", fontsize=7)
 
 
+    # --- Plot 2: All positions scatter ---
+    m_sqrt = smf.ols("move_time ~ voc_sqrt", data=df).fit()
+    sns.scatterplot(x="voc_sqrt", y="move_time", data=df, alpha=0.4, color="blue", ax=axes[1])
+    sns.regplot(x="voc_sqrt", y="move_time", data=df, scatter=False, color="red", ax=axes[1])
+    axes[1].text(0.05, 0.95, f"R² = {m_sqrt.rsquared:.3f}\nCoef = {m_sqrt.params['voc_sqrt']:.3f}",
+                transform=axes[1].transAxes, fontsize=11, verticalalignment='top',
+                bbox=dict(facecolor='white', alpha=0.7))
+    axes[1].set_xlabel("sqrt(VOC)")
+    axes[1].set_ylabel("Move time (s)")
+    axes[1].set_title("All positions")
+
+    # --- Plot 3: Nonzero VOC only ---
+    df_nonzero = df[df["voc"] > 0].copy()
+    m_nonzero = smf.ols("move_time ~ voc_sqrt", data=df_nonzero).fit()
+    sns.scatterplot(x="voc_sqrt", y="move_time", data=df_nonzero, alpha=0.4, color="blue", ax=axes[2])
+    sns.regplot(x="voc_sqrt", y="move_time", data=df_nonzero, scatter=False, color="red", ax=axes[2])
+    axes[2].text(0.05, 0.95, f"R² = {m_nonzero.rsquared:.3f}\nCoef = {m_nonzero.params['voc_sqrt']:.3f}\nn={len(df_nonzero)}",
+                transform=axes[2].transAxes, fontsize=11, verticalalignment='top',
+                bbox=dict(facecolor='white', alpha=0.7))
+    axes[2].set_xlabel("sqrt(VOC)")
+    axes[2].set_title("Nonzero VOC only")
+
+    plt.suptitle(f"VOC replication — SF15, n={len(df)} positions", fontsize=14)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig("voc_sqrt_vs_move_time.png", dpi=300)
+    plt.close()
+    print("Plot saved: voc_sqrt_vs_move_time.png")
+
+
+
+if __name__ == "__main__":
+    POSITIONS_CACHE = "positions_cache.parquet"
+    if os.path.exists(POSITIONS_CACHE):
+        positions = pd.read_parquet(POSITIONS_CACHE)
+    else:
+        conn = get_db_connection(threads=32)
+        start_date = "2022-01-01"
+        end_date = "2022-12-31"
+        db_path = '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db'
+        try:
+            conn.execute(f"ATTACH '{db_path}' AS core (READ_ONLY)")
+        except Exception as e:
+            print(f"Warning attaching database: {e}")
+
+        positions = conn.sql(f"""
+            SELECT m.gid, m.board_position, m.move_time, m.move_ply, m.player_white,
+                g.white_elo, g.black_elo, g.initial_clock
+            FROM core.moves m
+            JOIN core.games g ON m.gid = g.gid
+            WHERE g.utc_datetime BETWEEN '{start_date}' AND '{end_date}'
+            AND g.initial_clock >= 300
+            AND m.move_ply BETWEEN 15 AND 75
+            AND m.move_time > 0
+            AND g.white_elo >= 2000
+            AND g.black_elo >= 2000
+            LIMIT 10000
+        """).df()
+        positions.to_parquet(POSITIONS_CACHE)
+
+    results = Parallel(n_jobs=128, prefer="processes")(
+        delayed(analyze_position)(position) for position in tqdm(positions.itertuples(), total=len(positions))
+    )
+    data = [r for r in results if r is not None]
+    df = pd.DataFrame(data)
+    df.to_csv("voc_results.csv", index=False)
+    
+    df["voc_sqrt"] = np.sqrt(df["voc"])
+    df = analyze_data(df)
+    plot_data(df)

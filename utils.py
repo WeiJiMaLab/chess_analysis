@@ -10,15 +10,58 @@ import chess
 import chess.svg
 import chess.engine
 from IPython.display import SVG, display
-import datetime
 import duckdb
 
-# Default paths (override as needed)
-STOCKFISH_PATH = "/home/hl4291/Stockfish/src/stockfish"
-STOCKFISH_DIR = os.path.dirname(os.path.abspath(STOCKFISH_PATH))
-# NNUE default filenames (must match Stockfish src/evaluate.h; keep .nnue files in STOCKFISH_DIR)
-NNUE_BIG = "nn-5227780996d3.nnue"
-NNUE_SMALL = "nn-37f18f62d772.nnue"
+STOCKFISH_SF14_PATH = "/home/hl4291/Stockfish-sf_14/src/stockfish"
+STOCKFISH_SF15_PATH = "/home/hl4291/Stockfish-sf_15/src/stockfish"
+STOCKFISH_SF15_DIR  = "/home/hl4291/Stockfish-sf_15/src"
+NNUE_SF15           = "nn-6877cd24400e.nnue"
+
+# Keep old names pointing at SF15 for backward compat
+STOCKFISH_PATH = STOCKFISH_SF15_PATH
+STOCKFISH_DIR  = STOCKFISH_SF15_DIR
+
+def get_stockfish_engine(
+    path: str | None = None,
+    *,
+    cwd: str | None = None,
+    threads: int = 1,
+    hash_mb: int = 128,
+    version: int = 14,   # default to SF14 for VOC work
+):
+    """
+    Spawn a Stockfish UCI engine process. Caller must call engine.quit() when done.
+
+    version=14: bundled NNUE, no EvalFile needed, better VOC variance at shallow depths
+    version=15: external NNUE required, hybrid classical+NNUE eval
+    """
+    if path is not None:
+        engine_path = path
+        work_dir = cwd or os.path.dirname(path)
+        nnue_path = None
+    elif version == 14:
+        engine_path = STOCKFISH_SF14_PATH
+        work_dir = os.path.dirname(STOCKFISH_SF14_PATH)
+        nnue_path = None  # bundled
+    elif version == 15:
+        engine_path = STOCKFISH_SF15_PATH
+        work_dir = cwd or STOCKFISH_SF15_DIR
+        nnue_path = os.path.join(work_dir, NNUE_SF15)
+    else:
+        raise ValueError(f"Unsupported version: {version}")
+
+    if not os.path.exists(engine_path):
+        raise FileNotFoundError(f"Stockfish binary not found at {engine_path}")
+    if nnue_path and not os.path.exists(nnue_path):
+        raise FileNotFoundError(f"NNUE file not found at {nnue_path}")
+
+    engine = chess.engine.SimpleEngine.popen_uci(engine_path, cwd=work_dir)
+    options = {"Threads": threads, "Hash": hash_mb}
+    if nnue_path:
+        options["EvalFile"] = nnue_path
+    engine.configure(options)
+    return engine
+
 
 def display_fen(fen: str, size: int = 200) -> None:
     """Render a FEN position as an SVG and display it in the notebook."""
@@ -27,16 +70,18 @@ def display_fen(fen: str, size: int = 200) -> None:
 
 
 def get_db_connection(
-    database: str = "personal.db",
+    database: str = ":memory:",  # default to in-memory to avoid personal.db/WAL clutter
     *,
     threads: int = 10,
     memory_limit: str = "20GB",
     temp_directory: str = ".",
     **kwargs,
 ):
-    """Create a DuckDB connection with default config for analysis."""
-    import duckdb
-
+    """Create a DuckDB connection with sensible defaults for analysis.
+    
+    Uses in-memory database by default — no persistent files created.
+    Pass database='personal.db' explicitly if you need persistence.
+    """
     config = {
         "threads": threads,
         "memory_limit": memory_limit,
@@ -44,31 +89,26 @@ def get_db_connection(
         **kwargs,
     }
     return duckdb.connect(database=database, config=config)
-
-
-def get_stockfish_engine(
-    path: str | None = None,
-    *,
-    cwd: str | None = None,
-    threads: int = 1,
-    hash_mb: int = 128,
-):
     """
-    Spawn a Stockfish UCI engine process. Caller must call engine.quit() when done.
+    Spawn a Stockfish 15 UCI engine process. Caller must call engine.quit() when done.
 
-    Uses explicit EvalFile paths and single-thread / modest hash to reduce
-    EngineTerminatedError (segfault) when running many positions.
+    SF15 uses a single NNUE network (no small net) with hybrid classical+NNUE eval,
+    which gives more VOC variance at shallow depths than SF17+.
+    Single-thread / modest hash reduces EngineTerminatedError (segfault) risk.
     """
     engine_path = path or STOCKFISH_PATH
     work_dir = cwd or STOCKFISH_DIR
-    big_path = os.path.join(work_dir, NNUE_BIG)
-    small_path = os.path.join(work_dir, NNUE_SMALL)
+    nnue_path = os.path.join(work_dir, NNUE_BIG)
+
+    if not os.path.exists(engine_path):
+        raise FileNotFoundError(f"Stockfish binary not found at {engine_path}")
+    if not os.path.exists(nnue_path):
+        raise FileNotFoundError(f"NNUE file not found at {nnue_path}")
+
     engine = chess.engine.SimpleEngine.popen_uci(engine_path, cwd=work_dir)
-    options = {
+    engine.configure({
         "Threads": threads,
         "Hash": hash_mb,
-        "EvalFile": big_path,
-        "EvalFileSmall": small_path,
-    }
-    engine.configure(options)
+        "EvalFile": nnue_path,
+    })
     return engine
