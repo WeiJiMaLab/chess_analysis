@@ -79,19 +79,19 @@ The vector $x_v$ includes Value $V$, Policy $P$, $Q$-values, and visit counts.
 **Bottom-up** (from children):
 
 $$
-m_{\mathrm{up}} = \mathrm{Attention}\!\left(h_v,\, \{h_u\}_{u \in \mathrm{children}(v)}\right)
+m_{\mathrm{up}} = \mathrm{Attention}\left(h_v,\, \{h_u\}_{u \in \mathrm{children}(v)}\right)
 $$
 
 **Top-down** (from parent):
 
 $$
-m_{\mathrm{down}} = \mathrm{MLP}_{\mathrm{down}}\!\left(h_{\mathrm{parent}(v)}\right)
+m_{\mathrm{down}} = \mathrm{MLP}_{\mathrm{down}}\left(h_{\mathrm{parent}(v)}\right)
 $$
 
 #### 3. Unified update
 
 $$
-h_v^{(t+1)} = \mathrm{GRU}\!\left(h_v^{(t)},\, \left[m_{v \leftarrow \mathrm{children}},\, m_{v \leftarrow \mathrm{parent}}\right]\right)
+h_v^{(t+1)} = \mathrm{GRU}\left(h_v^{(t)},\, \left[m_{v \leftarrow \mathrm{children}},\, m_{v \leftarrow \mathrm{parent}}\right]\right)
 $$
 
 *This ties together subtree structure (children) and global context (parent) in one recurrent step.*
