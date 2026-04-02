@@ -160,7 +160,7 @@ def plot_data(df):
     axes[2].set_xlabel("sqrt(VOC)")
     axes[2].set_title("Nonzero VOC only")
 
-    plt.suptitle(f"VOC replication — SF15, n={len(df)} positions", fontsize=14)
+    plt.suptitle(f"VOC replication — SF14, n={len(df)} positions", fontsize=14)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig("voc_sqrt_vs_move_time.png", dpi=300)
     plt.close()
