@@ -431,6 +431,33 @@ Conclusion:
 - It was worse than the frozen baseline on validation return, terminal quality, and search efficiency.
 - Like the frozen run, the best validation point still appeared very early and then deteriorated.
 
+## 2026-04-06
+
+### Real-data trivial control: `oracle_action_now`
+
+Intent:
+- Remove representation ambiguity on the real episode distribution by feeding the controller only the current offline oracle halt/continue action.
+
+Meaningful change:
+- Extended:
+  - `scripts/controller_representation_control.py`
+- Added regression coverage in:
+  - `test_controller_representation_control.py`
+
+What changed:
+- New representation mode:
+  - `oracle-action-now`
+- Each observation is now a 2d one-hot:
+  - `[1, 0]` for continue
+  - `[0, 1]` for halt
+- This representation intentionally hides phase and episode identity, so it is a stricter real-data control than `oracle-stop-step`.
+
+Validation:
+- Targeted unit tests passed for the new observation encoding and env behavior.
+
+Purpose:
+- If PPO succeeds with `oracle-action-now` on real data, the remaining bottleneck is much more likely to be representation/state construction than the RL machinery itself.
+
 ## Going forward
 
 Any future entry should include:

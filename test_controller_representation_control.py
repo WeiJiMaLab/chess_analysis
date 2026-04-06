@@ -44,10 +44,26 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         self.assertEqual(len(vector), 7)
         self.assertEqual(list(vector), [0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
 
+    def test_oracle_action_now_observation_tree_encodes_only_action_one_hot(self):
+        tree = _make_observation_tree(
+            step_index=3,
+            label_index=7,
+            max_steps=5,
+            num_labels=11,
+            representation="oracle-action-now",
+            oracle_action=1,
+        )
+        root = tree.get_node(tree.root_id)
+        schema = _build_schema(max_steps=1, num_labels=2, representation="oracle-action-now")
+        vector = schema.vectorize(root.scalar_features)
+        self.assertEqual(len(vector), 2)
+        self.assertEqual(list(vector), [0.0, 1.0])
+        self.assertEqual(set(root.scalar_features.keys()), {"action_0", "action_1"})
+
     def test_evaluate_controller_reuses_env_across_deterministic_episode_sequence(self):
         episodes = [
-            ControlEpisode(example_path="a", halt_rewards=[1.0], oracle_stop_step=0, label_index=0),
-            ControlEpisode(example_path="b", halt_rewards=[3.0], oracle_stop_step=0, label_index=1),
+            ControlEpisode(example_path="a", halt_rewards=[1.0], oracle_stop_step=0, label_index=0, oracle_actions=[1]),
+            ControlEpisode(example_path="b", halt_rewards=[3.0], oracle_stop_step=0, label_index=1, oracle_actions=[1]),
         ]
         schema = _build_schema(max_steps=1, num_labels=2)
         tensorizer = TreeTensorizer(schema, device="cpu")
@@ -69,8 +85,8 @@ class ControllerRepresentationControlTests(unittest.TestCase):
 
     def test_evaluate_oracle_agreement_reports_exact_matches(self):
         episodes = [
-            ControlEpisode(example_path="a", halt_rewards=[1.0], oracle_stop_step=0, label_index=0),
-            ControlEpisode(example_path="b", halt_rewards=[2.0], oracle_stop_step=0, label_index=1),
+            ControlEpisode(example_path="a", halt_rewards=[1.0], oracle_stop_step=0, label_index=0, oracle_actions=[1]),
+            ControlEpisode(example_path="b", halt_rewards=[2.0], oracle_stop_step=0, label_index=1, oracle_actions=[1]),
         ]
         schema = _build_schema(max_steps=1, num_labels=2)
         tensorizer = TreeTensorizer(schema, device="cpu")
@@ -87,6 +103,32 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         self.assertAlmostEqual(metrics.exact_stop_step_accuracy, 1.0)
         self.assertAlmostEqual(metrics.first_action_accuracy, 1.0)
         self.assertEqual(metrics.confusion_matrix, {0: {0: 2}})
+
+    def test_oracle_action_now_env_observation_tracks_current_oracle_action_only(self):
+        episode = ControlEpisode(
+            example_path="a",
+            halt_rewards=[-0.1, 0.3],
+            oracle_stop_step=1,
+            label_index=0,
+            oracle_actions=[0, 1],
+        )
+        env = RepresentationControlEnv(
+            [episode],
+            continue_cost=0.05,
+            max_steps=1,
+            num_labels=2,
+            representation="oracle-action-now",
+            seed=0,
+            shuffle=False,
+        )
+
+        first_tree = env.reset()
+        first_root = first_tree.get_node(first_tree.root_id)
+        self.assertEqual(first_root.scalar_features, {"action_0": 1.0, "action_1": 0.0})
+
+        step_result = env.step(0)
+        second_root = step_result.next_tree.get_node(step_result.next_tree.root_id)
+        self.assertEqual(second_root.scalar_features, {"action_0": 0.0, "action_1": 1.0})
 
 
 if __name__ == "__main__":

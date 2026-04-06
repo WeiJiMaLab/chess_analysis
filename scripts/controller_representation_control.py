@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 import torch
 import torch.nn as nn
 
+from controller_oracle import compute_oracle_policy as _compute_oracle_policy
 from controller_oracle import optimal_stop_step as _optimal_stop_step
 from GNN import PolicyValueTreeSearchModel, TreeEncoderOutput
 from schema import NodeFeatureSchema
@@ -38,6 +39,7 @@ class ControlEpisode:
     halt_rewards: List[float]
     oracle_stop_step: int
     label_index: int
+    oracle_actions: List[int]
 
 
 @dataclass(frozen=True)
@@ -57,11 +59,13 @@ class RolloutCoverageMetrics:
 
 def _episode_summary_line(episode: ControlEpisode) -> str:
     halt_rewards = ",".join(f"{reward:.6f}" for reward in episode.halt_rewards)
+    oracle_actions = ",".join(str(action) for action in episode.oracle_actions)
     return (
         f"path={episode.example_path} "
         f"oracle_stop_step={episode.oracle_stop_step} "
         f"label_index={episode.label_index} "
-        f"halt_rewards=[{halt_rewards}]"
+        f"halt_rewards=[{halt_rewards}] "
+        f"oracle_actions=[{oracle_actions}]"
     )
 
 
@@ -71,6 +75,7 @@ def _episode_summary_dict(episode: ControlEpisode) -> Dict[str, object]:
         "oracle_stop_step": episode.oracle_stop_step,
         "label_index": episode.label_index,
         "halt_rewards": list(episode.halt_rewards),
+        "oracle_actions": list(episode.oracle_actions),
     }
 
 
@@ -135,9 +140,12 @@ def _load_control_episodes(
         except ValueError:
             continue
         halt_rewards = [reward_scale * reward for reward in halt_rewards]
-        oracle_stop = _optimal_stop_step(halt_rewards, continue_cost)
+        oracle_policy = _compute_oracle_policy(halt_rewards, continue_cost)
+        oracle_stop = oracle_policy.optimal_stop_step
         if representation == "oracle-stop-step":
             label_index = oracle_stop
+        elif representation == "oracle-action-now":
+            label_index = 0
         elif representation == "example-id":
             label_index = len(episodes)
         else:
@@ -148,6 +156,7 @@ def _load_control_episodes(
                 halt_rewards=halt_rewards,
                 oracle_stop_step=oracle_stop,
                 label_index=label_index,
+                oracle_actions=list(oracle_policy.actions),
             )
         )
     if not episodes:
@@ -167,27 +176,53 @@ def _load_control_episodes(
     return episodes
 
 
-def _feature_names(max_steps: int, num_labels: int) -> List[str]:
+def _feature_names(representation: str, max_steps: int, num_labels: int) -> List[str]:
+    if representation == "oracle-action-now":
+        return ["action_0", "action_1"]
     return [f"phase_{idx}" for idx in range(max_steps)] + [f"label_{idx}" for idx in range(num_labels)]
 
 
-def _build_schema(max_steps: int, num_labels: int) -> NodeFeatureSchema:
-    feature_names = _feature_names(max_steps, num_labels)
+def _build_schema(
+    max_steps: int,
+    num_labels: int,
+    representation: str = "oracle-stop-step",
+) -> NodeFeatureSchema:
+    feature_names = _feature_names(representation, max_steps, num_labels)
     return NodeFeatureSchema.from_ordered_features(feature_names, defaults={name: 0.0 for name in feature_names})
 
 
-def _make_observation_tree(step_index: int, label_index: int, max_steps: int, num_labels: int) -> SearchTree:
+def _make_observation_tree(
+    step_index: int,
+    label_index: int,
+    max_steps: int,
+    num_labels: int,
+    representation: str = "oracle-stop-step",
+    oracle_action: int | None = None,
+) -> SearchTree:
     features: Dict[str, float] = {}
-    for idx in range(max_steps):
-        features[f"phase_{idx}"] = 1.0 if idx == step_index else 0.0
-    for idx in range(num_labels):
-        features[f"label_{idx}"] = 1.0 if idx == label_index else 0.0
+    if representation == "oracle-action-now":
+        if oracle_action not in (0, 1):
+            raise ValueError("oracle_action_now representation requires oracle_action in {0,1}.")
+        features["action_0"] = 1.0 if oracle_action == 0 else 0.0
+        features["action_1"] = 1.0 if oracle_action == 1 else 0.0
+    else:
+        for idx in range(max_steps):
+            features[f"phase_{idx}"] = 1.0 if idx == step_index else 0.0
+        for idx in range(num_labels):
+            features[f"label_{idx}"] = 1.0 if idx == label_index else 0.0
     tree = SearchTree()
     tree.create_root("control-root", features)
     return tree
 
 
-def _decode_observation_tree(tree: SearchTree, max_steps: int, num_labels: int) -> Tuple[int, int]:
+def _decode_observation_tree(
+    tree: SearchTree,
+    max_steps: int,
+    num_labels: int,
+    representation: str = "oracle-stop-step",
+) -> Tuple[int, int]:
+    if representation == "oracle-action-now":
+        raise ValueError("oracle-action-now observations do not encode phase/label indices.")
     root = tree.get_node(tree.root_id)
     phase_index = 0
     label_index = 0
@@ -209,6 +244,7 @@ class RepresentationControlEnv(ControllerOnlyEnv):
         continue_cost: float,
         max_steps: int,
         num_labels: int,
+        representation: str = "oracle-stop-step",
         seed: int = 0,
         shuffle: bool = True,
     ) -> None:
@@ -218,6 +254,7 @@ class RepresentationControlEnv(ControllerOnlyEnv):
         self.continue_cost = float(continue_cost)
         self.max_steps = max_steps
         self.num_labels = num_labels
+        self.representation = representation
         self.shuffle = shuffle
         self._rng = random.Random(seed)
         self._episode_index = -1
@@ -234,6 +271,8 @@ class RepresentationControlEnv(ControllerOnlyEnv):
             label_index=self._current.label_index,
             max_steps=self.max_steps,
             num_labels=self.num_labels,
+            representation=self.representation,
+            oracle_action=self._current.oracle_actions[self._step_index] if self.representation == "oracle-action-now" else None,
         )
 
     def reset(self) -> SearchTree:
@@ -351,7 +390,10 @@ def _collect_rollout_coverage(
     episodes: Sequence[ControlEpisode],
     max_steps: int,
     num_labels: int,
+    representation: str,
 ) -> RolloutCoverageMetrics:
+    if representation == "oracle-action-now":
+        raise ValueError("Rollout coverage is not available for oracle-action-now because phase and episode labels are intentionally hidden.")
     label_to_oracle_step = {episode.label_index: episode.oracle_stop_step for episode in episodes}
     transitions_by_oracle_step: Dict[int, int] = {}
     transitions_by_phase: Dict[int, int] = {}
@@ -364,6 +406,7 @@ def _collect_rollout_coverage(
             transition.observation,
             max_steps=max_steps,
             num_labels=num_labels,
+            representation=representation,
         )
         oracle_stop_step = label_to_oracle_step[label_index]
         transitions_by_oracle_step[oracle_stop_step] = transitions_by_oracle_step.get(oracle_stop_step, 0) + 1
@@ -386,7 +429,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Control diagnostic: train the production PPO path on intentionally trivial representations."
     )
     parser.add_argument("--data", required=True)
-    parser.add_argument("--representation", choices=["oracle-stop-step", "example-id"], required=True)
+    parser.add_argument("--representation", choices=["oracle-stop-step", "oracle-action-now", "example-id"], required=True)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--continue-cost", type=float, default=0.001)
     parser.add_argument("--reward-scale", type=float, default=1.0)
@@ -470,7 +513,10 @@ def main() -> None:
 
         trace_callback = _trace
 
-    schema = _build_schema(max_steps=max_steps, num_labels=num_labels)
+    if args.representation == "oracle-action-now":
+        num_labels = 2
+        max_steps = 1
+    schema = _build_schema(max_steps=max_steps, num_labels=num_labels, representation=args.representation)
     tensorizer = TreeTensorizer(schema, device=args.device)
     encoder = FixedFeatureEncoder(node_feat=len(schema.feature_names), device=args.device)
     model = PolicyValueTreeSearchModel(
@@ -492,6 +538,7 @@ def main() -> None:
             args.continue_cost,
             max_steps=max_steps,
             num_labels=num_labels,
+            representation=args.representation,
             seed=args.seed + env_index,
             shuffle=True,
         )
@@ -533,21 +580,30 @@ def main() -> None:
     if args.inspect_only:
         return
 
-    coverage = _collect_rollout_coverage(trainer, episodes, max_steps=max_steps, num_labels=num_labels)
-    print(f"rollout_transitions_by_oracle_step={coverage.transitions_by_oracle_step}")
-    print(f"rollout_transitions_by_phase={coverage.transitions_by_phase}")
-    print(f"rollout_actions_by_phase={coverage.actions_by_phase}")
-    print(f"rollout_phase_by_oracle_step={coverage.phase_by_oracle_step}")
-    if trace_callback is not None:
-        trace_callback(
-            "rollout_coverage",
-            {
-                "transitions_by_oracle_step": coverage.transitions_by_oracle_step,
-                "transitions_by_phase": coverage.transitions_by_phase,
-                "actions_by_phase": coverage.actions_by_phase,
-                "phase_by_oracle_step": coverage.phase_by_oracle_step,
-            },
+    if args.representation != "oracle-action-now":
+        coverage = _collect_rollout_coverage(
+            trainer,
+            episodes,
+            max_steps=max_steps,
+            num_labels=num_labels,
+            representation=args.representation,
         )
+        print(f"rollout_transitions_by_oracle_step={coverage.transitions_by_oracle_step}")
+        print(f"rollout_transitions_by_phase={coverage.transitions_by_phase}")
+        print(f"rollout_actions_by_phase={coverage.actions_by_phase}")
+        print(f"rollout_phase_by_oracle_step={coverage.phase_by_oracle_step}")
+        if trace_callback is not None:
+            trace_callback(
+                "rollout_coverage",
+                {
+                    "transitions_by_oracle_step": coverage.transitions_by_oracle_step,
+                    "transitions_by_phase": coverage.transitions_by_phase,
+                    "actions_by_phase": coverage.actions_by_phase,
+                    "phase_by_oracle_step": coverage.phase_by_oracle_step,
+                },
+            )
+    else:
+        print("rollout_coverage=unavailable_for_oracle_action_now")
 
     for update_idx in range(1, args.num_updates + 1):
         trace_state["update_index"] = update_idx
@@ -570,6 +626,7 @@ def main() -> None:
             args.continue_cost,
             max_steps=max_steps,
             num_labels=num_labels,
+            representation=args.representation,
             seed=args.seed,
             shuffle=False,
         )
