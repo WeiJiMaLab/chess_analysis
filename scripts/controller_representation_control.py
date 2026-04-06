@@ -18,7 +18,7 @@ import torch.nn as nn
 from controller_oracle import compute_oracle_policy as _compute_oracle_policy
 from controller_oracle import has_strong_optimal_margins as _has_strong_optimal_margins
 from controller_oracle import optimal_stop_step as _optimal_stop_step
-from GNN import PolicyValueTreeSearchModel, TreeEncoderOutput
+from GNN import PolicyValueOutput, TreeEncoderOutput
 from schema import NodeFeatureSchema
 from supervised_branch import (
     ControllerOnlyEnv,
@@ -102,6 +102,41 @@ class FixedFeatureEncoder(nn.Module):
         node_states = tree_batch.node_features.to(self.device)
         root_states = node_states[tree_batch.root_index.to(self.device)]
         return TreeEncoderOutput(node_states=node_states, root_states=root_states)
+
+
+class LinearPolicyValueControlModel(nn.Module):
+    def __init__(self, node_feat: int, device: str) -> None:
+        super().__init__()
+        resolved_device = torch.device(device)
+        self.encoder = FixedFeatureEncoder(node_feat=node_feat, device=device)
+        self.halt_controller = nn.Linear(node_feat, 1, device=resolved_device)
+        self.value_head = nn.Linear(node_feat, 1, device=resolved_device)
+
+    def freeze_encoder(self) -> None:
+        for parameter in self.encoder.parameters():
+            parameter.requires_grad = False
+
+    def forward(self, tree_batch) -> PolicyValueOutput:
+        encoded = self.encoder(tree_batch)
+        halt_logits = self.halt_controller(encoded.root_states).squeeze(-1)
+        halt_prob = torch.sigmoid(halt_logits)
+        state_value = self.value_head(encoded.root_states).squeeze(-1)
+        return PolicyValueOutput(
+            node_states=encoded.node_states,
+            root_states=encoded.root_states,
+            halt_logits=halt_logits,
+            halt_prob=halt_prob,
+            state_value=state_value,
+        )
+
+
+def _linear_layer_summary(layer: nn.Linear) -> Tuple[List[float], float]:
+    if layer.out_features != 1:
+        raise ValueError("Expected a scalar linear readout.")
+    weight = layer.weight.detach().cpu().squeeze(0).tolist()
+    bias = float(layer.bias.detach().cpu().squeeze(0).item()) if layer.bias is not None else 0.0
+    return [float(item) for item in weight], bias
+
 
 def _teacher_config(args: argparse.Namespace) -> TeacherSearchConfig:
     return TeacherSearchConfig(
@@ -355,7 +390,7 @@ class RepresentationControlEnv(ControllerOnlyEnv):
 
 
 def _predict_stop_step(
-    model: PolicyValueTreeSearchModel,
+    model: nn.Module,
     tensorizer: TreeTensorizer,
     env: RepresentationControlEnv,
 ) -> int:
@@ -376,7 +411,7 @@ def _predict_stop_step(
 
 
 def evaluate_oracle_agreement(
-    model: PolicyValueTreeSearchModel,
+    model: nn.Module,
     tensorizer: TreeTensorizer,
     episodes: Sequence[ControlEpisode],
     continue_cost: float,
@@ -554,19 +589,9 @@ def main() -> None:
         max_steps = 1
     schema = _build_schema(max_steps=max_steps, num_labels=num_labels, representation=args.representation)
     tensorizer = TreeTensorizer(schema, device=args.device)
-    encoder = FixedFeatureEncoder(node_feat=len(schema.feature_names), device=args.device)
-    model = PolicyValueTreeSearchModel(
-        k=2,
+    model = LinearPolicyValueControlModel(
         node_feat=len(schema.feature_names),
         device=args.device,
-        node_embed_hidden=64,
-        d_embed=len(schema.feature_names),
-        d_message=len(schema.feature_names),
-        n_heads=4,
-        d_att=16,
-        controller_hidden=64,
-        value_hidden=64,
-        encoder=encoder,
     )
     envs = [
         RepresentationControlEnv(
@@ -703,6 +728,15 @@ def main() -> None:
             for predicted_step in sorted(row)
         )
         print(f"  oracle_{oracle_step}: {formatted}")
+
+    if len(schema.feature_names) <= 32:
+        halt_weight, halt_bias = _linear_layer_summary(model.halt_controller)
+        value_weight, value_bias = _linear_layer_summary(model.value_head)
+        print(f"feature_names={schema.feature_names}")
+        print(f"halt_readout_weight={[round(value, 6) for value in halt_weight]}")
+        print(f"halt_readout_bias={halt_bias:.6f}")
+        print(f"value_readout_weight={[round(value, 6) for value in value_weight]}")
+        print(f"value_readout_bias={value_bias:.6f}")
 
 
 if __name__ == "__main__":

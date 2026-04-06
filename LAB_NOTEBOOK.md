@@ -467,6 +467,12 @@ Additional change:
 - Added `--min-decision-margin` to the control script.
 - This allows real-data control runs to filter episodes to only those with strong optimal-action margins under the current objective.
 
+Follow-up change:
+- Replaced the control diagnostic policy/value heads with linear readouts on top of the fixed-feature encoder.
+- This makes `oracle-action-now` directly interpretable:
+  - halt logit = `w_continue * action_0 + w_halt * action_1 + b`
+- The control script now prints the learned halt/value readout weights for small feature sets.
+
 ## Going forward
 
 Any future entry should include:

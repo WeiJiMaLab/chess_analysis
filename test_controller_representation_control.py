@@ -5,6 +5,7 @@ import torch
 
 from scripts.controller_representation_control import (
     ControlEpisode,
+    LinearPolicyValueControlModel,
     RepresentationControlEnv,
     _build_schema,
     _make_observation_tree,
@@ -75,6 +76,12 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         self.assertEqual(len(vector), 2)
         self.assertEqual(list(vector), [0.0, 1.0])
         self.assertEqual(set(root.scalar_features.keys()), {"action_0", "action_1"})
+
+    def test_control_model_uses_linear_halt_readout(self):
+        model = LinearPolicyValueControlModel(node_feat=2, device="cpu")
+        self.assertIsInstance(model.halt_controller, torch.nn.Linear)
+        self.assertEqual(tuple(model.halt_controller.weight.shape), (1, 2))
+        self.assertEqual(tuple(model.value_head.weight.shape), (1, 2))
 
     def test_evaluate_controller_reuses_env_across_deterministic_episode_sequence(self):
         episodes = [
