@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 
 from controller_oracle import compute_oracle_policy as _compute_oracle_policy
+from controller_oracle import has_strong_optimal_margins as _has_strong_optimal_margins
 from controller_oracle import optimal_stop_step as _optimal_stop_step
 from GNN import PolicyValueTreeSearchModel, TreeEncoderOutput
 from schema import NodeFeatureSchema
@@ -122,7 +123,9 @@ def _load_control_episodes(
     quality_config: TeacherSearchConfig,
     max_examples: int,
     episodes_per_stop_step: int,
+    min_decision_margin: float,
     seed: int,
+    log_interval: int,
 ) -> List[ControlEpisode]:
     paths = load_raw_pretrain_example_paths(data)
     rng = random.Random(seed)
@@ -130,6 +133,7 @@ def _load_control_episodes(
         paths = rng.sample(paths, max_examples)
 
     episodes: List[ControlEpisode] = []
+    skipped = 0
     for example_index, path in enumerate(paths):
         example = torch.load(path, weights_only=False)
         try:
@@ -138,8 +142,28 @@ def _load_control_episodes(
                 quality_config,
             )
         except ValueError:
+            skipped += 1
+            if (example_index + 1) % log_interval == 0 or example_index + 1 == len(paths):
+                print(
+                    f"loading_examples={example_index + 1}/{len(paths)} "
+                    f"accepted={len(episodes)} skipped={skipped}",
+                    flush=True,
+                )
             continue
         halt_rewards = [reward_scale * reward for reward in halt_rewards]
+        if not _has_strong_optimal_margins(
+            halt_rewards,
+            continue_cost=continue_cost,
+            min_decision_margin=min_decision_margin,
+        ):
+            skipped += 1
+            if (example_index + 1) % log_interval == 0 or example_index + 1 == len(paths):
+                print(
+                    f"loading_examples={example_index + 1}/{len(paths)} "
+                    f"accepted={len(episodes)} skipped={skipped}",
+                    flush=True,
+                )
+            continue
         oracle_policy = _compute_oracle_policy(halt_rewards, continue_cost)
         oracle_stop = oracle_policy.optimal_stop_step
         if representation == "oracle-stop-step":
@@ -159,6 +183,12 @@ def _load_control_episodes(
                 oracle_actions=list(oracle_policy.actions),
             )
         )
+        if (example_index + 1) % log_interval == 0 or example_index + 1 == len(paths):
+            print(
+                f"loading_examples={example_index + 1}/{len(paths)} "
+                f"accepted={len(episodes)} skipped={skipped}",
+                flush=True,
+            )
     if not episodes:
         raise ValueError("No usable control episodes were produced.")
     if episodes_per_stop_step > 0:
@@ -352,6 +382,7 @@ def evaluate_oracle_agreement(
     continue_cost: float,
     max_steps: int,
     num_labels: int,
+    representation: str,
 ) -> OracleAgreementMetrics:
     model.eval()
     exact_matches = 0
@@ -365,6 +396,7 @@ def evaluate_oracle_agreement(
                 continue_cost=continue_cost,
                 max_steps=max_steps,
                 num_labels=num_labels,
+                representation=representation,
                 seed=index,
                 shuffle=False,
             )
@@ -439,6 +471,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-examples", type=int, default=0)
     parser.add_argument("--episodes-per-stop-step", type=int, default=0)
+    parser.add_argument("--min-decision-margin", type=float, default=0.0)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--rollout-steps", type=int, default=256)
     parser.add_argument("--num-updates", type=int, default=200)
@@ -464,7 +497,9 @@ def main() -> None:
         quality_config=quality_config,
         max_examples=args.max_examples,
         episodes_per_stop_step=args.episodes_per_stop_step,
+        min_decision_margin=args.min_decision_margin,
         seed=args.seed,
+        log_interval=args.log_interval,
     )
     max_steps = max(len(episode.halt_rewards) for episode in episodes)
     num_labels = max(episode.label_index for episode in episodes) + 1
@@ -483,6 +518,7 @@ def main() -> None:
                     "reward_scale": args.reward_scale,
                     "max_examples": args.max_examples,
                     "episodes_per_stop_step": args.episodes_per_stop_step,
+                    "min_decision_margin": args.min_decision_margin,
                     "seed": args.seed,
                     "num_envs": args.num_envs,
                     "rollout_steps": args.rollout_steps,
@@ -565,6 +601,7 @@ def main() -> None:
     print(f"episodes={len(episodes)}")
     print(f"continue_cost={args.continue_cost:.6f}")
     print(f"reward_scale={args.reward_scale:.6f}")
+    print(f"min_decision_margin={args.min_decision_margin:.6f}")
     print(f"max_steps={max_steps}")
     print(f"num_labels={num_labels}")
     print(f"oracle_stop_histogram={oracle_histogram}")
@@ -654,6 +691,7 @@ def main() -> None:
         continue_cost=args.continue_cost,
         max_steps=max_steps,
         num_labels=num_labels,
+        representation=args.representation,
     )
     print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.6f}")
     print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.6f}")

@@ -30,6 +30,22 @@ class _AlwaysHaltModel:
         )
 
 
+class _OracleActionModel:
+    def __init__(self) -> None:
+        self.encoder = SimpleNamespace(device=torch.device("cpu"))
+
+    def eval(self):
+        return self
+
+    def __call__(self, tree_batch):
+        root_features = tree_batch.node_features[tree_batch.root_index]
+        halt_logits = 10.0 * (root_features[:, 1] - root_features[:, 0])
+        return SimpleNamespace(
+            halt_logits=halt_logits,
+            state_value=torch.zeros_like(halt_logits),
+        )
+
+
 class ControllerRepresentationControlTests(unittest.TestCase):
     def test_optimal_stop_step_matches_simple_cases(self):
         self.assertEqual(_optimal_stop_step([0.5, 0.4, 0.3], 0.05), 0)
@@ -99,6 +115,7 @@ class ControllerRepresentationControlTests(unittest.TestCase):
             continue_cost=0.1,
             max_steps=1,
             num_labels=2,
+            representation="oracle-stop-step",
         )
         self.assertAlmostEqual(metrics.exact_stop_step_accuracy, 1.0)
         self.assertAlmostEqual(metrics.first_action_accuracy, 1.0)
@@ -129,6 +146,40 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         step_result = env.step(0)
         second_root = step_result.next_tree.get_node(step_result.next_tree.root_id)
         self.assertEqual(second_root.scalar_features, {"action_0": 0.0, "action_1": 1.0})
+
+    def test_evaluate_oracle_agreement_uses_oracle_action_now_representation(self):
+        episodes = [
+            ControlEpisode(
+                example_path="a",
+                halt_rewards=[-0.1, 0.3],
+                oracle_stop_step=1,
+                label_index=0,
+                oracle_actions=[0, 1],
+            ),
+            ControlEpisode(
+                example_path="b",
+                halt_rewards=[0.2],
+                oracle_stop_step=0,
+                label_index=0,
+                oracle_actions=[1],
+            ),
+        ]
+        schema = _build_schema(max_steps=1, num_labels=2, representation="oracle-action-now")
+        tensorizer = TreeTensorizer(schema, device="cpu")
+        model = _OracleActionModel()
+
+        metrics = evaluate_oracle_agreement(
+            model,
+            tensorizer,
+            episodes,
+            continue_cost=0.05,
+            max_steps=1,
+            num_labels=2,
+            representation="oracle-action-now",
+        )
+        self.assertAlmostEqual(metrics.exact_stop_step_accuracy, 1.0)
+        self.assertAlmostEqual(metrics.first_action_accuracy, 1.0)
+        self.assertEqual(metrics.confusion_matrix, {0: {0: 1}, 1: {1: 1}})
 
 
 if __name__ == "__main__":

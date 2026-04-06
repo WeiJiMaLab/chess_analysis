@@ -458,6 +458,15 @@ Validation:
 Purpose:
 - If PPO succeeds with `oracle-action-now` on real data, the remaining bottleneck is much more likely to be representation/state construction than the RL machinery itself.
 
+Follow-up:
+- An independent audit found that `evaluate_oracle_agreement(...)` was miswired for `oracle-action-now`.
+- The evaluation env was accidentally instantiated with the default representation instead of the requested one, so the oracle-agreement footer from the first `oracle-action-now` run was invalid.
+- Fixed the evaluator wiring and added a regression test for `oracle-action-now` agreement evaluation.
+
+Additional change:
+- Added `--min-decision-margin` to the control script.
+- This allows real-data control runs to filter episodes to only those with strong optimal-action margins under the current objective.
+
 ## Going forward
 
 Any future entry should include:
