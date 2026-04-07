@@ -6,11 +6,15 @@ import torch
 from scripts.controller_representation_control import (
     ControlEpisode,
     LinearPolicyValueControlModel,
+    OracleActionBanditCase,
+    OracleActionBanditEnv,
     RepresentationControlEnv,
     _build_schema,
+    _build_balanced_oracle_action_bandit_cases,
     _make_observation_tree,
     _oracle_action_from_observation,
     _optimal_stop_step,
+    evaluate_bandit_agreement,
     evaluate_oracle_agreement,
 )
 from supervised_branch import evaluate_controller
@@ -198,6 +202,68 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         )
         self.assertAlmostEqual(metrics.exact_stop_step_accuracy, 1.0)
         self.assertAlmostEqual(metrics.first_action_accuracy, 1.0)
+        self.assertEqual(metrics.confusion_matrix, {0: {0: 1}, 1: {1: 1}})
+
+    def test_balanced_oracle_action_bandit_cases_balance_state_labels(self):
+        episodes = [
+            ControlEpisode(
+                example_path="a",
+                halt_rewards=[0.0, 0.1, 0.2],
+                oracle_stop_step=2,
+                label_index=0,
+                oracle_actions=[0, 0, 1],
+            ),
+            ControlEpisode(
+                example_path="b",
+                halt_rewards=[0.3],
+                oracle_stop_step=0,
+                label_index=0,
+                oracle_actions=[1],
+            ),
+        ]
+
+        cases = _build_balanced_oracle_action_bandit_cases(episodes, seed=0)
+
+        self.assertEqual(len(cases), 4)
+        self.assertEqual(
+            {action: sum(1 for case in cases if case.oracle_action == action) for action in (0, 1)},
+            {0: 2, 1: 2},
+        )
+
+    def test_oracle_action_bandit_env_is_one_step_reward_diagnostic(self):
+        cases = [OracleActionBanditCase(example_path="a", step_index=0, oracle_action=0)]
+        env = OracleActionBanditEnv(cases, max_steps=1, num_labels=2, seed=0, shuffle=False)
+
+        tree = env.reset()
+        self.assertEqual(_oracle_action_from_observation(tree), 0)
+        correct = env.step(0)
+        self.assertTrue(correct.done)
+        self.assertEqual(correct.reward, 1.0)
+
+        tree = env.reset()
+        self.assertEqual(_oracle_action_from_observation(tree), 0)
+        incorrect = env.step(1)
+        self.assertTrue(incorrect.done)
+        self.assertEqual(incorrect.reward, -1.0)
+
+    def test_evaluate_bandit_agreement_reports_action_accuracy(self):
+        cases = [
+            OracleActionBanditCase(example_path="a", step_index=0, oracle_action=0),
+            OracleActionBanditCase(example_path="b", step_index=0, oracle_action=1),
+        ]
+        schema = _build_schema(max_steps=1, num_labels=2, representation="oracle-action-now")
+        tensorizer = TreeTensorizer(schema, device="cpu")
+        model = _OracleActionModel()
+
+        metrics = evaluate_bandit_agreement(
+            model,
+            tensorizer,
+            cases,
+            max_steps=1,
+            num_labels=2,
+        )
+
+        self.assertAlmostEqual(metrics.action_accuracy, 1.0)
         self.assertEqual(metrics.confusion_matrix, {0: {0: 1}, 1: {1: 1}})
 
 

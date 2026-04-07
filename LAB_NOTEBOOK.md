@@ -481,6 +481,19 @@ Purpose:
 - Separate local gradient plumbing from on-policy exploration.
 - If ordinary `oracle-action-now` PPO collapses because continuing only pays off under correct future actions, forced-oracle rollouts test whether PPO moves the linear readout correctly when future actions are constrained to be optimal.
 
+Follow-up diagnostic:
+- Added `--one-step-oracle-bandit`.
+- This converts real oracle-action states into a balanced one-step contextual bandit:
+  - observation `[1, 0]` means continue
+  - observation `[0, 1]` means halt
+  - matching the encoded action gives reward `+1`
+  - the opposite action gives reward `-1`
+  - the episode terminates immediately
+
+Purpose:
+- This is the clean PPO plumbing diagnostic for the oracle-action representation.
+- It removes sequential stopping dynamics, future-policy dependence, and transition-count imbalance, while still using the same PPO trainer, tensorizer, and linear policy/value model.
+
 ## Going forward
 
 Any future entry should include:

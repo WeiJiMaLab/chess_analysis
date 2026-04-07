@@ -44,6 +44,13 @@ class ControlEpisode:
 
 
 @dataclass(frozen=True)
+class OracleActionBanditCase:
+    example_path: str
+    step_index: int
+    oracle_action: int
+
+
+@dataclass(frozen=True)
 class OracleAgreementMetrics:
     exact_stop_step_accuracy: float
     first_action_accuracy: float
@@ -407,6 +414,140 @@ class RepresentationControlEnv(ControllerOnlyEnv):
         return StepResult(next_tree=self._current_tree(), reward=reward, done=done, info=info)
 
 
+class OracleActionBanditEnv(ControllerOnlyEnv):
+    def __init__(
+        self,
+        cases: Sequence[OracleActionBanditCase],
+        max_steps: int,
+        num_labels: int,
+        seed: int = 0,
+        shuffle: bool = True,
+    ) -> None:
+        if not cases:
+            raise ValueError("cases must be non-empty.")
+        self.cases = list(cases)
+        self.max_steps = max_steps
+        self.num_labels = num_labels
+        self.shuffle = shuffle
+        self._rng = random.Random(seed)
+        self._case_index = -1
+        self._done = False
+        self._current: OracleActionBanditCase | None = None
+
+    def _current_tree(self) -> SearchTree:
+        assert self._current is not None
+        return _make_observation_tree(
+            step_index=0,
+            label_index=0,
+            max_steps=self.max_steps,
+            num_labels=self.num_labels,
+            representation="oracle-action-now",
+            oracle_action=self._current.oracle_action,
+        )
+
+    def reset(self) -> SearchTree:
+        if self.shuffle:
+            self._case_index = self._rng.randrange(len(self.cases))
+        else:
+            self._case_index = (self._case_index + 1) % len(self.cases)
+        self._current = self.cases[self._case_index]
+        self._done = False
+        return self._current_tree()
+
+    def step(self, action: int) -> StepResult:
+        if self._done:
+            raise ValueError("Episode already finished. Call reset().")
+        if action not in (0, 1):
+            raise ValueError("Action must be 0 or 1.")
+        assert self._current is not None
+        reward = 1.0 if action == self._current.oracle_action else -1.0
+        self._done = True
+        return StepResult(
+            next_tree=self._current_tree(),
+            reward=reward,
+            done=True,
+            info={
+                "episode_return": reward,
+                "episode_length": 1,
+                "expansions": 0,
+                "terminal_quality": reward,
+                "halted": action == 1,
+                "oracle_action": self._current.oracle_action,
+                "example_path": self._current.example_path,
+                "step_index": self._current.step_index,
+            },
+        )
+
+
+def _build_balanced_oracle_action_bandit_cases(
+    episodes: Sequence[ControlEpisode],
+    seed: int,
+) -> List[OracleActionBanditCase]:
+    rng = random.Random(seed)
+    cases_by_action: Dict[int, List[OracleActionBanditCase]] = {0: [], 1: []}
+    for episode in episodes:
+        for step_index, oracle_action in enumerate(episode.oracle_actions):
+            cases_by_action[oracle_action].append(
+                OracleActionBanditCase(
+                    example_path=episode.example_path,
+                    step_index=step_index,
+                    oracle_action=oracle_action,
+                )
+            )
+
+    count_per_action = min(len(cases_by_action[0]), len(cases_by_action[1]))
+    if count_per_action <= 0:
+        raise ValueError("One-step oracle bandit requires both oracle actions.")
+
+    balanced_cases: List[OracleActionBanditCase] = []
+    for action in (0, 1):
+        bucket = list(cases_by_action[action])
+        rng.shuffle(bucket)
+        balanced_cases.extend(bucket[:count_per_action])
+    rng.shuffle(balanced_cases)
+    return balanced_cases
+
+
+@dataclass(frozen=True)
+class BanditAgreementMetrics:
+    action_accuracy: float
+    confusion_matrix: Dict[int, Dict[int, int]]
+
+
+def evaluate_bandit_agreement(
+    model: nn.Module,
+    tensorizer: TreeTensorizer,
+    cases: Sequence[OracleActionBanditCase],
+    max_steps: int,
+    num_labels: int,
+) -> BanditAgreementMetrics:
+    model.eval()
+    matches = 0
+    confusion_matrix: Dict[int, Dict[int, int]] = {}
+    with torch.no_grad():
+        for case in cases:
+            tree = _make_observation_tree(
+                step_index=0,
+                label_index=0,
+                max_steps=max_steps,
+                num_labels=num_labels,
+                representation="oracle-action-now",
+                oracle_action=case.oracle_action,
+            )
+            tree_batch = tensorizer.tensorize_tree(tree)
+            output = model(tree_batch)
+            halt_logit = float(output.halt_logits.squeeze(0).item())
+            predicted_action = 1 if halt_logit >= 0.0 else 0
+            if predicted_action == case.oracle_action:
+                matches += 1
+            row = confusion_matrix.setdefault(case.oracle_action, {})
+            row[predicted_action] = row.get(predicted_action, 0) + 1
+    return BanditAgreementMetrics(
+        action_accuracy=matches / len(cases),
+        confusion_matrix=confusion_matrix,
+    )
+
+
 def _predict_stop_step(
     model: nn.Module,
     tensorizer: TreeTensorizer,
@@ -543,6 +684,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "oracle action encoded in oracle-action-now observations."
         ),
     )
+    parser.add_argument(
+        "--one-step-oracle-bandit",
+        action="store_true",
+        help=(
+            "Diagnostic-only mode: convert oracle-action-now states into a balanced "
+            "one-step contextual bandit with +1 reward for the encoded action."
+        ),
+    )
     return parser
 
 
@@ -550,6 +699,10 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     if args.force_oracle_actions and args.representation != "oracle-action-now":
         raise ValueError("--force-oracle-actions is only defined for --representation oracle-action-now.")
+    if args.one_step_oracle_bandit and args.representation != "oracle-action-now":
+        raise ValueError("--one-step-oracle-bandit is only defined for --representation oracle-action-now.")
+    if args.one_step_oracle_bandit and args.force_oracle_actions:
+        raise ValueError("--one-step-oracle-bandit and --force-oracle-actions are separate diagnostics.")
     random.seed(args.seed)
     quality_config = _teacher_config(args)
     episodes = _load_control_episodes(
@@ -591,6 +744,7 @@ def main() -> None:
                     "learning_rate": args.learning_rate,
                     "eval_episodes": args.eval_episodes,
                     "force_oracle_actions": args.force_oracle_actions,
+                    "one_step_oracle_bandit": args.one_step_oracle_bandit,
                 },
                 indent=2,
                 sort_keys=True,
@@ -622,18 +776,32 @@ def main() -> None:
         node_feat=len(schema.feature_names),
         device=args.device,
     )
-    envs = [
-        RepresentationControlEnv(
-            episodes,
-            args.continue_cost,
-            max_steps=max_steps,
-            num_labels=num_labels,
-            representation=args.representation,
-            seed=args.seed + env_index,
-            shuffle=True,
-        )
-        for env_index in range(args.num_envs)
-    ]
+    bandit_cases: List[OracleActionBanditCase] = []
+    if args.one_step_oracle_bandit:
+        bandit_cases = _build_balanced_oracle_action_bandit_cases(episodes, seed=args.seed)
+        envs = [
+            OracleActionBanditEnv(
+                bandit_cases,
+                max_steps=max_steps,
+                num_labels=num_labels,
+                seed=args.seed + env_index,
+                shuffle=True,
+            )
+            for env_index in range(args.num_envs)
+        ]
+    else:
+        envs = [
+            RepresentationControlEnv(
+                episodes,
+                args.continue_cost,
+                max_steps=max_steps,
+                num_labels=num_labels,
+                representation=args.representation,
+                seed=args.seed + env_index,
+                shuffle=True,
+            )
+            for env_index in range(args.num_envs)
+        ]
 
     rollout_action_override = None
     if args.force_oracle_actions:
@@ -664,9 +832,16 @@ def main() -> None:
     print(f"reward_scale={args.reward_scale:.6f}")
     print(f"min_decision_margin={args.min_decision_margin:.6f}")
     print(f"force_oracle_actions={args.force_oracle_actions}")
+    print(f"one_step_oracle_bandit={args.one_step_oracle_bandit}")
     print(f"max_steps={max_steps}")
     print(f"num_labels={num_labels}")
     print(f"oracle_stop_histogram={oracle_histogram}")
+    if args.one_step_oracle_bandit:
+        bandit_histogram = {0: 0, 1: 0}
+        for case in bandit_cases:
+            bandit_histogram[case.oracle_action] += 1
+        print(f"bandit_cases={len(bandit_cases)}")
+        print(f"bandit_action_histogram={bandit_histogram}")
     if args.debug_dir:
         print(f"debug_dir={args.debug_dir}")
     print("selected_episodes=")
@@ -679,7 +854,9 @@ def main() -> None:
     if args.inspect_only:
         return
 
-    if args.representation != "oracle-action-now":
+    if args.one_step_oracle_bandit:
+        print("rollout_coverage=unavailable_for_one_step_oracle_bandit")
+    elif args.representation != "oracle-action-now":
         coverage = _collect_rollout_coverage(
             trainer,
             episodes,
@@ -719,7 +896,15 @@ def main() -> None:
                 flush=True,
             )
 
-    def _make_env() -> RepresentationControlEnv:
+    def _make_env() -> ControllerOnlyEnv:
+        if args.one_step_oracle_bandit:
+            return OracleActionBanditEnv(
+                bandit_cases,
+                max_steps=max_steps,
+                num_labels=num_labels,
+                seed=args.seed,
+                shuffle=False,
+            )
         return RepresentationControlEnv(
             episodes,
             args.continue_cost,
@@ -746,25 +931,43 @@ def main() -> None:
     for step in sorted(evaluation.halt_step_histogram):
         print(f"  step_{step}={evaluation.halt_step_histogram[step]}")
 
-    oracle_agreement = evaluate_oracle_agreement(
-        model,
-        tensorizer,
-        episodes,
-        continue_cost=args.continue_cost,
-        max_steps=max_steps,
-        num_labels=num_labels,
-        representation=args.representation,
-    )
-    print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.3f}")
-    print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.3f}")
-    print("oracle_confusion_matrix=")
-    for oracle_step in sorted(oracle_agreement.confusion_matrix):
-        row = oracle_agreement.confusion_matrix[oracle_step]
-        formatted = " ".join(
-            f"pred_{predicted_step}={row[predicted_step]}"
-            for predicted_step in sorted(row)
+    if args.one_step_oracle_bandit:
+        bandit_agreement = evaluate_bandit_agreement(
+            model,
+            tensorizer,
+            bandit_cases,
+            max_steps=max_steps,
+            num_labels=num_labels,
         )
-        print(f"  oracle_{oracle_step}: {formatted}")
+        print(f"bandit_action_accuracy={bandit_agreement.action_accuracy:.3f}")
+        print("bandit_confusion_matrix=")
+        for oracle_action in sorted(bandit_agreement.confusion_matrix):
+            row = bandit_agreement.confusion_matrix[oracle_action]
+            formatted = " ".join(
+                f"pred_{predicted_action}={row[predicted_action]}"
+                for predicted_action in sorted(row)
+            )
+            print(f"  oracle_action_{oracle_action}: {formatted}")
+    else:
+        oracle_agreement = evaluate_oracle_agreement(
+            model,
+            tensorizer,
+            episodes,
+            continue_cost=args.continue_cost,
+            max_steps=max_steps,
+            num_labels=num_labels,
+            representation=args.representation,
+        )
+        print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.3f}")
+        print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.3f}")
+        print("oracle_confusion_matrix=")
+        for oracle_step in sorted(oracle_agreement.confusion_matrix):
+            row = oracle_agreement.confusion_matrix[oracle_step]
+            formatted = " ".join(
+                f"pred_{predicted_step}={row[predicted_step]}"
+                for predicted_step in sorted(row)
+            )
+            print(f"  oracle_{oracle_step}: {formatted}")
 
     if len(schema.feature_names) <= 32:
         halt_weight, halt_bias = _linear_layer_summary(model.halt_controller)
