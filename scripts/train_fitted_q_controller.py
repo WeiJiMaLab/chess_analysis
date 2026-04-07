@@ -45,11 +45,25 @@ class FittedQBatch:
     tree_batch: TreeBatch
     q_targets: torch.Tensor
     paths: List[str]
+    path_lengths: List[int]
+    halt_rewards: List[List[float]]
+    oracle_stop_steps: List[int]
+    oracle_values: List[float]
     skipped: int
 
 
 @dataclass(frozen=True)
 class OracleActionNowEpisode:
+    path: str
+    features: torch.Tensor
+    target_advantages: torch.Tensor
+    halt_rewards: List[float]
+    oracle_stop_step: int
+    oracle_value: float
+
+
+@dataclass(frozen=True)
+class MaterializedAdvantageEpisode:
     path: str
     features: torch.Tensor
     target_advantages: torch.Tensor
@@ -215,15 +229,27 @@ class FittedQCollator:
         trees: List[SearchTree] = []
         q_targets = []
         paths = []
+        path_lengths = []
+        halt_rewards = []
+        oracle_stop_steps = []
+        oracle_values = []
         for episode in valid:
             trees.extend(episode.snapshots)
             q_targets.append(episode.q_targets)
             paths.append(episode.path)
+            path_lengths.append(len(episode.snapshots))
+            halt_rewards.append(episode.halt_rewards)
+            oracle_stop_steps.append(episode.oracle_stop_step)
+            oracle_values.append(episode.oracle_value)
 
         return FittedQBatch(
             tree_batch=self.tensorizer.tensorize_forest(trees, validate=False),
             q_targets=torch.cat(q_targets, dim=0),
             paths=paths,
+            path_lengths=path_lengths,
+            halt_rewards=halt_rewards,
+            oracle_stop_steps=oracle_stop_steps,
+            oracle_values=oracle_values,
             skipped=len(episodes) - len(valid),
         )
 
@@ -338,6 +364,72 @@ def _oracle_action_now_tensor_dataset(episodes: Sequence[OracleActionNowEpisode]
     features = torch.cat([episode.features for episode in episodes], dim=0)
     target_advantages = torch.cat([episode.target_advantages for episode in episodes], dim=0)
     return TensorDataset(features, target_advantages)
+
+
+def _materialized_tensor_dataset(episodes: Sequence[MaterializedAdvantageEpisode]) -> TensorDataset:
+    features = torch.cat([episode.features for episode in episodes], dim=0)
+    target_advantages = torch.cat([episode.target_advantages for episode in episodes], dim=0)
+    return TensorDataset(features, target_advantages)
+
+
+def _materialize_tree_encoder_episodes(
+    model: ComputeAdvantageTreeSearchModel,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    log_interval: int,
+    split_name: str,
+) -> List[MaterializedAdvantageEpisode]:
+    model.eval()
+    materialized: List[MaterializedAdvantageEpisode] = []
+    skipped = 0
+    snapshots = 0
+    started = time.time()
+    with torch.inference_mode():
+        for batch_index, batch in enumerate(loader, start=1):
+            if batch is None:
+                continue
+            encoded = model.encoder(batch.tree_batch)
+            root_states = encoded.root_states.detach().cpu()
+            offset = 0
+            targets = batch.q_targets.detach().cpu()
+            for path, length, halt_rewards, oracle_stop_step, oracle_value in zip(
+                batch.paths,
+                batch.path_lengths,
+                batch.halt_rewards,
+                batch.oracle_stop_steps,
+                batch.oracle_values,
+            ):
+                next_offset = offset + length
+                episode_features = root_states[offset:next_offset]
+                episode_targets = targets[offset:next_offset]
+                if episode_features.shape[0] != length:
+                    raise ValueError("Materialized encoder feature length mismatch.")
+                materialized.append(
+                    MaterializedAdvantageEpisode(
+                        path=path,
+                        features=episode_features,
+                        target_advantages=_target_advantages(episode_targets),
+                        halt_rewards=halt_rewards,
+                        oracle_stop_step=oracle_stop_step,
+                        oracle_value=oracle_value,
+                    )
+                )
+                offset = next_offset
+            skipped += int(batch.skipped)
+            snapshots += int(root_states.shape[0])
+            if log_interval > 0 and (batch_index % log_interval == 0 or batch_index == len(loader)):
+                elapsed = time.time() - started
+                print(
+                    f"materialize_{split_name}_encoder_batch={batch_index}/{len(loader)} "
+                    f"episodes={len(materialized)} snapshots={snapshots} skipped={skipped} "
+                    f"elapsed_s={elapsed:.1f}",
+                    flush=True,
+                )
+
+    if not materialized:
+        raise ValueError(f"No usable {split_name} encoder episodes were materialized.")
+    return materialized
 
 
 def _build_tensor_loader(
@@ -530,7 +622,7 @@ def evaluate_advantage_predictions(
 
 
 def _train_tensor_epoch(
-    model: LinearComputeAdvantageModel,
+    model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     *,
@@ -587,7 +679,7 @@ def _train_tensor_epoch(
 
 
 def evaluate_tensor_advantage_predictions(
-    model: LinearComputeAdvantageModel,
+    model: nn.Module,
     loader: DataLoader,
     *,
     device: torch.device,
@@ -702,9 +794,9 @@ def evaluate_greedy_policy(
     )
 
 
-def evaluate_oracle_action_now_greedy_policy(
-    model: LinearComputeAdvantageModel,
-    episodes: Sequence[OracleActionNowEpisode],
+def evaluate_materialized_greedy_policy(
+    model: nn.Module,
+    episodes: Sequence[MaterializedAdvantageEpisode] | Sequence[OracleActionNowEpisode],
     continue_cost: float,
     *,
     device: torch.device,
@@ -812,7 +904,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-att", type=int, default=32)
     parser.add_argument("--q-hidden", type=int, default=128, help="Hidden width for the compute-advantage head.")
     parser.add_argument("--unfreeze-encoder", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=8, help="Number of full episodes per DataLoader batch.")
+    parser.add_argument("--batch-size", type=int, default=1024, help="Tensor minibatch size after materialization.")
+    parser.add_argument("--episode-batch-size", type=int, default=8, help="Raw full-episode batch size for tree materialization.")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
@@ -874,8 +967,8 @@ def main() -> None:
         weight_decay=args.weight_decay,
     )
 
-    train_episodes: List[OracleActionNowEpisode] | None = None
-    validation_episodes: List[OracleActionNowEpisode] | None = None
+    train_episodes: List[OracleActionNowEpisode] | List[MaterializedAdvantageEpisode] | None = None
+    validation_episodes: List[OracleActionNowEpisode] | List[MaterializedAdvantageEpisode] | None = None
     if args.representation == "oracle-action-now":
         print("[compute_advantage] stage=materialize_train", flush=True)
         train_episodes = _load_oracle_action_now_episodes(
@@ -909,6 +1002,64 @@ def main() -> None:
             seed=args.seed,
             device=device,
         )
+    elif not args.unfreeze_encoder:
+        raw_train_loader = _build_loader(
+            train_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.representation,
+            args.min_decision_margin,
+            tensorizer,
+            batch_size=args.episode_batch_size,
+            shuffle=True,
+            seed=args.seed,
+            num_workers=args.num_workers,
+        )
+        raw_validation_loader = _build_loader(
+            validation_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.representation,
+            args.min_decision_margin,
+            tensorizer,
+            batch_size=args.episode_batch_size,
+            shuffle=False,
+            seed=args.seed,
+            num_workers=args.num_workers,
+        )
+        assert isinstance(model, ComputeAdvantageTreeSearchModel)
+        print("[compute_advantage] stage=materialize_train_encoder", flush=True)
+        train_episodes = _materialize_tree_encoder_episodes(
+            model,
+            raw_train_loader,
+            device=device,
+            log_interval=args.log_interval,
+            split_name="train",
+        )
+        print("[compute_advantage] stage=materialize_validation_encoder", flush=True)
+        validation_episodes = _materialize_tree_encoder_episodes(
+            model,
+            raw_validation_loader,
+            device=device,
+            log_interval=args.log_interval,
+            split_name="validation",
+        )
+        train_loader = _build_tensor_loader(
+            _materialized_tensor_dataset(train_episodes),
+            batch_size=args.batch_size,
+            shuffle=True,
+            seed=args.seed,
+            device=device,
+        )
+        validation_loader = _build_tensor_loader(
+            _materialized_tensor_dataset(validation_episodes),
+            batch_size=args.batch_size,
+            shuffle=False,
+            seed=args.seed,
+            device=device,
+        )
     else:
         train_loader = _build_loader(
             train_paths,
@@ -918,7 +1069,7 @@ def main() -> None:
             args.representation,
             args.min_decision_margin,
             tensorizer,
-            batch_size=args.batch_size,
+            batch_size=args.episode_batch_size,
             shuffle=True,
             seed=args.seed,
             num_workers=args.num_workers,
@@ -931,7 +1082,7 @@ def main() -> None:
             args.representation,
             args.min_decision_margin,
             tensorizer,
-            batch_size=args.batch_size,
+            batch_size=args.episode_batch_size,
             shuffle=False,
             seed=args.seed,
             num_workers=args.num_workers,
@@ -941,7 +1092,7 @@ def main() -> None:
     best_metadata: dict | None = None
     print("[compute_advantage] stage=train_start", flush=True)
     for epoch in range(1, args.epochs + 1):
-        if isinstance(model, LinearComputeAdvantageModel):
+        if train_episodes is not None:
             train_metrics = _train_tensor_epoch(
                 model,
                 train_loader,
@@ -972,7 +1123,7 @@ def main() -> None:
 
         validation_metrics = None
         if args.validation_interval > 0 and (epoch % args.validation_interval == 0 or epoch == args.epochs):
-            if isinstance(model, LinearComputeAdvantageModel):
+            if validation_episodes is not None:
                 validation_metrics = evaluate_tensor_advantage_predictions(model, validation_loader, device=device)
             else:
                 validation_metrics = evaluate_advantage_predictions(model, validation_loader, device=device)
@@ -1003,9 +1154,9 @@ def main() -> None:
                     _save_checkpoint(args.output_checkpoint, model, best_metadata)
 
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
-            if isinstance(model, LinearComputeAdvantageModel):
+            if validation_episodes is not None:
                 assert validation_episodes is not None
-                greedy_metrics = evaluate_oracle_action_now_greedy_policy(
+                greedy_metrics = evaluate_materialized_greedy_policy(
                     model,
                     validation_episodes,
                     args.continue_cost,

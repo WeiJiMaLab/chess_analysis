@@ -618,14 +618,24 @@ Purpose:
 
 Follow-up optimization:
 - The initial toy path still used the lazy episode `DataLoader`, which rebuilt raw tree episodes each epoch.
-- Fixed this for `--representation oracle-action-now`:
-  - materialize selected train/validation episodes once
-  - build a `TensorDataset(features, target_advantages)`
-  - train/evaluate the linear readout directly on tensors
-  - run greedy evaluation from the precomputed per-episode tensors
+- Fixed this for the tensorizable frozen-encoder paths:
+  - `--representation oracle-action-now`: materialize selected train/validation episodes once, then train/evaluate from `TensorDataset(features, target_advantages)`
+  - frozen `--representation tree`: run the frozen encoder once to materialize root embeddings and target advantages, then train the advantage head on tensors
+  - greedy evaluation uses precomputed per-episode tensors for both materialized paths
 
 Purpose:
-- Keep the diagnostic faithful to the compute-advantage objective while avoiding repeated raw `.pt` loading and oracle recomputation every epoch.
+- Keep the diagnostic faithful to the compute-advantage objective while avoiding repeated raw `.pt` loading, oracle recomputation, and frozen-encoder forward passes every epoch.
+
+Overnight run setup:
+- Added `slurm/train_compute_advantage_della.slurm`.
+- Defaults:
+  - full train/validation manifests
+  - frozen pretrained encoder
+  - real tree representation
+  - materialized root embeddings
+  - `continue_cost = 0.001`
+  - `epochs = 50`
+  - checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_controller_compute_adv_full.pt`
 
 ## Going forward
 
