@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import sys
 import time
@@ -50,11 +49,10 @@ class FittedQBatch:
 
 
 @dataclass(frozen=True)
-class FittedQMetrics:
-    q_mse: float
-    halt_value_mse: float
-    continue_advantage_mse: float
-    action_accuracy: float
+class AdvantageMetrics:
+    advantage_mse: float
+    mean_abs_advantage_error: float
+    sign_accuracy: float
     examples: int
 
 
@@ -64,12 +62,13 @@ class GreedyPolicyMetrics:
     first_action_accuracy: float
     average_return: float
     average_oracle_value: float
+    average_regret: float
     average_expansions: float
     evaluated_episodes: int
     skipped_episodes: int
 
 
-class QValueTreeSearchModel(nn.Module):
+class ComputeAdvantageTreeSearchModel(nn.Module):
     def __init__(
         self,
         *,
@@ -95,10 +94,10 @@ class QValueTreeSearchModel(nn.Module):
             d_att=d_att,
         )
         resolved_device = self.encoder.device
-        self.q_head = nn.Sequential(
+        self.advantage_head = nn.Sequential(
             nn.Linear(self.encoder.d_embed, q_hidden, device=resolved_device),
             nn.ReLU(),
-            nn.Linear(q_hidden, 2, device=resolved_device),
+            nn.Linear(q_hidden, 1, device=resolved_device),
         )
 
     def freeze_encoder(self) -> None:
@@ -107,11 +106,7 @@ class QValueTreeSearchModel(nn.Module):
 
     def forward(self, tree_batch: TreeBatch) -> torch.Tensor:
         encoded: TreeEncoderOutput = self.encoder(tree_batch)
-        raw = self.q_head(encoded.root_states)
-        continue_advantage = raw[:, 0]
-        halt_value = raw[:, 1]
-        continue_value = halt_value + continue_advantage
-        return torch.stack([continue_value, halt_value], dim=1)
+        return self.advantage_head(encoded.root_states).squeeze(-1)
 
 
 class FittedQEpisodeDataset(Dataset):
@@ -211,8 +206,8 @@ def _quality_config(args: argparse.Namespace) -> TeacherSearchConfig:
         c_puct=args.c_puct,
         prior_feature="prior",
         value_feature="value",
-        target_normalization_version="fitted_q_controller_v1",
-        search_config_id="fitted_q_controller",
+        target_normalization_version="compute_advantage_controller_v1",
+        search_config_id="compute_advantage_controller",
     )
 
 
@@ -253,34 +248,39 @@ def _build_loader(
     )
 
 
-def _q_loss_components(
-    q_values: torch.Tensor,
+def _target_advantages(targets: torch.Tensor) -> torch.Tensor:
+    return targets[:, 0] - targets[:, 1]
+
+
+def _advantage_loss_components(
+    predicted_advantages: torch.Tensor,
     targets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    q_mse = F.mse_loss(q_values, targets)
-    halt_value_mse = F.mse_loss(q_values[:, 1], targets[:, 1])
-    continue_advantage_mse = F.mse_loss(
-        q_values[:, 0] - q_values[:, 1],
-        targets[:, 0] - targets[:, 1],
-    )
-    return q_mse, halt_value_mse, continue_advantage_mse
+    target_advantages = _target_advantages(targets)
+    advantage_mse = F.mse_loss(predicted_advantages, target_advantages)
+    mean_abs_advantage_error = torch.mean(torch.abs(predicted_advantages - target_advantages))
+    sign_accuracy = ((predicted_advantages > 0) == (target_advantages > 0)).float().mean()
+    return advantage_mse, mean_abs_advantage_error, sign_accuracy
+
+
+def _advantage_sign_correct_count(predicted_advantages: torch.Tensor, targets: torch.Tensor) -> int:
+    target_advantages = _target_advantages(targets)
+    return int(((predicted_advantages > 0) == (target_advantages > 0)).sum().item())
 
 
 def _train_epoch(
-    model: QValueTreeSearchModel,
+    model: ComputeAdvantageTreeSearchModel,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     *,
     device: torch.device,
     max_grad_norm: float,
-    advantage_loss_weight: float,
     epoch: int,
     log_interval: int,
-) -> FittedQMetrics:
+) -> AdvantageMetrics:
     model.train()
-    total_q_mse = 0.0
-    total_halt_value_mse = 0.0
-    total_continue_advantage_mse = 0.0
+    total_advantage_mse = 0.0
+    total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
     skipped = 0
@@ -290,23 +290,22 @@ def _train_epoch(
         if batch is None:
             continue
         targets = batch.q_targets.to(device, non_blocking=True)
-        q_values = model(batch.tree_batch)
-        q_mse, halt_value_mse, continue_advantage_mse = _q_loss_components(q_values, targets)
-        loss = halt_value_mse + advantage_loss_weight * continue_advantage_mse
+        predicted_advantages = model(batch.tree_batch)
+        advantage_mse, mean_abs_advantage_error, _sign_accuracy = _advantage_loss_components(
+            predicted_advantages,
+            targets,
+        )
 
         optimizer.zero_grad()
-        loss.backward()
+        advantage_mse.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
         examples = int(targets.shape[0])
-        predictions = torch.argmax(q_values.detach(), dim=1)
-        target_actions = torch.argmax(targets, dim=1)
-        total_q_mse += float(q_mse.item()) * examples
-        total_halt_value_mse += float(halt_value_mse.item()) * examples
-        total_continue_advantage_mse += float(continue_advantage_mse.item()) * examples
+        total_advantage_mse += float(advantage_mse.item()) * examples
+        total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
         total_examples += examples
-        total_correct += int((predictions == target_actions).sum().item())
+        total_correct += _advantage_sign_correct_count(predicted_advantages.detach(), targets)
         skipped += int(batch.skipped)
 
         if log_interval > 0 and batch_index % log_interval == 0:
@@ -314,35 +313,32 @@ def _train_epoch(
             print(
                 f"epoch={epoch} batch={batch_index}/{len(loader)} "
                 f"snapshots={total_examples} skipped_episodes={skipped} "
-                f"q_mse={total_q_mse / max(total_examples, 1):.3f} "
-                f"halt_value_mse={total_halt_value_mse / max(total_examples, 1):.3f} "
-                f"continue_advantage_mse={total_continue_advantage_mse / max(total_examples, 1):.3f} "
-                f"action_accuracy={total_correct / max(total_examples, 1):.3f} "
+                f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
+                f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
+                f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
                 f"elapsed_s={elapsed:.1f}",
                 flush=True,
             )
 
     if total_examples == 0:
-        raise ValueError("Training loader produced no valid fitted-Q snapshots.")
-    return FittedQMetrics(
-        q_mse=total_q_mse / total_examples,
-        halt_value_mse=total_halt_value_mse / total_examples,
-        continue_advantage_mse=total_continue_advantage_mse / total_examples,
-        action_accuracy=total_correct / total_examples,
+        raise ValueError("Training loader produced no valid compute-advantage snapshots.")
+    return AdvantageMetrics(
+        advantage_mse=total_advantage_mse / total_examples,
+        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
+        sign_accuracy=total_correct / total_examples,
         examples=total_examples,
     )
 
 
-def evaluate_q_predictions(
-    model: QValueTreeSearchModel,
+def evaluate_advantage_predictions(
+    model: ComputeAdvantageTreeSearchModel,
     loader: DataLoader,
     *,
     device: torch.device,
-) -> FittedQMetrics:
+) -> AdvantageMetrics:
     model.eval()
-    total_q_mse = 0.0
-    total_halt_value_mse = 0.0
-    total_continue_advantage_mse = 0.0
+    total_advantage_mse = 0.0
+    total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
     with torch.inference_mode():
@@ -350,41 +346,43 @@ def evaluate_q_predictions(
             if batch is None:
                 continue
             targets = batch.q_targets.to(device, non_blocking=True)
-            q_values = model(batch.tree_batch)
-            q_mse, halt_value_mse, continue_advantage_mse = _q_loss_components(q_values, targets)
-            predictions = torch.argmax(q_values, dim=1)
-            target_actions = torch.argmax(targets, dim=1)
+            predicted_advantages = model(batch.tree_batch)
+            advantage_mse, mean_abs_advantage_error, _sign_accuracy = _advantage_loss_components(
+                predicted_advantages,
+                targets,
+            )
             examples = int(targets.shape[0])
-            total_q_mse += float(q_mse.item()) * examples
-            total_halt_value_mse += float(halt_value_mse.item()) * examples
-            total_continue_advantage_mse += float(continue_advantage_mse.item()) * examples
+            total_advantage_mse += float(advantage_mse.item()) * examples
+            total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
-            total_correct += int((predictions == target_actions).sum().item())
+            total_correct += _advantage_sign_correct_count(predicted_advantages, targets)
     if total_examples == 0:
-        raise ValueError("Evaluation loader produced no valid fitted-Q snapshots.")
-    return FittedQMetrics(
-        q_mse=total_q_mse / total_examples,
-        halt_value_mse=total_halt_value_mse / total_examples,
-        continue_advantage_mse=total_continue_advantage_mse / total_examples,
-        action_accuracy=total_correct / total_examples,
+        raise ValueError("Evaluation loader produced no valid compute-advantage snapshots.")
+    return AdvantageMetrics(
+        advantage_mse=total_advantage_mse / total_examples,
+        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
+        sign_accuracy=total_correct / total_examples,
         examples=total_examples,
     )
 
 
-def _predict_stop_step(model: QValueTreeSearchModel, tensorizer: TreeTensorizer, episode: FittedQEpisode) -> int:
+def _predict_stop_step(
+    model: ComputeAdvantageTreeSearchModel,
+    tensorizer: TreeTensorizer,
+    episode: FittedQEpisode,
+) -> int:
     model.eval()
     with torch.inference_mode():
         tree_batch = tensorizer.tensorize_forest(episode.snapshots, validate=False)
-        q_values = model(tree_batch)
-        greedy_actions = torch.argmax(q_values, dim=1).detach().cpu().tolist()
-    for step_index, action in enumerate(greedy_actions):
-        if int(action) == 1:
+        predicted_advantages = model(tree_batch).detach().cpu().tolist()
+    for step_index, advantage in enumerate(predicted_advantages):
+        if float(advantage) <= 0:
             return step_index
-    return len(greedy_actions) - 1
+    return len(predicted_advantages) - 1
 
 
 def evaluate_greedy_policy(
-    model: QValueTreeSearchModel,
+    model: ComputeAdvantageTreeSearchModel,
     paths: Sequence[str],
     quality_config: TeacherSearchConfig,
     continue_cost: float,
@@ -435,13 +433,14 @@ def evaluate_greedy_policy(
         first_action_accuracy=first_action / evaluated,
         average_return=total_return / evaluated,
         average_oracle_value=total_oracle_value / evaluated,
+        average_regret=(total_oracle_value - total_return) / evaluated,
         average_expansions=total_expansions / evaluated,
         evaluated_episodes=evaluated,
         skipped_episodes=skipped,
     )
 
 
-def _save_checkpoint(path: str, model: QValueTreeSearchModel, metadata: dict) -> None:
+def _save_checkpoint(path: str, model: ComputeAdvantageTreeSearchModel, metadata: dict) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -455,7 +454,9 @@ def _save_checkpoint(path: str, model: QValueTreeSearchModel, metadata: dict) ->
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train an offline fitted-Q halt/continue controller on generated tree snapshot trajectories."
+        description=(
+            "Train an offline counterfactual compute-advantage controller on generated tree snapshot trajectories."
+        )
     )
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--validation-data", required=True)
@@ -476,14 +477,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-message", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--d-att", type=int, default=32)
-    parser.add_argument("--q-hidden", type=int, default=128)
+    parser.add_argument("--q-hidden", type=int, default=128, help="Hidden width for the compute-advantage head.")
     parser.add_argument("--unfreeze-encoder", action="store_true")
     parser.add_argument("--batch-size", type=int, default=8, help="Number of full episodes per DataLoader batch.")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--advantage-loss-weight", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=25)
     parser.add_argument("--validation-interval", type=int, default=1)
@@ -496,7 +496,7 @@ def main() -> None:
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    print("[fitted_q] stage=load_paths", flush=True)
+    print("[compute_advantage] stage=load_paths", flush=True)
     train_paths = _sample_paths(load_raw_pretrain_example_paths(args.train_data), args.max_train_examples, args.seed)
     validation_paths = _sample_paths(
         load_raw_pretrain_example_paths(args.validation_data),
@@ -504,7 +504,7 @@ def main() -> None:
         args.seed + 1,
     )
     print(
-        f"[fitted_q] train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
+        f"[compute_advantage] train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
         flush=True,
     )
 
@@ -513,8 +513,8 @@ def main() -> None:
     quality_config = _quality_config(args)
     device = torch.device(args.device)
 
-    print("[fitted_q] stage=build_model", flush=True)
-    model = QValueTreeSearchModel(
+    print("[compute_advantage] stage=build_model", flush=True)
+    model = ComputeAdvantageTreeSearchModel(
         k=args.k,
         node_feat=len(schema.feature_names),
         device=args.device,
@@ -557,9 +557,9 @@ def main() -> None:
         num_workers=args.num_workers,
     )
 
-    best_validation_mse = float("inf")
+    best_validation_advantage_mse = float("inf")
     best_metadata: dict | None = None
-    print("[fitted_q] stage=train_start", flush=True)
+    print("[compute_advantage] stage=train_start", flush=True)
     for epoch in range(1, args.epochs + 1):
         train_metrics = _train_epoch(
             model,
@@ -567,47 +567,43 @@ def main() -> None:
             optimizer,
             device=device,
             max_grad_norm=args.max_grad_norm,
-            advantage_loss_weight=args.advantage_loss_weight,
             epoch=epoch,
             log_interval=args.log_interval,
         )
         print(
             f"epoch={epoch}/{args.epochs} "
-            f"train_q_mse={train_metrics.q_mse:.3f} "
-            f"train_halt_value_mse={train_metrics.halt_value_mse:.3f} "
-            f"train_continue_advantage_mse={train_metrics.continue_advantage_mse:.3f} "
-            f"train_action_accuracy={train_metrics.action_accuracy:.3f} "
+            f"train_advantage_mse={train_metrics.advantage_mse:.3f} "
+            f"train_mean_abs_advantage_error={train_metrics.mean_abs_advantage_error:.3f} "
+            f"train_sign_accuracy={train_metrics.sign_accuracy:.3f} "
             f"train_snapshots={train_metrics.examples}",
             flush=True,
         )
 
         validation_metrics = None
         if args.validation_interval > 0 and (epoch % args.validation_interval == 0 or epoch == args.epochs):
-            validation_metrics = evaluate_q_predictions(model, validation_loader, device=device)
+            validation_metrics = evaluate_advantage_predictions(model, validation_loader, device=device)
             print(
                 f"validation_epoch={epoch}/{args.epochs} "
-                f"validation_q_mse={validation_metrics.q_mse:.3f} "
-                f"validation_halt_value_mse={validation_metrics.halt_value_mse:.3f} "
-                f"validation_continue_advantage_mse={validation_metrics.continue_advantage_mse:.3f} "
-                f"validation_action_accuracy={validation_metrics.action_accuracy:.3f} "
+                f"validation_advantage_mse={validation_metrics.advantage_mse:.3f} "
+                f"validation_mean_abs_advantage_error={validation_metrics.mean_abs_advantage_error:.3f} "
+                f"validation_sign_accuracy={validation_metrics.sign_accuracy:.3f} "
                 f"validation_snapshots={validation_metrics.examples}",
                 flush=True,
             )
-            if validation_metrics.q_mse < best_validation_mse:
-                best_validation_mse = validation_metrics.q_mse
+            if validation_metrics.advantage_mse < best_validation_advantage_mse:
+                best_validation_advantage_mse = validation_metrics.advantage_mse
                 best_metadata = {
-                    "stage": "fitted_q_controller",
+                    "stage": "compute_advantage_controller",
                     "epoch": epoch,
-                    "validation_q_mse": validation_metrics.q_mse,
-                    "validation_action_accuracy": validation_metrics.action_accuracy,
+                    "validation_advantage_mse": validation_metrics.advantage_mse,
+                    "validation_sign_accuracy": validation_metrics.sign_accuracy,
                     "continue_cost": args.continue_cost,
                     "reward_scale": args.reward_scale,
                     "encoder_checkpoint": args.encoder_checkpoint,
                     "unfreeze_encoder": args.unfreeze_encoder,
-                    "advantage_loss_weight": args.advantage_loss_weight,
                 }
                 if args.output_checkpoint:
-                    print(f"[fitted_q] stage=save_best path={args.output_checkpoint}", flush=True)
+                    print(f"[compute_advantage] stage=save_best path={args.output_checkpoint}", flush=True)
                     _save_checkpoint(args.output_checkpoint, model, best_metadata)
 
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
@@ -626,6 +622,7 @@ def main() -> None:
                 f"first_action_accuracy={greedy_metrics.first_action_accuracy:.3f} "
                 f"average_return={greedy_metrics.average_return:.3f} "
                 f"average_oracle_value={greedy_metrics.average_oracle_value:.3f} "
+                f"average_regret={greedy_metrics.average_regret:.3f} "
                 f"average_expansions={greedy_metrics.average_expansions:.3f} "
                 f"evaluated_episodes={greedy_metrics.evaluated_episodes} "
                 f"skipped_episodes={greedy_metrics.skipped_episodes}",
@@ -637,16 +634,15 @@ def main() -> None:
             args.output_checkpoint,
             model,
             {
-                "stage": "fitted_q_controller",
+                "stage": "compute_advantage_controller",
                 "epoch": args.epochs,
                 "continue_cost": args.continue_cost,
                 "reward_scale": args.reward_scale,
                 "encoder_checkpoint": args.encoder_checkpoint,
                 "unfreeze_encoder": args.unfreeze_encoder,
-                "advantage_loss_weight": args.advantage_loss_weight,
             },
         )
-    print("[fitted_q] stage=done", flush=True)
+    print("[compute_advantage] stage=done", flush=True)
 
 
 if __name__ == "__main__":

@@ -572,6 +572,34 @@ Purpose:
 - Train the actual stopping decision variable directly:
   - continue iff `Q_continue - Q_halt > 0`
 
+### 2026-04-07: Advantage-only compute controller
+
+Intent:
+- Stop treating the stopping controller as a two-Q regression problem when the deployed decision only depends on the compute advantage:
+  - `A_compute(s) = Q_continue(s) - Q_halt(s)`
+
+Meaningful change:
+- Simplified `scripts/train_fitted_q_controller.py` so the controller head now predicts one scalar:
+  - `A_compute`
+- Training loss is now direct MSE on the Bellman-derived counterfactual compute advantage.
+- Greedy evaluation now uses the explicit stopping rule:
+  - continue iff `A_compute > 0`
+  - halt otherwise
+- Logged metrics now emphasize:
+  - `advantage_mse`
+  - `mean_abs_advantage_error`
+  - `sign_accuracy`
+  - `average_regret`
+
+Purpose:
+- Remove common-mode value fitting from the controller objective.
+- Train the learned search rule directly: whether another unit of search is worth its compute cost.
+
+Validation:
+- `python3 -m py_compile scripts/train_fitted_q_controller.py test_train_fitted_q_controller.py`
+- `/opt/miniconda3/envs/cts_supervised/bin/python -m unittest test_train_fitted_q_controller.py`
+- `/opt/miniconda3/envs/cts_supervised/bin/python scripts/train_fitted_q_controller.py --help`
+
 ## Going forward
 
 Any future entry should include:
