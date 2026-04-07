@@ -52,6 +52,8 @@ class FittedQBatch:
 @dataclass(frozen=True)
 class FittedQMetrics:
     q_mse: float
+    halt_value_mse: float
+    continue_advantage_mse: float
     action_accuracy: float
     examples: int
 
@@ -105,7 +107,11 @@ class QValueTreeSearchModel(nn.Module):
 
     def forward(self, tree_batch: TreeBatch) -> torch.Tensor:
         encoded: TreeEncoderOutput = self.encoder(tree_batch)
-        return self.q_head(encoded.root_states)
+        raw = self.q_head(encoded.root_states)
+        continue_advantage = raw[:, 0]
+        halt_value = raw[:, 1]
+        continue_value = halt_value + continue_advantage
+        return torch.stack([continue_value, halt_value], dim=1)
 
 
 class FittedQEpisodeDataset(Dataset):
@@ -247,6 +253,19 @@ def _build_loader(
     )
 
 
+def _q_loss_components(
+    q_values: torch.Tensor,
+    targets: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    q_mse = F.mse_loss(q_values, targets)
+    halt_value_mse = F.mse_loss(q_values[:, 1], targets[:, 1])
+    continue_advantage_mse = F.mse_loss(
+        q_values[:, 0] - q_values[:, 1],
+        targets[:, 0] - targets[:, 1],
+    )
+    return q_mse, halt_value_mse, continue_advantage_mse
+
+
 def _train_epoch(
     model: QValueTreeSearchModel,
     loader: DataLoader,
@@ -254,11 +273,14 @@ def _train_epoch(
     *,
     device: torch.device,
     max_grad_norm: float,
+    advantage_loss_weight: float,
     epoch: int,
     log_interval: int,
 ) -> FittedQMetrics:
     model.train()
-    total_loss = 0.0
+    total_q_mse = 0.0
+    total_halt_value_mse = 0.0
+    total_continue_advantage_mse = 0.0
     total_examples = 0
     total_correct = 0
     skipped = 0
@@ -269,7 +291,8 @@ def _train_epoch(
             continue
         targets = batch.q_targets.to(device, non_blocking=True)
         q_values = model(batch.tree_batch)
-        loss = F.mse_loss(q_values, targets)
+        q_mse, halt_value_mse, continue_advantage_mse = _q_loss_components(q_values, targets)
+        loss = halt_value_mse + advantage_loss_weight * continue_advantage_mse
 
         optimizer.zero_grad()
         loss.backward()
@@ -279,7 +302,9 @@ def _train_epoch(
         examples = int(targets.shape[0])
         predictions = torch.argmax(q_values.detach(), dim=1)
         target_actions = torch.argmax(targets, dim=1)
-        total_loss += float(loss.item()) * examples
+        total_q_mse += float(q_mse.item()) * examples
+        total_halt_value_mse += float(halt_value_mse.item()) * examples
+        total_continue_advantage_mse += float(continue_advantage_mse.item()) * examples
         total_examples += examples
         total_correct += int((predictions == target_actions).sum().item())
         skipped += int(batch.skipped)
@@ -289,7 +314,9 @@ def _train_epoch(
             print(
                 f"epoch={epoch} batch={batch_index}/{len(loader)} "
                 f"snapshots={total_examples} skipped_episodes={skipped} "
-                f"q_mse={total_loss / max(total_examples, 1):.3f} "
+                f"q_mse={total_q_mse / max(total_examples, 1):.3f} "
+                f"halt_value_mse={total_halt_value_mse / max(total_examples, 1):.3f} "
+                f"continue_advantage_mse={total_continue_advantage_mse / max(total_examples, 1):.3f} "
                 f"action_accuracy={total_correct / max(total_examples, 1):.3f} "
                 f"elapsed_s={elapsed:.1f}",
                 flush=True,
@@ -298,7 +325,9 @@ def _train_epoch(
     if total_examples == 0:
         raise ValueError("Training loader produced no valid fitted-Q snapshots.")
     return FittedQMetrics(
-        q_mse=total_loss / total_examples,
+        q_mse=total_q_mse / total_examples,
+        halt_value_mse=total_halt_value_mse / total_examples,
+        continue_advantage_mse=total_continue_advantage_mse / total_examples,
         action_accuracy=total_correct / total_examples,
         examples=total_examples,
     )
@@ -311,7 +340,9 @@ def evaluate_q_predictions(
     device: torch.device,
 ) -> FittedQMetrics:
     model.eval()
-    total_loss = 0.0
+    total_q_mse = 0.0
+    total_halt_value_mse = 0.0
+    total_continue_advantage_mse = 0.0
     total_examples = 0
     total_correct = 0
     with torch.inference_mode():
@@ -320,16 +351,21 @@ def evaluate_q_predictions(
                 continue
             targets = batch.q_targets.to(device, non_blocking=True)
             q_values = model(batch.tree_batch)
-            loss = F.mse_loss(q_values, targets, reduction="sum")
+            q_mse, halt_value_mse, continue_advantage_mse = _q_loss_components(q_values, targets)
             predictions = torch.argmax(q_values, dim=1)
             target_actions = torch.argmax(targets, dim=1)
-            total_loss += float(loss.item())
-            total_examples += int(targets.shape[0])
+            examples = int(targets.shape[0])
+            total_q_mse += float(q_mse.item()) * examples
+            total_halt_value_mse += float(halt_value_mse.item()) * examples
+            total_continue_advantage_mse += float(continue_advantage_mse.item()) * examples
+            total_examples += examples
             total_correct += int((predictions == target_actions).sum().item())
     if total_examples == 0:
         raise ValueError("Evaluation loader produced no valid fitted-Q snapshots.")
     return FittedQMetrics(
-        q_mse=total_loss / (total_examples * 2),
+        q_mse=total_q_mse / total_examples,
+        halt_value_mse=total_halt_value_mse / total_examples,
+        continue_advantage_mse=total_continue_advantage_mse / total_examples,
         action_accuracy=total_correct / total_examples,
         examples=total_examples,
     )
@@ -447,6 +483,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--advantage-loss-weight", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=25)
     parser.add_argument("--validation-interval", type=int, default=1)
@@ -530,12 +567,15 @@ def main() -> None:
             optimizer,
             device=device,
             max_grad_norm=args.max_grad_norm,
+            advantage_loss_weight=args.advantage_loss_weight,
             epoch=epoch,
             log_interval=args.log_interval,
         )
         print(
             f"epoch={epoch}/{args.epochs} "
             f"train_q_mse={train_metrics.q_mse:.3f} "
+            f"train_halt_value_mse={train_metrics.halt_value_mse:.3f} "
+            f"train_continue_advantage_mse={train_metrics.continue_advantage_mse:.3f} "
             f"train_action_accuracy={train_metrics.action_accuracy:.3f} "
             f"train_snapshots={train_metrics.examples}",
             flush=True,
@@ -547,6 +587,8 @@ def main() -> None:
             print(
                 f"validation_epoch={epoch}/{args.epochs} "
                 f"validation_q_mse={validation_metrics.q_mse:.3f} "
+                f"validation_halt_value_mse={validation_metrics.halt_value_mse:.3f} "
+                f"validation_continue_advantage_mse={validation_metrics.continue_advantage_mse:.3f} "
                 f"validation_action_accuracy={validation_metrics.action_accuracy:.3f} "
                 f"validation_snapshots={validation_metrics.examples}",
                 flush=True,
@@ -562,6 +604,7 @@ def main() -> None:
                     "reward_scale": args.reward_scale,
                     "encoder_checkpoint": args.encoder_checkpoint,
                     "unfreeze_encoder": args.unfreeze_encoder,
+                    "advantage_loss_weight": args.advantage_loss_weight,
                 }
                 if args.output_checkpoint:
                     print(f"[fitted_q] stage=save_best path={args.output_checkpoint}", flush=True)
@@ -600,6 +643,7 @@ def main() -> None:
                 "reward_scale": args.reward_scale,
                 "encoder_checkpoint": args.encoder_checkpoint,
                 "unfreeze_encoder": args.unfreeze_encoder,
+                "advantage_loss_weight": args.advantage_loss_weight,
             },
         )
     print("[fitted_q] stage=done", flush=True)

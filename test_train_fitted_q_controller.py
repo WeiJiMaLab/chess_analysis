@@ -7,6 +7,7 @@ from scripts.train_fitted_q_controller import (
     FittedQCollator,
     FittedQEpisode,
     QValueTreeSearchModel,
+    _q_loss_components,
     _predict_stop_step,
     bellman_q_targets,
 )
@@ -63,6 +64,40 @@ class TrainFittedQControllerTests(unittest.TestCase):
         self.assertEqual(batch.skipped, 1)
         self.assertTrue(torch.equal(batch.q_targets, episode.q_targets))
 
+    def test_q_model_outputs_continue_value_from_advantage_parameterization(self):
+        schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+        tensorizer = TreeTensorizer(schema, device="cpu")
+        model = QValueTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=4,
+            d_embed=4,
+            d_message=4,
+            n_heads=1,
+            d_att=2,
+            q_hidden=4,
+        )
+
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.zero_()
+            model.q_head[-1].bias.copy_(torch.tensor([0.5, 0.2]))
+
+        q_values = model(tensorizer.tensorize_tree(_root_tree(0.0)))
+
+        self.assertTrue(torch.allclose(q_values, torch.tensor([[0.7, 0.2]])))
+
+    def test_q_loss_components_train_halt_value_and_continue_advantage(self):
+        q_values = torch.tensor([[0.7, 0.2]])
+        q_targets = torch.tensor([[0.3, 0.1]])
+
+        q_mse, halt_value_mse, continue_advantage_mse = _q_loss_components(q_values, q_targets)
+
+        self.assertAlmostEqual(float(q_mse.item()), 0.085)
+        self.assertAlmostEqual(float(halt_value_mse.item()), 0.01)
+        self.assertAlmostEqual(float(continue_advantage_mse.item()), 0.09)
+
     def test_predict_stop_step_uses_greedy_q_argmax(self):
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
         tensorizer = TreeTensorizer(schema, device="cpu")
@@ -89,7 +124,7 @@ class TrainFittedQControllerTests(unittest.TestCase):
         with torch.no_grad():
             for parameter in model.parameters():
                 parameter.zero_()
-            model.q_head[-1].bias.copy_(torch.tensor([0.0, 1.0]))
+            model.q_head[-1].bias.copy_(torch.tensor([-1.0, 1.0]))
 
         self.assertEqual(_predict_stop_step(model, tensorizer, episode), 0)
 

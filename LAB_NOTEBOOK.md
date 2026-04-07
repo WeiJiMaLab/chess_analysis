@@ -547,6 +547,31 @@ Validation:
   - `test_train_fitted_q_controller.py`
 - Tests cover Bellman target construction, episode-batch collation, and greedy stop-step behavior.
 
+Initial smoke result:
+- On a 1000-train / 500-validation smoke run, plain two-Q MSE achieved:
+  - `validation_q_mse = 0.024`
+  - `validation_action_accuracy = 0.507`
+  - `greedy average_return = 0.148`
+  - `greedy average_oracle_value = 0.164`
+  - `greedy exact_stop_step_accuracy = 0.166`
+
+Interpretation:
+- Return was reasonably close to oracle, but action/boundary accuracy was weak.
+- This indicates that plain Q-value MSE can fit common value level while missing the decision margin.
+
+Follow-up change:
+- Reparameterized the Q head as:
+  - raw output 0: `Q_continue - Q_halt`
+  - raw output 1: `Q_halt`
+- `forward()` still returns comparable action values in `[Q_continue, Q_halt]` order.
+- Training loss now optimizes:
+  - halt-value MSE
+  - continue-advantage MSE, weighted by `--advantage-loss-weight`
+
+Purpose:
+- Train the actual stopping decision variable directly:
+  - continue iff `Q_continue - Q_halt > 0`
+
 ## Going forward
 
 Any future entry should include:
