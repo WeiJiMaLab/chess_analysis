@@ -494,6 +494,17 @@ Purpose:
 - This is the clean PPO plumbing diagnostic for the oracle-action representation.
 - It removes sequential stopping dynamics, future-policy dependence, and transition-count imbalance, while still using the same PPO trainer, tensorizer, and linear policy/value model.
 
+Result:
+- The one-step bandit diagnostic achieved:
+  - `average_return = 1.000`
+  - `bandit_action_accuracy = 1.000`
+- Learned linear halt logits:
+  - `logit([1, 0]) = -6.854`
+  - `logit([0, 1]) = 6.997`
+
+Conclusion:
+- PPO plumbing, action encoding, tensorization, Bernoulli sign convention, and linear readout capacity are correct in the immediate-reward setting.
+
 Additional diagnostic:
 - Added `--supervised-oracle-action`.
 - This trains the same linear halt readout with supervised BCE on balanced `oracle-action-now` states extracted from the selected sequential real episodes.
@@ -501,6 +512,16 @@ Additional diagnostic:
 Purpose:
 - Check whether the sequential oracle-action labels are internally coherent and linearly learnable once RL temporal credit assignment is removed.
 - The diagnostic also evaluates the supervised readout through the tensorized sequential stop-step evaluator.
+
+Result:
+- The supervised sequential oracle-action diagnostic achieved perfect reported accuracies.
+- Learned linear halt logits in the latest run:
+  - `logit([1, 0]) = -0.990`
+  - `logit([0, 1]) = 1.118`
+
+Conclusion:
+- The sequential oracle-action labels are coherent and linearly learnable.
+- The remaining `oracle-action-now` PPO failure is therefore isolated to sequential on-policy credit assignment/exploration, not diagnostic wiring or representation capacity for the toy control.
 
 ## Going forward
 
