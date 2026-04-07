@@ -157,6 +157,7 @@ class FrozenEncoderControllerTrainer:
         encoder_checkpoint_path: Optional[str] = None,
         freeze_encoder: bool = True,
         trace_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        rollout_action_override: Optional[Callable[[RolloutObservation, int, int], Optional[int]]] = None,
     ) -> None:
         if not envs:
             raise ValueError("At least one environment is required.")
@@ -166,6 +167,7 @@ class FrozenEncoderControllerTrainer:
         self.envs = list(envs)
         self.config = config
         self.trace_callback = trace_callback
+        self.rollout_action_override = rollout_action_override
 
         if encoder_checkpoint_path is not None:
             load_encoder_checkpoint(encoder_checkpoint_path, self.model.encoder)
@@ -244,14 +246,31 @@ class FrozenEncoderControllerTrainer:
             output = self._batch_inference_outputs_from_observations(observations)
             distributions = Bernoulli(logits=output.halt_logits)
             sampled_actions = distributions.sample()
-            log_probs = distributions.log_prob(sampled_actions).detach().cpu().tolist()
-            actions = sampled_actions.to(dtype=torch.int64).detach().cpu().tolist()
+            sampled_action_list = sampled_actions.to(dtype=torch.int64).detach().cpu().tolist()
+            actions = list(sampled_action_list)
+            forced_action_flags = [False] * len(actions)
+            if self.rollout_action_override is not None:
+                for env_id, observation in enumerate(observations):
+                    override = self.rollout_action_override(observation, env_id, step_idx)
+                    if override is None:
+                        continue
+                    if override not in (0, 1):
+                        raise ValueError("rollout_action_override must return 0, 1, or None.")
+                    actions[env_id] = int(override)
+                    forced_action_flags[env_id] = True
+            action_tensor = torch.tensor(
+                actions,
+                dtype=sampled_actions.dtype,
+                device=sampled_actions.device,
+            )
+            log_probs = distributions.log_prob(action_tensor).detach().cpu().tolist()
             values = output.state_value.detach().cpu().tolist()
 
             for env_id, env in enumerate(self.envs):
                 rollout_index = len(rollout)
                 observation = observations[env_id]
                 action = int(actions[env_id])
+                sampled_action = int(sampled_action_list[env_id])
                 log_prob = float(log_probs[env_id])
                 value = float(values[env_id])
 
@@ -267,6 +286,8 @@ class FrozenEncoderControllerTrainer:
                             observation.tree.get_node(observation.tree.root_id).scalar_features
                         ),
                         "action": action,
+                        "sampled_action": sampled_action,
+                        "forced_action": forced_action_flags[env_id],
                         "reward": float(step_result.reward),
                         "done": bool(step_result.done),
                         "old_log_prob": log_prob,

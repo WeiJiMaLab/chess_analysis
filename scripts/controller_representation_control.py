@@ -92,6 +92,24 @@ def _make_trace_writer(debug_dir: Path) -> Callable[[str, Dict[str, object]], No
     return _write
 
 
+def _observation_tree_for_control(observation) -> SearchTree:
+    return observation.tree if hasattr(observation, "tree") else observation
+
+
+def _oracle_action_from_observation(observation) -> int:
+    tree = _observation_tree_for_control(observation)
+    root = tree.get_node(tree.root_id)
+    continue_feature = float(root.scalar_features.get("action_0", 0.0))
+    halt_feature = float(root.scalar_features.get("action_1", 0.0))
+    if continue_feature > 0.5 and halt_feature <= 0.5:
+        return 0
+    if halt_feature > 0.5 and continue_feature <= 0.5:
+        return 1
+    raise ValueError(
+        "oracle-action-now force mode requires a one-hot action observation."
+    )
+
+
 class FixedFeatureEncoder(nn.Module):
     def __init__(self, node_feat: int, device: str) -> None:
         super().__init__()
@@ -517,11 +535,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--inspect-only", action="store_true")
     parser.add_argument("--debug-dir")
+    parser.add_argument(
+        "--force-oracle-actions",
+        action="store_true",
+        help=(
+            "Diagnostic-only mode: collect PPO rollouts by stepping the env with the "
+            "oracle action encoded in oracle-action-now observations."
+        ),
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.force_oracle_actions and args.representation != "oracle-action-now":
+        raise ValueError("--force-oracle-actions is only defined for --representation oracle-action-now.")
     random.seed(args.seed)
     quality_config = _teacher_config(args)
     episodes = _load_control_episodes(
@@ -562,6 +590,7 @@ def main() -> None:
                     "minibatch_size": args.minibatch_size,
                     "learning_rate": args.learning_rate,
                     "eval_episodes": args.eval_episodes,
+                    "force_oracle_actions": args.force_oracle_actions,
                 },
                 indent=2,
                 sort_keys=True,
@@ -605,6 +634,12 @@ def main() -> None:
         )
         for env_index in range(args.num_envs)
     ]
+
+    rollout_action_override = None
+    if args.force_oracle_actions:
+        rollout_action_override = (
+            lambda observation, env_id, rollout_step: _oracle_action_from_observation(observation)
+        )
     trainer = FrozenEncoderControllerTrainer(
         model=model,
         tensorizer=tensorizer,
@@ -616,6 +651,7 @@ def main() -> None:
             minibatch_size=args.minibatch_size,
         ),
         trace_callback=trace_callback,
+        rollout_action_override=rollout_action_override,
     )
 
     oracle_histogram: Dict[int, int] = {}
@@ -627,6 +663,7 @@ def main() -> None:
     print(f"continue_cost={args.continue_cost:.6f}")
     print(f"reward_scale={args.reward_scale:.6f}")
     print(f"min_decision_margin={args.min_decision_margin:.6f}")
+    print(f"force_oracle_actions={args.force_oracle_actions}")
     print(f"max_steps={max_steps}")
     print(f"num_labels={num_labels}")
     print(f"oracle_stop_histogram={oracle_histogram}")
@@ -673,10 +710,10 @@ def main() -> None:
         if update_idx % args.log_interval == 0 or update_idx == args.num_updates:
             print(
                 f"update={update_idx}/{args.num_updates} "
-                f"policy_loss={metrics.policy_loss:.6f} "
-                f"value_loss={metrics.value_loss:.6f} "
-                f"entropy={metrics.entropy:.6f} "
-                f"mean_episode_return={metrics.mean_episode_return:.6f} "
+                f"policy_loss={metrics.policy_loss:.3f} "
+                f"value_loss={metrics.value_loss:.3f} "
+                f"entropy={metrics.entropy:.3f} "
+                f"mean_episode_return={metrics.mean_episode_return:.3f} "
                 f"mean_episode_length={metrics.mean_episode_length:.3f} "
                 f"halt_rate={metrics.halt_rate:.3f}",
                 flush=True,
@@ -701,9 +738,9 @@ def main() -> None:
         trace_callback=trace_callback,
     )
     print(
-        f"average_return={evaluation.average_return:.6f} "
-        f"average_expansions={evaluation.average_expansions:.6f} "
-        f"average_terminal_quality={evaluation.average_terminal_quality:.6f}"
+        f"average_return={evaluation.average_return:.3f} "
+        f"average_expansions={evaluation.average_expansions:.3f} "
+        f"average_terminal_quality={evaluation.average_terminal_quality:.3f}"
     )
     print("halt_step_histogram=")
     for step in sorted(evaluation.halt_step_histogram):
@@ -718,8 +755,8 @@ def main() -> None:
         num_labels=num_labels,
         representation=args.representation,
     )
-    print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.6f}")
-    print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.6f}")
+    print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.3f}")
+    print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.3f}")
     print("oracle_confusion_matrix=")
     for oracle_step in sorted(oracle_agreement.confusion_matrix):
         row = oracle_agreement.confusion_matrix[oracle_step]
@@ -733,10 +770,10 @@ def main() -> None:
         halt_weight, halt_bias = _linear_layer_summary(model.halt_controller)
         value_weight, value_bias = _linear_layer_summary(model.value_head)
         print(f"feature_names={schema.feature_names}")
-        print(f"halt_readout_weight={[round(value, 6) for value in halt_weight]}")
-        print(f"halt_readout_bias={halt_bias:.6f}")
-        print(f"value_readout_weight={[round(value, 6) for value in value_weight]}")
-        print(f"value_readout_bias={value_bias:.6f}")
+        print(f"halt_readout_weight={[round(value, 3) for value in halt_weight]}")
+        print(f"halt_readout_bias={halt_bias:.3f}")
+        print(f"value_readout_weight={[round(value, 3) for value in value_weight]}")
+        print(f"value_readout_bias={value_bias:.3f}")
 
 
 if __name__ == "__main__":

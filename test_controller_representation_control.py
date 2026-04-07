@@ -9,6 +9,7 @@ from scripts.controller_representation_control import (
     RepresentationControlEnv,
     _build_schema,
     _make_observation_tree,
+    _oracle_action_from_observation,
     _optimal_stop_step,
     evaluate_oracle_agreement,
 )
@@ -76,6 +77,17 @@ class ControllerRepresentationControlTests(unittest.TestCase):
         self.assertEqual(len(vector), 2)
         self.assertEqual(list(vector), [0.0, 1.0])
         self.assertEqual(set(root.scalar_features.keys()), {"action_0", "action_1"})
+        self.assertEqual(_oracle_action_from_observation(tree), 1)
+
+        continue_tree = _make_observation_tree(
+            step_index=3,
+            label_index=7,
+            max_steps=5,
+            num_labels=11,
+            representation="oracle-action-now",
+            oracle_action=0,
+        )
+        self.assertEqual(_oracle_action_from_observation(continue_tree), 0)
 
     def test_control_model_uses_linear_halt_readout(self):
         model = LinearPolicyValueControlModel(node_feat=2, device="cpu")

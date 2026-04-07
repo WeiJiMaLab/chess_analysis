@@ -491,6 +491,39 @@ class SupervisedBranchTests(unittest.TestCase):
         counts = Counter(transition.env_id for transition in rollout)
         self.assertEqual(counts, Counter({0: 4, 1: 4}))
 
+    def test_collect_rollout_uses_action_override_for_diagnostic_rollouts(self):
+        rl_model = PolicyValueTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=12,
+            d_embed=8,
+            d_message=6,
+            n_heads=1,
+            d_att=4,
+            controller_hidden=8,
+            value_hidden=8,
+        )
+        trainer = FrozenEncoderControllerTrainer(
+            model=rl_model,
+            tensorizer=self.tensorizer,
+            envs=[make_toy_env(), make_toy_env()],
+            config=PPOConfig(
+                rollout_steps=4,
+                learning_rate=0.01,
+                ppo_epochs=1,
+                minibatch_size=4,
+            ),
+            rollout_action_override=lambda observation, env_id, rollout_step: 1,
+        )
+
+        rollout, completed = trainer._collect_rollout()
+
+        self.assertEqual(len(rollout), 8)
+        self.assertTrue(all(transition.action == 1 for transition in rollout))
+        self.assertTrue(all(transition.done for transition in rollout))
+        self.assertEqual(len(completed), 8)
+
     def test_collect_rollout_snapshots_are_isolated_from_live_env_state(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,

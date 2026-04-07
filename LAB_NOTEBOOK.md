@@ -473,6 +473,14 @@ Follow-up change:
   - halt logit = `w_continue * action_0 + w_halt * action_1 + b`
 - The control script now prints the learned halt/value readout weights for small feature sets.
 
+Additional diagnostic:
+- Added `--force-oracle-actions` to `scripts/controller_representation_control.py`.
+- This diagnostic collects PPO rollouts by stepping the environment with the oracle action encoded in `oracle-action-now` observations, while still scoring the model log-probability and value for that forced action.
+
+Purpose:
+- Separate local gradient plumbing from on-policy exploration.
+- If ordinary `oracle-action-now` PPO collapses because continuing only pays off under correct future actions, forced-oracle rollouts test whether PPO moves the linear readout correctly when future actions are constrained to be optimal.
+
 ## Going forward
 
 Any future entry should include:
