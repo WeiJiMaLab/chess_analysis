@@ -10,8 +10,10 @@ from scripts.train_fitted_q_controller import (
     FittedQEpisode,
     FittedQEpisodeDataset,
     LinearComputeAdvantageModel,
+    OracleActionNowEpisode,
     _advantage_loss_components,
     _oracle_action_now_schema,
+    _oracle_action_now_tensor_dataset,
     _oracle_action_now_tree,
     _oracle_actions_from_targets,
     _predict_stop_step,
@@ -165,6 +167,22 @@ class TrainFittedQControllerTests(unittest.TestCase):
         )
 
         self.assertTrue(torch.allclose(advantages, torch.tensor([2.5, -2.5])))
+
+    def test_oracle_action_now_tensor_dataset_materializes_features_and_targets(self):
+        episode = OracleActionNowEpisode(
+            path="example.pt",
+            features=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            target_advantages=torch.tensor([0.2, -0.3]),
+            halt_rewards=[0.0, 0.1],
+            oracle_stop_step=1,
+            oracle_value=0.2,
+        )
+
+        dataset = _oracle_action_now_tensor_dataset([episode])
+
+        self.assertEqual(len(dataset), 2)
+        self.assertTrue(torch.equal(dataset.tensors[0], episode.features))
+        self.assertTrue(torch.equal(dataset.tensors[1], episode.target_advantages))
 
     def test_predict_stop_step_uses_positive_compute_advantage(self):
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})

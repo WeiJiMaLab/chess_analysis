@@ -616,6 +616,17 @@ Purpose:
   - `advantage_readout_weight[0] + bias > 0`
   - `advantage_readout_weight[1] + bias <= 0`
 
+Follow-up optimization:
+- The initial toy path still used the lazy episode `DataLoader`, which rebuilt raw tree episodes each epoch.
+- Fixed this for `--representation oracle-action-now`:
+  - materialize selected train/validation episodes once
+  - build a `TensorDataset(features, target_advantages)`
+  - train/evaluate the linear readout directly on tensors
+  - run greedy evaluation from the precomputed per-episode tensors
+
+Purpose:
+- Keep the diagnostic faithful to the compute-advantage objective while avoiding repeated raw `.pt` loading and oracle recomputation every epoch.
+
 ## Going forward
 
 Any future entry should include:

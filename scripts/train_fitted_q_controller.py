@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from controller_oracle import compute_oracle_policy, has_strong_optimal_margins
 from cts_pretrain import load_encoder_checkpoint
@@ -46,6 +46,16 @@ class FittedQBatch:
     q_targets: torch.Tensor
     paths: List[str]
     skipped: int
+
+
+@dataclass(frozen=True)
+class OracleActionNowEpisode:
+    path: str
+    features: torch.Tensor
+    target_advantages: torch.Tensor
+    halt_rewards: List[float]
+    oracle_stop_step: int
+    oracle_value: float
 
 
 @dataclass(frozen=True)
@@ -267,6 +277,87 @@ def _oracle_actions_from_targets(q_targets: torch.Tensor) -> List[int]:
     return [0 if float(advantage) > 0.0 else 1 for advantage in target_advantages]
 
 
+def _oracle_action_now_features_from_targets(q_targets: torch.Tensor) -> torch.Tensor:
+    target_advantages = _target_advantages(q_targets)
+    oracle_actions = (target_advantages <= 0.0).to(dtype=torch.long)
+    return F.one_hot(oracle_actions, num_classes=2).to(dtype=torch.float32)
+
+
+def _load_oracle_action_now_episodes(
+    paths: Sequence[str],
+    quality_config: TeacherSearchConfig,
+    continue_cost: float,
+    reward_scale: float,
+    min_decision_margin: float,
+    log_interval: int,
+) -> List[OracleActionNowEpisode]:
+    episodes: List[OracleActionNowEpisode] = []
+    skipped = 0
+    started = time.time()
+    for example_index, path in enumerate(paths, start=1):
+        try:
+            example = torch.load(path, weights_only=False)
+            _, halt_rewards = build_trimmed_decision_episode_with_halt_rewards(example, quality_config)
+        except ValueError:
+            skipped += 1
+        else:
+            scaled_rewards = [reward_scale * reward for reward in halt_rewards]
+            if not has_strong_optimal_margins(
+                scaled_rewards,
+                continue_cost=continue_cost,
+                min_decision_margin=min_decision_margin,
+            ):
+                skipped += 1
+            else:
+                q_targets, oracle_stop_step, oracle_value = bellman_q_targets(scaled_rewards, continue_cost)
+                episodes.append(
+                    OracleActionNowEpisode(
+                        path=path,
+                        features=_oracle_action_now_features_from_targets(q_targets),
+                        target_advantages=_target_advantages(q_targets),
+                        halt_rewards=scaled_rewards,
+                        oracle_stop_step=oracle_stop_step,
+                        oracle_value=oracle_value,
+                    )
+                )
+
+        if log_interval > 0 and (example_index % log_interval == 0 or example_index == len(paths)):
+            elapsed = time.time() - started
+            print(
+                f"materialize_oracle_action_now={example_index}/{len(paths)} "
+                f"accepted={len(episodes)} skipped={skipped} elapsed_s={elapsed:.1f}",
+                flush=True,
+            )
+
+    if not episodes:
+        raise ValueError("No usable oracle-action-now compute-advantage episodes were produced.")
+    return episodes
+
+
+def _oracle_action_now_tensor_dataset(episodes: Sequence[OracleActionNowEpisode]) -> TensorDataset:
+    features = torch.cat([episode.features for episode in episodes], dim=0)
+    target_advantages = torch.cat([episode.target_advantages for episode in episodes], dim=0)
+    return TensorDataset(features, target_advantages)
+
+
+def _build_tensor_loader(
+    dataset: TensorDataset,
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+    device: torch.device,
+) -> DataLoader:
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        generator=generator if shuffle else None,
+        pin_memory=device.type == "cuda",
+    )
+
+
 def _quality_config(args: argparse.Namespace) -> TeacherSearchConfig:
     return TeacherSearchConfig(
         max_depth=args.max_depth,
@@ -438,6 +529,96 @@ def evaluate_advantage_predictions(
     )
 
 
+def _train_tensor_epoch(
+    model: LinearComputeAdvantageModel,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    *,
+    device: torch.device,
+    max_grad_norm: float,
+    epoch: int,
+    log_interval: int,
+) -> AdvantageMetrics:
+    model.train()
+    total_advantage_mse = 0.0
+    total_mean_abs_advantage_error = 0.0
+    total_examples = 0
+    total_correct = 0
+    started = time.time()
+
+    for batch_index, (features, target_advantages) in enumerate(loader, start=1):
+        features = features.to(device, non_blocking=True)
+        target_advantages = target_advantages.to(device, non_blocking=True)
+        predicted_advantages = model.advantage_head(features).squeeze(-1)
+        advantage_mse = F.mse_loss(predicted_advantages, target_advantages)
+        mean_abs_advantage_error = torch.mean(torch.abs(predicted_advantages - target_advantages))
+
+        optimizer.zero_grad()
+        advantage_mse.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        optimizer.step()
+
+        examples = int(target_advantages.shape[0])
+        total_advantage_mse += float(advantage_mse.item()) * examples
+        total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
+        total_examples += examples
+        total_correct += int(((predicted_advantages.detach() > 0) == (target_advantages > 0)).sum().item())
+
+        if log_interval > 0 and batch_index % log_interval == 0:
+            elapsed = time.time() - started
+            print(
+                f"epoch={epoch} batch={batch_index}/{len(loader)} "
+                f"snapshots={total_examples} "
+                f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
+                f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
+                f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
+                f"elapsed_s={elapsed:.1f}",
+                flush=True,
+            )
+
+    if total_examples == 0:
+        raise ValueError("Tensor training loader produced no oracle-action-now snapshots.")
+    return AdvantageMetrics(
+        advantage_mse=total_advantage_mse / total_examples,
+        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
+        sign_accuracy=total_correct / total_examples,
+        examples=total_examples,
+    )
+
+
+def evaluate_tensor_advantage_predictions(
+    model: LinearComputeAdvantageModel,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+) -> AdvantageMetrics:
+    model.eval()
+    total_advantage_mse = 0.0
+    total_mean_abs_advantage_error = 0.0
+    total_examples = 0
+    total_correct = 0
+    with torch.inference_mode():
+        for features, target_advantages in loader:
+            features = features.to(device, non_blocking=True)
+            target_advantages = target_advantages.to(device, non_blocking=True)
+            predicted_advantages = model.advantage_head(features).squeeze(-1)
+            advantage_mse = F.mse_loss(predicted_advantages, target_advantages)
+            mean_abs_advantage_error = torch.mean(torch.abs(predicted_advantages - target_advantages))
+            examples = int(target_advantages.shape[0])
+            total_advantage_mse += float(advantage_mse.item()) * examples
+            total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
+            total_examples += examples
+            total_correct += int(((predicted_advantages > 0) == (target_advantages > 0)).sum().item())
+    if total_examples == 0:
+        raise ValueError("Tensor evaluation loader produced no oracle-action-now snapshots.")
+    return AdvantageMetrics(
+        advantage_mse=total_advantage_mse / total_examples,
+        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
+        sign_accuracy=total_correct / total_examples,
+        examples=total_examples,
+    )
+
+
 def _predict_stop_step(
     model: nn.Module,
     tensorizer: TreeTensorizer,
@@ -518,6 +699,64 @@ def evaluate_greedy_policy(
         average_expansions=total_expansions / evaluated,
         evaluated_episodes=evaluated,
         skipped_episodes=skipped,
+    )
+
+
+def evaluate_oracle_action_now_greedy_policy(
+    model: LinearComputeAdvantageModel,
+    episodes: Sequence[OracleActionNowEpisode],
+    continue_cost: float,
+    *,
+    device: torch.device,
+    log_interval: int,
+) -> GreedyPolicyMetrics:
+    model.eval()
+    exact = 0
+    first_action = 0
+    total_return = 0.0
+    total_oracle_value = 0.0
+    total_expansions = 0
+    started = time.time()
+
+    with torch.inference_mode():
+        for index, episode in enumerate(episodes, start=1):
+            features = episode.features.to(device, non_blocking=True)
+            predicted_advantages = model.advantage_head(features).squeeze(-1).detach().cpu().tolist()
+            predicted_stop = len(predicted_advantages) - 1
+            for step_index, advantage in enumerate(predicted_advantages):
+                if float(advantage) <= 0:
+                    predicted_stop = step_index
+                    break
+
+            predicted_return = -continue_cost * predicted_stop + episode.halt_rewards[predicted_stop]
+            exact += int(predicted_stop == episode.oracle_stop_step)
+            first_action += int((predicted_stop == 0) == (episode.oracle_stop_step == 0))
+            total_return += predicted_return
+            total_oracle_value += episode.oracle_value
+            total_expansions += predicted_stop
+
+            if log_interval > 0 and (index % log_interval == 0 or index == len(episodes)):
+                elapsed = time.time() - started
+                print(
+                    f"greedy_eval_progress={index}/{len(episodes)} "
+                    f"evaluated={index} skipped=0 "
+                    f"exact_stop_step_accuracy={exact / max(index, 1):.3f} "
+                    f"elapsed_s={elapsed:.1f}",
+                    flush=True,
+                )
+
+    evaluated = len(episodes)
+    if evaluated == 0:
+        raise ValueError("Greedy evaluation produced no oracle-action-now episodes.")
+    return GreedyPolicyMetrics(
+        exact_stop_step_accuracy=exact / evaluated,
+        first_action_accuracy=first_action / evaluated,
+        average_return=total_return / evaluated,
+        average_oracle_value=total_oracle_value / evaluated,
+        average_regret=(total_oracle_value - total_return) / evaluated,
+        average_expansions=total_expansions / evaluated,
+        evaluated_episodes=evaluated,
+        skipped_episodes=0,
     )
 
 
@@ -635,46 +874,93 @@ def main() -> None:
         weight_decay=args.weight_decay,
     )
 
-    train_loader = _build_loader(
-        train_paths,
-        quality_config,
-        args.continue_cost,
-        args.reward_scale,
-        args.representation,
-        args.min_decision_margin,
-        tensorizer,
-        batch_size=args.batch_size,
-        shuffle=True,
-        seed=args.seed,
-        num_workers=args.num_workers,
-    )
-    validation_loader = _build_loader(
-        validation_paths,
-        quality_config,
-        args.continue_cost,
-        args.reward_scale,
-        args.representation,
-        args.min_decision_margin,
-        tensorizer,
-        batch_size=args.batch_size,
-        shuffle=False,
-        seed=args.seed,
-        num_workers=args.num_workers,
-    )
+    train_episodes: List[OracleActionNowEpisode] | None = None
+    validation_episodes: List[OracleActionNowEpisode] | None = None
+    if args.representation == "oracle-action-now":
+        print("[compute_advantage] stage=materialize_train", flush=True)
+        train_episodes = _load_oracle_action_now_episodes(
+            train_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.min_decision_margin,
+            args.log_interval,
+        )
+        print("[compute_advantage] stage=materialize_validation", flush=True)
+        validation_episodes = _load_oracle_action_now_episodes(
+            validation_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.min_decision_margin,
+            args.log_interval,
+        )
+        train_loader = _build_tensor_loader(
+            _oracle_action_now_tensor_dataset(train_episodes),
+            batch_size=args.batch_size,
+            shuffle=True,
+            seed=args.seed,
+            device=device,
+        )
+        validation_loader = _build_tensor_loader(
+            _oracle_action_now_tensor_dataset(validation_episodes),
+            batch_size=args.batch_size,
+            shuffle=False,
+            seed=args.seed,
+            device=device,
+        )
+    else:
+        train_loader = _build_loader(
+            train_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.representation,
+            args.min_decision_margin,
+            tensorizer,
+            batch_size=args.batch_size,
+            shuffle=True,
+            seed=args.seed,
+            num_workers=args.num_workers,
+        )
+        validation_loader = _build_loader(
+            validation_paths,
+            quality_config,
+            args.continue_cost,
+            args.reward_scale,
+            args.representation,
+            args.min_decision_margin,
+            tensorizer,
+            batch_size=args.batch_size,
+            shuffle=False,
+            seed=args.seed,
+            num_workers=args.num_workers,
+        )
 
     best_validation_advantage_mse = float("inf")
     best_metadata: dict | None = None
     print("[compute_advantage] stage=train_start", flush=True)
     for epoch in range(1, args.epochs + 1):
-        train_metrics = _train_epoch(
-            model,
-            train_loader,
-            optimizer,
-            device=device,
-            max_grad_norm=args.max_grad_norm,
-            epoch=epoch,
-            log_interval=args.log_interval,
-        )
+        if isinstance(model, LinearComputeAdvantageModel):
+            train_metrics = _train_tensor_epoch(
+                model,
+                train_loader,
+                optimizer,
+                device=device,
+                max_grad_norm=args.max_grad_norm,
+                epoch=epoch,
+                log_interval=args.log_interval,
+            )
+        else:
+            train_metrics = _train_epoch(
+                model,
+                train_loader,
+                optimizer,
+                device=device,
+                max_grad_norm=args.max_grad_norm,
+                epoch=epoch,
+                log_interval=args.log_interval,
+            )
         print(
             f"epoch={epoch}/{args.epochs} "
             f"train_advantage_mse={train_metrics.advantage_mse:.3f} "
@@ -686,7 +972,10 @@ def main() -> None:
 
         validation_metrics = None
         if args.validation_interval > 0 and (epoch % args.validation_interval == 0 or epoch == args.epochs):
-            validation_metrics = evaluate_advantage_predictions(model, validation_loader, device=device)
+            if isinstance(model, LinearComputeAdvantageModel):
+                validation_metrics = evaluate_tensor_advantage_predictions(model, validation_loader, device=device)
+            else:
+                validation_metrics = evaluate_advantage_predictions(model, validation_loader, device=device)
             print(
                 f"validation_epoch={epoch}/{args.epochs} "
                 f"validation_advantage_mse={validation_metrics.advantage_mse:.3f} "
@@ -714,17 +1003,27 @@ def main() -> None:
                     _save_checkpoint(args.output_checkpoint, model, best_metadata)
 
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
-            greedy_metrics = evaluate_greedy_policy(
-                model,
-                validation_paths,
-                quality_config,
-                args.continue_cost,
-                args.reward_scale,
-                args.representation,
-                args.min_decision_margin,
-                tensorizer,
-                log_interval=args.log_interval,
-            )
+            if isinstance(model, LinearComputeAdvantageModel):
+                assert validation_episodes is not None
+                greedy_metrics = evaluate_oracle_action_now_greedy_policy(
+                    model,
+                    validation_episodes,
+                    args.continue_cost,
+                    device=device,
+                    log_interval=args.log_interval,
+                )
+            else:
+                greedy_metrics = evaluate_greedy_policy(
+                    model,
+                    validation_paths,
+                    quality_config,
+                    args.continue_cost,
+                    args.reward_scale,
+                    args.representation,
+                    args.min_decision_margin,
+                    tensorizer,
+                    log_interval=args.log_interval,
+                )
             print(
                 f"greedy_epoch={epoch}/{args.epochs} "
                 f"exact_stop_step_accuracy={greedy_metrics.exact_stop_step_accuracy:.3f} "
