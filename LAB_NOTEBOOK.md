@@ -600,6 +600,22 @@ Validation:
 - `/opt/miniconda3/envs/cts_supervised/bin/python -m unittest test_train_fitted_q_controller.py`
 - `/opt/miniconda3/envs/cts_supervised/bin/python scripts/train_fitted_q_controller.py --help`
 
+Follow-up change:
+- Added `--representation oracle-action-now` to `scripts/train_fitted_q_controller.py`.
+- This replaces each real tree snapshot with a 2d one-hot root feature:
+  - `[1, 0]` for oracle continue
+  - `[0, 1]` for oracle halt
+- In this mode, the model uses a fixed-feature linear advantage readout instead of loading the TreeNN encoder.
+- Added `--min-decision-margin` so low-margin episodes can be filtered for the toy sanity check.
+
+Purpose:
+- Make the counterfactual advantage objective testable on the same trivial representation used for prior PPO diagnostics.
+- Expected behavior on strong-margin data:
+  - high `sign_accuracy`
+  - high greedy stop-step accuracy
+  - `advantage_readout_weight[0] + bias > 0`
+  - `advantage_readout_weight[1] + bias <= 0`
+
 ## Going forward
 
 Any future entry should include:

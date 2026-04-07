@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from controller_oracle import compute_oracle_policy
+from controller_oracle import compute_oracle_policy, has_strong_optimal_margins
 from cts_pretrain import load_encoder_checkpoint
 from GNN import TreeEncoderOutput, TreeNN
 from schema import NodeFeatureSchema
@@ -109,6 +109,33 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
         return self.advantage_head(encoded.root_states).squeeze(-1)
 
 
+class FixedFeatureEncoder(nn.Module):
+    def __init__(self, node_feat: int, device: str) -> None:
+        super().__init__()
+        self.device = torch.device(device)
+        self.d_embed = node_feat
+
+    def forward(self, tree_batch: TreeBatch) -> TreeEncoderOutput:
+        node_states = tree_batch.node_features.to(self.device)
+        root_states = node_states[tree_batch.root_index.to(self.device)]
+        return TreeEncoderOutput(node_states=node_states, root_states=root_states)
+
+
+class LinearComputeAdvantageModel(nn.Module):
+    def __init__(self, node_feat: int, device: str) -> None:
+        super().__init__()
+        resolved_device = torch.device(device)
+        self.encoder = FixedFeatureEncoder(node_feat=node_feat, device=device)
+        self.advantage_head = nn.Linear(node_feat, 1, device=resolved_device)
+
+    def freeze_encoder(self) -> None:
+        return None
+
+    def forward(self, tree_batch: TreeBatch) -> torch.Tensor:
+        encoded = self.encoder(tree_batch)
+        return self.advantage_head(encoded.root_states).squeeze(-1)
+
+
 class FittedQEpisodeDataset(Dataset):
     def __init__(
         self,
@@ -116,11 +143,15 @@ class FittedQEpisodeDataset(Dataset):
         quality_config: TeacherSearchConfig,
         continue_cost: float,
         reward_scale: float,
+        representation: str,
+        min_decision_margin: float,
     ) -> None:
         self.paths = list(paths)
         self.quality_config = quality_config
         self.continue_cost = float(continue_cost)
         self.reward_scale = float(reward_scale)
+        self.representation = representation
+        self.min_decision_margin = float(min_decision_margin)
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -137,13 +168,24 @@ class FittedQEpisodeDataset(Dataset):
             return None
 
         scaled_rewards = [self.reward_scale * reward for reward in halt_rewards]
+        if not has_strong_optimal_margins(
+            scaled_rewards,
+            continue_cost=self.continue_cost,
+            min_decision_margin=self.min_decision_margin,
+        ):
+            return None
         q_targets, oracle_stop_step, oracle_value = bellman_q_targets(
             scaled_rewards,
             self.continue_cost,
         )
+        snapshots = list(episode.snapshots)
+        if self.representation == "oracle-action-now":
+            snapshots = [_oracle_action_now_tree(action) for action in _oracle_actions_from_targets(q_targets)]
+        elif self.representation != "tree":
+            raise ValueError(f"Unsupported representation: {self.representation}")
         return FittedQEpisode(
             path=path,
-            snapshots=list(episode.snapshots),
+            snapshots=snapshots,
             halt_rewards=scaled_rewards,
             q_targets=q_targets,
             oracle_stop_step=oracle_stop_step,
@@ -199,6 +241,32 @@ def _feature_schema() -> NodeFeatureSchema:
     return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
 
 
+def _oracle_action_now_schema() -> NodeFeatureSchema:
+    return NodeFeatureSchema.from_ordered_features(
+        ["action_0", "action_1"],
+        defaults={"action_0": 0.0, "action_1": 0.0},
+    )
+
+
+def _oracle_action_now_tree(action: int) -> SearchTree:
+    if action not in (0, 1):
+        raise ValueError("oracle-action-now representation requires action in {0, 1}.")
+    tree = SearchTree()
+    tree.create_root(
+        "oracle-action-now-root",
+        {
+            "action_0": 1.0 if action == 0 else 0.0,
+            "action_1": 1.0 if action == 1 else 0.0,
+        },
+    )
+    return tree
+
+
+def _oracle_actions_from_targets(q_targets: torch.Tensor) -> List[int]:
+    target_advantages = _target_advantages(q_targets)
+    return [0 if float(advantage) > 0.0 else 1 for advantage in target_advantages]
+
+
 def _quality_config(args: argparse.Namespace) -> TeacherSearchConfig:
     return TeacherSearchConfig(
         max_depth=args.max_depth,
@@ -224,6 +292,8 @@ def _build_loader(
     quality_config: TeacherSearchConfig,
     continue_cost: float,
     reward_scale: float,
+    representation: str,
+    min_decision_margin: float,
     tensorizer: TreeTensorizer,
     batch_size: int,
     shuffle: bool,
@@ -235,6 +305,8 @@ def _build_loader(
         quality_config=quality_config,
         continue_cost=continue_cost,
         reward_scale=reward_scale,
+        representation=representation,
+        min_decision_margin=min_decision_margin,
     )
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -269,7 +341,7 @@ def _advantage_sign_correct_count(predicted_advantages: torch.Tensor, targets: t
 
 
 def _train_epoch(
-    model: ComputeAdvantageTreeSearchModel,
+    model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     *,
@@ -331,7 +403,7 @@ def _train_epoch(
 
 
 def evaluate_advantage_predictions(
-    model: ComputeAdvantageTreeSearchModel,
+    model: nn.Module,
     loader: DataLoader,
     *,
     device: torch.device,
@@ -367,7 +439,7 @@ def evaluate_advantage_predictions(
 
 
 def _predict_stop_step(
-    model: ComputeAdvantageTreeSearchModel,
+    model: nn.Module,
     tensorizer: TreeTensorizer,
     episode: FittedQEpisode,
 ) -> int:
@@ -382,16 +454,25 @@ def _predict_stop_step(
 
 
 def evaluate_greedy_policy(
-    model: ComputeAdvantageTreeSearchModel,
+    model: nn.Module,
     paths: Sequence[str],
     quality_config: TeacherSearchConfig,
     continue_cost: float,
     reward_scale: float,
+    representation: str,
+    min_decision_margin: float,
     tensorizer: TreeTensorizer,
     *,
     log_interval: int,
 ) -> GreedyPolicyMetrics:
-    dataset = FittedQEpisodeDataset(paths, quality_config, continue_cost, reward_scale)
+    dataset = FittedQEpisodeDataset(
+        paths,
+        quality_config,
+        continue_cost,
+        reward_scale,
+        representation,
+        min_decision_margin,
+    )
     exact = 0
     first_action = 0
     total_return = 0.0
@@ -440,7 +521,7 @@ def evaluate_greedy_policy(
     )
 
 
-def _save_checkpoint(path: str, model: ComputeAdvantageTreeSearchModel, metadata: dict) -> None:
+def _save_checkpoint(path: str, model: nn.Module, metadata: dict) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -452,6 +533,12 @@ def _save_checkpoint(path: str, model: ComputeAdvantageTreeSearchModel, metadata
     )
 
 
+def _linear_advantage_summary(model: LinearComputeAdvantageModel) -> tuple[List[float], float]:
+    weight = model.advantage_head.weight.detach().cpu().squeeze(0).tolist()
+    bias = float(model.advantage_head.bias.detach().cpu().squeeze(0).item())
+    return [float(item) for item in weight], bias
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -460,12 +547,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--validation-data", required=True)
-    parser.add_argument("--encoder-checkpoint", required=True)
+    parser.add_argument("--encoder-checkpoint")
     parser.add_argument("--output-checkpoint")
+    parser.add_argument("--representation", choices=["tree", "oracle-action-now"], default="tree")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--continue-cost", type=float, default=0.001)
     parser.add_argument("--reward-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--min-decision-margin",
+        type=float,
+        default=0.0,
+        help="Drop episodes whose oracle stopping decisions have weaker margins than this threshold.",
+    )
     parser.add_argument("--search-budget", type=int, default=64)
     parser.add_argument("--max-depth", type=int, default=10)
     parser.add_argument("--c-puct", type=float, default=1.0)
@@ -493,6 +587,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.representation == "tree" and not args.encoder_checkpoint:
+        raise ValueError("--encoder-checkpoint is required when --representation tree.")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
@@ -504,30 +600,35 @@ def main() -> None:
         args.seed + 1,
     )
     print(
-        f"[compute_advantage] train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
+        f"[compute_advantage] representation={args.representation} "
+        f"train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
         flush=True,
     )
 
-    schema = _feature_schema()
+    schema = _feature_schema() if args.representation == "tree" else _oracle_action_now_schema()
     tensorizer = TreeTensorizer(schema, device="cpu")
     quality_config = _quality_config(args)
     device = torch.device(args.device)
 
     print("[compute_advantage] stage=build_model", flush=True)
-    model = ComputeAdvantageTreeSearchModel(
-        k=args.k,
-        node_feat=len(schema.feature_names),
-        device=args.device,
-        node_embed_hidden=args.node_embed_hidden,
-        d_embed=args.d_embed,
-        d_message=args.d_message,
-        n_heads=args.n_heads,
-        d_att=args.d_att,
-        q_hidden=args.q_hidden,
-    )
-    load_encoder_checkpoint(args.encoder_checkpoint, model.encoder)
-    if not args.unfreeze_encoder:
-        model.freeze_encoder()
+    if args.representation == "tree":
+        model = ComputeAdvantageTreeSearchModel(
+            k=args.k,
+            node_feat=len(schema.feature_names),
+            device=args.device,
+            node_embed_hidden=args.node_embed_hidden,
+            d_embed=args.d_embed,
+            d_message=args.d_message,
+            n_heads=args.n_heads,
+            d_att=args.d_att,
+            q_hidden=args.q_hidden,
+        )
+        assert args.encoder_checkpoint is not None
+        load_encoder_checkpoint(args.encoder_checkpoint, model.encoder)
+        if not args.unfreeze_encoder:
+            model.freeze_encoder()
+    else:
+        model = LinearComputeAdvantageModel(node_feat=len(schema.feature_names), device=args.device)
     optimizer = torch.optim.Adam(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=args.learning_rate,
@@ -539,6 +640,8 @@ def main() -> None:
         quality_config,
         args.continue_cost,
         args.reward_scale,
+        args.representation,
+        args.min_decision_margin,
         tensorizer,
         batch_size=args.batch_size,
         shuffle=True,
@@ -550,6 +653,8 @@ def main() -> None:
         quality_config,
         args.continue_cost,
         args.reward_scale,
+        args.representation,
+        args.min_decision_margin,
         tensorizer,
         batch_size=args.batch_size,
         shuffle=False,
@@ -599,6 +704,8 @@ def main() -> None:
                     "validation_sign_accuracy": validation_metrics.sign_accuracy,
                     "continue_cost": args.continue_cost,
                     "reward_scale": args.reward_scale,
+                    "representation": args.representation,
+                    "min_decision_margin": args.min_decision_margin,
                     "encoder_checkpoint": args.encoder_checkpoint,
                     "unfreeze_encoder": args.unfreeze_encoder,
                 }
@@ -613,6 +720,8 @@ def main() -> None:
                 quality_config,
                 args.continue_cost,
                 args.reward_scale,
+                args.representation,
+                args.min_decision_margin,
                 tensorizer,
                 log_interval=args.log_interval,
             )
@@ -629,6 +738,12 @@ def main() -> None:
                 flush=True,
             )
 
+    if isinstance(model, LinearComputeAdvantageModel):
+        weight, bias = _linear_advantage_summary(model)
+        print("feature_names=('action_0', 'action_1')", flush=True)
+        print(f"advantage_readout_weight={[round(item, 3) for item in weight]}", flush=True)
+        print(f"advantage_readout_bias={bias:.3f}", flush=True)
+
     if args.output_checkpoint and best_metadata is None:
         _save_checkpoint(
             args.output_checkpoint,
@@ -638,6 +753,8 @@ def main() -> None:
                 "epoch": args.epochs,
                 "continue_cost": args.continue_cost,
                 "reward_scale": args.reward_scale,
+                "representation": args.representation,
+                "min_decision_margin": args.min_decision_margin,
                 "encoder_checkpoint": args.encoder_checkpoint,
                 "unfreeze_encoder": args.unfreeze_encoder,
             },
