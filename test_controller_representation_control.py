@@ -12,10 +12,12 @@ from scripts.controller_representation_control import (
     _build_schema,
     _build_balanced_oracle_action_bandit_cases,
     _make_observation_tree,
+    _oracle_action_case_tensors,
     _oracle_action_from_observation,
     _optimal_stop_step,
     evaluate_bandit_agreement,
     evaluate_oracle_agreement,
+    train_supervised_oracle_action_readout,
 )
 from supervised_branch import evaluate_controller
 from tensorizer import TreeTensorizer
@@ -230,6 +232,17 @@ class ControllerRepresentationControlTests(unittest.TestCase):
             {0: 2, 1: 2},
         )
 
+    def test_oracle_action_case_tensors_encode_binary_halt_targets(self):
+        cases = [
+            OracleActionBanditCase(example_path="a", step_index=0, oracle_action=0),
+            OracleActionBanditCase(example_path="b", step_index=0, oracle_action=1),
+        ]
+
+        features, labels = _oracle_action_case_tensors(cases)
+
+        self.assertEqual(features.tolist(), [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(labels.tolist(), [0.0, 1.0])
+
     def test_oracle_action_bandit_env_is_one_step_reward_diagnostic(self):
         cases = [OracleActionBanditCase(example_path="a", step_index=0, oracle_action=0)]
         env = OracleActionBanditEnv(cases, max_steps=1, num_labels=2, seed=0, shuffle=False)
@@ -265,6 +278,33 @@ class ControllerRepresentationControlTests(unittest.TestCase):
 
         self.assertAlmostEqual(metrics.action_accuracy, 1.0)
         self.assertEqual(metrics.confusion_matrix, {0: {0: 1}, 1: {1: 1}})
+
+    def test_supervised_oracle_action_readout_learns_balanced_mapping(self):
+        cases = [
+            OracleActionBanditCase(example_path=f"continue-{index}", step_index=0, oracle_action=0)
+            for index in range(16)
+        ] + [
+            OracleActionBanditCase(example_path=f"halt-{index}", step_index=0, oracle_action=1)
+            for index in range(16)
+        ]
+        model = LinearPolicyValueControlModel(node_feat=2, device="cpu")
+
+        metrics = train_supervised_oracle_action_readout(
+            model=model,
+            cases=cases,
+            device="cpu",
+            learning_rate=0.1,
+            batch_size=8,
+            epochs=50,
+            seed=0,
+            log_interval=0,
+        )
+
+        self.assertAlmostEqual(metrics.action_accuracy, 1.0)
+        halt_weight = model.halt_controller.weight.detach().squeeze(0)
+        halt_bias = float(model.halt_controller.bias.detach().squeeze(0).item())
+        self.assertLess(float(halt_weight[0].item()) + halt_bias, 0.0)
+        self.assertGreater(float(halt_weight[1].item()) + halt_bias, 0.0)
 
 
 if __name__ == "__main__":

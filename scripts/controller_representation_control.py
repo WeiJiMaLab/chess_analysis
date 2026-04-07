@@ -14,6 +14,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
 
 from controller_oracle import compute_oracle_policy as _compute_oracle_policy
 from controller_oracle import has_strong_optimal_margins as _has_strong_optimal_margins
@@ -514,6 +516,106 @@ class BanditAgreementMetrics:
     confusion_matrix: Dict[int, Dict[int, int]]
 
 
+@dataclass(frozen=True)
+class SupervisedOracleActionMetrics:
+    loss: float
+    action_accuracy: float
+
+
+def _oracle_action_case_tensors(
+    cases: Sequence[OracleActionBanditCase],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    features = torch.zeros((len(cases), 2), dtype=torch.float32)
+    labels = torch.zeros((len(cases),), dtype=torch.float32)
+    for index, case in enumerate(cases):
+        features[index, case.oracle_action] = 1.0
+        labels[index] = float(case.oracle_action)
+    return features, labels
+
+
+def _evaluate_supervised_oracle_action(
+    model: LinearPolicyValueControlModel,
+    loader: DataLoader,
+    device: torch.device,
+) -> SupervisedOracleActionMetrics:
+    model.eval()
+    total_loss = 0.0
+    total_examples = 0
+    total_correct = 0
+    with torch.inference_mode():
+        for features, labels in loader:
+            features = features.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            logits = model.halt_controller(features).squeeze(-1)
+            loss = F.binary_cross_entropy_with_logits(logits, labels, reduction="sum")
+            predictions = (logits >= 0.0).to(dtype=torch.float32)
+            total_loss += float(loss.item())
+            total_examples += int(labels.numel())
+            total_correct += int((predictions == labels).sum().item())
+    if total_examples == 0:
+        raise ValueError("Cannot evaluate an empty supervised oracle-action dataset.")
+    return SupervisedOracleActionMetrics(
+        loss=total_loss / total_examples,
+        action_accuracy=total_correct / total_examples,
+    )
+
+
+def train_supervised_oracle_action_readout(
+    model: LinearPolicyValueControlModel,
+    cases: Sequence[OracleActionBanditCase],
+    device: str,
+    learning_rate: float,
+    batch_size: int,
+    epochs: int,
+    seed: int,
+    log_interval: int,
+) -> SupervisedOracleActionMetrics:
+    resolved_device = torch.device(device)
+    features, labels = _oracle_action_case_tensors(cases)
+    dataset = TensorDataset(features, labels)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    pin_memory = resolved_device.type == "cuda"
+    train_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=generator,
+        pin_memory=pin_memory,
+    )
+    eval_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=pin_memory,
+    )
+    optimizer = torch.optim.Adam(model.halt_controller.parameters(), lr=learning_rate)
+
+    final_metrics = _evaluate_supervised_oracle_action(model, eval_loader, resolved_device)
+    for epoch in range(1, epochs + 1):
+        model.train()
+        for batch_features, batch_labels in train_loader:
+            batch_features = batch_features.to(resolved_device, non_blocking=True)
+            batch_labels = batch_labels.to(resolved_device, non_blocking=True)
+            logits = model.halt_controller(batch_features).squeeze(-1)
+            loss = F.binary_cross_entropy_with_logits(logits, batch_labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        if log_interval > 0 and (epoch % log_interval == 0 or epoch == epochs):
+            final_metrics = _evaluate_supervised_oracle_action(model, eval_loader, resolved_device)
+            print(
+                f"supervised_epoch={epoch}/{epochs} "
+                f"loss={final_metrics.loss:.3f} "
+                f"action_accuracy={final_metrics.action_accuracy:.3f}",
+                flush=True,
+            )
+    if log_interval <= 0:
+        final_metrics = _evaluate_supervised_oracle_action(model, eval_loader, resolved_device)
+    return final_metrics
+
+
 def evaluate_bandit_agreement(
     model: nn.Module,
     tensorizer: TreeTensorizer,
@@ -692,6 +794,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "one-step contextual bandit with +1 reward for the encoded action."
         ),
     )
+    parser.add_argument(
+        "--supervised-oracle-action",
+        action="store_true",
+        help=(
+            "Diagnostic-only mode: train the linear readout with supervised BCE on "
+            "balanced oracle-action-now states from the selected sequential episodes."
+        ),
+    )
     return parser
 
 
@@ -703,6 +813,10 @@ def main() -> None:
         raise ValueError("--one-step-oracle-bandit is only defined for --representation oracle-action-now.")
     if args.one_step_oracle_bandit and args.force_oracle_actions:
         raise ValueError("--one-step-oracle-bandit and --force-oracle-actions are separate diagnostics.")
+    if args.supervised_oracle_action and args.representation != "oracle-action-now":
+        raise ValueError("--supervised-oracle-action is only defined for --representation oracle-action-now.")
+    if args.supervised_oracle_action and (args.one_step_oracle_bandit or args.force_oracle_actions):
+        raise ValueError("--supervised-oracle-action is separate from PPO diagnostic modes.")
     random.seed(args.seed)
     quality_config = _teacher_config(args)
     episodes = _load_control_episodes(
@@ -745,6 +859,7 @@ def main() -> None:
                     "eval_episodes": args.eval_episodes,
                     "force_oracle_actions": args.force_oracle_actions,
                     "one_step_oracle_bandit": args.one_step_oracle_bandit,
+                    "supervised_oracle_action": args.supervised_oracle_action,
                 },
                 indent=2,
                 sort_keys=True,
@@ -777,8 +892,9 @@ def main() -> None:
         device=args.device,
     )
     bandit_cases: List[OracleActionBanditCase] = []
-    if args.one_step_oracle_bandit:
+    if args.one_step_oracle_bandit or args.supervised_oracle_action:
         bandit_cases = _build_balanced_oracle_action_bandit_cases(episodes, seed=args.seed)
+    if args.one_step_oracle_bandit:
         envs = [
             OracleActionBanditEnv(
                 bandit_cases,
@@ -833,15 +949,16 @@ def main() -> None:
     print(f"min_decision_margin={args.min_decision_margin:.6f}")
     print(f"force_oracle_actions={args.force_oracle_actions}")
     print(f"one_step_oracle_bandit={args.one_step_oracle_bandit}")
+    print(f"supervised_oracle_action={args.supervised_oracle_action}")
     print(f"max_steps={max_steps}")
     print(f"num_labels={num_labels}")
     print(f"oracle_stop_histogram={oracle_histogram}")
-    if args.one_step_oracle_bandit:
+    if args.one_step_oracle_bandit or args.supervised_oracle_action:
         bandit_histogram = {0: 0, 1: 0}
         for case in bandit_cases:
             bandit_histogram[case.oracle_action] += 1
-        print(f"bandit_cases={len(bandit_cases)}")
-        print(f"bandit_action_histogram={bandit_histogram}")
+        print(f"oracle_action_cases={len(bandit_cases)}")
+        print(f"oracle_action_histogram={bandit_histogram}")
     if args.debug_dir:
         print(f"debug_dir={args.debug_dir}")
     print("selected_episodes=")
@@ -852,6 +969,69 @@ def main() -> None:
                 print(f"    {_episode_summary_line(episode)}")
 
     if args.inspect_only:
+        return
+
+    if args.supervised_oracle_action:
+        print("rollout_coverage=not_applicable_for_supervised_oracle_action")
+        supervised_metrics = train_supervised_oracle_action_readout(
+            model=model,
+            cases=bandit_cases,
+            device=args.device,
+            learning_rate=args.learning_rate,
+            batch_size=args.minibatch_size,
+            epochs=args.num_updates,
+            seed=args.seed,
+            log_interval=args.log_interval,
+        )
+        print(
+            f"supervised_final_loss={supervised_metrics.loss:.3f} "
+            f"supervised_action_accuracy={supervised_metrics.action_accuracy:.3f}"
+        )
+        bandit_agreement = evaluate_bandit_agreement(
+            model,
+            tensorizer,
+            bandit_cases,
+            max_steps=max_steps,
+            num_labels=num_labels,
+        )
+        print(f"supervised_tensorized_action_accuracy={bandit_agreement.action_accuracy:.3f}")
+        print("supervised_action_confusion_matrix=")
+        for oracle_action in sorted(bandit_agreement.confusion_matrix):
+            row = bandit_agreement.confusion_matrix[oracle_action]
+            formatted = " ".join(
+                f"pred_{predicted_action}={row[predicted_action]}"
+                for predicted_action in sorted(row)
+            )
+            print(f"  oracle_action_{oracle_action}: {formatted}")
+
+        oracle_agreement = evaluate_oracle_agreement(
+            model,
+            tensorizer,
+            episodes,
+            continue_cost=args.continue_cost,
+            max_steps=max_steps,
+            num_labels=num_labels,
+            representation=args.representation,
+        )
+        print(f"exact_stop_step_accuracy={oracle_agreement.exact_stop_step_accuracy:.3f}")
+        print(f"first_action_accuracy={oracle_agreement.first_action_accuracy:.3f}")
+        print("oracle_confusion_matrix=")
+        for oracle_step in sorted(oracle_agreement.confusion_matrix):
+            row = oracle_agreement.confusion_matrix[oracle_step]
+            formatted = " ".join(
+                f"pred_{predicted_step}={row[predicted_step]}"
+                for predicted_step in sorted(row)
+            )
+            print(f"  oracle_{oracle_step}: {formatted}")
+
+        if len(schema.feature_names) <= 32:
+            halt_weight, halt_bias = _linear_layer_summary(model.halt_controller)
+            value_weight, value_bias = _linear_layer_summary(model.value_head)
+            print(f"feature_names={schema.feature_names}")
+            print(f"halt_readout_weight={[round(value, 3) for value in halt_weight]}")
+            print(f"halt_readout_bias={halt_bias:.3f}")
+            print(f"value_readout_weight={[round(value, 3) for value in value_weight]}")
+            print(f"value_readout_bias={value_bias:.3f}")
         return
 
     if args.one_step_oracle_bandit:

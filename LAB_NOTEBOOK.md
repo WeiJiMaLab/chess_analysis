@@ -494,6 +494,14 @@ Purpose:
 - This is the clean PPO plumbing diagnostic for the oracle-action representation.
 - It removes sequential stopping dynamics, future-policy dependence, and transition-count imbalance, while still using the same PPO trainer, tensorizer, and linear policy/value model.
 
+Additional diagnostic:
+- Added `--supervised-oracle-action`.
+- This trains the same linear halt readout with supervised BCE on balanced `oracle-action-now` states extracted from the selected sequential real episodes.
+
+Purpose:
+- Check whether the sequential oracle-action labels are internally coherent and linearly learnable once RL temporal credit assignment is removed.
+- The diagnostic also evaluates the supervised readout through the tensorized sequential stop-step evaluator.
+
 ## Going forward
 
 Any future entry should include:
