@@ -713,6 +713,19 @@ Validation:
 - `/opt/miniconda3/envs/cts_supervised/bin/python -m unittest test_probe_controller_representation.py`
 - `/opt/miniconda3/envs/cts_supervised/bin/python scripts/probe_controller_representation.py --help`
 
+Follow-up:
+- Added `slurm/probe_advantage_decodability_della.slurm` to submit the full-dataset frozen advantage probe without hand-writing the command on the cluster.
+- Defaults:
+  - full train/validation manifests
+  - pretrained frozen encoder checkpoint
+  - shared probe cache directory
+  - `--probe-target advantage`
+  - `--probe-type mlp`
+  - `--probe-epochs 50`
+
+Validation:
+- `bash -n slurm/probe_advantage_decodability_della.slurm`
+
 ## Going forward
 
 Any future entry should include:
