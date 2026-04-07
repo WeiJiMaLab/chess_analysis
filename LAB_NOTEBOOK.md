@@ -523,6 +523,30 @@ Conclusion:
 - The sequential oracle-action labels are coherent and linearly learnable.
 - The remaining `oracle-action-now` PPO failure is therefore isolated to sequential on-policy credit assignment/exploration, not diagnostic wiring or representation capacity for the toy control.
 
+### Offline fitted-Q controller path added
+
+Intent:
+- Add an RL-flavored alternative to PPO that avoids the on-policy continuation-trajectory discovery problem.
+
+Meaningful change:
+- Added:
+  - `scripts/train_fitted_q_controller.py`
+- The script trains a frozen-encoder controller to predict Bellman action values:
+  - `Q(s_t, continue) = -continue_cost + V*(s_{t+1})`
+  - `Q(s_t, halt) = halt_reward_t`
+  - action order is `[continue, halt]`
+- The greedy policy halts iff:
+  - `Q_halt >= Q_continue`
+
+Purpose:
+- Use the known deterministic snapshot trajectory structure directly.
+- Preserve an RL/value-learning framing while removing PPO’s on-policy exploration trap.
+
+Validation:
+- Added focused regression tests in:
+  - `test_train_fitted_q_controller.py`
+- Tests cover Bellman target construction, episode-batch collation, and greedy stop-step behavior.
+
 ## Going forward
 
 Any future entry should include:
