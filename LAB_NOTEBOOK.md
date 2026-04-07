@@ -686,6 +686,33 @@ Conclusion:
 - The unfrozen run did not improve the compute-advantage controller in the time available.
 - It was worse than the frozen run on sign accuracy and greedy boundary metrics, but the run was incomplete and much slower.
 
+### Frozen encoder advantage decodability probe added
+
+Intent:
+- Test whether counterfactual compute advantage is decodable from frozen encoder root snapshots independent of the full controller training loop.
+
+Meaningful change:
+- Extended `scripts/probe_controller_representation.py` with:
+  - `--probe-target action`
+  - `--probe-target advantage`
+- The advantage probe trains the existing linear/MLP probe heads to regress:
+  - `A_compute(s) = Q_continue(s) - Q_halt(s)`
+- It reports:
+  - `mse`
+  - `mae`
+  - `sign_accuracy`
+  - `first_sign_accuracy`
+  - per-phase sign accuracy
+- Existing action-probe caches remain usable. If a cache was created before advantage targets were stored, the script backfills advantage targets from the selected raw paths without recomputing frozen encoder embeddings.
+
+Purpose:
+- Separate representation decodability from the full compute-advantage trainer and check whether the frozen encoder root embedding contains enough information for the scalar value-of-computation boundary.
+
+Validation:
+- `python3 -m py_compile scripts/probe_controller_representation.py test_probe_controller_representation.py`
+- `/opt/miniconda3/envs/cts_supervised/bin/python -m unittest test_probe_controller_representation.py`
+- `/opt/miniconda3/envs/cts_supervised/bin/python scripts/probe_controller_representation.py --help`
+
 ## Going forward
 
 Any future entry should include:
