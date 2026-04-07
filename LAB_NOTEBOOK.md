@@ -666,6 +666,26 @@ Conclusion:
 - The advantage-only counterfactual objective works on the toy `oracle-action-now` representation, but the frozen real-tree representation still does not expose the compute-advantage boundary strongly enough for a simple head.
 - Return is close to oracle in absolute value, but stop-step and sign metrics remain poor.
 
+Unfrozen run result:
+- Log analyzed:
+  - `cts-adv-unfrozen_6645314.out`
+- Local analysis directory:
+  - `analysis_outputs/compute_advantage_run_6645314/`
+- The run only logged 9 train epochs and one validation/greedy checkpoint, likely because unfrozen training cannot use frozen-embedding materialization and is much slower.
+- Best validation sign accuracy:
+  - `0.288` at epoch `5`
+- Final logged greedy evaluation:
+  - `exact_stop_step_accuracy = 0.028`
+  - `first_action_accuracy = 0.438`
+  - `average_return = 0.155`
+  - `average_oracle_value = 0.167`
+  - `average_regret = 0.012`
+  - `average_expansions = 12.591`
+
+Conclusion:
+- The unfrozen run did not improve the compute-advantage controller in the time available.
+- It was worse than the frozen run on sign accuracy and greedy boundary metrics, but the run was incomplete and much slower.
+
 ## Going forward
 
 Any future entry should include:
