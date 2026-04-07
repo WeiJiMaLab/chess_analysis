@@ -637,6 +637,35 @@ Overnight run setup:
   - `epochs = 50`
   - checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_controller_compute_adv_full.pt`
 
+Frozen run result:
+- Log analyzed:
+  - `cts-compute-adv_6645287.out`
+- Local analysis directory:
+  - `analysis_outputs/compute_advantage_run_6645287/`
+- Materialization time:
+  - train: approximately `4097.9s`
+  - validation: approximately `221.0s`
+- Best validation sign accuracy:
+  - `0.435` at epoch `15`
+- Best greedy return:
+  - epoch `5`
+  - `average_return = 0.157`
+  - `average_oracle_value = 0.167`
+  - `average_regret = 0.010`
+  - `exact_stop_step_accuracy = 0.076`
+  - `first_action_accuracy = 0.480`
+- Final greedy evaluation:
+  - `exact_stop_step_accuracy = 0.065`
+  - `first_action_accuracy = 0.468`
+  - `average_return = 0.156`
+  - `average_oracle_value = 0.167`
+  - `average_regret = 0.011`
+  - `average_expansions = 11.644`
+
+Conclusion:
+- The advantage-only counterfactual objective works on the toy `oracle-action-now` representation, but the frozen real-tree representation still does not expose the compute-advantage boundary strongly enough for a simple head.
+- Return is close to oracle in absolute value, but stop-step and sign metrics remain poor.
+
 ## Going forward
 
 Any future entry should include:
