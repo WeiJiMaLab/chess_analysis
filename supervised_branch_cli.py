@@ -7,7 +7,7 @@ import time
 from typing import List, Optional
 
 from GNN import NodeValueModel, PolicyValueTreeSearchModel
-from schema import NodeFeatureSchema
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from supervised_branch import (
     FrozenEncoderControllerTrainer,
     GeneratedTreeHaltEnv,
@@ -39,7 +39,7 @@ from uci_provider import (
 
 
 def _feature_schema() -> NodeFeatureSchema:
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def _default_lc0_engine_path() -> str:
@@ -317,6 +317,7 @@ def generate_dataset_command(args: argparse.Namespace) -> None:
             prior_uci_options["Backend"] = args.prior_backend
         if args.value_backend:
             value_uci_options["Backend"] = args.value_backend
+        value_uci_options.setdefault("UCI_ShowWDL", "true")
         prior_config = UciEngineConfig(
             engine_path=args.engine_path,
             engine_kind="lc0",

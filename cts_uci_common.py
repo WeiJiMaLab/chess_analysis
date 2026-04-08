@@ -20,6 +20,10 @@ MOVE_STATS_RE = re.compile(
     rf"(?P<move>{UCI_MOVE_PATTERN}).*?\bP[:=]\s*(?P<prior>-?\d+(?:\.\d+)?%?).*?\bQ[:=]\s*(?P<q>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+WDL_RE = re.compile(
+    r"\bwdl\s+(?P<win>\d+)\s+(?P<draw>\d+)\s+(?P<loss>\d+)\b",
+    re.IGNORECASE,
+)
 BESTMOVE_RE = re.compile(r"^bestmove\s+(?P<move>\S+)")
 POSITION_SPEC_SEPARATOR = " ||moves|| "
 

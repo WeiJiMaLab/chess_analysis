@@ -7,6 +7,7 @@ from cts_uci_common import (
     MOVE_STATS_RE,
     MULTIPV_RE,
     SCORE_LINE_RE,
+    WDL_RE,
     append_move_to_position_spec,
     clamp,
     uci_score_to_value,
@@ -156,11 +157,60 @@ class Lc0NoSearchAnalysisParser(UciAnalysisParser):
 
 
 def parse_root_value_from_lines(lines: Sequence[str]) -> float:
+    return parse_root_value_features_from_lines(lines, require_wdl=False)["value"]
+
+
+def value_features_from_wdl(win: float, draw: float, loss: float) -> Dict[str, float]:
+    total = win + draw + loss
+    if total <= 0.0:
+        raise ValueError("WDL counts must have positive mass.")
+    p_win = win / total
+    p_draw = draw / total
+    p_loss = loss / total
+    value = p_win - p_loss
+    variance = (p_win + p_loss) - value * value
+    return {
+        "value": value,
+        "wdl_win": p_win,
+        "wdl_draw": p_draw,
+        "wdl_loss": p_loss,
+        "wdl_var": variance,
+    }
+
+
+def terminal_value_features(value: float) -> Dict[str, float]:
+    if value > 0.0:
+        return value_features_from_wdl(1.0, 0.0, 0.0)
+    if value < 0.0:
+        return value_features_from_wdl(0.0, 0.0, 1.0)
+    return value_features_from_wdl(0.0, 1.0, 0.0)
+
+
+def parse_root_value_features_from_lines(
+    lines: Sequence[str],
+    *,
+    require_wdl: bool = True,
+) -> Dict[str, float]:
+    for line in lines:
+        wdl_match = WDL_RE.search(line)
+        if wdl_match is None:
+            continue
+        return value_features_from_wdl(
+            float(wdl_match.group("win")),
+            float(wdl_match.group("draw")),
+            float(wdl_match.group("loss")),
+        )
+
+    if require_wdl:
+        raise ValueError("Could not parse WDL statistics from engine output.")
+
     for line in lines:
         score_match = SCORE_LINE_RE.search(line)
         if score_match is not None:
-            return uci_score_to_value(
-                score_match.group("kind"),
-                int(score_match.group("score")),
-            )
+            return {
+                "value": uci_score_to_value(
+                    score_match.group("kind"),
+                    int(score_match.group("score")),
+                )
+            }
     raise ValueError("Could not parse a root value from engine output.")

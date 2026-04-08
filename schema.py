@@ -63,3 +63,10 @@ class NodeFeatureSchema:
 
     def vectorize(self, scalar_features: Mapping[str, float]) -> Tuple[float, ...]:
         return self.vectorize_tuple(scalar_features)
+
+
+TREE_ENCODER_FEATURE_NAMES: Tuple[str, ...] = ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
+
+
+def tree_encoder_feature_schema() -> NodeFeatureSchema:
+    return NodeFeatureSchema.from_ordered_features(TREE_ENCODER_FEATURE_NAMES)

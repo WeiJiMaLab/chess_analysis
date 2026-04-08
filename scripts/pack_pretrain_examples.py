@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from schema import NodeFeatureSchema
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from tensorizer import tensorize_tree_with_targets
 
 
@@ -28,7 +28,7 @@ def _read_manifest(path: Path) -> list[Path]:
 
 
 def _feature_schema() -> NodeFeatureSchema:
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tuple[Path, int]:

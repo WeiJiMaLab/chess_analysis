@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from controller_oracle import compute_oracle_policy
 from GNN import PolicyValueTreeSearchModel
-from schema import NodeFeatureSchema
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from supervised_branch import (
     TeacherSearchConfig,
     build_trimmed_decision_episode,
@@ -63,7 +63,7 @@ class ProbeTensorDataset:
 
 
 def _feature_schema() -> NodeFeatureSchema:
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def _teacher_config(args: argparse.Namespace) -> TeacherSearchConfig:

@@ -10,6 +10,7 @@ from uci_provider import (
     StockfishAnalysisParser,
     UciAnalysis,
     UciTreeExpansionProvider,
+    parse_root_value_features_from_lines,
     parse_root_value_from_lines,
     append_move_to_position_spec,
     position_spec_to_uci_command,
@@ -119,6 +120,31 @@ class UciProviderTests(unittest.TestCase):
         ]
         self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
 
+    def test_parse_root_value_features_from_wdl_lines(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497",
+            "bestmove f2f4",
+        ]
+
+        features = parse_root_value_features_from_lines(lines)
+
+        self.assertAlmostEqual(features["value"], 0.006)
+        self.assertAlmostEqual(features["wdl_win"], 0.503)
+        self.assertAlmostEqual(features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(features["wdl_loss"], 0.497)
+        self.assertAlmostEqual(features["wdl_var"], 1.0 - 0.006 * 0.006)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
+    def test_parse_root_value_features_requires_wdl_by_default(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 46 score cp 6",
+            "bestmove f2f4",
+        ]
+
+        with self.assertRaises(ValueError):
+            parse_root_value_features_from_lines(lines)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
     def test_lc0_direct_eval_provider_uses_prior_and_value_engines(self):
         prior_engine = MappingEngineProcess(
             {
@@ -132,9 +158,15 @@ class UciProviderTests(unittest.TestCase):
         )
         value_engine = MappingEngineProcess(
             {
-                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6", "bestmove f2f4"],
-                "fen ||moves|| f2f4": ["info depth 1 seldepth 1 nodes 46 score cp -43", "bestmove e7e5"],
-                "fen ||moves|| g2g4": ["info depth 1 seldepth 1 nodes 46 score cp 12", "bestmove e7e5"],
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
+                "fen ||moves|| f2f4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp -43 wdl 478 1 521",
+                    "bestmove e7e5",
+                ],
+                "fen ||moves|| g2g4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp 12 wdl 506 0 494",
+                    "bestmove e7e5",
+                ],
             }
         )
         provider = Lc0DirectEvalProvider(
@@ -147,9 +179,16 @@ class UciProviderTests(unittest.TestCase):
         children = provider.expand_node("fen", 0)
 
         self.assertAlmostEqual(root_features["value"], 0.006)
+        self.assertAlmostEqual(root_features["wdl_win"], 0.503)
+        self.assertAlmostEqual(root_features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(root_features["wdl_loss"], 0.497)
         self.assertEqual([child.move_uci for child in children], ["f2f4", "g2g4"])
         self.assertAlmostEqual(children[0].scalar_features["prior"], 0.1394)
         self.assertAlmostEqual(children[0].scalar_features["value"], -0.043)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_win"], 0.478)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_draw"], 0.001)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_loss"], 0.521)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_var"], 0.999 - (-0.043 * -0.043))
         self.assertEqual(prior_engine.calls, ["fen"])
         self.assertEqual(value_engine.calls, ["fen", "fen ||moves|| f2f4", "fen ||moves|| g2g4"])
         self.assertEqual(provider.provider_metadata()["engine"], "lc0")
@@ -167,8 +206,11 @@ class UciProviderTests(unittest.TestCase):
         )
         value_engine = MappingEngineProcess(
             {
-                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6", "bestmove f2f4"],
-                "fen ||moves|| g2g4": ["info depth 1 seldepth 1 nodes 46 score cp 12", "bestmove e7e5"],
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
+                "fen ||moves|| g2g4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp 12 wdl 506 0 494",
+                    "bestmove e7e5",
+                ],
             }
         )
         provider = Lc0DirectEvalProvider(prior_engine, value_engine)
@@ -183,7 +225,12 @@ class UciProviderTests(unittest.TestCase):
         self.assertEqual([child.move_uci for child in children], ["f2f4", "g2g4"])
         self.assertTrue(children[0].is_terminal)
         self.assertAlmostEqual(children[0].scalar_features["value"], -1.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_win"], 0.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_loss"], 1.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_var"], 0.0)
         self.assertAlmostEqual(children[1].scalar_features["value"], 0.012)
+        self.assertAlmostEqual(children[1].scalar_features["wdl_win"], 0.506)
         self.assertEqual(value_engine.calls, ["fen ||moves|| g2g4"])
 
     def test_lc0_direct_eval_provider_caches_terminal_checks(self):
@@ -198,7 +245,7 @@ class UciProviderTests(unittest.TestCase):
         )
         value_engine = MappingEngineProcess(
             {
-                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6", "bestmove f2f4"],
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
             }
         )
         provider = Lc0DirectEvalProvider(prior_engine, value_engine)

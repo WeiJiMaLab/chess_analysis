@@ -10,7 +10,7 @@ from unittest.mock import patch
 import torch
 
 from GNN import NodeValueModel, PolicyValueTreeSearchModel
-from schema import NodeFeatureSchema
+from schema import tree_encoder_feature_schema
 from supervised_branch import (
     EdgeStats,
     FrozenEncoderControllerTrainer,
@@ -86,7 +86,7 @@ class DummyProvider(TreeExpansionProvider):
 
 
 def make_schema():
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def make_config():

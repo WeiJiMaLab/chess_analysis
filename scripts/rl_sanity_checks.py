@@ -18,7 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from GNN import PolicyValueTreeSearchModel
-from schema import NodeFeatureSchema
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from supervised_branch import (
     FrozenEncoderControllerTrainer,
     PPOConfig,
@@ -34,7 +34,7 @@ from tree import ExpansionChild, SearchTree
 
 
 def _feature_schema() -> NodeFeatureSchema:
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def _make_snapshot(best_value: float) -> SearchTree:

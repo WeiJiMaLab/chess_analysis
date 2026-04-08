@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence
 
@@ -29,7 +28,9 @@ from cts_uci_parsers import (
     StockfishAnalysisParser,
     UciAnalysis,
     UciAnalysisParser,
+    parse_root_value_features_from_lines,
     parse_root_value_from_lines,
+    terminal_value_features,
 )
 from cts_uci_process import UciEngineConfig, UciEngineProcess
 from supervised_branch import TreeExpansionProvider
@@ -121,7 +122,7 @@ class Lc0DirectEvalProvider(TreeExpansionProvider):
         self.prior_parser = Lc0NoSearchAnalysisParser()
         self._metadata = dict(metadata or {})
         self._prior_cache: Dict[str, UciAnalysis] = {}
-        self._value_cache: Dict[str, float] = {}
+        self._value_cache: Dict[str, Mapping[str, float]] = {}
         self._terminal_cache: Dict[str, Optional[float]] = {}
         self._value_query_log_path = Path("logs/valuehead_queries.log")
         self._enable_value_query_log = os.environ.get("CTS_LOG_VALUEHEAD_QUERIES", "").lower() in {
@@ -136,8 +137,10 @@ class Lc0DirectEvalProvider(TreeExpansionProvider):
     def root_features(self, fen: str) -> Mapping[str, float]:
         terminal_value = self._terminal_value_for_fen(fen)
         if terminal_value is not None:
-            return {"value": terminal_value, "prior": 1.0}
-        return {"value": self._value_for_fen(fen), "prior": 1.0}
+            features = terminal_value_features(terminal_value)
+        else:
+            features = self._value_features_for_fen(fen)
+        return {**features, "prior": 1.0}
 
     def expand_node(
         self,
@@ -153,11 +156,10 @@ class Lc0DirectEvalProvider(TreeExpansionProvider):
         parent_board = board_from_position_spec(fen)
         for child in selected_children:
             scalar_features = dict(child.scalar_features)
-            fallback_value = scalar_features.get("value")
             is_terminal = child.is_terminal
             terminal_value = self._terminal_value_for_child(child, parent_board)
             if terminal_value is not None:
-                scalar_features["value"] = terminal_value
+                scalar_features.update(terminal_value_features(terminal_value))
                 is_terminal = True
                 children.append(
                     ExpansionChild(
@@ -170,12 +172,12 @@ class Lc0DirectEvalProvider(TreeExpansionProvider):
                 )
                 continue
             try:
-                scalar_features["value"] = self._value_for_fen(child.fen, fallback_value=fallback_value)
+                scalar_features.update(self._value_features_for_fen(child.fen))
             except RuntimeError:
                 terminal_value = self._terminal_value_from_prior(child.fen)
                 if terminal_value is None:
                     raise
-                scalar_features["value"] = terminal_value
+                scalar_features.update(terminal_value_features(terminal_value))
                 is_terminal = True
             children.append(
                 ExpansionChild(
@@ -202,30 +204,21 @@ class Lc0DirectEvalProvider(TreeExpansionProvider):
             self._prior_cache[fen] = self.prior_parser.parse(lines, fen)
         return self._prior_cache[fen]
 
-    def _value_for_fen(self, fen: str, fallback_value: Optional[float] = None) -> float:
+    def _value_features_for_fen(self, fen: str) -> Mapping[str, float]:
         if fen not in self._value_cache:
             if self._enable_value_query_log:
                 with self._value_query_log_path.open("a", encoding="utf-8") as handle:
                     handle.write(f"{fen}\n")
             try:
                 lines = self.value_engine.analyse(fen)
-            except RuntimeError as exc:
+            except RuntimeError:
                 self.value_engine.close()
                 self.value_engine.start()
                 try:
                     lines = self.value_engine.analyse(fen)
                 except RuntimeError:
-                    if fallback_value is None:
-                        raise
-                    print(
-                        "warning: valuehead failed; falling back to classic child value "
-                        f"for fen={fen!r}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    self._value_cache[fen] = fallback_value
-                    return self._value_cache[fen]
-            self._value_cache[fen] = parse_root_value_from_lines(lines)
+                    raise
+            self._value_cache[fen] = parse_root_value_features_from_lines(lines, require_wdl=True)
         return self._value_cache[fen]
 
     def _terminal_value_from_prior(self, fen: str) -> Optional[float]:
@@ -286,6 +279,7 @@ __all__ = [
     "board_from_position_spec",
     "chess",
     "parse_root_value_from_lines",
+    "parse_root_value_features_from_lines",
     "position_spec_to_uci_command",
     "split_position_spec",
     "terminal_value_from_board",

@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 from controller_oracle import compute_oracle_policy, has_strong_optimal_margins
 from cts_pretrain import load_encoder_checkpoint
 from GNN import TreeEncoderOutput, TreeNN
-from schema import NodeFeatureSchema
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from supervised_branch import (
     TeacherSearchConfig,
     build_trimmed_decision_episode_with_halt_rewards,
@@ -274,7 +274,7 @@ def bellman_q_targets(
 
 
 def _feature_schema() -> NodeFeatureSchema:
-    return NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+    return tree_encoder_feature_schema()
 
 
 def _oracle_action_now_schema() -> NodeFeatureSchema:
