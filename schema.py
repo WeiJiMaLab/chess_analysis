@@ -70,3 +70,12 @@ TREE_ENCODER_FEATURE_NAMES: Tuple[str, ...] = ("value", "wdl_win", "wdl_draw", "
 
 def tree_encoder_feature_schema() -> NodeFeatureSchema:
     return NodeFeatureSchema.from_ordered_features(TREE_ENCODER_FEATURE_NAMES)
+
+
+def require_tree_encoder_scalar_features(scalar_features: Mapping[str, float], *, context: str = "node") -> None:
+    missing = [feature for feature in TREE_ENCODER_FEATURE_NAMES if feature not in scalar_features]
+    if missing:
+        raise ValueError(
+            f"{context} is missing required tree encoder features {missing}. "
+            "Regenerate the teacher trees with WDL valuehead features before VOC preprocessing."
+        )

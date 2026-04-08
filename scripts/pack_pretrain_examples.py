@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from schema import NodeFeatureSchema, tree_encoder_feature_schema
+from schema import NodeFeatureSchema, require_tree_encoder_scalar_features, tree_encoder_feature_schema
 from tensorizer import tensorize_tree_with_targets
 
 
@@ -31,6 +31,14 @@ def _feature_schema() -> NodeFeatureSchema:
     return tree_encoder_feature_schema()
 
 
+def _validate_tree_encoder_example_features(example, *, context: str) -> None:
+    for node in example.tree.iter_nodes():
+        require_tree_encoder_scalar_features(
+            node.scalar_features,
+            context=f"{context} node_id={node.node_id} fen={node.fen!r}",
+        )
+
+
 def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tuple[Path, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
@@ -45,10 +53,13 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
-        tensorized_examples = [
-            tensorize_tree_with_targets(example.tree, example.node_target_values, schema=schema, device="cpu")
-            for example in (torch.load(path, weights_only=False) for path in shard_paths)
-        ]
+        tensorized_examples = []
+        for path in shard_paths:
+            example = torch.load(path, weights_only=False)
+            _validate_tree_encoder_example_features(example, context=str(path))
+            tensorized_examples.append(
+                tensorize_tree_with_targets(example.tree, example.node_target_values, schema=schema, device="cpu")
+            )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
         edge_ptr = [0]
