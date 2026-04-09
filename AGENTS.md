@@ -12,6 +12,11 @@ cluster jobs in `slurm/`, SQL helpers in `sql/`, and tests in root-level `test_*
 - Prefer small, local fixes over broad refactors unless the user explicitly asks for restructuring.
 - Preserve experimental intent. If a change affects training semantics, reward definitions, rollout logic,
   evaluation procedure, or dataset generation, call that out clearly.
+- Distinguish semantic readiness from operational readiness. Do not say a long experiment or preprocessing job is
+  “ready to run” without explicitly calling out known throughput debt, walltime risk, and whether an optimization
+  pass is still warranted.
+- When asked about optimization, provide a complete, prioritized inventory of remaining levers rather than a partial
+  list of the first ideas that come to mind.
 - Do not touch heavyweight artifacts in `weights/` or external scratch-path data unless the user asks.
 - When changing experiment behavior in a meaningful way, update `LAB_NOTEBOOK.md` with intent,
   meaningful change, and result once the outcome is known.
@@ -55,6 +60,14 @@ When asked to implement something:
 3. Edit only the files needed for the task.
 4. Run focused validation.
 5. Summarize behavior changes, validation run, and any residual risk.
+
+When asked to explain something conceptual:
+
+1. Define every term and symbol before using it.
+2. State assumptions explicitly.
+3. Explain what problem the formulation solves and why the equation/design has that form.
+4. Call out what is exact versus approximate, and note meaningful alternatives when relevant.
+5. Prefer a complete answer over a fast but underspecified one.
 
 When asked for an experiment or analysis task:
 
