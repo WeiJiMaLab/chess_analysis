@@ -9,9 +9,11 @@ from unittest.mock import patch
 
 import torch
 
-from GNN import NodeValueModel, PolicyValueTreeSearchModel
+from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
 from schema import tree_encoder_feature_schema
 from supervised_branch import (
+    ChildWdlPretrainConfig,
+    ChildWdlPretrainer,
     EdgeStats,
     FrozenEncoderControllerTrainer,
     GeneratedTree,
@@ -42,39 +44,85 @@ from supervised_branch import (
     build_tree_from_provider,
     consolidate_generated_tree,
     compute_teacher_targets,
+    edge_child_wdl_targets,
     evaluate_controller,
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
     normalize_prior_scores,
     _backup_target_from_child_q,
 )
-from tensorizer import TreeTensorizer
+from tensorizer import TreeTensorizer, collate_tensorized_examples, tensorize_tree_with_targets
 from tree import ExpansionChild, SearchTree
+
+
+def make_scalar_features(value, prior, wdl_win, wdl_draw, wdl_loss):
+    expected_total = wdl_win + wdl_draw + wdl_loss
+    if not math.isclose(expected_total, 1.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError("WDL probabilities must sum to 1.")
+    mean = wdl_win + 0.5 * wdl_draw
+    variance = (
+        wdl_win * (1.0 - mean) ** 2
+        + wdl_draw * (0.5 - mean) ** 2
+        + wdl_loss * mean**2
+    )
+    return {
+        "value": value,
+        "prior": prior,
+        "wdl_win": wdl_win,
+        "wdl_draw": wdl_draw,
+        "wdl_loss": wdl_loss,
+        "wdl_var": variance,
+    }
+
+
+def build_slot_test_tree():
+    tree = SearchTree()
+    root_id = tree.create_root(
+        "slot-root",
+        make_scalar_features(0.0, 1.0, 0.34, 0.33, 0.33),
+    )
+    child_ids = tree.add_children(
+        root_id,
+        [
+            ExpansionChild("g1f3", "slot-child-1", make_scalar_features(0.1, 0.25, 0.60, 0.25, 0.15)),
+            ExpansionChild("b1c3", "slot-child-2", make_scalar_features(0.2, 0.25, 0.20, 0.50, 0.30)),
+            ExpansionChild("e2e4", "slot-child-3", make_scalar_features(0.3, 0.25, 0.10, 0.35, 0.55)),
+            ExpansionChild("a2a4", "slot-child-4", make_scalar_features(0.4, 0.25, 0.70, 0.20, 0.10)),
+        ],
+    )
+    tree.add_children(
+        child_ids[0],
+        [
+            ExpansionChild("c7c5", "slot-grandchild-1", make_scalar_features(-0.1, 0.6, 0.15, 0.25, 0.60)),
+            ExpansionChild("e7e5", "slot-grandchild-2", make_scalar_features(0.0, 0.4, 0.55, 0.20, 0.25)),
+        ],
+    )
+    return tree
 
 
 class DummyProvider(TreeExpansionProvider):
     def root_features(self, fen):
         if fen == "root_alt":
-            return {"value": 0.1, "prior": 1.0}
-        return {"value": 0.0, "prior": 1.0}
+            return make_scalar_features(0.1, 1.0, 0.35, 0.40, 0.25)
+        return make_scalar_features(0.0, 1.0, 0.30, 0.40, 0.30)
 
     def expand_node(self, fen, depth, max_children=None):
         mapping = {
             "root": [
-                ExpansionChild("a", "a", {"value": 0.4, "prior": 0.7}),
-                ExpansionChild("b", "b", {"value": -0.2, "prior": 0.3}),
+                ExpansionChild("a", "a", make_scalar_features(0.4, 0.7, 0.62, 0.18, 0.20)),
+                ExpansionChild("b", "b", make_scalar_features(-0.2, 0.3, 0.18, 0.26, 0.56)),
             ],
             "root_alt": [
-                ExpansionChild("c", "c", {"value": 0.2, "prior": 0.6}),
-                ExpansionChild("d", "d", {"value": 0.1, "prior": 0.4}),
+                ExpansionChild("c", "c", make_scalar_features(0.2, 0.6, 0.48, 0.22, 0.30)),
+                ExpansionChild("d", "d", make_scalar_features(0.1, 0.4, 0.42, 0.28, 0.30)),
             ],
             "a": [
-                ExpansionChild("a1", "a1", {"value": -0.1, "prior": 0.6}),
-                ExpansionChild("a2", "a2", {"value": 0.2, "prior": 0.4}),
+                ExpansionChild("a1", "a1", make_scalar_features(-0.1, 0.6, 0.20, 0.35, 0.45)),
+                ExpansionChild("a2", "a2", make_scalar_features(0.2, 0.4, 0.52, 0.23, 0.25)),
             ],
-            "b": [ExpansionChild("b1", "b1", {"value": 0.3, "prior": 1.0})],
-            "c": [ExpansionChild("c1", "c1", {"value": 0.5, "prior": 1.0})],
-            "d": [ExpansionChild("d1", "d1", {"value": -0.3, "prior": 1.0})],
+            "b": [ExpansionChild("b1", "b1", make_scalar_features(0.3, 1.0, 0.58, 0.20, 0.22))],
+            "c": [ExpansionChild("c1", "c1", make_scalar_features(0.5, 1.0, 0.72, 0.12, 0.16))],
+            "d": [ExpansionChild("d1", "d1", make_scalar_features(-0.3, 1.0, 0.12, 0.18, 0.70))],
         }
         children = mapping.get(fen, [])
         if max_children is None:
@@ -103,12 +151,12 @@ def make_config():
 
 def make_episode_snapshot(best_value):
     tree = SearchTree()
-    root_id = tree.create_root("episode-root", {"value": 0.0, "prior": 1.0})
+    root_id = tree.create_root("episode-root", make_scalar_features(0.0, 1.0, 0.33, 0.34, 0.33))
     tree.add_children(
         root_id,
         [
-            ExpansionChild("best", f"best-{best_value}", {"value": best_value, "prior": 0.7}),
-            ExpansionChild("other", f"other-{best_value}", {"value": 0.1, "prior": 0.3}),
+            ExpansionChild("best", f"best-{best_value}", make_scalar_features(best_value, 0.7, 0.65, 0.15, 0.20)),
+            ExpansionChild("other", f"other-{best_value}", make_scalar_features(0.1, 0.3, 0.40, 0.25, 0.35)),
         ],
     )
     return tree
@@ -235,6 +283,152 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(example.metadata["root_position_id"], "p0")
         self.assertEqual(example.metadata["search_config_id"], self.config.search_config_id)
         self.assertEqual(example.metadata["provider_metadata"]["provider"], "dummy")
+
+    def test_tensorizer_emits_canonical_edge_slots_from_move_sorted_children(self):
+        tree = build_slot_test_tree()
+        batch = TreeTensorizer(self.schema, child_slot_count=4).tensorize_tree(tree)
+
+        self.assertTrue(torch.equal(batch.edge_parent.cpu(), torch.tensor([0, 0, 0, 0, 1, 1], dtype=torch.long)))
+        self.assertTrue(torch.equal(batch.edge_child.cpu(), torch.tensor([4, 2, 3, 1, 5, 6], dtype=torch.long)))
+        self.assertTrue(torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.long)))
+        self.assertTrue(torch.equal(batch.child_ptr.cpu(), torch.tensor([0, 4, 6, 6, 6, 6, 6, 6], dtype=torch.long)))
+        self.assertTrue(torch.equal(batch.children_index.cpu(), batch.edge_child.cpu()))
+
+    def test_tensorized_example_collation_preserves_edge_parent_child_slot_alignment(self):
+        tree_a = build_slot_test_tree()
+        tree_b = SearchTree()
+        root_b = tree_b.create_root("batch-root", make_scalar_features(0.0, 1.0, 0.25, 0.50, 0.25))
+        tree_b.add_children(
+            root_b,
+            [
+                ExpansionChild("h2h4", "batch-child-1", make_scalar_features(0.1, 0.4, 0.40, 0.30, 0.30)),
+                ExpansionChild("a2a3", "batch-child-2", make_scalar_features(-0.1, 0.3, 0.20, 0.30, 0.50)),
+                ExpansionChild("c2c4", "batch-child-3", make_scalar_features(0.2, 0.3, 0.55, 0.20, 0.25)),
+            ],
+        )
+
+        examples = [
+            tensorize_tree_with_targets(tree_a, [0.0] * tree_a.num_nodes(), schema=self.schema),
+            tensorize_tree_with_targets(tree_b, [0.0] * tree_b.num_nodes(), schema=self.schema),
+        ]
+        batch, _ = collate_tensorized_examples(examples)
+
+        self.assertTrue(
+            torch.equal(
+                batch.edge_parent.cpu(),
+                torch.tensor([0, 0, 0, 0, 1, 1, 7, 7, 7], dtype=torch.long),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                batch.edge_child.cpu(),
+                torch.tensor([4, 2, 3, 1, 5, 6, 9, 10, 8], dtype=torch.long),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                batch.edge_slot.cpu(),
+                torch.tensor([0, 1, 2, 3, 0, 1, 0, 1, 2], dtype=torch.long),
+            )
+        )
+        self.assertTrue(torch.equal(batch.children_index.cpu(), batch.edge_child.cpu()))
+        self.assertTrue(
+            torch.equal(
+                batch.child_ptr.cpu(),
+                torch.tensor([0, 4, 6, 6, 6, 6, 6, 6, 9, 9, 9, 9], dtype=torch.long),
+            )
+        )
+
+    def test_edge_child_wdl_targets_match_child_node_features(self):
+        tree = build_slot_test_tree()
+        batch = self.tensorizer.tensorize_tree(tree)
+
+        targets = edge_child_wdl_targets(batch).cpu()
+
+        expected = torch.tensor(
+            [
+                [0.70, 0.20, 0.10],
+                [0.20, 0.50, 0.30],
+                [0.10, 0.35, 0.55],
+                [0.60, 0.25, 0.15],
+                [0.15, 0.25, 0.60],
+                [0.55, 0.20, 0.25],
+            ],
+            dtype=torch.float32,
+        )
+        self.assertTrue(torch.allclose(targets, expected))
+
+    def test_child_wdl_slot_overflow_is_deterministic(self):
+        tree = build_slot_test_tree()
+        batch = TreeTensorizer(self.schema, child_slot_count=3).tensorize_tree(tree)
+
+        self.assertTrue(torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 2, 2, 0, 1], dtype=torch.long)))
+
+    def test_child_wdl_pretraining_runs_and_saves_objective_metadata(self):
+        train_examples = [
+            PretrainExample(tree=build_slot_test_tree(), node_target_values=[0.0] * build_slot_test_tree().num_nodes()),
+            PretrainExample(tree=build_slot_test_tree(), node_target_values=[0.0] * build_slot_test_tree().num_nodes()),
+        ]
+        model = ChildWdlModel(
+            k=1,
+            node_feat=self.node_feat,
+            device="cpu",
+            node_embed_hidden=16,
+            d_embed=12,
+            d_message=8,
+            n_heads=1,
+            d_att=4,
+            decoder_hidden=8,
+            child_slot_count=4,
+        )
+        trainer = ChildWdlPretrainer(
+            model=model,
+            tensorizer=TreeTensorizer(self.schema, child_slot_count=4),
+            train_examples=train_examples,
+            validation_examples=train_examples,
+            config=ChildWdlPretrainConfig(
+                batch_size=2,
+                learning_rate=0.05,
+                epochs=6,
+                shuffle=False,
+            ),
+        )
+
+        initial_validation = trainer.validate().total_loss
+        history = trainer.fit()
+        final_validation = trainer.validate().total_loss
+
+        self.assertTrue(history)
+        self.assertTrue(math.isfinite(initial_validation))
+        self.assertTrue(math.isfinite(final_validation))
+        self.assertLess(final_validation, initial_validation)
+        self.assertGreater(history[-1]["validation"].num_supervised_edges, 0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = os.path.join(temp_dir, "child_wdl_encoder.pt")
+            trainer.save_best_encoder(
+                checkpoint_path,
+                metadata={
+                    "pretrain_objective": "child_wdl",
+                    "child_slot_count": 4,
+                },
+            )
+
+            loaded_model = NodeValueModel(
+                k=1,
+                node_feat=self.node_feat,
+                device="cpu",
+                node_embed_hidden=16,
+                d_embed=12,
+                d_message=8,
+                n_heads=1,
+                d_att=4,
+                value_hidden=8,
+                child_slot_count=4,
+            )
+            metadata = load_encoder_checkpoint(checkpoint_path, loaded_model.encoder)
+            self.assertEqual(metadata["pretrain_objective"], "child_wdl")
+            self.assertEqual(metadata["child_slot_count"], 4)
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [

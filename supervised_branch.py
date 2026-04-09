@@ -18,6 +18,9 @@ from cts_episode_envs import (
     trim_episode_to_first_root_decision,
 )
 from cts_pretrain import (
+    ChildWdlMetrics,
+    ChildWdlPretrainConfig,
+    ChildWdlPretrainer,
     EdgeStats,
     GeneratedTree,
     NodeBudgetDistribution,
@@ -37,6 +40,7 @@ from cts_pretrain import (
     build_tree_from_provider,
     compute_teacher_targets,
     consolidate_generated_tree,
+    edge_child_wdl_targets,
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
     load_pretrain_example_dataset,
@@ -65,6 +69,9 @@ from cts_rl import (
 )
 
 __all__ = [
+    "ChildWdlMetrics",
+    "ChildWdlPretrainConfig",
+    "ChildWdlPretrainer",
     "ControllerOnlyEnv",
     "EdgeStats",
     "EvaluationMetrics",
@@ -104,6 +111,7 @@ __all__ = [
     "build_trimmed_decision_episode_with_halt_rewards",
     "compute_teacher_targets",
     "consolidate_generated_tree",
+    "edge_child_wdl_targets",
     "evaluate_controller",
     "generate_partial_tree_from_provider",
     "halt_rewards_for_snapshot_episode",

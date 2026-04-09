@@ -15,8 +15,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from GNN import NodeValueModel
-from tensorizer import TensorizedTreeExample, TreeTensorizer, collate_tensorized_examples
+from GNN import ChildWdlModel, NodeValueModel
+from tensorizer import (
+    DEFAULT_CHILD_SLOT_COUNT,
+    TensorizedTreeExample,
+    TreeTensorizer,
+    collate_tensorized_examples,
+)
 from tree import ExpansionChild, SearchTree
 
 
@@ -291,11 +296,19 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         edge_start = int(edge_ptr[example_offset].item())
         edge_end = int(edge_ptr[example_offset + 1].item())
         feature_names = tuple(payload["feature_names"])
+        if "edge_slot" in payload:
+            edge_slot = payload["edge_slot"][edge_start:edge_end]
+        else:
+            edge_slot = _infer_edge_slots_from_edge_parents(
+                payload["edge_parent"][edge_start:edge_end],
+                child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
+            )
         return TensorizedTreeExample(
             node_features=payload["node_features"][node_start:node_end],
             parent_index=payload["parent_index"][node_start:node_end],
             edge_parent=payload["edge_parent"][edge_start:edge_end],
             edge_child=payload["edge_child"][edge_start:edge_end],
+            edge_slot=edge_slot,
             depth=payload["depth"][node_start:node_end],
             node_targets=payload["node_targets"][node_start:node_end],
             feature_names=feature_names,
@@ -347,6 +360,43 @@ def load_raw_pretrain_example_paths(path: str) -> List[str]:
     if not paths:
         raise ValueError(f"No raw pretrain examples found at: {path}")
     return paths
+
+
+def _infer_edge_slots_from_edge_parents(
+    edge_parent: torch.Tensor,
+    *,
+    child_slot_count: int,
+) -> torch.Tensor:
+    if edge_parent.numel() == 0:
+        return torch.empty(0, dtype=torch.long, device=edge_parent.device)
+    overflow_slot = child_slot_count - 1
+    edge_slot = torch.empty_like(edge_parent)
+    current_parent = None
+    current_slot = 0
+    for edge_index, parent_id in enumerate(edge_parent.tolist()):
+        if parent_id != current_parent:
+            current_parent = parent_id
+            current_slot = 0
+        edge_slot[edge_index] = min(current_slot, overflow_slot)
+        current_slot += 1
+    return edge_slot
+
+
+def edge_child_wdl_targets(tree_batch) -> torch.Tensor:
+    feature_names = tree_batch.feature_names
+    missing = [name for name in ("wdl_win", "wdl_draw", "wdl_loss") if name not in feature_names]
+    if missing:
+        raise KeyError(f"Tree batch is missing WDL feature columns {missing}.")
+    wdl_indices = [feature_names.index(name) for name in ("wdl_win", "wdl_draw", "wdl_loss")]
+    edge_child = tree_batch.edge_child
+    if edge_child.numel() == 0:
+        return tree_batch.node_features.new_empty((0, 3))
+
+    edge_targets = tree_batch.node_features.index_select(0, edge_child)
+    edge_targets = edge_targets[:, wdl_indices]
+    edge_targets = edge_targets.clamp_min(0.0)
+    target_mass = edge_targets.sum(dim=-1, keepdim=True)
+    return edge_targets / target_mass.clamp_min(1e-12)
 
 
 def save_encoder_checkpoint(path: str, encoder, metadata: Optional[Mapping[str, Any]] = None) -> None:
@@ -692,12 +742,32 @@ class SupervisedPretrainConfig:
     persistent_workers: bool = True
 
 
+@dataclass(frozen=True)
+class ChildWdlPretrainConfig:
+    batch_size: int = 4
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.0
+    epochs: int = 5
+    shuffle: bool = True
+    num_workers: int = 0
+    pin_memory: bool = False
+    prefetch_factor: int = 2
+    persistent_workers: bool = True
+
+
 @dataclass
 class SupervisedMetrics:
     total_loss: float
     node_mse: float
     root_mse: float
     num_examples: int
+
+
+@dataclass
+class ChildWdlMetrics:
+    total_loss: float
+    num_examples: int
+    num_supervised_edges: int
 
 
 class SupervisedPretrainer:
@@ -841,6 +911,150 @@ class SupervisedPretrainer:
         batch_progress_callback: Optional[Callable[[str, int, int, int, float, float, float], None]] = None,
     ) -> List[Dict[str, SupervisedMetrics]]:
         history: List[Dict[str, SupervisedMetrics]] = []
+        for epoch_index in range(1, self.config.epochs + 1):
+            train_metrics = self.train_epoch(batch_progress_callback=batch_progress_callback)
+            validation_metrics = self.validate(batch_progress_callback=batch_progress_callback)
+            history.append({"train": train_metrics, "validation": validation_metrics})
+            if validation_metrics.total_loss < self.best_validation_loss:
+                self.best_validation_loss = validation_metrics.total_loss
+                self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+            if progress_callback is not None:
+                progress_callback(epoch_index, train_metrics, validation_metrics)
+        self.model.encoder.load_state_dict(self.best_encoder_state)
+        return history
+
+    def save_best_encoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
+        save_encoder_checkpoint(path, self.model.encoder, metadata=metadata)
+
+
+class ChildWdlPretrainer:
+    def __init__(
+        self,
+        model: ChildWdlModel,
+        tensorizer: TreeTensorizer,
+        train_examples: Sequence[PretrainExample],
+        validation_examples: Sequence[PretrainExample],
+        config: ChildWdlPretrainConfig,
+    ) -> None:
+        self.model = model
+        self.tensorizer = tensorizer
+        self.train_examples = train_examples
+        self.validation_examples = validation_examples
+        self.config = config
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
+        self.best_validation_loss = float("inf")
+        self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+
+    def _iter_batches(self, examples: Sequence[PretrainExample], shuffle: bool):
+        collate_fn = getattr(examples, "collate_fn", list)
+        dataloader_kwargs = {
+            "batch_size": self.config.batch_size,
+            "shuffle": shuffle,
+            "collate_fn": collate_fn,
+            "num_workers": self.config.num_workers,
+            "pin_memory": self.config.pin_memory,
+        }
+        if self.config.num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = self.config.prefetch_factor
+            dataloader_kwargs["persistent_workers"] = self.config.persistent_workers
+        return DataLoader(examples, **dataloader_kwargs)
+
+    def _tree_batch_from_batch_data(self, batch_data):
+        if isinstance(batch_data, tuple) and len(batch_data) == 2:
+            tree_batch, _ = batch_data
+            return tree_batch
+        return self.tensorizer.tensorize_forest([example.tree for example in batch_data])
+
+    def _run_epoch(
+        self,
+        examples: Sequence[PretrainExample],
+        training: bool,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        if training:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        metric_device = self.model.encoder.device
+        total_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
+        total_examples = 0
+        total_supervised_edges = 0
+
+        batches = self._iter_batches(examples, shuffle=training and self.config.shuffle)
+        total_batches = len(batches)
+        phase = "train" if training else "validation"
+        for batch_index, batch_data in enumerate(batches, start=1):
+            tree_batch = self._tree_batch_from_batch_data(batch_data)
+            edge_targets = edge_child_wdl_targets(tree_batch).to(self.model.encoder.device)
+            if edge_targets.numel() == 0:
+                continue
+
+            with torch.set_grad_enabled(training):
+                output = self.model(tree_batch)
+                log_probs = F.log_softmax(output.edge_logits, dim=-1)
+                per_edge_loss = -(edge_targets * log_probs).sum(dim=-1)
+                total_loss = per_edge_loss.mean()
+
+                if training:
+                    self.optimizer.zero_grad()
+                    total_loss.backward()
+                    self.optimizer.step()
+
+            batch_size = int(tree_batch.batch_size)
+            num_supervised_edges = int(edge_targets.shape[0])
+            total_examples += batch_size
+            total_supervised_edges += num_supervised_edges
+            total_loss_sum += total_loss.detach() * num_supervised_edges
+            if batch_progress_callback is not None:
+                batch_progress_callback(
+                    phase,
+                    batch_index,
+                    total_batches,
+                    total_examples,
+                    total_supervised_edges,
+                    float(total_loss.item()),
+                )
+
+        if total_supervised_edges == 0:
+            return ChildWdlMetrics(total_loss=0.0, num_examples=total_examples, num_supervised_edges=0)
+
+        return ChildWdlMetrics(
+            total_loss=float((total_loss_sum / total_supervised_edges).item()),
+            num_examples=total_examples,
+            num_supervised_edges=total_supervised_edges,
+        )
+
+    def train_epoch(
+        self,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        return self._run_epoch(
+            self.train_examples,
+            training=True,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def validate(
+        self,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        return self._run_epoch(
+            self.validation_examples,
+            training=False,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def fit(
+        self,
+        progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
+    ) -> List[Dict[str, ChildWdlMetrics]]:
+        history: List[Dict[str, ChildWdlMetrics]] = []
         for epoch_index in range(1, self.config.epochs + 1):
             train_metrics = self.train_epoch(batch_progress_callback=batch_progress_callback)
             validation_metrics = self.validate(batch_progress_callback=batch_progress_callback)

@@ -218,6 +218,30 @@ Meaningful changes:
 Conclusion:
 - Training logs now include both PPO-health metrics and periodic validation metrics.
 
+## 2026-04-09
+
+### Encoder pretraining objective changed from scalar node-value regression to slot-conditioned child WDL decoding
+
+Intent:
+- Keep the legacy scalar node-value encoder pretraining path available, while adding the new branch objective that trains parent representations to decode each child's WDL distribution by canonical child slot.
+
+Meaningful changes:
+- Added canonical lexicographic child-slot tensorization with deterministic overflow bucketing on flattened tree edges.
+- Made the shared upward encoder message path slot-aware by injecting learned slot embeddings into child-to-parent key/value messages.
+- Added a separate child-WDL pretraining model, trainer, and CLI command:
+  - `pretrain-child-wdl-encoder`
+- Kept the old scalar `pretrain-encoder` path intact.
+- Updated packed tensorized pretrain shards to store `edge_slot` so future packed datasets preserve the slot contract.
+
+Result:
+- Focused regression coverage now checks canonical slot assignment, batched edge alignment, edge-level child-WDL targets, deterministic overflow handling, and an end-to-end child-WDL pretraining smoke test.
+- Validation run:
+  - `python -m pytest test_supervised_branch.py test_plumbing.py`
+  - Result: `41 passed`
+
+Notes:
+- This validates the plumbing and checkpoint path only. No long real-data child-WDL pretraining run has been executed yet, so throughput and final representation quality remain unmeasured.
+
 ### Interactive smoke test after the rollout fix
 
 Intent:
