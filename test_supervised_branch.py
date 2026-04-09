@@ -128,6 +128,7 @@ class SupervisedBranchTests(unittest.TestCase):
         self.provider = DummyProvider()
         self.config = make_config()
         self.schema = make_schema()
+        self.node_feat = len(self.schema.feature_names)
         self.tensorizer = TreeTensorizer(self.schema)
         self.node_budget_distribution = NodeBudgetDistribution(min_nodes=3, max_nodes=5)
 
@@ -325,7 +326,7 @@ class SupervisedBranchTests(unittest.TestCase):
         ]
         model = NodeValueModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=16,
             d_embed=12,
@@ -361,7 +362,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
             loaded_model = NodeValueModel(
                 k=1,
-                node_feat=2,
+                node_feat=self.node_feat,
                 device="cpu",
                 node_embed_hidden=16,
                 d_embed=12,
@@ -380,7 +381,7 @@ class SupervisedBranchTests(unittest.TestCase):
         example = build_pretrain_example("root", self.provider, self.config)
         pretrain_model = NodeValueModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=16,
             d_embed=10,
@@ -410,7 +411,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
             rl_model = PolicyValueTreeSearchModel(
                 k=1,
-                node_feat=2,
+                node_feat=self.node_feat,
                 device="cpu",
                 node_embed_hidden=16,
                 d_embed=10,
@@ -462,7 +463,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_collect_rollout_steps_all_envs_each_rollout_step(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -494,7 +495,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_collect_rollout_uses_action_override_for_diagnostic_rollouts(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -527,7 +528,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_collect_rollout_snapshots_are_isolated_from_live_env_state(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -562,7 +563,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_ppo_update_increases_halt_log_prob_for_consistent_positive_signal(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -625,7 +626,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_ppo_update_reaches_encoder_when_unfrozen(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -693,7 +694,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_reinforce_positive_return_increases_halt_log_prob(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -732,7 +733,7 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_reinforce_update_reaches_encoder_but_not_value_head(self):
         rl_model = PolicyValueTreeSearchModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -789,7 +790,7 @@ class SupervisedBranchTests(unittest.TestCase):
         ]
         pretrain_model = NodeValueModel(
             k=1,
-            node_feat=2,
+            node_feat=self.node_feat,
             device="cpu",
             node_embed_hidden=12,
             d_embed=8,
@@ -819,7 +820,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
             rl_model = PolicyValueTreeSearchModel(
                 k=1,
-                node_feat=2,
+                node_feat=self.node_feat,
                 device="cpu",
                 node_embed_hidden=12,
                 d_embed=8,
