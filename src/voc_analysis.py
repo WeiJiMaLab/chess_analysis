@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from joblib import Parallel, delayed
 import os
+import multiprocessing
+import resource
+from joblib.externals.loky.process_executor import TerminatedWorkerError
 
 SHALLOW_DEPTH = 1   # proxy for "no computation" — what you'd play immediately
 DEEP_DEPTH = 15     # proxy for "full computation" — Russek at depth 15
@@ -124,13 +127,50 @@ def plot_data(df):
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
     # --- Plot 1: Russek Figure 1b replication — binned mean move time ---
+    def bootstrap_mean_ci(values, n_boot=1000, alpha=0.05, rng=None):
+        arr = np.asarray(values, dtype=float)
+        arr = arr[~np.isnan(arr)]
+        if arr.size == 0:
+            return np.nan, np.nan, np.nan
+        if rng is None:
+            rng = np.random.default_rng(42)
+        boot_means = np.empty(n_boot, dtype=float)
+        n = arr.size
+        for i in range(n_boot):
+            sample = rng.choice(arr, size=n, replace=True)
+            boot_means[i] = sample.mean()
+        mean = arr.mean()
+        lower = np.percentile(boot_means, 100 * (alpha / 2.0))
+        upper = np.percentile(boot_means, 100 * (1.0 - alpha / 2.0))
+        return mean, lower, upper
+
     df_plot = df.copy()
     df_plot["voc_bin"] = pd.cut(df_plot["voc"], bins=10)
-    binned = df_plot.groupby("voc_bin")["move_time"].agg(["mean", "count"])
-    axes[0].plot(range(len(binned)), binned["mean"].values, marker="o", color="black")
+    grouped = df_plot.groupby("voc_bin", observed=False)["move_time"]
+    binned = grouped.agg(["count"])
+    rng = np.random.default_rng(42)
+    ci_stats = grouped.apply(lambda s: pd.Series(bootstrap_mean_ci(s.values, n_boot=1000, alpha=0.05, rng=rng)))
+    ci_stats.columns = ["mean", "ci_low", "ci_high"]
+    binned = binned.join(ci_stats)
+    x = np.arange(len(binned))
+    y = binned["mean"].values
+    yerr = np.vstack([
+        y - binned["ci_low"].values,
+        binned["ci_high"].values - y
+    ])
+    axes[0].errorbar(
+        x,
+        y,
+        yerr=yerr,
+        fmt="o-",
+        color="black",
+        ecolor="gray",
+        elinewidth=1,
+        capsize=3,
+    )
     axes[0].set_xlabel("VOC bin (equal-width, low → high)")
     axes[0].set_ylabel("Mean move time (s)")
-    axes[0].set_title("Russek Fig 1b replication")
+    axes[0].set_title("Russek Fig 1b replication (bootstrap 95% CI, n=1000)")
     # annotate bin counts so you can see how sparse the tail is
     for j, (mean, count) in enumerate(zip(binned["mean"], binned["count"])):
         if not np.isnan(mean):
@@ -169,11 +209,19 @@ def plot_data(df):
 
 
 if __name__ == "__main__":
+    # Prevent Stockfish crashes from writing large core.* files.
+    # Child worker processes inherit this limit.
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        print("Core dumps disabled (RLIMIT_CORE=0).")
+    except Exception as e:
+        print(f"Warning: could not disable core dumps: {e}")
+
     POSITIONS_CACHE = "positions_cache.parquet"
     if os.path.exists(POSITIONS_CACHE):
         positions = pd.read_parquet(POSITIONS_CACHE)
     else:
-        conn = get_db_connection(threads=32)
+        conn = get_db_connection(threads=64)
         start_date = "2022-01-01"
         end_date = "2022-12-31"
         db_path = '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db'
@@ -197,9 +245,36 @@ if __name__ == "__main__":
         """).df()
         positions.to_parquet(POSITIONS_CACHE)
 
-    results = Parallel(n_jobs=128, prefer="processes")(
-        delayed(analyze_position)(position) for position in tqdm(positions.itertuples(), total=len(positions))
-    )
+    # Large process pools can OOM when each worker owns a Stockfish process.
+    # Allow override via VOC_N_JOBS, but default conservatively.
+    cpu_count = multiprocessing.cpu_count()
+    default_jobs = max(1, min(16, cpu_count // 2))
+    n_jobs = int(os.getenv("VOC_N_JOBS", default_jobs))
+    n_jobs = max(1, n_jobs)
+    print(f"Running VOC analysis with n_jobs={n_jobs} (cpu_count={cpu_count})")
+
+    # If the OS kills workers (SIGKILL), retry with lower parallelism.
+    attempt_jobs = n_jobs
+    while True:
+        try:
+            results = Parallel(
+                n_jobs=attempt_jobs,
+                prefer="processes",
+                pre_dispatch="n_jobs",
+                batch_size=1,
+            )(
+                delayed(analyze_position)(position) for position in tqdm(positions.itertuples(), total=len(positions))
+            )
+            break
+        except TerminatedWorkerError:
+            if attempt_jobs <= 1:
+                raise
+            next_jobs = max(1, attempt_jobs // 2)
+            print(
+                f"Workers terminated unexpectedly at n_jobs={attempt_jobs}. "
+                f"Retrying with n_jobs={next_jobs}."
+            )
+            attempt_jobs = next_jobs
     data = [r for r in results if r is not None]
     df = pd.DataFrame(data)
     df.to_csv("voc_results.csv", index=False)
