@@ -14,7 +14,6 @@ SPLIT_ROOT="${SPLIT_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain
 OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed}"
 SHARD_SIZE="${SHARD_SIZE:-2000}"
 NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
-LOG_INTERVAL="${LOG_INTERVAL:-100}"
 CLEAR_FLAG="${CLEAR_FLAG:-1}"
 SINGLE_SHARD="${SINGLE_SHARD:-0}"
 
@@ -36,7 +35,6 @@ echo "split_root=${SPLIT_ROOT}"
 echo "output_root=${OUTPUT_ROOT}"
 echo "shard_size=${SHARD_SIZE}"
 echo "num_workers=${NUM_WORKERS}"
-echo "log_interval=${LOG_INTERVAL}"
 echo "hostname=$(hostname)"
 date
 
@@ -45,7 +43,6 @@ ARGS=(
   --output-root "${OUTPUT_ROOT}"
   --shard-size "${SHARD_SIZE}"
   --num-workers "${NUM_WORKERS}"
-  --log-interval "${LOG_INTERVAL}"
 )
 
 if [[ "${CLEAR_FLAG}" == "1" ]]; then

@@ -789,12 +789,6 @@ Conclusion:
 Follow-up:
 - The packer now parallelizes tensorization across trees within each shard using a process pool.
 - Added `--num-workers` to `scripts/pack_pretrain_examples.py` and threaded it through `slurm/pack_pretrain_examples_della.slurm` via `NUM_WORKERS`, defaulting to `SLURM_CPUS_PER_TASK`.
-- Restored intermediate parent-side progress logging within each shard.
-- Added `--log-interval` / `LOG_INTERVAL` so the packer prints sub-shard progress lines including:
-  - `shard_examples`
-  - `packed_examples`
-  - `elapsed_s`
-  - `base_examples_per_s`
 
 Validation:
 - `/opt/miniconda3/envs/trm/bin/python -m pytest test_supervised_branch.py test_plumbing.py test_model.py -q`

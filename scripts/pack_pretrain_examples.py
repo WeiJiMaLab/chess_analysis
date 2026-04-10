@@ -54,12 +54,10 @@ def _tensorize_example_path(path_str: str):
 
 def _load_tensorized_examples(shard_paths: list[Path], num_workers: int):
     if num_workers <= 1:
-        for path in shard_paths:
-            yield _tensorize_example_path(str(path))
-        return
+        return [_tensorize_example_path(str(path)) for path in shard_paths]
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        yield from executor.map(_tensorize_example_path, [str(path) for path in shard_paths])
+        return list(executor.map(_tensorize_example_path, [str(path) for path in shard_paths]))
 
 
 def _pack_split(
@@ -67,7 +65,6 @@ def _pack_split(
     output_root: Path,
     shard_size: int,
     num_workers: int,
-    log_interval: int,
 ) -> tuple[Path, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
@@ -82,6 +79,7 @@ def _pack_split(
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
+        tensorized_examples = _load_tensorized_examples(shard_paths, num_workers)
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
         edge_ptr = [0]
@@ -94,9 +92,7 @@ def _pack_split(
         depth_parts = []
         target_parts = []
 
-        completed_in_shard = 0
-        for path, tensorized in zip(shard_paths, _load_tensorized_examples(shard_paths, num_workers)):
-            completed_in_shard += 1
+        for path, tensorized in zip(shard_paths, tensorized_examples):
             node_features_parts.append(tensorized.node_features.cpu())
             parent_index_parts.append(tensorized.parent_index.cpu())
             edge_parent_parts.append(tensorized.edge_parent.cpu())
@@ -110,27 +106,9 @@ def _pack_split(
             node_ptr.append(node_ptr[-1] + int(tensorized.node_features.shape[0]))
             edge_ptr.append(edge_ptr[-1] + int(tensorized.edge_parent.shape[0]))
 
-            should_log_progress = (
-                log_interval > 0
-                and completed_in_shard < len(shard_paths)
-                and completed_in_shard % log_interval == 0
-            )
-            if should_log_progress:
-                elapsed = time.time() - start_time
-                packed_examples_so_far = total_examples + completed_in_shard
-                base_examples_per_s = packed_examples_so_far / elapsed if elapsed > 0.0 else 0.0
-                print(
-                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                    f"shard_examples={completed_in_shard}/{len(shard_paths)} "
-                    f"packed_examples={packed_examples_so_far}/{len(example_paths)} "
-                    f"elapsed_s={elapsed:.1f} base_examples_per_s={base_examples_per_s:.2f} "
-                    f"num_workers={num_workers}",
-                    flush=True,
-                )
-
         payload = {
             "format": "cts_tensorized_pretrain_shard_v1",
-            "num_examples": len(shard_paths),
+            "num_examples": len(tensorized_examples),
             "source_manifest": str(manifest_path),
             "source_paths": [str(path) for path in shard_paths],
             "feature_names": list(schema.feature_names),
@@ -153,18 +131,16 @@ def _pack_split(
         entries.append(
             {
                 "path": str(shard_path),
-                "num_examples": len(shard_paths),
+                "num_examples": len(tensorized_examples),
                 "shard_index": shard_index,
             }
         )
-        total_examples += len(shard_paths)
+        total_examples += len(tensorized_examples)
         elapsed = time.time() - start_time
-        base_examples_per_s = total_examples / elapsed if elapsed > 0.0 else 0.0
         print(
             f"split={split_name} shard={shard_index + 1}/{total_shards} "
             f"packed_examples={total_examples}/{len(example_paths)} "
-            f"elapsed_s={elapsed:.1f} base_examples_per_s={base_examples_per_s:.2f} "
-            f"num_workers={num_workers}",
+            f"elapsed_s={elapsed:.1f} num_workers={num_workers}",
             flush=True,
         )
 
@@ -196,7 +172,6 @@ def main() -> None:
     )
     parser.add_argument("--shard-size", type=int, default=2000)
     parser.add_argument("--num-workers", type=int, default=1)
-    parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--single-shard", action="store_true")
     parser.add_argument("--clear", action="store_true")
     args = parser.parse_args()
@@ -205,8 +180,6 @@ def main() -> None:
         raise ValueError("shard_size must be positive.")
     if args.num_workers <= 0:
         raise ValueError("num_workers must be positive.")
-    if args.log_interval <= 0:
-        raise ValueError("log_interval must be positive.")
 
     split_root = Path(args.split_root)
     output_root = Path(args.output_root)
@@ -227,19 +200,12 @@ def main() -> None:
     validation_paths = _read_manifest(validation_manifest)
     shard_size = max(len(train_paths), len(validation_paths)) if args.single_shard else args.shard_size
 
-    train_packed_manifest, train_count = _pack_split(
-        train_manifest,
-        output_root,
-        shard_size,
-        args.num_workers,
-        args.log_interval,
-    )
+    train_packed_manifest, train_count = _pack_split(train_manifest, output_root, shard_size, args.num_workers)
     validation_packed_manifest, validation_count = _pack_split(
         validation_manifest,
         output_root,
         shard_size,
         args.num_workers,
-        args.log_interval,
     )
 
     print(f"train_manifest={train_packed_manifest}")
@@ -248,7 +214,6 @@ def main() -> None:
     print(f"validation_examples={validation_count}")
     print(f"output_root={output_root}")
     print(f"num_workers={args.num_workers}")
-    print(f"log_interval={args.log_interval}")
     print(f"single_shard={args.single_shard}")
     print(f"effective_shard_size={shard_size}")
 

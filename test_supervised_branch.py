@@ -1,12 +1,10 @@
 import copy
-import io
 import json
 import math
 import os
 import random
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
@@ -617,7 +615,7 @@ class SupervisedBranchTests(unittest.TestCase):
             self.assertTrue(math.isfinite(metrics.total_loss))
             self.assertGreater(metrics.num_supervised_edges, 0)
 
-    def test_pack_split_logs_subshard_progress_and_uses_process_pool(self):
+    def test_pack_split_uses_process_pool_when_num_workers_exceeds_one(self):
         examples = [
             build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
             build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
@@ -651,22 +649,16 @@ class SupervisedBranchTests(unittest.TestCase):
                     torch.save(example, example_path)
                     handle.write(f"{example_path}\n")
 
-            log_buffer = io.StringIO()
             with patch.object(pack_pretrain_examples_script, "ProcessPoolExecutor", RecordingExecutor):
-                with redirect_stdout(log_buffer):
-                    packed_manifest_path, packed_count = pack_pretrain_examples_script._pack_split(
-                        Path(manifest_path),
-                        Path(output_root),
-                        shard_size=8,
-                        num_workers=2,
-                        log_interval=1,
-                    )
+                packed_manifest_path, packed_count = pack_pretrain_examples_script._pack_split(
+                    Path(manifest_path),
+                    Path(output_root),
+                    shard_size=8,
+                    num_workers=2,
+                )
 
             self.assertEqual(RecordingExecutor.calls, [2])
             self.assertEqual(packed_count, 2)
-            logged = log_buffer.getvalue()
-            self.assertIn("shard_examples=1/2", logged)
-            self.assertIn("base_examples_per_s=", logged)
 
             with open(packed_manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
