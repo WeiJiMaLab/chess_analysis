@@ -54,7 +54,7 @@ from supervised_branch import (
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
     normalize_prior_scores,
-    prefix_node_count_schedule,
+    prefix_expansion_count_schedule,
     _backup_target_from_child_q,
 )
 from tensorizer import TreeTensorizer, tensorize_tree_with_targets
@@ -308,12 +308,12 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(example.metadata["provider_metadata"]["provider"], "dummy")
         self.assertEqual(example.metadata["edge_wdl_target_generation_version"], "search_consolidated_edge_wdl_v1")
 
-    def test_prefix_node_count_schedule_tracks_root_prefix_sizes(self):
+    def test_prefix_expansion_count_schedule_tracks_root_prefix_sizes(self):
         tree = build_tree_from_provider("root", self.provider, self.config)
-        counts = prefix_node_count_schedule(tree)
+        counts = prefix_expansion_count_schedule(tree)
 
-        self.assertEqual(counts[0], 1)
-        self.assertEqual(counts[-1], tree.num_nodes())
+        self.assertEqual(counts[0], 0)
+        self.assertEqual(counts[-1], len(tree.ordered_expansion_parent_ids()))
         self.assertTrue(all(left < right for left, right in zip(counts, counts[1:])))
 
     def test_derive_prefix_pretrain_example_uses_root_prefix_and_recomputes_targets(self):
@@ -326,11 +326,12 @@ class SupervisedBranchTests(unittest.TestCase):
             rng=random.Random(0),
         )
 
-        self.assertGreaterEqual(prefix_example.tree.num_nodes(), 3)
-        self.assertLessEqual(prefix_example.tree.num_nodes(), 5)
         self.assertEqual(prefix_example.tree.root_id, 0)
         self.assertEqual(prefix_example.metadata["source_root_position_id"], "p0")
-        self.assertEqual(prefix_example.metadata["prefix_node_count"], prefix_example.tree.num_nodes())
+        self.assertGreaterEqual(prefix_example.metadata["prefix_expansion_count"], 3)
+        self.assertLessEqual(prefix_example.metadata["prefix_expansion_count"], 5)
+        self.assertEqual(prefix_example.metadata["prefix_expansion_count"], len(prefix_example.tree.ordered_expansion_parent_ids()))
+        self.assertEqual(prefix_example.metadata["prefix_total_node_count"], prefix_example.tree.num_nodes())
         self.assertEqual(len(prefix_example.edge_wdl_targets), prefix_example.tree.num_edges())
 
         recomputed = compute_teacher_targets(prefix_example.tree, self.config)
@@ -340,6 +341,43 @@ class SupervisedBranchTests(unittest.TestCase):
             recomputed_target = recomputed.edge_target_wdls[edge_key]
             for actual, expected in zip(target, recomputed_target):
                 self.assertAlmostEqual(actual, expected)
+
+    def test_derive_prefix_pretrain_example_handles_large_total_tree_under_expanded_budget(self):
+        tree = SearchTree()
+        root_id = tree.create_root("wide-root", make_wdl_features(0.4, 0.3, 0.3))
+        children = [
+            ExpansionChild(f"m{i:02d}", f"child-{i}", make_wdl_features(0.5, 0.25, 0.25, prior=1.0 / 60.0))
+            for i in range(60)
+        ]
+        child_ids = tree.add_children(root_id, children)
+        for child_id in child_ids[:59]:
+            child_fen = tree.get_node(child_id).fen
+            tree.add_children(
+                child_id,
+                [ExpansionChild(f"{child_fen}-next", f"{child_fen}-next", make_wdl_features(0.55, 0.2, 0.25, prior=1.0))],
+            )
+        source_example = PretrainExample(
+            tree=tree,
+            node_target_values={node.node_id: 0.0 for node in tree.iter_nodes()},
+            edge_wdl_targets={},
+            metadata={"root_position_id": "wide-root"},
+        )
+
+        prefix_example = derive_prefix_pretrain_example(
+            source_example,
+            config=self.config,
+            min_nodes=8,
+            max_nodes=48,
+            rng=random.Random(0),
+        )
+
+        self.assertGreater(prefix_example.tree.num_nodes(), 48)
+        self.assertEqual(prefix_example.tree.root_id, 0)
+        self.assertGreaterEqual(prefix_example.metadata["prefix_expansion_count"], 8)
+        self.assertLessEqual(prefix_example.metadata["prefix_expansion_count"], 48)
+        self.assertEqual(prefix_example.metadata["prefix_expansion_count"], len(prefix_example.tree.ordered_expansion_parent_ids()))
+        self.assertEqual(prefix_example.metadata["prefix_total_node_count"], prefix_example.tree.num_nodes())
+        self.assertEqual(len(prefix_example.edge_wdl_targets), prefix_example.tree.num_edges())
 
     def test_derive_pretrain_prefixes_script_supports_multiprocessing(self):
         repo_root = Path(__file__).resolve().parent

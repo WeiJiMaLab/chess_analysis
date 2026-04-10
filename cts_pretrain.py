@@ -794,16 +794,10 @@ def build_pretrain_example(
     )
 
 
-def prefix_node_count_schedule(tree: SearchTree) -> List[int]:
+def prefix_expansion_count_schedule(tree: SearchTree) -> List[int]:
     if tree.root_id is None:
         raise ValueError("Tree must contain a root.")
-
-    counts = [1]
-    total_nodes = 1
-    for parent_id in tree.ordered_expansion_parent_ids():
-        total_nodes += len(tree.child_ids(parent_id))
-        counts.append(total_nodes)
-    return counts
+    return list(range(0, len(tree.ordered_expansion_parent_ids()) + 1))
 
 
 def sample_prefix_expansion_count_for_node_budget(
@@ -811,18 +805,18 @@ def sample_prefix_expansion_count_for_node_budget(
     min_nodes: int,
     max_nodes: int,
     rng: Optional[random.Random] = None,
-) -> Tuple[int, int]:
+) -> int:
     if min_nodes <= 0:
         raise ValueError("min_nodes must be positive.")
     if max_nodes < min_nodes:
         raise ValueError("max_nodes must be >= min_nodes.")
 
     rng = rng or random.Random()
-    counts = prefix_node_count_schedule(tree)
-    eligible = [(expansion_count, count) for expansion_count, count in enumerate(counts) if min_nodes <= count <= max_nodes]
+    counts = prefix_expansion_count_schedule(tree)
+    eligible = [count for count in counts if min_nodes <= count <= max_nodes]
     if not eligible:
         raise ValueError(
-            f"Tree with {tree.num_nodes()} nodes has no root prefix whose node count falls in [{min_nodes}, {max_nodes}]."
+            f"Tree with {len(tree.ordered_expansion_parent_ids())} expanded nodes has no root prefix whose expanded-node count falls in [{min_nodes}, {max_nodes}]."
         )
 
     if min_nodes == max_nodes:
@@ -834,9 +828,9 @@ def sample_prefix_expansion_count_for_node_budget(
 
     return min(
         eligible,
-        key=lambda item: (
-            abs(math.log(item[1]) - math.log(target_nodes)),
-            item[1],
+        key=lambda count: (
+            abs(math.log(count) - math.log(target_nodes)),
+            count,
         ),
     )
 
@@ -849,26 +843,28 @@ def derive_prefix_pretrain_example(
     rng: Optional[random.Random] = None,
 ) -> PretrainExample:
     rng = rng or random.Random()
-    expansion_count, prefix_node_count = sample_prefix_expansion_count_for_node_budget(
+    prefix_expansion_count = sample_prefix_expansion_count_for_node_budget(
         source_example.tree,
         min_nodes=min_nodes,
         max_nodes=max_nodes,
         rng=rng,
     )
-    prefix_tree = source_example.tree.clone_expansion_prefix(expansion_count)
+    prefix_tree = source_example.tree.clone_expansion_prefix(prefix_expansion_count)
     teacher_result = compute_teacher_targets(prefix_tree, config)
+    prefix_total_node_count = prefix_tree.num_nodes()
 
     source_root_position_id = str(source_example.metadata.get("root_position_id", "unknown_root"))
     metadata = dict(source_example.metadata)
     metadata.update(
         {
-            "root_position_id": f"{source_root_position_id}__prefix_nodes_{prefix_node_count}",
+            "root_position_id": f"{source_root_position_id}__prefix_expanded_{prefix_expansion_count}",
             "source_root_position_id": source_root_position_id,
             "source_num_nodes": source_example.tree.num_nodes(),
-            "prefix_node_count": prefix_node_count,
-            "prefix_expansion_count": expansion_count,
-            "prefix_node_budget_min": min_nodes,
-            "prefix_node_budget_max": max_nodes,
+            "source_expanded_node_count": len(source_example.tree.ordered_expansion_parent_ids()),
+            "prefix_expansion_count": prefix_expansion_count,
+            "prefix_total_node_count": prefix_total_node_count,
+            "prefix_expanded_node_budget_min": min_nodes,
+            "prefix_expanded_node_budget_max": max_nodes,
             "prefix_target_generation_version": "search_consolidated_edge_wdl_prefix_v1",
         }
     )
