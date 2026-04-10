@@ -165,10 +165,7 @@ class TensorizerTests(unittest.TestCase):
             torch.equal(batch.edge_parent.cpu(), torch.tensor([0, 0, 1, 1], dtype=torch.long))
         )
         self.assertTrue(
-            torch.equal(batch.edge_child.cpu(), torch.tensor([2, 1, 4, 3], dtype=torch.long))
-        )
-        self.assertTrue(
-            torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 0, 1], dtype=torch.long))
+            torch.equal(batch.edge_child.cpu(), torch.tensor([1, 2, 3, 4], dtype=torch.long))
         )
         self.assertTrue(
             torch.equal(batch.child_ptr.cpu(), torch.tensor([0, 2, 4, 4, 4, 4], dtype=torch.long))
@@ -209,9 +206,6 @@ class TensorizerTests(unittest.TestCase):
         self.assertTrue(
             torch.equal(batch.child_ptr.cpu(), torch.tensor([0, 2, 4, 4, 4, 4, 7, 7, 7, 7], dtype=torch.long))
         )
-        self.assertTrue(
-            torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 0, 1, 0, 1, 2], dtype=torch.long))
-        )
 
     def test_tensorized_observation_collation_preserves_boundaries(self) -> None:
         tree_a = build_sample_tree()
@@ -237,7 +231,6 @@ class TensorizerTests(unittest.TestCase):
         self.assertEqual(batch.num_nodes, 8)
         self.assertEqual(batch.num_edges, 6)
         self.assertTrue(torch.equal(batch.root_index.cpu(), torch.tensor([0, 5], dtype=torch.long)))
-        self.assertTrue(torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 0, 1, 0, 1], dtype=torch.long)))
 
 
 class PlanningStateTests(unittest.TestCase):

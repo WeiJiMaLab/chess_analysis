@@ -6,11 +6,9 @@ import random
 import time
 from typing import List, Optional
 
-from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
+from GNN import NodeValueModel, PolicyValueTreeSearchModel
 from schema import NodeFeatureSchema, tree_encoder_feature_schema
 from supervised_branch import (
-    ChildWdlPretrainConfig,
-    ChildWdlPretrainer,
     FrozenEncoderControllerTrainer,
     GeneratedTreeHaltEnv,
     NodeBudgetDistribution,
@@ -29,7 +27,7 @@ from supervised_branch import (
     evaluate_controller,
     save_pretrain_example_to_directory,
 )
-from tensorizer import DEFAULT_CHILD_SLOT_COUNT, TreeTensorizer
+from tensorizer import TreeTensorizer
 from tree import ExpansionChild, SearchTree
 from uci_provider import (
     Lc0DirectEvalProvider,
@@ -59,7 +57,7 @@ def _load_fens(path: str) -> List[str]:
 
 
 def _build_tensorizer(args: argparse.Namespace, schema: NodeFeatureSchema) -> TreeTensorizer:
-    return TreeTensorizer(schema, device=args.device, child_slot_count=args.child_slot_count)
+    return TreeTensorizer(schema, device=args.device)
 
 
 def _build_node_value_model(args: argparse.Namespace, schema: NodeFeatureSchema) -> NodeValueModel:
@@ -73,22 +71,6 @@ def _build_node_value_model(args: argparse.Namespace, schema: NodeFeatureSchema)
         n_heads=args.n_heads,
         d_att=args.d_att,
         value_hidden=args.value_hidden,
-        child_slot_count=args.child_slot_count,
-    )
-
-
-def _build_child_wdl_model(args: argparse.Namespace, schema: NodeFeatureSchema) -> ChildWdlModel:
-    return ChildWdlModel(
-        k=args.k,
-        node_feat=len(schema.feature_names),
-        device=args.device,
-        node_embed_hidden=args.node_embed_hidden,
-        d_embed=args.d_embed,
-        d_message=args.d_message,
-        n_heads=args.n_heads,
-        d_att=args.d_att,
-        decoder_hidden=args.decoder_hidden,
-        child_slot_count=args.child_slot_count,
     )
 
 
@@ -104,7 +86,6 @@ def _build_policy_value_model(args: argparse.Namespace, schema: NodeFeatureSchem
         d_att=args.d_att,
         controller_hidden=args.controller_hidden,
         value_hidden=args.value_hidden,
-        child_slot_count=args.child_slot_count,
     )
 
 
@@ -199,12 +180,7 @@ def _make_generated_eval_env_factory(
     return _make_eval_env
 
 
-def _add_shared_model_args(
-    parser: argparse.ArgumentParser,
-    *,
-    include_controller_hidden: bool,
-    include_value_hidden: bool = True,
-) -> None:
+def _add_shared_model_args(parser: argparse.ArgumentParser, *, include_controller_hidden: bool) -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--k", type=int, default=2)
     parser.add_argument("--node-embed-hidden", type=int, default=128)
@@ -212,11 +188,9 @@ def _add_shared_model_args(
     parser.add_argument("--d-message", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--d-att", type=int, default=32)
-    parser.add_argument("--child-slot-count", type=int, default=DEFAULT_CHILD_SLOT_COUNT)
     if include_controller_hidden:
         parser.add_argument("--controller-hidden", type=int, default=128)
-    if include_value_hidden:
-        parser.add_argument("--value-hidden", type=int, default=128)
+    parser.add_argument("--value-hidden", type=int, default=128)
 
 
 def _add_generated_quality_args(parser: argparse.ArgumentParser) -> None:
@@ -479,14 +453,7 @@ def pretrain_encoder_command(args: argparse.Namespace) -> None:
         batch_progress_callback=_log_batch_progress,
     )
     print(f"[pretrain] stage=save_checkpoint path={args.output_checkpoint}", flush=True)
-    trainer.save_best_encoder(
-        args.output_checkpoint,
-        metadata={
-            "stage": "supervised_pretrain",
-            "pretrain_objective": "node_value_regression",
-            "child_slot_count": args.child_slot_count,
-        },
-    )
+    trainer.save_best_encoder(args.output_checkpoint, metadata={"stage": "supervised_pretrain"})
     final_validation = history[-1]["validation"]
     print(
         f"validation_total_loss={final_validation.total_loss:.6f} "
@@ -496,93 +463,6 @@ def pretrain_encoder_command(args: argparse.Namespace) -> None:
         flush=True,
     )
     print("[pretrain] stage=done", flush=True)
-
-
-def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
-    print(f"[child-wdl-pretrain] stage=load_train_dataset path={args.train_dir}", flush=True)
-    train_examples = load_pretrain_example_dataset(args.train_dir)
-    print(f"[child-wdl-pretrain] stage=load_validation_dataset path={args.validation_dir}", flush=True)
-    validation_examples = load_pretrain_example_dataset(args.validation_dir)
-    print(
-        f"[child-wdl-pretrain] stage=datasets_ready train_examples={len(train_examples)} "
-        f"validation_examples={len(validation_examples)}",
-        flush=True,
-    )
-
-    print("[child-wdl-pretrain] stage=build_schema_and_tensorizer", flush=True)
-    schema = _feature_schema()
-    tensorizer = _build_tensorizer(args, schema)
-    print("[child-wdl-pretrain] stage=build_model", flush=True)
-    model = _build_child_wdl_model(args, schema)
-    print("[child-wdl-pretrain] stage=build_trainer", flush=True)
-    trainer = ChildWdlPretrainer(
-        model=model,
-        tensorizer=tensorizer,
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        config=ChildWdlPretrainConfig(
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            weight_decay=args.weight_decay,
-            epochs=args.epochs,
-            shuffle=True,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_memory,
-            prefetch_factor=args.prefetch_factor,
-            persistent_workers=not args.disable_persistent_workers,
-        ),
-    )
-    print("[child-wdl-pretrain] stage=train_start", flush=True)
-
-    last_logged_batch = {"train": 0, "validation": 0}
-
-    def _log_batch_progress(phase, batch_index, total_batches, seen_examples, seen_edges, total_loss):
-        interval = args.log_interval
-        should_log = (
-            batch_index == 1
-            or batch_index == total_batches
-            or batch_index - last_logged_batch[phase] >= interval
-        )
-        if not should_log:
-            return
-        last_logged_batch[phase] = batch_index
-        print(
-            f"[child-wdl-pretrain] phase={phase} batch={batch_index}/{total_batches} "
-            f"seen_examples={seen_examples} seen_edges={seen_edges} total_loss={total_loss:.6f}",
-            flush=True,
-        )
-
-    def _log_epoch(epoch_index, train_metrics, validation_metrics):
-        print(
-            f"epoch={epoch_index}/{args.epochs} "
-            f"train_total_loss={train_metrics.total_loss:.6f} "
-            f"train_supervised_edges={train_metrics.num_supervised_edges} "
-            f"val_total_loss={validation_metrics.total_loss:.6f} "
-            f"val_supervised_edges={validation_metrics.num_supervised_edges}",
-            flush=True,
-        )
-
-    history = trainer.fit(
-        progress_callback=_log_epoch,
-        batch_progress_callback=_log_batch_progress,
-    )
-    print(f"[child-wdl-pretrain] stage=save_checkpoint path={args.output_checkpoint}", flush=True)
-    trainer.save_best_encoder(
-        args.output_checkpoint,
-        metadata={
-            "stage": "supervised_pretrain",
-            "pretrain_objective": "child_wdl",
-            "child_slot_count": args.child_slot_count,
-        },
-    )
-    final_validation = history[-1]["validation"]
-    print(
-        f"validation_total_loss={final_validation.total_loss:.6f} "
-        f"validation_supervised_edges={final_validation.num_supervised_edges} "
-        f"checkpoint={args.output_checkpoint}",
-        flush=True,
-    )
-    print("[child-wdl-pretrain] stage=done", flush=True)
 
 
 def frozen_controller_toy_command(args: argparse.Namespace) -> None:
@@ -864,23 +744,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     pretrain.add_argument("--pin-memory", action="store_true")
     pretrain.add_argument("--disable-persistent-workers", action="store_true")
     pretrain.set_defaults(func=pretrain_encoder_command)
-
-    child_wdl_pretrain = subparsers.add_parser("pretrain-child-wdl-encoder")
-    child_wdl_pretrain.add_argument("--train-dir", required=True)
-    child_wdl_pretrain.add_argument("--validation-dir", required=True)
-    child_wdl_pretrain.add_argument("--output-checkpoint", required=True)
-    _add_shared_model_args(child_wdl_pretrain, include_controller_hidden=False, include_value_hidden=False)
-    child_wdl_pretrain.add_argument("--decoder-hidden", type=int, default=128)
-    child_wdl_pretrain.add_argument("--batch-size", type=int, default=128)
-    child_wdl_pretrain.add_argument("--learning-rate", type=float, default=1e-3)
-    child_wdl_pretrain.add_argument("--weight-decay", type=float, default=0.0)
-    child_wdl_pretrain.add_argument("--epochs", type=int, default=10)
-    child_wdl_pretrain.add_argument("--log-interval", type=int, default=25)
-    child_wdl_pretrain.add_argument("--num-workers", type=int, default=4)
-    child_wdl_pretrain.add_argument("--prefetch-factor", type=int, default=2)
-    child_wdl_pretrain.add_argument("--pin-memory", action="store_true")
-    child_wdl_pretrain.add_argument("--disable-persistent-workers", action="store_true")
-    child_wdl_pretrain.set_defaults(func=pretrain_child_wdl_encoder_command)
 
     frozen = subparsers.add_parser("frozen-rl-toy")
     frozen.add_argument("--encoder-checkpoint", required=True)

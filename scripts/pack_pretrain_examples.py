@@ -67,7 +67,6 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
         parent_index_parts = []
         edge_parent_parts = []
         edge_child_parts = []
-        edge_slot_parts = []
         depth_parts = []
         target_parts = []
 
@@ -76,7 +75,6 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
             parent_index_parts.append(tensorized.parent_index.cpu())
             edge_parent_parts.append(tensorized.edge_parent.cpu())
             edge_child_parts.append(tensorized.edge_child.cpu())
-            edge_slot_parts.append(tensorized.edge_slot.cpu())
             depth_parts.append(tensorized.depth.cpu())
             target_parts.append(tensorized.node_targets.cpu())
             node_ptr.append(node_ptr[-1] + int(tensorized.node_features.shape[0]))
@@ -94,7 +92,6 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
             "parent_index": torch.cat(parent_index_parts, dim=0),
             "edge_parent": torch.cat(edge_parent_parts, dim=0) if edge_parent_parts else torch.empty(0, dtype=torch.long),
             "edge_child": torch.cat(edge_child_parts, dim=0) if edge_child_parts else torch.empty(0, dtype=torch.long),
-            "edge_slot": torch.cat(edge_slot_parts, dim=0) if edge_slot_parts else torch.empty(0, dtype=torch.long),
             "depth": torch.cat(depth_parts, dim=0),
             "node_targets": torch.cat(target_parts, dim=0),
         }
