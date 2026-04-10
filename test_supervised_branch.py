@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 import os
 import random
@@ -9,9 +10,11 @@ from unittest.mock import patch
 
 import torch
 
-from GNN import NodeValueModel, PolicyValueTreeSearchModel
+from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
 from schema import tree_encoder_feature_schema
 from supervised_branch import (
+    ChildWdlPretrainConfig,
+    ChildWdlPretrainer,
     EdgeStats,
     FrozenEncoderControllerTrainer,
     GeneratedTree,
@@ -38,6 +41,7 @@ from supervised_branch import (
     TeacherSearchConfig,
     ToyHaltEnv,
     TreeExpansionProvider,
+    _backup_target_from_child_wdl,
     build_pretrain_example,
     build_tree_from_provider,
     consolidate_generated_tree,
@@ -48,33 +52,33 @@ from supervised_branch import (
     normalize_prior_scores,
     _backup_target_from_child_q,
 )
-from tensorizer import TreeTensorizer
+from tensorizer import TreeTensorizer, tensorize_tree_with_targets
 from tree import ExpansionChild, SearchTree
 
 
 class DummyProvider(TreeExpansionProvider):
     def root_features(self, fen):
         if fen == "root_alt":
-            return {"value": 0.1, "prior": 1.0}
-        return {"value": 0.0, "prior": 1.0}
+            return make_wdl_features(0.4, 0.3, 0.3)
+        return make_wdl_features(0.35, 0.3, 0.35)
 
     def expand_node(self, fen, depth, max_children=None):
         mapping = {
             "root": [
-                ExpansionChild("a", "a", {"value": 0.4, "prior": 0.7}),
-                ExpansionChild("b", "b", {"value": -0.2, "prior": 0.3}),
+                ExpansionChild("a", "a", make_wdl_features(0.6, 0.2, 0.2, prior=0.7)),
+                ExpansionChild("b", "b", make_wdl_features(0.2, 0.4, 0.4, prior=0.3)),
             ],
             "root_alt": [
-                ExpansionChild("c", "c", {"value": 0.2, "prior": 0.6}),
-                ExpansionChild("d", "d", {"value": 0.1, "prior": 0.4}),
+                ExpansionChild("c", "c", make_wdl_features(0.5, 0.3, 0.2, prior=0.6)),
+                ExpansionChild("d", "d", make_wdl_features(0.45, 0.2, 0.35, prior=0.4)),
             ],
             "a": [
-                ExpansionChild("a1", "a1", {"value": -0.1, "prior": 0.6}),
-                ExpansionChild("a2", "a2", {"value": 0.2, "prior": 0.4}),
+                ExpansionChild("a1", "a1", make_wdl_features(0.35, 0.3, 0.35, prior=0.6)),
+                ExpansionChild("a2", "a2", make_wdl_features(0.55, 0.2, 0.25, prior=0.4)),
             ],
-            "b": [ExpansionChild("b1", "b1", {"value": 0.3, "prior": 1.0})],
-            "c": [ExpansionChild("c1", "c1", {"value": 0.5, "prior": 1.0})],
-            "d": [ExpansionChild("d1", "d1", {"value": -0.3, "prior": 1.0})],
+            "b": [ExpansionChild("b1", "b1", make_wdl_features(0.6, 0.1, 0.3, prior=1.0))],
+            "c": [ExpansionChild("c1", "c1", make_wdl_features(0.65, 0.2, 0.15, prior=1.0))],
+            "d": [ExpansionChild("d1", "d1", make_wdl_features(0.25, 0.2, 0.55, prior=1.0))],
         }
         children = mapping.get(fen, [])
         if max_children is None:
@@ -121,6 +125,36 @@ def make_toy_env():
         make_episode_snapshot(0.9),
     ]
     return ToyHaltEnv(snapshots, continue_cost=0.05)
+
+
+def make_wdl_features(win: float, draw: float, loss: float, prior: float = 1.0) -> dict[str, float]:
+    total = win + draw + loss
+    p_win = win / total
+    p_draw = draw / total
+    p_loss = loss / total
+    value = p_win - p_loss
+    variance = (p_win + p_loss) - value * value
+    return {
+        "value": value,
+        "prior": prior,
+        "wdl_win": p_win,
+        "wdl_draw": p_draw,
+        "wdl_loss": p_loss,
+        "wdl_var": variance,
+    }
+
+
+def build_slot_test_tree() -> SearchTree:
+    tree = SearchTree()
+    root_id = tree.create_root("root", make_wdl_features(0.5, 0.3, 0.2))
+    tree.add_children(
+        root_id,
+        [
+            ExpansionChild("g1f3", "child_b", make_wdl_features(0.2, 0.3, 0.5, prior=0.4)),
+            ExpansionChild("e2e4", "child_a", make_wdl_features(0.7, 0.2, 0.1, prior=0.6)),
+        ],
+    )
+    return tree
 
 
 class SupervisedBranchTests(unittest.TestCase):
@@ -190,6 +224,7 @@ class SupervisedBranchTests(unittest.TestCase):
         result_b = compute_teacher_targets(tree, self.config)
 
         self.assertEqual(result_a.node_target_values, result_b.node_target_values)
+        self.assertEqual(result_a.edge_target_wdls, result_b.edge_target_wdls)
 
         for node in tree.iter_nodes():
             if not tree.children(node.node_id):
@@ -205,6 +240,9 @@ class SupervisedBranchTests(unittest.TestCase):
             for child_id in root_children
         ) / total_visits
         self.assertAlmostEqual(result_a.node_target_values[0], expected_root)
+        for child_id in root_children:
+            edge_key = (0, child_id)
+            self.assertEqual(result_a.edge_target_wdls[edge_key], result_a.edge_stats[edge_key].mean_wdl)
 
     def test_backup_target_uses_child_q_statistics_not_selection_score(self):
         tree = SearchTree()
@@ -227,14 +265,43 @@ class SupervisedBranchTests(unittest.TestCase):
 
         self.assertAlmostEqual(target, expected)
 
+    def test_backup_target_uses_visit_weighted_child_wdls(self):
+        tree = SearchTree()
+        root_id = tree.create_root("root", make_wdl_features(0.4, 0.2, 0.4))
+        child_ids = tree.add_children(
+            root_id,
+            [
+                ExpansionChild("a", "a", make_wdl_features(0.7, 0.2, 0.1, prior=0.5)),
+                ExpansionChild("b", "b", make_wdl_features(0.2, 0.5, 0.3, prior=0.5)),
+            ],
+        )
+
+        edge_stats = {
+            (root_id, child_ids[0]): EdgeStats(visit_count=2, mean_wdl=(0.8, 0.1, 0.1)),
+            (root_id, child_ids[1]): EdgeStats(visit_count=3, mean_wdl=(0.1, 0.6, 0.3)),
+        }
+
+        target = _backup_target_from_child_wdl(tree, root_id, edge_stats)
+        expected = (
+            (2 * 0.8 + 3 * 0.1) / 5,
+            (2 * 0.1 + 3 * 0.6) / 5,
+            (2 * 0.1 + 3 * 0.3) / 5,
+        )
+
+        for actual, target_component in zip(target, expected):
+            self.assertAlmostEqual(actual, target_component)
+        self.assertAlmostEqual(sum(target), 1.0)
+
     def test_pretrain_example_target_order_matches_tensorized_node_order(self):
         example = build_pretrain_example("root", self.provider, self.config, root_position_id="p0")
         tree_batch = self.tensorizer.tensorize_tree(example.tree)
 
         self.assertEqual(len(example.node_target_values), tree_batch.num_nodes)
+        self.assertEqual(len(example.edge_wdl_targets), tree_batch.num_edges)
         self.assertEqual(example.metadata["root_position_id"], "p0")
         self.assertEqual(example.metadata["search_config_id"], self.config.search_config_id)
         self.assertEqual(example.metadata["provider_metadata"]["provider"], "dummy")
+        self.assertEqual(example.metadata["edge_wdl_target_generation_version"], "search_consolidated_edge_wdl_v1")
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
@@ -319,6 +386,79 @@ class SupervisedBranchTests(unittest.TestCase):
                 self.assertEqual(mocked_load.call_count, 1)
                 self.assertEqual(loaded.metadata["root_position_id"], "p1")
 
+    def test_child_wdl_pretrainer_uses_precomputed_edge_targets_from_packed_tensorized_data(self):
+        tree = build_slot_test_tree()
+        edge_wdl_targets = {
+            (0, 1): (0.2, 0.5, 0.3),
+            (0, 2): (0.6, 0.2, 0.2),
+        }
+        tensorized = tensorize_tree_with_targets(
+            tree,
+            [0.0] * tree.num_nodes(),
+            schema=self.schema,
+            edge_wdl_targets=edge_wdl_targets,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = os.path.join(tmpdir, "shard_00000.pt")
+            torch.save(
+                {
+                    "format": "cts_tensorized_pretrain_shard_v1",
+                    "num_examples": 1,
+                    "feature_names": list(self.schema.feature_names),
+                    "node_ptr": torch.tensor([0, tensorized.node_features.shape[0]], dtype=torch.long),
+                    "edge_ptr": torch.tensor([0, tensorized.edge_parent.shape[0]], dtype=torch.long),
+                    "node_features": tensorized.node_features,
+                    "parent_index": tensorized.parent_index,
+                    "edge_parent": tensorized.edge_parent,
+                    "edge_child": tensorized.edge_child,
+                    "edge_slot": tensorized.edge_slot,
+                    "edge_wdl_targets": tensorized.edge_wdl_targets,
+                    "depth": tensorized.depth,
+                    "node_targets": tensorized.node_targets,
+                },
+                shard_path,
+            )
+            manifest_path = os.path.join(tmpdir, "train_manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "format": "cts_tensorized_pretrain_manifest_v1",
+                        "entries": [{"path": shard_path, "num_examples": 1}],
+                    },
+                    handle,
+                )
+
+            dataset = load_pretrain_example_dataset(manifest_path)
+            model = ChildWdlModel(
+                k=1,
+                node_feat=self.node_feat,
+                device="cpu",
+                node_embed_hidden=16,
+                d_embed=12,
+                d_message=8,
+                n_heads=1,
+                d_att=4,
+                decoder_hidden=8,
+            )
+            trainer = ChildWdlPretrainer(
+                model=model,
+                tensorizer=self.tensorizer,
+                train_examples=dataset,
+                validation_examples=dataset,
+                config=ChildWdlPretrainConfig(
+                    batch_size=1,
+                    learning_rate=0.01,
+                    epochs=1,
+                    shuffle=False,
+                ),
+            )
+
+            with patch.object(TreeTensorizer, "edge_wdl_target_tensor", side_effect=AssertionError("recomputed")):
+                metrics = trainer.validate()
+
+            self.assertTrue(math.isfinite(metrics.total_loss))
+            self.assertEqual(metrics.num_supervised_edges, 2)
+
     def test_supervised_pretraining_reduces_validation_loss_and_checkpoint_restores_encoder(self):
         train_examples = [
             build_pretrain_example("root", self.provider, self.config),
@@ -373,6 +513,68 @@ class SupervisedBranchTests(unittest.TestCase):
             )
             metadata = load_encoder_checkpoint(checkpoint_path, loaded_model.encoder)
             self.assertEqual(metadata["tag"], "pretrain")
+
+            for key, value in trainer.model.encoder.state_dict().items():
+                self.assertTrue(torch.equal(value, loaded_model.encoder.state_dict()[key]))
+
+    def test_child_wdl_pretraining_reduces_validation_loss_and_checkpoint_restores_encoder(self):
+        train_examples = [
+            build_pretrain_example("root", self.provider, self.config),
+            build_pretrain_example("root_alt", self.provider, self.config),
+        ]
+        model = ChildWdlModel(
+            k=1,
+            node_feat=self.node_feat,
+            device="cpu",
+            node_embed_hidden=16,
+            d_embed=12,
+            d_message=8,
+            n_heads=1,
+            d_att=4,
+            decoder_hidden=8,
+        )
+        trainer = ChildWdlPretrainer(
+            model=model,
+            tensorizer=self.tensorizer,
+            train_examples=train_examples,
+            validation_examples=train_examples,
+            config=ChildWdlPretrainConfig(
+                batch_size=2,
+                learning_rate=0.05,
+                epochs=6,
+                shuffle=False,
+            ),
+        )
+
+        initial_validation = trainer.validate().total_loss
+        history = trainer.fit()
+        final_validation = trainer.validate().total_loss
+
+        self.assertTrue(history)
+        self.assertLess(final_validation, initial_validation)
+        self.assertGreaterEqual(history[-1]["validation"].target_entropy, 0.0)
+        self.assertGreaterEqual(history[-1]["validation"].loss_gap, 0.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = os.path.join(temp_dir, "child_wdl_encoder.pt")
+            trainer.save_best_encoder(
+                checkpoint_path,
+                metadata={"pretrain_objective": "search_consolidated_edge_wdl_v1"},
+            )
+
+            loaded_model = ChildWdlModel(
+                k=1,
+                node_feat=self.node_feat,
+                device="cpu",
+                node_embed_hidden=16,
+                d_embed=12,
+                d_message=8,
+                n_heads=1,
+                d_att=4,
+                decoder_hidden=8,
+            )
+            metadata = load_encoder_checkpoint(checkpoint_path, loaded_model.encoder)
+            self.assertEqual(metadata["pretrain_objective"], "search_consolidated_edge_wdl_v1")
 
             for key, value in trainer.model.encoder.state_dict().items():
                 self.assertTrue(torch.equal(value, loaded_model.encoder.state_dict()[key]))

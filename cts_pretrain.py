@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from GNN import NodeValueModel
+from GNN import ChildWdlModel, NodeValueModel
 from tensorizer import TensorizedTreeExample, TreeTensorizer, collate_tensorized_examples
 from tree import ExpansionChild, SearchTree
 
@@ -84,17 +84,35 @@ class TreeExpansionProvider(ABC):
         pass
 
 
+def _normalize_wdl_target(target: Sequence[float]) -> Tuple[float, float, float]:
+    if len(target) != 3:
+        raise ValueError(f"WDL target must have length 3, got {len(target)}.")
+    values = [max(0.0, float(value)) for value in target]
+    total = sum(values)
+    if total <= 0.0:
+        raise ValueError("WDL target must have positive mass.")
+    return (values[0] / total, values[1] / total, values[2] / total)
+
+
+def _flip_wdl_target(target: Sequence[float]) -> Tuple[float, float, float]:
+    win, draw, loss = _normalize_wdl_target(target)
+    return (loss, draw, win)
+
+
 @dataclass
 class EdgeStats:
     visit_count: int = 0
     total_value: float = 0.0
     q_value: float = 0.0
+    total_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    mean_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass
 class TeacherSearchResult:
     node_target_values: List[float]
     edge_stats: Dict[Tuple[int, int], EdgeStats]
+    edge_target_wdls: Dict[Tuple[int, int], Tuple[float, float, float]]
 
 
 @dataclass
@@ -109,13 +127,26 @@ class GeneratedTree:
 class PretrainExample:
     tree: SearchTree
     node_target_values: List[float]
+    edge_wdl_targets: Dict[Tuple[int, int], Tuple[float, float, float]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.node_target_values = [float(value) for value in self.node_target_values]
+        self.edge_wdl_targets = {
+            (int(parent_id), int(child_id)): _normalize_wdl_target(target)
+            for (parent_id, child_id), target in dict(self.edge_wdl_targets).items()
+        }
         self.metadata = dict(self.metadata)
         if len(self.node_target_values) != self.tree.num_nodes():
             raise ValueError("node_target_values must match tree.num_nodes().")
+        if self.edge_wdl_targets and len(self.edge_wdl_targets) != self.tree.num_edges():
+            raise ValueError("edge_wdl_targets must match tree.num_edges().")
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        self.__dict__.update(state)
+        if "edge_wdl_targets" not in self.__dict__:
+            self.edge_wdl_targets = {}
+        self.__post_init__()
 
 
 def save_pretrain_examples(path: str, examples: Sequence[PretrainExample]) -> None:
@@ -291,14 +322,21 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         edge_start = int(edge_ptr[example_offset].item())
         edge_end = int(edge_ptr[example_offset + 1].item())
         feature_names = tuple(payload["feature_names"])
+        if "edge_slot" in payload:
+            edge_slot = payload["edge_slot"][edge_start:edge_end]
+        else:
+            edge_slot = torch.arange(edge_end - edge_start, dtype=torch.long)
+        edge_wdl_targets = payload.get("edge_wdl_targets")
         return TensorizedTreeExample(
             node_features=payload["node_features"][node_start:node_end],
             parent_index=payload["parent_index"][node_start:node_end],
             edge_parent=payload["edge_parent"][edge_start:edge_end],
             edge_child=payload["edge_child"][edge_start:edge_end],
+            edge_slot=edge_slot,
             depth=payload["depth"][node_start:node_end],
             node_targets=payload["node_targets"][node_start:node_end],
             feature_names=feature_names,
+            edge_wdl_targets=edge_wdl_targets[edge_start:edge_end] if edge_wdl_targets is not None else None,
         )
 
     @staticmethod
@@ -501,14 +539,21 @@ def _backpropagate_path(
     edge_stats: Dict[Tuple[int, int], EdgeStats],
     path: Sequence[Tuple[int, int]],
     leaf_value: float,
+    leaf_wdl: Optional[Sequence[float]] = None,
 ) -> None:
     value = leaf_value
+    wdl = None if leaf_wdl is None else _normalize_wdl_target(leaf_wdl)
     for parent_id, child_id in reversed(path):
         value = -value
         stats = edge_stats[(parent_id, child_id)]
         stats.visit_count += 1
         stats.total_value += value
         stats.q_value = stats.total_value / stats.visit_count
+        if wdl is not None:
+            wdl = _flip_wdl_target(wdl)
+            total_wdl = tuple(stats.total_wdl[index] + wdl[index] for index in range(3))
+            stats.total_wdl = total_wdl
+            stats.mean_wdl = tuple(component / stats.visit_count for component in total_wdl)
 
 
 def _backup_target_from_child_q(
@@ -528,6 +573,46 @@ def _backup_target_from_child_q(
 
     weighted_sum = sum(stats.visit_count * stats.q_value for stats in keyed_child_stats)
     return weighted_sum / total_visits
+
+
+def _backup_target_from_child_wdl(
+    tree: SearchTree,
+    node_id: int,
+    edge_stats: Mapping[Tuple[int, int], EdgeStats],
+) -> Tuple[float, float, float]:
+    child_ids = tree.child_ids(node_id)
+    if not child_ids:
+        return _static_node_wdl(tree, node_id)
+
+    keyed_child_stats = [edge_stats[(node_id, child_id)] for child_id in child_ids]
+    total_visits = sum(stats.visit_count for stats in keyed_child_stats)
+    if total_visits == 0:
+        return _static_node_wdl(tree, node_id)
+
+    weighted = [0.0, 0.0, 0.0]
+    for stats in keyed_child_stats:
+        for index, value in enumerate(stats.mean_wdl):
+            weighted[index] += stats.visit_count * value
+    return tuple(component / total_visits for component in weighted)
+
+
+def _edge_target_wdls_from_edge_stats(
+    tree: SearchTree,
+    edge_stats: Mapping[Tuple[int, int], EdgeStats],
+) -> Dict[Tuple[int, int], Tuple[float, float, float]]:
+    edge_targets: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+    for node in tree.iter_nodes():
+        for child_id in tree.child_ids(node.node_id):
+            edge_key = (node.node_id, child_id)
+            stats = edge_stats[edge_key]
+            if stats.visit_count > 0 and sum(stats.mean_wdl) > 0.0:
+                edge_targets[edge_key] = _normalize_wdl_target(stats.mean_wdl)
+            else:
+                child_wdl = _maybe_static_node_wdl(tree, child_id)
+                if child_wdl is None:
+                    return {}
+                edge_targets[edge_key] = _flip_wdl_target(child_wdl)
+    return edge_targets
 
 
 def generate_partial_tree_from_provider(
@@ -553,10 +638,11 @@ def generate_partial_tree_from_provider(
         node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
         node = tree.get_node(node_id)
         leaf_value = _static_node_value(tree, node_id, config.value_feature)
+        leaf_wdl = _maybe_static_node_wdl(tree, node_id)
 
         if node.is_terminal or node.depth >= config.max_depth:
             node.is_terminal = True
-            _backpropagate_path(edge_stats, path, leaf_value)
+            _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
             continue
 
         raw_children = provider.expand_node(node.fen, node.depth)
@@ -566,14 +652,14 @@ def generate_partial_tree_from_provider(
         )
         if not children:
             node.is_terminal = True
-            _backpropagate_path(edge_stats, path, leaf_value)
+            _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
             continue
 
         child_ids = tree.add_children(node_id, children)
         for child_id in child_ids:
             edge_stats[(node_id, child_id)] = EdgeStats()
         num_expansions += 1
-        _backpropagate_path(edge_stats, path, leaf_value)
+        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
 
     return GeneratedTree(
         tree=tree,
@@ -604,6 +690,7 @@ def consolidate_generated_tree(
     return TeacherSearchResult(
         node_target_values=node_target_values,
         edge_stats=dict(generated_tree.edge_stats),
+        edge_target_wdls=_edge_target_wdls_from_edge_stats(tree, generated_tree.edge_stats),
     )
 
 
@@ -612,6 +699,27 @@ def _static_node_value(tree: SearchTree, node_id: int, value_feature: str) -> fl
     if value_feature not in node.scalar_features:
         raise KeyError(f"Node {node_id} is missing feature '{value_feature}'.")
     return float(node.scalar_features[value_feature])
+
+
+def _static_node_wdl(tree: SearchTree, node_id: int) -> Tuple[float, float, float]:
+    node = tree.get_node(node_id)
+    try:
+        return _normalize_wdl_target(
+            (
+                node.scalar_features["wdl_win"],
+                node.scalar_features["wdl_draw"],
+                node.scalar_features["wdl_loss"],
+            )
+        )
+    except KeyError as exc:
+        raise KeyError(f"Node {node_id} is missing WDL feature {exc.args[0]!r}.") from exc
+
+
+def _maybe_static_node_wdl(tree: SearchTree, node_id: int) -> Optional[Tuple[float, float, float]]:
+    try:
+        return _static_node_wdl(tree, node_id)
+    except KeyError:
+        return None
 
 
 def compute_teacher_targets(
@@ -633,14 +741,19 @@ def compute_teacher_targets(
     for _ in range(config.search_budget):
         node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
         leaf_value = _static_node_value(tree, node_id, config.value_feature)
-        _backpropagate_path(edge_stats, path, leaf_value)
+        leaf_wdl = _maybe_static_node_wdl(tree, node_id)
+        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
 
     node_target_values = [
         float(_backup_target_from_child_q(tree, node.node_id, edge_stats, config.value_feature))
         for node in tree.iter_nodes()
     ]
 
-    return TeacherSearchResult(node_target_values=node_target_values, edge_stats=edge_stats)
+    return TeacherSearchResult(
+        node_target_values=node_target_values,
+        edge_stats=edge_stats,
+        edge_target_wdls=_edge_target_wdls_from_edge_stats(tree, edge_stats),
+    )
 
 
 def build_pretrain_example(
@@ -670,10 +783,12 @@ def build_pretrain_example(
         "search_config_id": config.search_config_id,
         "provider_metadata": dict(provider.provider_metadata()),
         "target_generation_version": config.target_normalization_version,
+        "edge_wdl_target_generation_version": "search_consolidated_edge_wdl_v1",
     }
     return PretrainExample(
         tree=tree,
         node_target_values=teacher_result.node_target_values,
+        edge_wdl_targets=teacher_result.edge_target_wdls,
         metadata=metadata,
     )
 
@@ -698,6 +813,28 @@ class SupervisedMetrics:
     node_mse: float
     root_mse: float
     num_examples: int
+
+
+@dataclass(frozen=True)
+class ChildWdlPretrainConfig:
+    batch_size: int = 4
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.0
+    epochs: int = 5
+    shuffle: bool = True
+    num_workers: int = 0
+    pin_memory: bool = False
+    prefetch_factor: int = 2
+    persistent_workers: bool = True
+
+
+@dataclass
+class ChildWdlMetrics:
+    total_loss: float
+    num_examples: int
+    num_supervised_edges: int
+    target_entropy: float = 0.0
+    loss_gap: float = 0.0
 
 
 class SupervisedPretrainer:
@@ -844,6 +981,187 @@ class SupervisedPretrainer:
         for epoch_index in range(1, self.config.epochs + 1):
             train_metrics = self.train_epoch(batch_progress_callback=batch_progress_callback)
             validation_metrics = self.validate(batch_progress_callback=batch_progress_callback)
+            history.append({"train": train_metrics, "validation": validation_metrics})
+            if validation_metrics.total_loss < self.best_validation_loss:
+                self.best_validation_loss = validation_metrics.total_loss
+                self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+            if progress_callback is not None:
+                progress_callback(epoch_index, train_metrics, validation_metrics)
+        self.model.encoder.load_state_dict(self.best_encoder_state)
+        return history
+
+    def save_best_encoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
+        save_encoder_checkpoint(path, self.model.encoder, metadata=metadata)
+
+
+class ChildWdlPretrainer:
+    def __init__(
+        self,
+        model: ChildWdlModel,
+        tensorizer: TreeTensorizer,
+        train_examples: Sequence[PretrainExample],
+        validation_examples: Sequence[PretrainExample],
+        config: ChildWdlPretrainConfig,
+    ) -> None:
+        self.model = model
+        self.tensorizer = tensorizer
+        self.train_examples = train_examples
+        self.validation_examples = validation_examples
+        self.config = config
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
+        self.best_validation_loss = float("inf")
+        self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+
+    def _iter_batches(self, examples: Sequence[PretrainExample], shuffle: bool):
+        collate_fn = getattr(examples, "collate_fn", list)
+        dataloader_kwargs = {
+            "batch_size": self.config.batch_size,
+            "shuffle": shuffle,
+            "collate_fn": collate_fn,
+            "num_workers": self.config.num_workers,
+            "pin_memory": self.config.pin_memory,
+        }
+        if self.config.num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = self.config.prefetch_factor
+            dataloader_kwargs["persistent_workers"] = self.config.persistent_workers
+        return DataLoader(examples, **dataloader_kwargs)
+
+    def _edge_target_tensor(self, examples: Sequence[PretrainExample], device: torch.device) -> torch.Tensor:
+        targets = []
+        for example in examples:
+            if not example.edge_wdl_targets:
+                raise ValueError(
+                    "Child-WDL pretraining requires raw examples with search-consolidated edge_wdl_targets."
+                )
+            targets.append(self.tensorizer.edge_wdl_target_tensor(example.tree, example.edge_wdl_targets))
+        if not targets:
+            return torch.empty((0, 3), dtype=torch.float32, device=device)
+        return torch.cat(targets, dim=0).to(device)
+
+    def _tree_batch_and_edge_targets(self, batch_data, device: torch.device) -> Tuple[Any, torch.Tensor]:
+        if isinstance(batch_data, tuple) and len(batch_data) == 2:
+            tree_batch, _node_targets = batch_data
+            if tree_batch.edge_wdl_targets is None:
+                raise ValueError(
+                    "Packed tensorized child-WDL batches require edge_wdl_targets; repack the dataset with edge targets."
+                )
+            return tree_batch, tree_batch.edge_wdl_targets.to(device)
+
+        batch_examples = batch_data
+        tree_batch = self.tensorizer.tensorize_forest([example.tree for example in batch_examples])
+        edge_targets = self._edge_target_tensor(batch_examples, device=device)
+        return tree_batch, edge_targets
+
+    def _run_epoch(
+        self,
+        examples: Sequence[PretrainExample],
+        epoch_index: int,
+        training: bool,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        if training:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        metric_device = self.model.encoder.device
+        total_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
+        target_entropy_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
+        total_examples = 0
+        total_supervised_edges = 0
+
+        batches = self._iter_batches(examples, shuffle=training and self.config.shuffle)
+        total_batches = len(batches)
+        phase = "train" if training else "validation"
+        for batch_index, batch_data in enumerate(batches, start=1):
+            tree_batch, edge_targets = self._tree_batch_and_edge_targets(batch_data, device=self.model.encoder.device)
+            if edge_targets.numel() == 0:
+                continue
+
+            with torch.set_grad_enabled(training):
+                output = self.model(tree_batch)
+                log_probs = F.log_softmax(output.edge_logits, dim=-1)
+                per_edge_loss = -(edge_targets * log_probs).sum(dim=-1)
+                total_loss = per_edge_loss.mean()
+                target_log_probs = edge_targets.clamp_min(1e-12).log()
+                per_edge_target_entropy = -(edge_targets * target_log_probs).sum(dim=-1)
+                target_entropy = per_edge_target_entropy.mean()
+                loss_gap = total_loss - target_entropy
+
+                if training:
+                    self.optimizer.zero_grad()
+                    total_loss.backward()
+                    self.optimizer.step()
+
+            batch_size = int(tree_batch.batch_size)
+            num_supervised_edges = int(edge_targets.shape[0])
+            total_examples += batch_size
+            total_supervised_edges += num_supervised_edges
+            total_loss_sum += total_loss.detach() * num_supervised_edges
+            target_entropy_sum += target_entropy.detach() * num_supervised_edges
+            if batch_progress_callback is not None:
+                batch_progress_callback(
+                    epoch_index,
+                    phase,
+                    batch_index,
+                    total_batches,
+                    total_examples,
+                    total_supervised_edges,
+                    float(total_loss.item()),
+                    float(target_entropy.item()),
+                    float(loss_gap.item()),
+                )
+
+        if total_supervised_edges == 0:
+            return ChildWdlMetrics(total_loss=0.0, num_examples=total_examples, num_supervised_edges=0)
+
+        mean_total_loss = float((total_loss_sum / total_supervised_edges).item())
+        mean_target_entropy = float((target_entropy_sum / total_supervised_edges).item())
+        return ChildWdlMetrics(
+            total_loss=mean_total_loss,
+            num_examples=total_examples,
+            num_supervised_edges=total_supervised_edges,
+            target_entropy=mean_target_entropy,
+            loss_gap=mean_total_loss - mean_target_entropy,
+        )
+
+    def train_epoch(
+        self,
+        epoch_index: int = 1,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        return self._run_epoch(
+            self.train_examples,
+            epoch_index,
+            training=True,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def validate(
+        self,
+        epoch_index: int = 1,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+    ) -> ChildWdlMetrics:
+        return self._run_epoch(
+            self.validation_examples,
+            epoch_index,
+            training=False,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def fit(
+        self,
+        progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+    ) -> List[Dict[str, ChildWdlMetrics]]:
+        history: List[Dict[str, ChildWdlMetrics]] = []
+        for epoch_index in range(1, self.config.epochs + 1):
+            train_metrics = self.train_epoch(epoch_index, batch_progress_callback=batch_progress_callback)
+            validation_metrics = self.validate(epoch_index, batch_progress_callback=batch_progress_callback)
             history.append({"train": train_metrics, "validation": validation_metrics})
             if validation_metrics.total_loss < self.best_validation_loss:
                 self.best_validation_loss = validation_metrics.total_loss

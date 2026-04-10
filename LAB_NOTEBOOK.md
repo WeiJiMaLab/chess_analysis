@@ -734,3 +734,34 @@ Any future entry should include:
 - Meaningful change or run configuration
 - Outcome
 - Conclusion
+
+## 2026-04-10
+
+Intent:
+- Correct the uncertainty-encoder pretraining target semantics after discovering that the earlier child-WDL path was decoding raw child valuehead WDLs instead of search-consolidated edge WDLs.
+
+Meaningful change:
+- Extended search backup statistics to carry WDL vectors alongside scalar values in `cts_pretrain.py`.
+- `compute_teacher_targets(...)` and `consolidate_generated_tree(...)` now produce per-edge search-consolidated WDL targets:
+  - backed up through search with ply-wise win/loss perspective flips
+  - aggregated by visit-weighted averaging
+- `PretrainExample` now persists `edge_wdl_targets` for those consolidated edge targets.
+- Reintroduced a slot-conditioned child-WDL encoder pretraining path:
+  - canonical sibling slots from lexicographic `incoming_move_uci`
+  - sinusoidal slot encoding plus learned projection in the encoder/decoder
+  - child-WDL trainer logs target entropy and KL gap (`loss_gap`)
+- Updated packed tensorized shards to store `edge_slot` and optional `edge_wdl_targets`.
+- Scrubbed a stale WDL validation message in `schema.py`.
+
+Outcome:
+- Focused and full validation passed:
+  - `/opt/miniconda3/envs/trm/bin/python -m pytest test_supervised_branch.py -q`
+  - `/opt/miniconda3/envs/trm/bin/python -m pytest test_plumbing.py test_model.py -q`
+  - `/opt/miniconda3/envs/trm/bin/python -m pytest -q`
+  - `/opt/miniconda3/envs/trm/bin/python supervised_branch_cli.py pretrain-child-wdl-encoder --help`
+  - `/opt/miniconda3/envs/trm/bin/python scripts/pack_pretrain_examples.py --help`
+- Final test result: `91 passed`
+
+Conclusion:
+- The branch is back to a semantically aligned child-WDL pretraining pipeline.
+- The remaining work is operational: regenerate raw examples so they actually carry the corrected `edge_wdl_targets`, then rerun any packing/training on top of those regenerated examples.

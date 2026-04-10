@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 import torch
 import torch.nn as nn
@@ -28,12 +29,43 @@ class NodeValueOutput:
 
 
 @dataclass
+class ChildWdlOutput:
+    node_states: torch.Tensor
+    root_states: torch.Tensor
+    edge_logits: torch.Tensor
+
+
+@dataclass
 class PolicyValueOutput:
     node_states: torch.Tensor
     root_states: torch.Tensor
     halt_logits: torch.Tensor
     halt_prob: torch.Tensor
     state_value: torch.Tensor
+
+
+class SinusoidalSlotEncoding(nn.Module):
+    def __init__(self, d_embed: int, device: torch.device | str = "cpu") -> None:
+        super().__init__()
+        if d_embed <= 0:
+            raise ValueError("d_embed must be positive.")
+        self.d_embed = int(d_embed)
+        self.device = torch.device(device)
+        half_dim = max(1, math.ceil(self.d_embed / 2))
+        exponent = torch.arange(half_dim, dtype=torch.float32, device=self.device)
+        scale = torch.exp(-math.log(10000.0) * exponent / half_dim)
+        self.register_buffer("inverse_frequencies", scale, persistent=False)
+
+    def forward(self, slot_index: torch.Tensor) -> torch.Tensor:
+        if slot_index.dtype != torch.long:
+            slot_index = slot_index.long()
+        positions = slot_index.to(self.inverse_frequencies.device, dtype=torch.float32).unsqueeze(-1)
+        angles = positions * self.inverse_frequencies.unsqueeze(0)
+        encoding = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+        if encoding.shape[-1] < self.d_embed:
+            padding = encoding.new_zeros(encoding.shape[0], self.d_embed - encoding.shape[-1])
+            encoding = torch.cat([encoding, padding], dim=-1)
+        return encoding[:, : self.d_embed]
 
 
 class TreeNN(nn.Module):
@@ -68,6 +100,8 @@ class TreeNN(nn.Module):
             nn.ReLU(),
             nn.Linear(node_embed_hidden, d_embed, device=self.device),
         )
+        self.child_slot_encoding = SinusoidalSlotEncoding(d_embed=d_embed, device=self.device)
+        self.child_slot_projection = nn.Linear(d_embed, d_embed, device=self.device)
         self.node_gru = nn.GRUCell(d_message, d_embed, device=self.device)
         self.upward_msg = TreeAttMsgLayer(
             n_heads=n_heads,
@@ -86,21 +120,28 @@ class TreeNN(nn.Module):
             messages[has_parent] = self.downward_msg(parent_states)
         return messages
 
+    def slot_embeddings(self, edge_slot: torch.Tensor) -> torch.Tensor:
+        slot_encoding = self.child_slot_encoding(edge_slot.to(self.device))
+        return self.child_slot_projection(slot_encoding)
+
     def forward(self, tree_batch):
         node_features = tree_batch.node_features.to(self.device)
         child_ptr = tree_batch.child_ptr.to(self.device)
         children_index = tree_batch.children_index.to(self.device)
         edge_parent = tree_batch.edge_parent.to(self.device)
         edge_child = tree_batch.edge_child.to(self.device)
+        edge_slot = tree_batch.edge_slot.to(self.device)
         parent_index = tree_batch.parent_index.to(self.device)
         root_index = tree_batch.root_index.to(self.device)
 
         node_states = self.node_embed(node_features)
         for _ in range(self.k):
+            edge_slot_embed = self.slot_embeddings(edge_slot)
             upward = self.upward_msg(
                 node_states,
                 edge_parent,
                 edge_child,
+                edge_slot_embed=edge_slot_embed,
                 child_ptr=child_ptr,
                 children_index=children_index,
             )
@@ -143,6 +184,20 @@ class NodeValueHead(nn.Module):
 
     def forward(self, node_states):
         return self.mlp(node_states).squeeze(-1)
+
+
+class ChildWdlHead(nn.Module):
+    def __init__(self, d_embed, hidden_dim=128, device="cpu"):
+        super().__init__()
+        device = torch.device(device)
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * d_embed, hidden_dim, device=device),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 3, device=device),
+        )
+
+    def forward(self, parent_states, slot_states):
+        return self.mlp(torch.cat([parent_states, slot_states], dim=-1))
 
 
 class RootValueHead(nn.Module):
@@ -248,6 +303,56 @@ class NodeValueModel(nn.Module):
             node_states=encoded.node_states,
             root_states=encoded.root_states,
             node_values=node_values,
+        )
+
+
+class ChildWdlModel(nn.Module):
+    """
+    Encoder plus slot-conditioned child-WDL decoder used for supervised pretraining.
+    """
+
+    def __init__(
+        self,
+        k,
+        node_feat,
+        device,
+        node_embed_hidden=128,
+        d_embed=512,
+        d_message=512,
+        n_heads=4,
+        d_att=128,
+        decoder_hidden=128,
+        encoder=None,
+    ):
+        super().__init__()
+        if encoder is None:
+            encoder = TreeNN(
+                k=k,
+                node_feat=node_feat,
+                device=device,
+                node_embed_hidden=node_embed_hidden,
+                d_embed=d_embed,
+                d_message=d_message,
+                n_heads=n_heads,
+                d_att=d_att,
+            )
+        self.encoder = encoder
+        self.child_wdl_head = ChildWdlHead(
+            d_embed=encoder.d_embed,
+            hidden_dim=decoder_hidden,
+            device=encoder.device,
+        )
+
+    def forward(self, tree_batch):
+        encoded = self.encoder(tree_batch)
+        edge_parent = tree_batch.edge_parent.to(self.encoder.device)
+        edge_slot = tree_batch.edge_slot.to(self.encoder.device)
+        slot_states = self.encoder.slot_embeddings(edge_slot)
+        edge_logits = self.child_wdl_head(encoded.node_states[edge_parent], slot_states)
+        return ChildWdlOutput(
+            node_states=encoded.node_states,
+            root_states=encoded.root_states,
+            edge_logits=edge_logits,
         )
 
 

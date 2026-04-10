@@ -165,7 +165,10 @@ class TensorizerTests(unittest.TestCase):
             torch.equal(batch.edge_parent.cpu(), torch.tensor([0, 0, 1, 1], dtype=torch.long))
         )
         self.assertTrue(
-            torch.equal(batch.edge_child.cpu(), torch.tensor([1, 2, 3, 4], dtype=torch.long))
+            torch.equal(batch.edge_child.cpu(), torch.tensor([2, 1, 4, 3], dtype=torch.long))
+        )
+        self.assertTrue(
+            torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 0, 1], dtype=torch.long))
         )
         self.assertTrue(
             torch.equal(batch.child_ptr.cpu(), torch.tensor([0, 2, 4, 4, 4, 4], dtype=torch.long))

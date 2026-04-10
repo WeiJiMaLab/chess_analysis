@@ -31,12 +31,10 @@ class TreeAttMsgLayer(nn.Module):
         self.W_v = nn.Linear(d_embed, self.model_width, bias=False, device=device)
         self.W_o = nn.Linear(self.model_width, self.d_message, bias=False, device=device)
 
-    def _forward_python_loop(self, tree_acts, child_ptr, children_index):
+    def _forward_python_loop(self, tree_acts, child_ptr, children_index, edge_slot_embed=None):
         n_nodes, _ = tree_acts.shape
 
         query = self.W_q(tree_acts).view(n_nodes, self.n_heads, self.d_att)
-        key = self.W_k(tree_acts).view(n_nodes, self.n_heads, self.d_att)
-        value = self.W_v(tree_acts).view(n_nodes, self.n_heads, self.d_att)
 
         head_messages = tree_acts.new_zeros(n_nodes, self.n_heads, self.d_att)
         for node_id in range(n_nodes):
@@ -47,8 +45,11 @@ class TreeAttMsgLayer(nn.Module):
                 continue
 
             q = query[node_id].unsqueeze(0)  # [1, H, D]
-            k = key[child_ids]  # [C, H, D]
-            v = value[child_ids]  # [C, H, D]
+            child_input = tree_acts[child_ids]
+            if edge_slot_embed is not None:
+                child_input = child_input + edge_slot_embed[start:end]
+            k = self.W_k(child_input).view(-1, self.n_heads, self.d_att)  # [C, H, D]
+            v = self.W_v(child_input).view(-1, self.n_heads, self.d_att)  # [C, H, D]
 
             logits = (k * q).sum(dim=-1) / math.sqrt(self.d_att)  # [C, H]
             attn = torch.softmax(logits, dim=0)
@@ -56,19 +57,20 @@ class TreeAttMsgLayer(nn.Module):
 
         return self.W_o(head_messages.reshape(n_nodes, self.model_width))
 
-    def forward(self, tree_acts, edge_parent, edge_child, child_ptr=None, children_index=None):
+    def forward(self, tree_acts, edge_parent, edge_child, edge_slot_embed=None, child_ptr=None, children_index=None):
         n_nodes, _ = tree_acts.shape
         if edge_child.numel() == 0:
             head_messages = tree_acts.new_zeros(n_nodes, self.n_heads, self.d_att)
             return self.W_o(head_messages.reshape(n_nodes, self.model_width))
 
         query = self.W_q(tree_acts).view(n_nodes, self.n_heads, self.d_att)
-        key = self.W_k(tree_acts).view(n_nodes, self.n_heads, self.d_att)
-        value = self.W_v(tree_acts).view(n_nodes, self.n_heads, self.d_att)
+        edge_input = tree_acts[edge_child]
+        if edge_slot_embed is not None:
+            edge_input = edge_input + edge_slot_embed
+        edge_key = self.W_k(edge_input).view(-1, self.n_heads, self.d_att)
+        edge_value = self.W_v(edge_input).view(-1, self.n_heads, self.d_att)
 
         edge_query = query[edge_parent]
-        edge_key = key[edge_child]
-        edge_value = value[edge_child]
         logits = (edge_key * edge_query).sum(dim=-1) / math.sqrt(self.d_att)
 
         expanded_parent = edge_parent.unsqueeze(-1).expand(-1, self.n_heads)
@@ -77,7 +79,7 @@ class TreeAttMsgLayer(nn.Module):
         if hasattr(parent_max, "scatter_reduce_"):
             parent_max.scatter_reduce_(0, expanded_parent, logits, reduce="amax", include_self=True)
         elif child_ptr is not None and children_index is not None:
-            return self._forward_python_loop(tree_acts, child_ptr, children_index)
+            return self._forward_python_loop(tree_acts, child_ptr, children_index, edge_slot_embed=edge_slot_embed)
         else:
             raise RuntimeError("Vectorized tree attention requires scatter_reduce_ support.")
 

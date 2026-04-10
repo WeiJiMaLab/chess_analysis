@@ -58,7 +58,13 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
             example = torch.load(path, weights_only=False)
             _validate_tree_encoder_example_features(example, context=str(path))
             tensorized_examples.append(
-                tensorize_tree_with_targets(example.tree, example.node_target_values, schema=schema, device="cpu")
+                tensorize_tree_with_targets(
+                    example.tree,
+                    example.node_target_values,
+                    schema=schema,
+                    device="cpu",
+                    edge_wdl_targets=getattr(example, "edge_wdl_targets", None),
+                )
             )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
@@ -67,16 +73,21 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
         parent_index_parts = []
         edge_parent_parts = []
         edge_child_parts = []
+        edge_slot_parts = []
         depth_parts = []
         target_parts = []
+        edge_wdl_target_parts = []
 
         for tensorized in tensorized_examples:
             node_features_parts.append(tensorized.node_features.cpu())
             parent_index_parts.append(tensorized.parent_index.cpu())
             edge_parent_parts.append(tensorized.edge_parent.cpu())
             edge_child_parts.append(tensorized.edge_child.cpu())
+            edge_slot_parts.append(tensorized.edge_slot.cpu())
             depth_parts.append(tensorized.depth.cpu())
             target_parts.append(tensorized.node_targets.cpu())
+            if tensorized.edge_wdl_targets is not None:
+                edge_wdl_target_parts.append(tensorized.edge_wdl_targets.cpu())
             node_ptr.append(node_ptr[-1] + int(tensorized.node_features.shape[0]))
             edge_ptr.append(edge_ptr[-1] + int(tensorized.edge_parent.shape[0]))
 
@@ -92,8 +103,14 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tupl
             "parent_index": torch.cat(parent_index_parts, dim=0),
             "edge_parent": torch.cat(edge_parent_parts, dim=0) if edge_parent_parts else torch.empty(0, dtype=torch.long),
             "edge_child": torch.cat(edge_child_parts, dim=0) if edge_child_parts else torch.empty(0, dtype=torch.long),
+            "edge_slot": torch.cat(edge_slot_parts, dim=0) if edge_slot_parts else torch.empty(0, dtype=torch.long),
             "depth": torch.cat(depth_parts, dim=0),
             "node_targets": torch.cat(target_parts, dim=0),
+            "edge_wdl_targets": (
+                torch.cat(edge_wdl_target_parts, dim=0)
+                if edge_wdl_target_parts and len(edge_wdl_target_parts) == len(tensorized_examples)
+                else None
+            ),
         }
         torch.save(payload, shard_path)
         entries.append(
