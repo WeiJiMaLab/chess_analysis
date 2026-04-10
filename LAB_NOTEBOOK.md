@@ -785,15 +785,3 @@ Outcome:
 
 Conclusion:
 - The child-WDL objective now has the precomputation path it needs for fast training from packed tensorized datasets, without introducing a separate semantic target-generation pipeline.
-
-Follow-up:
-- The packer now parallelizes tensorization across trees within each shard using a process pool.
-- Added `--num-workers` to `scripts/pack_pretrain_examples.py` and threaded it through `slurm/pack_pretrain_examples_della.slurm` via `NUM_WORKERS`, defaulting to `SLURM_CPUS_PER_TASK`.
-
-Validation:
-- `/opt/miniconda3/envs/trm/bin/python -m pytest test_supervised_branch.py test_plumbing.py test_model.py -q`
-- `/opt/miniconda3/envs/trm/bin/python scripts/pack_pretrain_examples.py --help`
-- `bash -n slurm/pack_pretrain_examples_della.slurm`
-
-Conclusion:
-- Packing now actually uses the CPU allocation it requests, with deterministic per-shard output order preserved by ordered worker mapping.

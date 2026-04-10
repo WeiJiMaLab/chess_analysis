@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
 import json
 import sys
 import time
@@ -40,31 +39,10 @@ def _validate_tree_encoder_example_features(example, *, context: str) -> None:
         )
 
 
-def _tensorize_example_path(path_str: str):
-    path = Path(path_str)
-    example = torch.load(path, weights_only=False)
-    _validate_tree_encoder_example_features(example, context=str(path))
-    return tensorize_tree_with_targets(
-        example.tree,
-        example.node_target_values,
-        schema=_feature_schema(),
-        device="cpu",
-    )
-
-
-def _load_tensorized_examples(shard_paths: list[Path], num_workers: int):
-    if num_workers <= 1:
-        return [_tensorize_example_path(str(path)) for path in shard_paths]
-
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        return list(executor.map(_tensorize_example_path, [str(path) for path in shard_paths]))
-
-
 def _pack_split(
     manifest_path: Path,
     output_root: Path,
     shard_size: int,
-    num_workers: int,
 ) -> tuple[Path, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
@@ -79,7 +57,18 @@ def _pack_split(
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
-        tensorized_examples = _load_tensorized_examples(shard_paths, num_workers)
+        tensorized_examples = []
+        for path in shard_paths:
+            example = torch.load(path, weights_only=False)
+            _validate_tree_encoder_example_features(example, context=str(path))
+            tensorized_examples.append(
+                tensorize_tree_with_targets(
+                    example.tree,
+                    example.node_target_values,
+                    schema=schema,
+                    device="cpu",
+                )
+            )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
         edge_ptr = [0]
@@ -92,7 +81,7 @@ def _pack_split(
         depth_parts = []
         target_parts = []
 
-        for path, tensorized in zip(shard_paths, tensorized_examples):
+        for tensorized in tensorized_examples:
             node_features_parts.append(tensorized.node_features.cpu())
             parent_index_parts.append(tensorized.parent_index.cpu())
             edge_parent_parts.append(tensorized.edge_parent.cpu())
@@ -140,7 +129,7 @@ def _pack_split(
         print(
             f"split={split_name} shard={shard_index + 1}/{total_shards} "
             f"packed_examples={total_examples}/{len(example_paths)} "
-            f"elapsed_s={elapsed:.1f} num_workers={num_workers}",
+            f"elapsed_s={elapsed:.1f}",
             flush=True,
         )
 
@@ -171,15 +160,12 @@ def main() -> None:
         default="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed",
     )
     parser.add_argument("--shard-size", type=int, default=2000)
-    parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--single-shard", action="store_true")
     parser.add_argument("--clear", action="store_true")
     args = parser.parse_args()
 
     if args.shard_size <= 0:
         raise ValueError("shard_size must be positive.")
-    if args.num_workers <= 0:
-        raise ValueError("num_workers must be positive.")
 
     split_root = Path(args.split_root)
     output_root = Path(args.output_root)
@@ -200,20 +186,14 @@ def main() -> None:
     validation_paths = _read_manifest(validation_manifest)
     shard_size = max(len(train_paths), len(validation_paths)) if args.single_shard else args.shard_size
 
-    train_packed_manifest, train_count = _pack_split(train_manifest, output_root, shard_size, args.num_workers)
-    validation_packed_manifest, validation_count = _pack_split(
-        validation_manifest,
-        output_root,
-        shard_size,
-        args.num_workers,
-    )
+    train_packed_manifest, train_count = _pack_split(train_manifest, output_root, shard_size)
+    validation_packed_manifest, validation_count = _pack_split(validation_manifest, output_root, shard_size)
 
     print(f"train_manifest={train_packed_manifest}")
     print(f"validation_manifest={validation_packed_manifest}")
     print(f"train_examples={train_count}")
     print(f"validation_examples={validation_count}")
     print(f"output_root={output_root}")
-    print(f"num_workers={args.num_workers}")
     print(f"single_shard={args.single_shard}")
     print(f"effective_shard_size={shard_size}")
 

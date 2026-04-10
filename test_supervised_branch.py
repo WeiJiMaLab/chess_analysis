@@ -6,11 +6,9 @@ import random
 import tempfile
 import unittest
 from collections import Counter
-from pathlib import Path
 from unittest.mock import patch
 
 import torch
-import scripts.pack_pretrain_examples as pack_pretrain_examples_script
 
 from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
 from schema import tree_encoder_feature_schema
@@ -614,60 +612,6 @@ class SupervisedBranchTests(unittest.TestCase):
                 metrics = trainer.validate()
             self.assertTrue(math.isfinite(metrics.total_loss))
             self.assertGreater(metrics.num_supervised_edges, 0)
-
-    def test_pack_split_uses_process_pool_when_num_workers_exceeds_one(self):
-        examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
-        ]
-
-        class RecordingExecutor:
-            calls = []
-
-            def __init__(self, max_workers):
-                self.max_workers = max_workers
-                RecordingExecutor.calls.append(max_workers)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def map(self, fn, items):
-                return [fn(item) for item in items]
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            split_root = os.path.join(tmpdir, "split")
-            output_root = os.path.join(tmpdir, "packed")
-            os.makedirs(split_root, exist_ok=True)
-
-            manifest_path = os.path.join(split_root, "train_manifest.txt")
-            with open(manifest_path, "w", encoding="utf-8") as handle:
-                for index, example in enumerate(examples):
-                    example_path = os.path.join(split_root, f"{index:06d}.pt")
-                    torch.save(example, example_path)
-                    handle.write(f"{example_path}\n")
-
-            with patch.object(pack_pretrain_examples_script, "ProcessPoolExecutor", RecordingExecutor):
-                packed_manifest_path, packed_count = pack_pretrain_examples_script._pack_split(
-                    Path(manifest_path),
-                    Path(output_root),
-                    shard_size=8,
-                    num_workers=2,
-                )
-
-            self.assertEqual(RecordingExecutor.calls, [2])
-            self.assertEqual(packed_count, 2)
-
-            with open(packed_manifest_path, "r", encoding="utf-8") as handle:
-                manifest = json.load(handle)
-            self.assertEqual(manifest["format"], "cts_tensorized_pretrain_manifest_v1")
-
-            shard_path = manifest["entries"][0]["path"]
-            payload = torch.load(shard_path, weights_only=False)
-            self.assertIn("edge_wdl_targets", payload)
-            self.assertEqual(tuple(payload["edge_wdl_targets"].shape[1:]), (3,))
 
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [
