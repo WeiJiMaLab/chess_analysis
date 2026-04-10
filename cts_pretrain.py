@@ -1003,9 +1003,8 @@ class ChildWdlPretrainer:
     def _run_epoch(
         self,
         examples: Sequence[PretrainExample],
-        epoch_index: int,
         training: bool,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
     ) -> ChildWdlMetrics:
         if training:
             self.model.train()
@@ -1044,7 +1043,6 @@ class ChildWdlPretrainer:
             total_loss_sum += total_loss.detach() * num_supervised_edges
             if batch_progress_callback is not None:
                 batch_progress_callback(
-                    epoch_index,
                     phase,
                     batch_index,
                     total_batches,
@@ -1064,24 +1062,20 @@ class ChildWdlPretrainer:
 
     def train_epoch(
         self,
-        epoch_index: int = 1,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
     ) -> ChildWdlMetrics:
         return self._run_epoch(
             self.train_examples,
-            epoch_index,
             training=True,
             batch_progress_callback=batch_progress_callback,
         )
 
     def validate(
         self,
-        epoch_index: int = 1,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
     ) -> ChildWdlMetrics:
         return self._run_epoch(
             self.validation_examples,
-            epoch_index,
             training=False,
             batch_progress_callback=batch_progress_callback,
         )
@@ -1089,12 +1083,12 @@ class ChildWdlPretrainer:
     def fit(
         self,
         progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[str, int, int, int, int, float], None]] = None,
     ) -> List[Dict[str, ChildWdlMetrics]]:
         history: List[Dict[str, ChildWdlMetrics]] = []
         for epoch_index in range(1, self.config.epochs + 1):
-            train_metrics = self.train_epoch(epoch_index, batch_progress_callback=batch_progress_callback)
-            validation_metrics = self.validate(epoch_index, batch_progress_callback=batch_progress_callback)
+            train_metrics = self.train_epoch(batch_progress_callback=batch_progress_callback)
+            validation_metrics = self.validate(batch_progress_callback=batch_progress_callback)
             history.append({"train": train_metrics, "validation": validation_metrics})
             if validation_metrics.total_loss < self.best_validation_loss:
                 self.best_validation_loss = validation_metrics.total_loss

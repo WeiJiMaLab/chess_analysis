@@ -531,7 +531,7 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
 
     last_logged_batch = {"train": 0, "validation": 0}
 
-    def _log_batch_progress(epoch_index, phase, batch_index, total_batches, seen_examples, seen_edges, total_loss):
+    def _log_batch_progress(phase, batch_index, total_batches, seen_examples, seen_edges, total_loss):
         interval = args.log_interval
         should_log = (
             batch_index == 1
@@ -542,8 +542,7 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
             return
         last_logged_batch[phase] = batch_index
         print(
-            f"[child-wdl-pretrain] epoch={epoch_index}/{args.epochs} phase={phase} "
-            f"batch={batch_index}/{total_batches} "
+            f"[child-wdl-pretrain] phase={phase} batch={batch_index}/{total_batches} "
             f"seen_examples={seen_examples} seen_edges={seen_edges} total_loss={total_loss:.6f}",
             flush=True,
         )
