@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 
@@ -21,6 +21,7 @@ class TreeBatch:
     child_ptr: torch.Tensor
     children_index: torch.Tensor
     depth: torch.Tensor
+    edge_wdl_targets: Optional[torch.Tensor]
     feature_names: Tuple[str, ...]
     batch_size: int
     num_nodes: int
@@ -35,6 +36,7 @@ class TensorizedTreeExample:
     edge_child: torch.Tensor
     edge_slot: torch.Tensor
     depth: torch.Tensor
+    edge_wdl_targets: Optional[torch.Tensor]
     node_targets: torch.Tensor
     feature_names: Tuple[str, ...]
 
@@ -47,8 +49,27 @@ class TensorizedTreeObservation:
     edge_child: torch.Tensor
     edge_slot: torch.Tensor
     depth: torch.Tensor
+    edge_wdl_targets: Optional[torch.Tensor]
     root_index: int
     feature_names: Tuple[str, ...]
+
+
+def edge_wdl_targets_from_node_features(
+    node_features: torch.Tensor,
+    edge_child: torch.Tensor,
+    feature_names: Tuple[str, ...],
+) -> Optional[torch.Tensor]:
+    required = ("wdl_win", "wdl_draw", "wdl_loss")
+    if any(name not in feature_names for name in required):
+        return None
+    if edge_child.numel() == 0:
+        return node_features.new_empty((0, 3))
+
+    indices = [feature_names.index(name) for name in required]
+    edge_targets = node_features.index_select(0, edge_child)[:, indices]
+    edge_targets = edge_targets.clamp_min(0.0)
+    target_mass = edge_targets.sum(dim=-1, keepdim=True)
+    return edge_targets / target_mass.clamp_min(1e-12)
 
 
 class TreeTensorizer:
@@ -100,13 +121,20 @@ class TreeTensorizer:
                 edge_child.append(child_id)
                 edge_slot.append(slot_index)
 
+        node_features_tensor = torch.tensor(node_feature_rows, dtype=self.schema.dtype, device=self.device)
+        edge_child_tensor = torch.tensor(edge_child, dtype=torch.long, device=self.device)
         return TensorizedTreeObservation(
-            node_features=torch.tensor(node_feature_rows, dtype=self.schema.dtype, device=self.device),
+            node_features=node_features_tensor,
             parent_index=torch.tensor(parent_index, dtype=torch.long, device=self.device),
             edge_parent=torch.tensor(edge_parent, dtype=torch.long, device=self.device),
-            edge_child=torch.tensor(edge_child, dtype=torch.long, device=self.device),
+            edge_child=edge_child_tensor,
             edge_slot=torch.tensor(edge_slot, dtype=torch.long, device=self.device),
             depth=torch.tensor(depth, dtype=torch.long, device=self.device),
+            edge_wdl_targets=edge_wdl_targets_from_node_features(
+                node_features_tensor,
+                edge_child_tensor,
+                self.schema.feature_names,
+            ),
             root_index=tree.root_id,
             feature_names=self.schema.feature_names,
         )
@@ -159,17 +187,23 @@ class TreeTensorizer:
             device=self.device,
         )
         long_device = self.device
+        edge_child_tensor = torch.tensor(edge_child, dtype=torch.long, device=long_device)
         return TreeBatch(
             node_features=node_features_tensor,
             tree_index=torch.tensor(tree_index, dtype=torch.long, device=long_device),
             parent_index=torch.tensor(parent_index, dtype=torch.long, device=long_device),
             root_index=torch.tensor(root_index, dtype=torch.long, device=long_device),
             edge_parent=torch.tensor(edge_parent, dtype=torch.long, device=long_device),
-            edge_child=torch.tensor(edge_child, dtype=torch.long, device=long_device),
+            edge_child=edge_child_tensor,
             edge_slot=torch.tensor(edge_slot, dtype=torch.long, device=long_device),
             child_ptr=torch.tensor(child_ptr, dtype=torch.long, device=long_device),
             children_index=torch.tensor(children_index, dtype=torch.long, device=long_device),
             depth=torch.tensor(depth, dtype=torch.long, device=long_device),
+            edge_wdl_targets=edge_wdl_targets_from_node_features(
+                node_features_tensor,
+                edge_child_tensor,
+                self.schema.feature_names,
+            ),
             feature_names=self.schema.feature_names,
             batch_size=len(trees),
             num_nodes=len(node_feature_rows),
@@ -191,6 +225,7 @@ def tensorize_tree_with_targets(
         edge_child=tree_batch.edge_child,
         edge_slot=tree_batch.edge_slot,
         depth=tree_batch.depth,
+        edge_wdl_targets=tree_batch.edge_wdl_targets,
         node_targets=torch.tensor(node_target_values, dtype=torch.float32, device=tree_batch.node_features.device),
         feature_names=tree_batch.feature_names,
     )
@@ -207,11 +242,14 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
     edge_child_parts = []
     edge_slot_parts = []
     depth_parts = []
+    edge_wdl_target_parts = []
     target_parts = []
     tree_index_parts = []
     root_index = []
 
     node_offset = 0
+    saw_edge_wdl_targets = False
+    saw_missing_edge_wdl_targets = False
     for batch_idx, example in enumerate(examples):
         if example.feature_names != feature_names:
             raise ValueError("All tensorized examples must share the same feature schema.")
@@ -233,8 +271,16 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
             edge_parent_parts.append(example.edge_parent + node_offset)
             edge_child_parts.append(example.edge_child + node_offset)
             edge_slot_parts.append(example.edge_slot)
+            if example.edge_wdl_targets is not None:
+                saw_edge_wdl_targets = True
+                edge_wdl_target_parts.append(example.edge_wdl_targets)
+            else:
+                saw_missing_edge_wdl_targets = True
 
         node_offset += num_nodes
+
+    if saw_edge_wdl_targets and saw_missing_edge_wdl_targets:
+        raise ValueError("Tensorized batch mixes examples with and without edge_wdl_targets.")
 
     node_features = torch.cat(node_features_parts, dim=0)
     parent_index = torch.cat(parent_index_parts, dim=0)
@@ -258,6 +304,10 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
         children_index = torch.empty(0, dtype=torch.long, device=node_features.device)
         child_ptr = torch.zeros(node_features.shape[0] + 1, dtype=torch.long, device=node_features.device)
 
+    edge_wdl_targets = None
+    if edge_wdl_target_parts:
+        edge_wdl_targets = torch.cat(edge_wdl_target_parts, dim=0)
+
     tree_batch = TreeBatch(
         node_features=node_features,
         tree_index=tree_index,
@@ -269,6 +319,7 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
         child_ptr=child_ptr,
         children_index=children_index,
         depth=depth,
+        edge_wdl_targets=edge_wdl_targets,
         feature_names=feature_names,
         batch_size=len(examples),
         num_nodes=int(node_features.shape[0]),
@@ -347,6 +398,7 @@ def collate_tensorized_observations(observations: Sequence[TensorizedTreeObserva
         child_ptr=child_ptr,
         children_index=children_index,
         depth=depth,
+        edge_wdl_targets=None,
         feature_names=feature_names,
         batch_size=len(observations),
         num_nodes=int(node_features.shape[0]),

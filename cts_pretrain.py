@@ -20,6 +20,7 @@ from tensorizer import (
     TensorizedTreeExample,
     TreeTensorizer,
     collate_tensorized_examples,
+    edge_wdl_targets_from_node_features,
 )
 from tree import ExpansionChild, SearchTree
 
@@ -307,6 +308,15 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
             edge_child=payload["edge_child"][edge_start:edge_end],
             edge_slot=payload["edge_slot"][edge_start:edge_end],
             depth=payload["depth"][node_start:node_end],
+            edge_wdl_targets=(
+                payload["edge_wdl_targets"][edge_start:edge_end]
+                if "edge_wdl_targets" in payload
+                else edge_wdl_targets_from_node_features(
+                    payload["node_features"][node_start:node_end],
+                    payload["edge_child"][edge_start:edge_end],
+                    feature_names,
+                )
+            ),
             node_targets=payload["node_targets"][node_start:node_end],
             feature_names=feature_names,
         )
@@ -359,6 +369,8 @@ def load_raw_pretrain_example_paths(path: str) -> List[str]:
     return paths
 
 def edge_child_wdl_targets(tree_batch) -> torch.Tensor:
+    if getattr(tree_batch, "edge_wdl_targets", None) is not None:
+        return tree_batch.edge_wdl_targets
     feature_names = tree_batch.feature_names
     missing = [name for name in ("wdl_win", "wdl_draw", "wdl_loss") if name not in feature_names]
     if missing:
