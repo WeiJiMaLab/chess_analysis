@@ -194,13 +194,8 @@ def tensorize_tree_with_targets(
     node_target_values: Sequence[float],
     schema: NodeFeatureSchema,
     device: Union[torch.device, str] = "cpu",
-    child_slot_count: int = DEFAULT_CHILD_SLOT_COUNT,
 ) -> TensorizedTreeExample:
-    tree_batch = TreeTensorizer(
-        schema=schema,
-        device=device,
-        child_slot_count=child_slot_count,
-    ).tensorize_tree(tree)
+    tree_batch = TreeTensorizer(schema=schema, device=device).tensorize_tree(tree)
     return TensorizedTreeExample(
         node_features=tree_batch.node_features,
         parent_index=tree_batch.parent_index,

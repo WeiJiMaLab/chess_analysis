@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from schema import NodeFeatureSchema, require_tree_encoder_scalar_features, tree_encoder_feature_schema
-from tensorizer import DEFAULT_CHILD_SLOT_COUNT, tensorize_tree_with_targets
+from tensorizer import tensorize_tree_with_targets
 
 
 def _read_manifest(path: Path) -> list[Path]:
@@ -39,13 +39,7 @@ def _validate_tree_encoder_example_features(example, *, context: str) -> None:
         )
 
 
-def _pack_split(
-    manifest_path: Path,
-    output_root: Path,
-    shard_size: int,
-    *,
-    child_slot_count: int,
-) -> tuple[Path, int]:
+def _pack_split(manifest_path: Path, output_root: Path, shard_size: int) -> tuple[Path, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
     split_output_dir.mkdir(parents=True, exist_ok=True)
@@ -64,13 +58,7 @@ def _pack_split(
             example = torch.load(path, weights_only=False)
             _validate_tree_encoder_example_features(example, context=str(path))
             tensorized_examples.append(
-                tensorize_tree_with_targets(
-                    example.tree,
-                    example.node_target_values,
-                    schema=schema,
-                    device="cpu",
-                    child_slot_count=child_slot_count,
-                )
+                tensorize_tree_with_targets(example.tree, example.node_target_values, schema=schema, device="cpu")
             )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
@@ -100,7 +88,6 @@ def _pack_split(
             "source_manifest": str(manifest_path),
             "source_paths": [str(path) for path in shard_paths],
             "feature_names": list(schema.feature_names),
-            "child_slot_count": child_slot_count,
             "node_ptr": torch.tensor(node_ptr, dtype=torch.long),
             "edge_ptr": torch.tensor(edge_ptr, dtype=torch.long),
             "node_features": torch.cat(node_features_parts, dim=0),
@@ -135,7 +122,6 @@ def _pack_split(
                 "format": "cts_tensorized_pretrain_manifest_v1",
                 "split": split_name,
                 "total_examples": total_examples,
-                "child_slot_count": child_slot_count,
                 "entries": entries,
             },
             handle,
@@ -156,15 +142,12 @@ def main() -> None:
         default="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed",
     )
     parser.add_argument("--shard-size", type=int, default=2000)
-    parser.add_argument("--child-slot-count", type=int, default=DEFAULT_CHILD_SLOT_COUNT)
     parser.add_argument("--single-shard", action="store_true")
     parser.add_argument("--clear", action="store_true")
     args = parser.parse_args()
 
     if args.shard_size <= 0:
         raise ValueError("shard_size must be positive.")
-    if args.child_slot_count < 2:
-        raise ValueError("child_slot_count must be at least 2 so the final slot can act as overflow.")
 
     split_root = Path(args.split_root)
     output_root = Path(args.output_root)
@@ -185,18 +168,8 @@ def main() -> None:
     validation_paths = _read_manifest(validation_manifest)
     shard_size = max(len(train_paths), len(validation_paths)) if args.single_shard else args.shard_size
 
-    train_packed_manifest, train_count = _pack_split(
-        train_manifest,
-        output_root,
-        shard_size,
-        child_slot_count=args.child_slot_count,
-    )
-    validation_packed_manifest, validation_count = _pack_split(
-        validation_manifest,
-        output_root,
-        shard_size,
-        child_slot_count=args.child_slot_count,
-    )
+    train_packed_manifest, train_count = _pack_split(train_manifest, output_root, shard_size)
+    validation_packed_manifest, validation_count = _pack_split(validation_manifest, output_root, shard_size)
 
     print(f"train_manifest={train_packed_manifest}")
     print(f"validation_manifest={validation_packed_manifest}")
@@ -205,7 +178,6 @@ def main() -> None:
     print(f"output_root={output_root}")
     print(f"single_shard={args.single_shard}")
     print(f"effective_shard_size={shard_size}")
-    print(f"child_slot_count={args.child_slot_count}")
 
 
 if __name__ == "__main__":

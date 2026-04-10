@@ -125,18 +125,6 @@ def _build_quality_config(
     )
 
 
-def _validate_dataset_child_slot_count(dataset, expected_child_slot_count: int, *, path: str, stage: str) -> None:
-    dataset_child_slot_count = getattr(dataset, "child_slot_count", None)
-    if dataset_child_slot_count is None:
-        return
-    if int(dataset_child_slot_count) != int(expected_child_slot_count):
-        raise ValueError(
-            f"[{stage}] dataset child_slot_count mismatch for {path}: "
-            f"dataset={dataset_child_slot_count}, requested={expected_child_slot_count}. "
-            "Re-pack the tensorized dataset with the requested slot count or use a matching --child-slot-count."
-        )
-
-
 def _load_generated_data_paths(args: argparse.Namespace, stage: str) -> tuple[List[str], List[str]]:
     print(f"[{stage}] stage=load_train_paths path={args.train_data}", flush=True)
     train_paths = load_raw_pretrain_example_paths(args.train_data)
@@ -423,18 +411,6 @@ def pretrain_encoder_command(args: argparse.Namespace) -> None:
     train_examples = load_pretrain_example_dataset(args.train_dir)
     print(f"[pretrain] stage=load_validation_dataset path={args.validation_dir}", flush=True)
     validation_examples = load_pretrain_example_dataset(args.validation_dir)
-    _validate_dataset_child_slot_count(
-        train_examples,
-        args.child_slot_count,
-        path=args.train_dir,
-        stage="pretrain",
-    )
-    _validate_dataset_child_slot_count(
-        validation_examples,
-        args.child_slot_count,
-        path=args.validation_dir,
-        stage="pretrain",
-    )
     print(
         f"[pretrain] stage=datasets_ready train_examples={len(train_examples)} "
         f"validation_examples={len(validation_examples)}",
@@ -527,18 +503,6 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
     train_examples = load_pretrain_example_dataset(args.train_dir)
     print(f"[child-wdl-pretrain] stage=load_validation_dataset path={args.validation_dir}", flush=True)
     validation_examples = load_pretrain_example_dataset(args.validation_dir)
-    _validate_dataset_child_slot_count(
-        train_examples,
-        args.child_slot_count,
-        path=args.train_dir,
-        stage="child-wdl-pretrain",
-    )
-    _validate_dataset_child_slot_count(
-        validation_examples,
-        args.child_slot_count,
-        path=args.validation_dir,
-        stage="child-wdl-pretrain",
-    )
     print(
         f"[child-wdl-pretrain] stage=datasets_ready train_examples={len(train_examples)} "
         f"validation_examples={len(validation_examples)}",

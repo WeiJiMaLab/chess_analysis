@@ -1,19 +1,16 @@
 import copy
-import json
 import math
 import os
 import random
 import tempfile
 import unittest
 from collections import Counter
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 
 from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
 from schema import tree_encoder_feature_schema
-from supervised_branch_cli import _validate_dataset_child_slot_count
 from supervised_branch import (
     ChildWdlPretrainConfig,
     ChildWdlPretrainer,
@@ -433,21 +430,6 @@ class SupervisedBranchTests(unittest.TestCase):
             self.assertEqual(metadata["pretrain_objective"], "child_wdl")
             self.assertEqual(metadata["child_slot_count"], 4)
 
-            mismatched_model = NodeValueModel(
-                k=1,
-                node_feat=self.node_feat,
-                device="cpu",
-                node_embed_hidden=16,
-                d_embed=12,
-                d_message=8,
-                n_heads=1,
-                d_att=4,
-                value_hidden=8,
-                child_slot_count=3,
-            )
-            with self.assertRaisesRegex(ValueError, "child_slot_count does not match"):
-                load_encoder_checkpoint(checkpoint_path, mismatched_model.encoder)
-
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
             build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
@@ -474,64 +456,6 @@ class SupervisedBranchTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 load_raw_pretrain_example_paths(manifest_path)
-
-    def test_tensorized_manifest_requires_child_slot_count_metadata(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = os.path.join(tmpdir, "train_manifest.json")
-            with open(manifest_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    '{"format":"cts_tensorized_pretrain_manifest_v1","entries":[{"path":"dummy.pt","num_examples":1}]}'
-                )
-
-            with self.assertRaisesRegex(ValueError, "child_slot_count"):
-                load_pretrain_example_dataset(manifest_path)
-
-    def test_tensorized_manifest_rejects_legacy_shard_missing_edge_slot(self):
-        tree = build_slot_test_tree()
-        tensorized = tensorize_tree_with_targets(
-            tree,
-            [0.0] * tree.num_nodes(),
-            schema=self.schema,
-            child_slot_count=4,
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shard_path = os.path.join(tmpdir, "shard_00000.pt")
-            torch.save(
-                {
-                    "format": "cts_tensorized_pretrain_shard_v1",
-                    "num_examples": 1,
-                    "feature_names": list(self.schema.feature_names),
-                    "child_slot_count": 4,
-                    "node_ptr": torch.tensor([0, tensorized.node_features.shape[0]], dtype=torch.long),
-                    "edge_ptr": torch.tensor([0, tensorized.edge_parent.shape[0]], dtype=torch.long),
-                    "node_features": tensorized.node_features,
-                    "parent_index": tensorized.parent_index,
-                    "edge_parent": tensorized.edge_parent,
-                    "edge_child": tensorized.edge_child,
-                    "depth": tensorized.depth,
-                    "node_targets": tensorized.node_targets,
-                },
-                shard_path,
-            )
-            manifest_path = os.path.join(tmpdir, "train_manifest.json")
-            with open(manifest_path, "w", encoding="utf-8") as handle:
-                json.dump(
-                    {
-                        "format": "cts_tensorized_pretrain_manifest_v1",
-                        "child_slot_count": 4,
-                        "entries": [{"path": shard_path, "num_examples": 1}],
-                    },
-                    handle,
-                )
-
-            dataset = load_pretrain_example_dataset(manifest_path)
-            with self.assertRaisesRegex(ValueError, "missing edge_slot"):
-                _ = dataset[0]
-
-    def test_validate_dataset_child_slot_count_rejects_mismatch(self):
-        dataset = SimpleNamespace(child_slot_count=4)
-        with self.assertRaisesRegex(ValueError, "child_slot_count mismatch"):
-            _validate_dataset_child_slot_count(dataset, 3, path="train.json", stage="pretrain")
 
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [
