@@ -9,6 +9,9 @@ from schema import NodeFeatureSchema
 from tree import SearchTree
 
 
+DEFAULT_CHILD_SLOT_COUNT = 9
+
+
 @dataclass
 class TreeBatch:
     node_features: torch.Tensor
@@ -56,9 +59,13 @@ class TreeTensorizer:
         self,
         schema: NodeFeatureSchema,
         device: Union[torch.device, str] = "cpu",
+        child_slot_count: int = DEFAULT_CHILD_SLOT_COUNT,
     ) -> None:
+        if child_slot_count < 2:
+            raise ValueError("child_slot_count must be at least 2 so the final slot can act as overflow.")
         self.schema = schema
         self.device = torch.device(device)
+        self.child_slot_count = int(child_slot_count)
 
     def _sorted_child_ids_with_slots(self, tree: SearchTree, parent_id: int) -> list[tuple[int, int]]:
         ordered_children = []
@@ -68,7 +75,12 @@ class TreeTensorizer:
                 raise ValueError(f"Child node {child_id} is missing incoming_move_uci.")
             ordered_children.append((move_uci, child_id))
         ordered_children.sort(key=lambda item: item[0])
-        return [(child_id, slot_index) for slot_index, (_, child_id) in enumerate(ordered_children)]
+
+        overflow_slot = self.child_slot_count - 1
+        return [
+            (child_id, min(slot_index, overflow_slot))
+            for slot_index, (_, child_id) in enumerate(ordered_children)
+        ]
 
     def tensorize_tree(self, tree: SearchTree, *, validate: bool = True) -> TreeBatch:
         return self.tensorize_forest([tree], validate=validate)
@@ -182,8 +194,13 @@ def tensorize_tree_with_targets(
     node_target_values: Sequence[float],
     schema: NodeFeatureSchema,
     device: Union[torch.device, str] = "cpu",
+    child_slot_count: int = DEFAULT_CHILD_SLOT_COUNT,
 ) -> TensorizedTreeExample:
-    tree_batch = TreeTensorizer(schema=schema, device=device).tensorize_tree(tree)
+    tree_batch = TreeTensorizer(
+        schema=schema,
+        device=device,
+        child_slot_count=child_slot_count,
+    ).tensorize_tree(tree)
     return TensorizedTreeExample(
         node_features=tree_batch.node_features,
         parent_index=tree_batch.parent_index,

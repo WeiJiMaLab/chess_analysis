@@ -29,7 +29,7 @@ from supervised_branch import (
     evaluate_controller,
     save_pretrain_example_to_directory,
 )
-from tensorizer import TreeTensorizer
+from tensorizer import DEFAULT_CHILD_SLOT_COUNT, TreeTensorizer
 from tree import ExpansionChild, SearchTree
 from uci_provider import (
     Lc0DirectEvalProvider,
@@ -59,7 +59,7 @@ def _load_fens(path: str) -> List[str]:
 
 
 def _build_tensorizer(args: argparse.Namespace, schema: NodeFeatureSchema) -> TreeTensorizer:
-    return TreeTensorizer(schema, device=args.device)
+    return TreeTensorizer(schema, device=args.device, child_slot_count=args.child_slot_count)
 
 
 def _build_node_value_model(args: argparse.Namespace, schema: NodeFeatureSchema) -> NodeValueModel:
@@ -73,6 +73,7 @@ def _build_node_value_model(args: argparse.Namespace, schema: NodeFeatureSchema)
         n_heads=args.n_heads,
         d_att=args.d_att,
         value_hidden=args.value_hidden,
+        child_slot_count=args.child_slot_count,
     )
 
 
@@ -87,6 +88,7 @@ def _build_child_wdl_model(args: argparse.Namespace, schema: NodeFeatureSchema) 
         n_heads=args.n_heads,
         d_att=args.d_att,
         decoder_hidden=args.decoder_hidden,
+        child_slot_count=args.child_slot_count,
     )
 
 
@@ -102,6 +104,7 @@ def _build_policy_value_model(args: argparse.Namespace, schema: NodeFeatureSchem
         d_att=args.d_att,
         controller_hidden=args.controller_hidden,
         value_hidden=args.value_hidden,
+        child_slot_count=args.child_slot_count,
     )
 
 
@@ -120,6 +123,18 @@ def _build_quality_config(
         target_normalization_version=target_normalization_version,
         search_config_id=search_config_id,
     )
+
+
+def _validate_dataset_child_slot_count(dataset, expected_child_slot_count: int, *, path: str, stage: str) -> None:
+    dataset_child_slot_count = getattr(dataset, "child_slot_count", None)
+    if dataset_child_slot_count is None:
+        return
+    if int(dataset_child_slot_count) != int(expected_child_slot_count):
+        raise ValueError(
+            f"[{stage}] dataset child_slot_count mismatch for {path}: "
+            f"dataset={dataset_child_slot_count}, requested={expected_child_slot_count}. "
+            "Re-pack the tensorized dataset with the requested slot count or use a matching --child-slot-count."
+        )
 
 
 def _load_generated_data_paths(args: argparse.Namespace, stage: str) -> tuple[List[str], List[str]]:
@@ -209,6 +224,7 @@ def _add_shared_model_args(
     parser.add_argument("--d-message", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--d-att", type=int, default=32)
+    parser.add_argument("--child-slot-count", type=int, default=DEFAULT_CHILD_SLOT_COUNT)
     if include_controller_hidden:
         parser.add_argument("--controller-hidden", type=int, default=128)
     if include_value_hidden:
@@ -407,6 +423,18 @@ def pretrain_encoder_command(args: argparse.Namespace) -> None:
     train_examples = load_pretrain_example_dataset(args.train_dir)
     print(f"[pretrain] stage=load_validation_dataset path={args.validation_dir}", flush=True)
     validation_examples = load_pretrain_example_dataset(args.validation_dir)
+    _validate_dataset_child_slot_count(
+        train_examples,
+        args.child_slot_count,
+        path=args.train_dir,
+        stage="pretrain",
+    )
+    _validate_dataset_child_slot_count(
+        validation_examples,
+        args.child_slot_count,
+        path=args.validation_dir,
+        stage="pretrain",
+    )
     print(
         f"[pretrain] stage=datasets_ready train_examples={len(train_examples)} "
         f"validation_examples={len(validation_examples)}",
@@ -480,6 +508,7 @@ def pretrain_encoder_command(args: argparse.Namespace) -> None:
         metadata={
             "stage": "supervised_pretrain",
             "pretrain_objective": "node_value_regression",
+            "child_slot_count": args.child_slot_count,
         },
     )
     final_validation = history[-1]["validation"]
@@ -498,6 +527,18 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
     train_examples = load_pretrain_example_dataset(args.train_dir)
     print(f"[child-wdl-pretrain] stage=load_validation_dataset path={args.validation_dir}", flush=True)
     validation_examples = load_pretrain_example_dataset(args.validation_dir)
+    _validate_dataset_child_slot_count(
+        train_examples,
+        args.child_slot_count,
+        path=args.train_dir,
+        stage="child-wdl-pretrain",
+    )
+    _validate_dataset_child_slot_count(
+        validation_examples,
+        args.child_slot_count,
+        path=args.validation_dir,
+        stage="child-wdl-pretrain",
+    )
     print(
         f"[child-wdl-pretrain] stage=datasets_ready train_examples={len(train_examples)} "
         f"validation_examples={len(validation_examples)}",
@@ -567,6 +608,7 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
         metadata={
             "stage": "supervised_pretrain",
             "pretrain_objective": "child_wdl",
+            "child_slot_count": args.child_slot_count,
         },
     )
     final_validation = history[-1]["validation"]
