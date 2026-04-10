@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 
@@ -62,6 +63,67 @@ def _load_tensorized_examples(shard_paths: list[Path], num_workers: int):
         yield from executor.map(_tensorize_example_path, [str(path) for path in shard_paths])
 
 
+def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    return tensor.detach().cpu().numpy()
+
+
+def _write_tensorized_v2_shard(
+    shard_dir: Path,
+    *,
+    manifest_path: Path,
+    shard_paths: list[Path],
+    schema: NodeFeatureSchema,
+    node_ptr: list[int],
+    edge_ptr: list[int],
+    node_features_parts: list[torch.Tensor],
+    parent_index_parts: list[torch.Tensor],
+    edge_parent_parts: list[torch.Tensor],
+    edge_child_parts: list[torch.Tensor],
+    edge_slot_parts: list[torch.Tensor],
+    edge_wdl_target_parts: list[torch.Tensor],
+    depth_parts: list[torch.Tensor],
+    target_parts: list[torch.Tensor],
+) -> None:
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata = {
+        "format": "cts_tensorized_pretrain_shard_v2",
+        "num_examples": len(shard_paths),
+        "source_manifest": str(manifest_path),
+        "source_paths": [str(path) for path in shard_paths],
+        "feature_names": list(schema.feature_names),
+    }
+    with (shard_dir / "metadata.json").open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
+
+    np.save(shard_dir / "node_ptr.npy", np.asarray(node_ptr, dtype=np.int64))
+    np.save(shard_dir / "edge_ptr.npy", np.asarray(edge_ptr, dtype=np.int64))
+    np.save(shard_dir / "node_features.npy", _to_numpy(torch.cat(node_features_parts, dim=0)))
+    np.save(shard_dir / "parent_index.npy", _to_numpy(torch.cat(parent_index_parts, dim=0)))
+    np.save(
+        shard_dir / "edge_parent.npy",
+        _to_numpy(torch.cat(edge_parent_parts, dim=0) if edge_parent_parts else torch.empty(0, dtype=torch.long)),
+    )
+    np.save(
+        shard_dir / "edge_child.npy",
+        _to_numpy(torch.cat(edge_child_parts, dim=0) if edge_child_parts else torch.empty(0, dtype=torch.long)),
+    )
+    np.save(
+        shard_dir / "edge_slot.npy",
+        _to_numpy(torch.cat(edge_slot_parts, dim=0) if edge_slot_parts else torch.empty(0, dtype=torch.long)),
+    )
+    np.save(
+        shard_dir / "edge_wdl_targets.npy",
+        _to_numpy(
+            torch.cat(edge_wdl_target_parts, dim=0)
+            if edge_wdl_target_parts
+            else torch.empty((0, 3), dtype=torch.float32)
+        ),
+    )
+    np.save(shard_dir / "depth.npy", _to_numpy(torch.cat(depth_parts, dim=0)))
+    np.save(shard_dir / "node_targets.npy", _to_numpy(torch.cat(target_parts, dim=0)))
+
+
 def _pack_split(
     manifest_path: Path,
     output_root: Path,
@@ -82,7 +144,7 @@ def _pack_split(
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
-        shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
+        shard_path = split_output_dir / f"shard_{shard_index:05d}"
         node_ptr = [0]
         edge_ptr = [0]
         node_features_parts = []
@@ -128,28 +190,22 @@ def _pack_split(
                     flush=True,
                 )
 
-        payload = {
-            "format": "cts_tensorized_pretrain_shard_v1",
-            "num_examples": len(shard_paths),
-            "source_manifest": str(manifest_path),
-            "source_paths": [str(path) for path in shard_paths],
-            "feature_names": list(schema.feature_names),
-            "node_ptr": torch.tensor(node_ptr, dtype=torch.long),
-            "edge_ptr": torch.tensor(edge_ptr, dtype=torch.long),
-            "node_features": torch.cat(node_features_parts, dim=0),
-            "parent_index": torch.cat(parent_index_parts, dim=0),
-            "edge_parent": torch.cat(edge_parent_parts, dim=0) if edge_parent_parts else torch.empty(0, dtype=torch.long),
-            "edge_child": torch.cat(edge_child_parts, dim=0) if edge_child_parts else torch.empty(0, dtype=torch.long),
-            "edge_slot": torch.cat(edge_slot_parts, dim=0) if edge_slot_parts else torch.empty(0, dtype=torch.long),
-            "edge_wdl_targets": (
-                torch.cat(edge_wdl_target_parts, dim=0)
-                if edge_wdl_target_parts
-                else torch.empty((0, 3), dtype=torch.float32)
-            ),
-            "depth": torch.cat(depth_parts, dim=0),
-            "node_targets": torch.cat(target_parts, dim=0),
-        }
-        torch.save(payload, shard_path)
+        _write_tensorized_v2_shard(
+            shard_path,
+            manifest_path=manifest_path,
+            shard_paths=shard_paths,
+            schema=schema,
+            node_ptr=node_ptr,
+            edge_ptr=edge_ptr,
+            node_features_parts=node_features_parts,
+            parent_index_parts=parent_index_parts,
+            edge_parent_parts=edge_parent_parts,
+            edge_child_parts=edge_child_parts,
+            edge_slot_parts=edge_slot_parts,
+            edge_wdl_target_parts=edge_wdl_target_parts,
+            depth_parts=depth_parts,
+            target_parts=target_parts,
+        )
         entries.append(
             {
                 "path": str(shard_path),
@@ -172,7 +228,7 @@ def _pack_split(
     with packed_manifest_path.open("w", encoding="utf-8") as handle:
         json.dump(
             {
-                "format": "cts_tensorized_pretrain_manifest_v1",
+                "format": "cts_tensorized_pretrain_manifest_v2",
                 "split": split_name,
                 "total_examples": total_examples,
                 "entries": entries,

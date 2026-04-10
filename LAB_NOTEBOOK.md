@@ -822,3 +822,19 @@ Validation:
 
 Conclusion:
 - Child-WDL encoder pretraining now has a dedicated cluster entrypoint with the correct branch-specific defaults.
+
+Follow-up:
+- Replaced packed tensorized whole-shard `.pt` loading with an indexed array-backed shard format.
+- New packed shard format:
+  - one shard directory per shard
+  - `metadata.json`
+  - flat `.npy` arrays for `node_features`, `parent_index`, `edge_parent`, `edge_child`, `edge_slot`, `edge_wdl_targets`, `depth`, `node_targets`, plus `node_ptr` and `edge_ptr`
+- The packed tensorized loader now opens v2 shards with `numpy.load(..., mmap_mode="r")` and materializes only per-example slices, instead of `torch.load`ing an entire shard into each worker process.
+- Legacy v1 `.pt` tensorized shards remain readable for compatibility, but the packer now writes v2 manifests and shard directories by default.
+
+Validation:
+- `/opt/miniconda3/envs/trm/bin/python -m pytest test_supervised_branch.py test_plumbing.py test_model.py -q`
+- `/opt/miniconda3/envs/trm/bin/python scripts/pack_pretrain_examples.py --help`
+
+Conclusion:
+- The packed child-WDL path now follows the production principle that matters here: array-backed indexed storage with slice-based loading, instead of per-worker whole-shard Python deserialization.

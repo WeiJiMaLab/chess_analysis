@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import torch
 import scripts.pack_pretrain_examples as pack_pretrain_examples_script
 
@@ -550,6 +551,56 @@ class SupervisedBranchTests(unittest.TestCase):
             self.assertIsNotNone(batch.edge_wdl_targets)
             self.assertTrue(torch.allclose(batch.edge_wdl_targets.cpu(), tensorized.edge_wdl_targets.cpu()))
 
+    def test_tensorized_manifest_v2_memmaps_and_loads_precomputed_edge_wdl_targets(self):
+        tree = build_slot_test_tree()
+        tensorized = tensorize_tree_with_targets(
+            tree,
+            [0.0] * tree.num_nodes(),
+            schema=self.schema,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_dir = Path(tmpdir) / "shard_00000"
+            pack_pretrain_examples_script._write_tensorized_v2_shard(
+                shard_dir,
+                manifest_path=Path(tmpdir) / "train_manifest.txt",
+                shard_paths=[Path(tmpdir) / "example_00000.pt"],
+                schema=self.schema,
+                node_ptr=[0, tensorized.node_features.shape[0]],
+                edge_ptr=[0, tensorized.edge_parent.shape[0]],
+                node_features_parts=[tensorized.node_features],
+                parent_index_parts=[tensorized.parent_index],
+                edge_parent_parts=[tensorized.edge_parent],
+                edge_child_parts=[tensorized.edge_child],
+                edge_slot_parts=[tensorized.edge_slot],
+                edge_wdl_target_parts=[tensorized.edge_wdl_targets],
+                depth_parts=[tensorized.depth],
+                target_parts=[tensorized.node_targets],
+            )
+            manifest_path = os.path.join(tmpdir, "train_manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "format": "cts_tensorized_pretrain_manifest_v2",
+                        "entries": [{"path": str(shard_dir), "num_examples": 1}],
+                    },
+                    handle,
+                )
+
+            mmap_modes = []
+            real_np_load = np.load
+
+            def _recording_np_load(*args, **kwargs):
+                mmap_modes.append(kwargs.get("mmap_mode"))
+                return real_np_load(*args, **kwargs)
+
+            with patch("cts_pretrain.np.load", side_effect=_recording_np_load):
+                dataset = load_pretrain_example_dataset(manifest_path)
+                loaded = dataset[0]
+
+            self.assertIn("r", mmap_modes)
+            self.assertIsNotNone(loaded.edge_wdl_targets)
+            self.assertTrue(torch.allclose(loaded.edge_wdl_targets.cpu(), tensorized.edge_wdl_targets.cpu()))
+
     def test_child_wdl_pretrainer_uses_precomputed_edge_targets_from_packed_tensorized_data(self):
         tree = build_slot_test_tree()
         tensorized = tensorize_tree_with_targets(
@@ -670,12 +721,12 @@ class SupervisedBranchTests(unittest.TestCase):
 
             with open(packed_manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
-            self.assertEqual(manifest["format"], "cts_tensorized_pretrain_manifest_v1")
+            self.assertEqual(manifest["format"], "cts_tensorized_pretrain_manifest_v2")
 
             shard_path = manifest["entries"][0]["path"]
-            payload = torch.load(shard_path, weights_only=False)
-            self.assertIn("edge_wdl_targets", payload)
-            self.assertEqual(tuple(payload["edge_wdl_targets"].shape[1:]), (3,))
+            self.assertTrue(os.path.isdir(shard_path))
+            edge_wdl_targets = np.load(os.path.join(shard_path, "edge_wdl_targets.npy"))
+            self.assertEqual(tuple(edge_wdl_targets.shape[1:]), (3,))
 
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [
