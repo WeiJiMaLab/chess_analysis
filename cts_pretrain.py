@@ -11,7 +11,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -271,54 +270,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
     def __len__(self) -> int:
         return self.cumulative_sizes[-1]
 
-    def _open_tensorized_v1_payload(self, shard_path: str) -> Dict[str, Any]:
-        payload = torch.load(shard_path, weights_only=False)
-        if not isinstance(payload, dict) or payload.get("format") != "cts_tensorized_pretrain_shard_v1":
-            raise ValueError(f"Packed tensorized shard file has unexpected format: {shard_path}")
-        if "edge_slot" not in payload:
-            raise ValueError(
-                f"Packed tensorized shard is missing edge_slot data: {shard_path}. "
-                "Canonical slot order cannot be recovered from legacy tensorized shards; re-pack from raw trees."
-            )
-        return payload
-
-    def _open_tensorized_v2_payload(self, shard_dir: str) -> Dict[str, Any]:
-        metadata_path = os.path.join(shard_dir, "metadata.json")
-        with open(metadata_path, "r", encoding="utf-8") as handle:
-            metadata = json.load(handle)
-        if metadata.get("format") != "cts_tensorized_pretrain_shard_v2":
-            raise ValueError(f"Packed tensorized shard directory has unexpected format: {shard_dir}")
-
-        def _mmap_array(filename: str):
-            return np.load(os.path.join(shard_dir, filename), mmap_mode="r")
-
-        return {
-            "format": metadata["format"],
-            "feature_names": metadata["feature_names"],
-            "node_ptr": _mmap_array("node_ptr.npy"),
-            "edge_ptr": _mmap_array("edge_ptr.npy"),
-            "node_features": _mmap_array("node_features.npy"),
-            "parent_index": _mmap_array("parent_index.npy"),
-            "edge_parent": _mmap_array("edge_parent.npy"),
-            "edge_child": _mmap_array("edge_child.npy"),
-            "edge_slot": _mmap_array("edge_slot.npy"),
-            "edge_wdl_targets": _mmap_array("edge_wdl_targets.npy"),
-            "depth": _mmap_array("depth.npy"),
-            "node_targets": _mmap_array("node_targets.npy"),
-        }
-
-    def _load_shard_payload(self, shard_path: str) -> Dict[str, Any]:
-        if os.path.isdir(shard_path):
-            return self._open_tensorized_v2_payload(shard_path)
-        return self._open_tensorized_v1_payload(shard_path)
-
-    @staticmethod
-    def _slice_to_tensor(array, start: int, end: int) -> torch.Tensor:
-        sliced = array[start:end]
-        if isinstance(sliced, torch.Tensor):
-            return sliced
-        return torch.from_numpy(np.array(sliced, copy=True))
-
     def __getitem__(self, index: int) -> TensorizedTreeExample:
         if index < 0:
             index += len(self)
@@ -330,7 +281,14 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         example_offset = index - shard_start
 
         if self._loaded_shard_index != shard_index:
-            payload = self._load_shard_payload(self.paths[shard_index])
+            payload = torch.load(self.paths[shard_index], weights_only=False)
+            if not isinstance(payload, dict) or payload.get("format") != "cts_tensorized_pretrain_shard_v1":
+                raise ValueError(f"Packed tensorized shard file has unexpected format: {self.paths[shard_index]}")
+            if "edge_slot" not in payload:
+                raise ValueError(
+                    f"Packed tensorized shard is missing edge_slot data: {self.paths[shard_index]}. "
+                    "Canonical slot order cannot be recovered from legacy tensorized shards; re-pack from raw trees."
+                )
             self._loaded_shard_index = shard_index
             self._loaded_payload = payload
 
@@ -338,28 +296,28 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         payload = self._loaded_payload
         node_ptr = payload["node_ptr"]
         edge_ptr = payload["edge_ptr"]
-        node_start = int(node_ptr[example_offset])
-        node_end = int(node_ptr[example_offset + 1])
-        edge_start = int(edge_ptr[example_offset])
-        edge_end = int(edge_ptr[example_offset + 1])
+        node_start = int(node_ptr[example_offset].item())
+        node_end = int(node_ptr[example_offset + 1].item())
+        edge_start = int(edge_ptr[example_offset].item())
+        edge_end = int(edge_ptr[example_offset + 1].item())
         feature_names = tuple(payload["feature_names"])
         return TensorizedTreeExample(
-            node_features=self._slice_to_tensor(payload["node_features"], node_start, node_end),
-            parent_index=self._slice_to_tensor(payload["parent_index"], node_start, node_end),
-            edge_parent=self._slice_to_tensor(payload["edge_parent"], edge_start, edge_end),
-            edge_child=self._slice_to_tensor(payload["edge_child"], edge_start, edge_end),
-            edge_slot=self._slice_to_tensor(payload["edge_slot"], edge_start, edge_end),
-            depth=self._slice_to_tensor(payload["depth"], node_start, node_end),
+            node_features=payload["node_features"][node_start:node_end],
+            parent_index=payload["parent_index"][node_start:node_end],
+            edge_parent=payload["edge_parent"][edge_start:edge_end],
+            edge_child=payload["edge_child"][edge_start:edge_end],
+            edge_slot=payload["edge_slot"][edge_start:edge_end],
+            depth=payload["depth"][node_start:node_end],
             edge_wdl_targets=(
-                self._slice_to_tensor(payload["edge_wdl_targets"], edge_start, edge_end)
+                payload["edge_wdl_targets"][edge_start:edge_end]
                 if "edge_wdl_targets" in payload
                 else edge_wdl_targets_from_node_features(
-                    self._slice_to_tensor(payload["node_features"], node_start, node_end),
-                    self._slice_to_tensor(payload["edge_child"], edge_start, edge_end),
+                    payload["node_features"][node_start:node_end],
+                    payload["edge_child"][edge_start:edge_end],
                     feature_names,
                 )
             ),
-            node_targets=self._slice_to_tensor(payload["node_targets"], node_start, node_end),
+            node_targets=payload["node_targets"][node_start:node_end],
             feature_names=feature_names,
         )
 
@@ -378,7 +336,7 @@ def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
         with open(path, "r", encoding="utf-8") as handle:
             manifest = json.load(handle)
         manifest_format = manifest.get("format")
-        if manifest_format in {"cts_tensorized_pretrain_manifest_v1", "cts_tensorized_pretrain_manifest_v2"}:
+        if manifest_format == "cts_tensorized_pretrain_manifest_v1":
             return PackedTensorizedShardDataset(path)
         return PackedPretrainShardDataset(path)
 
