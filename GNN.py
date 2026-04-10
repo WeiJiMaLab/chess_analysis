@@ -1,10 +1,10 @@
 from dataclasses import dataclass
+import math
 
 import torch
 import torch.nn as nn
 
 from TreeMHA import TreeAttMsgLayer
-from tensorizer import DEFAULT_CHILD_SLOT_COUNT
 
 
 @dataclass
@@ -44,6 +44,30 @@ class PolicyValueOutput:
     state_value: torch.Tensor
 
 
+class SinusoidalSlotEncoding(nn.Module):
+    def __init__(self, d_embed: int, device: torch.device | str = "cpu") -> None:
+        super().__init__()
+        if d_embed <= 0:
+            raise ValueError("d_embed must be positive.")
+        self.d_embed = int(d_embed)
+        self.device = torch.device(device)
+        half_dim = max(1, math.ceil(self.d_embed / 2))
+        exponent = torch.arange(half_dim, dtype=torch.float32, device=self.device)
+        scale = torch.exp(-math.log(10000.0) * exponent / half_dim)
+        self.register_buffer("inverse_frequencies", scale, persistent=False)
+
+    def forward(self, slot_index: torch.Tensor) -> torch.Tensor:
+        if slot_index.dtype != torch.long:
+            slot_index = slot_index.long()
+        positions = slot_index.to(self.inverse_frequencies.device, dtype=torch.float32).unsqueeze(-1)
+        angles = positions * self.inverse_frequencies.unsqueeze(0)
+        encoding = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+        if encoding.shape[-1] < self.d_embed:
+            padding = encoding.new_zeros(encoding.shape[0], self.d_embed - encoding.shape[-1])
+            encoding = torch.cat([encoding, padding], dim=-1)
+        return encoding[:, : self.d_embed]
+
+
 class TreeNN(nn.Module):
     """
     Tree encoder over the flattened TreeBatch representation.
@@ -63,24 +87,21 @@ class TreeNN(nn.Module):
         d_message=512,
         n_heads=4,
         d_att=128,
-        child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
     ):
         super().__init__()
-        if child_slot_count < 2:
-            raise ValueError("child_slot_count must be at least 2 so the final slot can act as overflow.")
         self.k = k
         self.node_feat = node_feat
         self.device = torch.device(device)
         self.d_embed = d_embed
         self.d_message = d_message
-        self.child_slot_count = int(child_slot_count)
 
         self.node_embed = nn.Sequential(
             nn.Linear(node_feat, node_embed_hidden, device=self.device),
             nn.ReLU(),
             nn.Linear(node_embed_hidden, d_embed, device=self.device),
         )
-        self.child_slot_embedding = nn.Embedding(self.child_slot_count, d_embed, device=self.device)
+        self.child_slot_encoding = SinusoidalSlotEncoding(d_embed=d_embed, device=self.device)
+        self.child_slot_projection = nn.Linear(d_embed, d_embed, device=self.device)
         self.node_gru = nn.GRUCell(d_message, d_embed, device=self.device)
         self.upward_msg = TreeAttMsgLayer(
             n_heads=n_heads,
@@ -99,8 +120,9 @@ class TreeNN(nn.Module):
             messages[has_parent] = self.downward_msg(parent_states)
         return messages
 
-    def canonicalize_edge_slots(self, edge_slot: torch.Tensor) -> torch.Tensor:
-        return edge_slot.clamp(min=0, max=self.child_slot_count - 1)
+    def slot_embeddings(self, edge_slot: torch.Tensor) -> torch.Tensor:
+        slot_encoding = self.child_slot_encoding(edge_slot.to(self.device))
+        return self.child_slot_projection(slot_encoding)
 
     def forward(self, tree_batch):
         node_features = tree_batch.node_features.to(self.device)
@@ -108,13 +130,13 @@ class TreeNN(nn.Module):
         children_index = tree_batch.children_index.to(self.device)
         edge_parent = tree_batch.edge_parent.to(self.device)
         edge_child = tree_batch.edge_child.to(self.device)
-        edge_slot = self.canonicalize_edge_slots(tree_batch.edge_slot.to(self.device))
+        edge_slot = tree_batch.edge_slot.to(self.device)
         parent_index = tree_batch.parent_index.to(self.device)
         root_index = tree_batch.root_index.to(self.device)
 
         node_states = self.node_embed(node_features)
         for _ in range(self.k):
-            edge_slot_embed = self.child_slot_embedding(edge_slot)
+            edge_slot_embed = self.slot_embeddings(edge_slot)
             upward = self.upward_msg(
                 node_states,
                 edge_parent,
@@ -208,7 +230,6 @@ class TreeSearchModel(nn.Module):
         n_heads=4,
         d_att=128,
         controller_hidden=128,
-        child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
     ):
         super().__init__()
         self.encoder = TreeNN(
@@ -220,7 +241,6 @@ class TreeSearchModel(nn.Module):
             d_message=d_message,
             n_heads=n_heads,
             d_att=d_att,
-            child_slot_count=child_slot_count,
         )
         self.halt_controller = HaltController(
             d_embed=d_embed,
@@ -256,7 +276,6 @@ class NodeValueModel(nn.Module):
         d_att=128,
         value_hidden=128,
         encoder=None,
-        child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
     ):
         super().__init__()
         if encoder is None:
@@ -269,7 +288,6 @@ class NodeValueModel(nn.Module):
                 d_message=d_message,
                 n_heads=n_heads,
                 d_att=d_att,
-                child_slot_count=child_slot_count,
             )
         self.encoder = encoder
         self.node_value_head = NodeValueHead(
@@ -306,7 +324,6 @@ class PolicyValueTreeSearchModel(nn.Module):
         controller_hidden=128,
         value_hidden=128,
         encoder=None,
-        child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
     ):
         super().__init__()
         if encoder is None:
@@ -319,7 +336,6 @@ class PolicyValueTreeSearchModel(nn.Module):
                 d_message=d_message,
                 n_heads=n_heads,
                 d_att=d_att,
-                child_slot_count=child_slot_count,
             )
         self.encoder = encoder
         self.halt_controller = HaltController(
@@ -367,7 +383,6 @@ class ChildWdlModel(nn.Module):
         d_att=128,
         decoder_hidden=128,
         encoder=None,
-        child_slot_count=DEFAULT_CHILD_SLOT_COUNT,
     ):
         super().__init__()
         if encoder is None:
@@ -380,7 +395,6 @@ class ChildWdlModel(nn.Module):
                 d_message=d_message,
                 n_heads=n_heads,
                 d_att=d_att,
-                child_slot_count=child_slot_count,
             )
         self.encoder = encoder
         self.child_wdl_head = ChildWdlHead(
@@ -392,9 +406,9 @@ class ChildWdlModel(nn.Module):
     def forward(self, tree_batch):
         encoded = self.encoder(tree_batch)
         edge_parent = tree_batch.edge_parent.to(self.encoder.device)
-        edge_slot = self.encoder.canonicalize_edge_slots(tree_batch.edge_slot.to(self.encoder.device))
+        edge_slot = tree_batch.edge_slot.to(self.encoder.device)
         parent_states = encoded.node_states[edge_parent]
-        slot_states = self.encoder.child_slot_embedding(edge_slot)
+        slot_states = self.encoder.slot_embeddings(edge_slot)
         edge_logits = self.child_wdl_head(parent_states, slot_states)
         return ChildWdlOutput(
             node_states=encoded.node_states,

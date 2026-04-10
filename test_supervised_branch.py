@@ -6,14 +6,12 @@ import random
 import tempfile
 import unittest
 from collections import Counter
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 
 from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
 from schema import tree_encoder_feature_schema
-from supervised_branch_cli import _validate_dataset_child_slot_count
 from supervised_branch import (
     ChildWdlPretrainConfig,
     ChildWdlPretrainer,
@@ -289,7 +287,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
     def test_tensorizer_emits_canonical_edge_slots_from_move_sorted_children(self):
         tree = build_slot_test_tree()
-        batch = TreeTensorizer(self.schema, child_slot_count=4).tensorize_tree(tree)
+        batch = TreeTensorizer(self.schema).tensorize_tree(tree)
 
         self.assertTrue(torch.equal(batch.edge_parent.cpu(), torch.tensor([0, 0, 0, 0, 1, 1], dtype=torch.long)))
         self.assertTrue(torch.equal(batch.edge_child.cpu(), torch.tensor([4, 2, 3, 1, 5, 6], dtype=torch.long)))
@@ -361,11 +359,18 @@ class SupervisedBranchTests(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(targets, expected))
 
-    def test_child_wdl_slot_overflow_is_deterministic(self):
-        tree = build_slot_test_tree()
-        batch = TreeTensorizer(self.schema, child_slot_count=3).tensorize_tree(tree)
+    def test_child_wdl_slots_expand_without_overflow_bucket(self):
+        tree = SearchTree()
+        root_id = tree.create_root("root", make_scalar_features(0.0, 1.0, 0.25, 0.50, 0.25))
+        children = [
+            ExpansionChild(f"{chr(ord('a') + idx)}2a3", f"child-{idx}", make_scalar_features(0.1, 0.1, 0.4, 0.3, 0.3))
+            for idx in range(12)
+        ]
+        tree.add_children(root_id, children)
 
-        self.assertTrue(torch.equal(batch.edge_slot.cpu(), torch.tensor([0, 1, 2, 2, 0, 1], dtype=torch.long)))
+        batch = TreeTensorizer(self.schema).tensorize_tree(tree)
+
+        self.assertTrue(torch.equal(batch.edge_slot.cpu(), torch.arange(12, dtype=torch.long)))
 
     def test_child_wdl_pretraining_runs_and_saves_objective_metadata(self):
         train_examples = [
@@ -382,11 +387,10 @@ class SupervisedBranchTests(unittest.TestCase):
             n_heads=1,
             d_att=4,
             decoder_hidden=8,
-            child_slot_count=4,
         )
         trainer = ChildWdlPretrainer(
             model=model,
-            tensorizer=TreeTensorizer(self.schema, child_slot_count=4),
+            tensorizer=TreeTensorizer(self.schema),
             train_examples=train_examples,
             validation_examples=train_examples,
             config=ChildWdlPretrainConfig(
@@ -413,7 +417,6 @@ class SupervisedBranchTests(unittest.TestCase):
                 checkpoint_path,
                 metadata={
                     "pretrain_objective": "child_wdl",
-                    "child_slot_count": 4,
                 },
             )
 
@@ -427,26 +430,9 @@ class SupervisedBranchTests(unittest.TestCase):
                 n_heads=1,
                 d_att=4,
                 value_hidden=8,
-                child_slot_count=4,
             )
             metadata = load_encoder_checkpoint(checkpoint_path, loaded_model.encoder)
             self.assertEqual(metadata["pretrain_objective"], "child_wdl")
-            self.assertEqual(metadata["child_slot_count"], 4)
-
-            mismatched_model = NodeValueModel(
-                k=1,
-                node_feat=self.node_feat,
-                device="cpu",
-                node_embed_hidden=16,
-                d_embed=12,
-                d_message=8,
-                n_heads=1,
-                d_att=4,
-                value_hidden=8,
-                child_slot_count=3,
-            )
-            with self.assertRaisesRegex(ValueError, "child_slot_count does not match"):
-                load_encoder_checkpoint(checkpoint_path, mismatched_model.encoder)
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
@@ -475,24 +461,12 @@ class SupervisedBranchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_raw_pretrain_example_paths(manifest_path)
 
-    def test_tensorized_manifest_requires_child_slot_count_metadata(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest_path = os.path.join(tmpdir, "train_manifest.json")
-            with open(manifest_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    '{"format":"cts_tensorized_pretrain_manifest_v1","entries":[{"path":"dummy.pt","num_examples":1}]}'
-                )
-
-            with self.assertRaisesRegex(ValueError, "child_slot_count"):
-                load_pretrain_example_dataset(manifest_path)
-
     def test_tensorized_manifest_rejects_legacy_shard_missing_edge_slot(self):
         tree = build_slot_test_tree()
         tensorized = tensorize_tree_with_targets(
             tree,
             [0.0] * tree.num_nodes(),
             schema=self.schema,
-            child_slot_count=4,
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             shard_path = os.path.join(tmpdir, "shard_00000.pt")
@@ -501,7 +475,6 @@ class SupervisedBranchTests(unittest.TestCase):
                     "format": "cts_tensorized_pretrain_shard_v1",
                     "num_examples": 1,
                     "feature_names": list(self.schema.feature_names),
-                    "child_slot_count": 4,
                     "node_ptr": torch.tensor([0, tensorized.node_features.shape[0]], dtype=torch.long),
                     "edge_ptr": torch.tensor([0, tensorized.edge_parent.shape[0]], dtype=torch.long),
                     "node_features": tensorized.node_features,
@@ -518,7 +491,6 @@ class SupervisedBranchTests(unittest.TestCase):
                 json.dump(
                     {
                         "format": "cts_tensorized_pretrain_manifest_v1",
-                        "child_slot_count": 4,
                         "entries": [{"path": shard_path, "num_examples": 1}],
                     },
                     handle,
@@ -527,11 +499,6 @@ class SupervisedBranchTests(unittest.TestCase):
             dataset = load_pretrain_example_dataset(manifest_path)
             with self.assertRaisesRegex(ValueError, "missing edge_slot"):
                 _ = dataset[0]
-
-    def test_validate_dataset_child_slot_count_rejects_mismatch(self):
-        dataset = SimpleNamespace(child_slot_count=4)
-        with self.assertRaisesRegex(ValueError, "child_slot_count mismatch"):
-            _validate_dataset_child_slot_count(dataset, 3, path="train.json", stage="pretrain")
 
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [

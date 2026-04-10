@@ -250,15 +250,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         entries = manifest.get("entries", [])
         if not entries:
             raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
-        child_slot_count = manifest.get("child_slot_count")
-        if child_slot_count is None:
-            raise ValueError(
-                f"Packed tensorized manifest is missing child_slot_count metadata: {manifest_path}. "
-                "Re-pack tensorized datasets with slot-aware metadata."
-            )
-        self.child_slot_count = int(child_slot_count)
-        if self.child_slot_count < 2:
-            raise ValueError(f"Packed tensorized manifest has invalid child_slot_count={self.child_slot_count}.")
 
         self.paths: List[str] = []
         self.cumulative_sizes: List[int] = []
@@ -292,17 +283,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
             payload = torch.load(self.paths[shard_index], weights_only=False)
             if not isinstance(payload, dict) or payload.get("format") != "cts_tensorized_pretrain_shard_v1":
                 raise ValueError(f"Packed tensorized shard file has unexpected format: {self.paths[shard_index]}")
-            shard_child_slot_count = payload.get("child_slot_count")
-            if shard_child_slot_count is None:
-                raise ValueError(
-                    f"Packed tensorized shard is missing child_slot_count metadata: {self.paths[shard_index]}. "
-                    "Re-pack tensorized datasets with slot-aware metadata."
-                )
-            if int(shard_child_slot_count) != self.child_slot_count:
-                raise ValueError(
-                    "Packed tensorized shard child_slot_count does not match manifest: "
-                    f"{self.paths[shard_index]}"
-                )
             if "edge_slot" not in payload:
                 raise ValueError(
                     f"Packed tensorized shard is missing edge_slot data: {self.paths[shard_index]}. "
@@ -396,14 +376,10 @@ def edge_child_wdl_targets(tree_batch) -> torch.Tensor:
 
 
 def save_encoder_checkpoint(path: str, encoder, metadata: Optional[Mapping[str, Any]] = None) -> None:
-    resolved_metadata = dict(metadata or {})
-    child_slot_count = getattr(encoder, "child_slot_count", None)
-    if child_slot_count is not None:
-        resolved_metadata["child_slot_count"] = int(child_slot_count)
     torch.save(
         {
             "encoder_state_dict": encoder.state_dict(),
-            "metadata": resolved_metadata,
+            "metadata": dict(metadata or {}),
         },
         path,
     )
@@ -412,19 +388,6 @@ def save_encoder_checkpoint(path: str, encoder, metadata: Optional[Mapping[str, 
 def load_encoder_checkpoint(path: str, encoder, map_location: str = "cpu") -> Dict[str, Any]:
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     metadata = dict(checkpoint.get("metadata", {}))
-    encoder_child_slot_count = getattr(encoder, "child_slot_count", None)
-    if encoder_child_slot_count is not None:
-        checkpoint_child_slot_count = metadata.get("child_slot_count")
-        if checkpoint_child_slot_count is None:
-            raise ValueError(
-                "Encoder checkpoint is missing child_slot_count metadata. "
-                "This checkpoint predates the slot-aware encoder or was saved incorrectly."
-            )
-        if int(checkpoint_child_slot_count) != int(encoder_child_slot_count):
-            raise ValueError(
-                "Encoder checkpoint child_slot_count does not match the constructed encoder: "
-                f"checkpoint={checkpoint_child_slot_count}, encoder={encoder_child_slot_count}."
-            )
     encoder.load_state_dict(checkpoint["encoder_state_dict"])
     return metadata
 
