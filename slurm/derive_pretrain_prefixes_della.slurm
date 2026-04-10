@@ -21,17 +21,9 @@ if [[ -z "${OUTPUT_DIR:-}" ]]; then
   echo "OUTPUT_DIR is required" >&2
   exit 1
 fi
-if [[ -z "${START_INDEX:-}" ]]; then
-  echo "START_INDEX is required" >&2
-  exit 1
-fi
-if [[ -z "${END_INDEX:-}" ]]; then
-  echo "END_INDEX is required" >&2
-  exit 1
-fi
-
 PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+START_INDEX="${START_INDEX:-0}"
 MIN_NODES="${MIN_NODES:-8}"
 MAX_NODES="${MAX_NODES:-48}"
 SEARCH_BUDGET="${SEARCH_BUDGET:-64}"
@@ -58,7 +50,7 @@ echo "project_dir=${PROJECT_DIR}"
 echo "input_data=${INPUT_DATA}"
 echo "output_dir=${OUTPUT_DIR}"
 echo "start_index=${START_INDEX}"
-echo "end_index=${END_INDEX}"
+echo "end_index=${END_INDEX:-all}"
 echo "min_nodes=${MIN_NODES}"
 echo "max_nodes=${MAX_NODES}"
 echo "search_budget=${SEARCH_BUDGET}"
@@ -78,9 +70,12 @@ ARGS=(
   --max-depth "${MAX_DEPTH}"
   --seed "${SEED}"
   --start-index "${START_INDEX}"
-  --end-index "${END_INDEX}"
   --log-interval "${LOG_INTERVAL}"
 )
+
+if [[ -n "${END_INDEX:-}" ]]; then
+  ARGS+=(--end-index "${END_INDEX}")
+fi
 
 if [[ "${RESUME_FLAG}" == "1" ]]; then
   ARGS+=(--resume)
