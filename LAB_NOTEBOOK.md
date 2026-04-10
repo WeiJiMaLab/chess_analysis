@@ -803,22 +803,3 @@ Validation:
 
 Conclusion:
 - Packing now actually uses the CPU allocation it requests, with deterministic per-shard output order preserved by ordered worker mapping.
-
-## 2026-04-10
-
-Intent:
-- Make the new child-WDL encoder pretraining path runnable on Della without ad hoc `sbatch --wrap` commands.
-
-Meaningful change:
-- Added `slurm/pretrain_child_wdl_encoder_della.slurm`.
-- The wrapper targets the uncertainty-branch defaults:
-  - packed input: `/scratch/.../pretrain_packed_uncertainty`
-  - split fallback: `/scratch/.../pretrain_split_uncertainty`
-  - checkpoint output: `/scratch/.../tree_encoder_child_wdl_uncertainty.pt`
-- It mirrors the existing GPU pretrain wrapper but calls `pretrain-child-wdl-encoder` and exposes the child-WDL decoder hyperparameters and logging controls.
-
-Validation:
-- `bash -n slurm/pretrain_child_wdl_encoder_della.slurm`
-
-Conclusion:
-- Child-WDL encoder pretraining now has a dedicated cluster entrypoint with the correct branch-specific defaults.
