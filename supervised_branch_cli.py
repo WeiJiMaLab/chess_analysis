@@ -531,7 +531,17 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
 
     last_logged_batch = {"train": 0, "validation": 0}
 
-    def _log_batch_progress(epoch_index, phase, batch_index, total_batches, seen_examples, seen_edges, total_loss):
+    def _log_batch_progress(
+        epoch_index,
+        phase,
+        batch_index,
+        total_batches,
+        seen_examples,
+        seen_edges,
+        total_loss,
+        target_entropy,
+        loss_gap,
+    ):
         interval = args.log_interval
         should_log = (
             batch_index == 1
@@ -544,7 +554,9 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
         print(
             f"[child-wdl-pretrain] epoch={epoch_index}/{args.epochs} phase={phase} "
             f"batch={batch_index}/{total_batches} "
-            f"seen_examples={seen_examples} seen_edges={seen_edges} total_loss={total_loss:.6f}",
+            f"seen_examples={seen_examples} seen_edges={seen_edges} "
+            f"total_loss={total_loss:.6f} target_entropy={target_entropy:.6f} "
+            f"loss_gap={loss_gap:.6f}",
             flush=True,
         )
 
@@ -552,8 +564,12 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
         print(
             f"epoch={epoch_index}/{args.epochs} "
             f"train_total_loss={train_metrics.total_loss:.6f} "
+            f"train_target_entropy={train_metrics.target_entropy:.6f} "
+            f"train_loss_gap={train_metrics.loss_gap:.6f} "
             f"train_supervised_edges={train_metrics.num_supervised_edges} "
             f"val_total_loss={validation_metrics.total_loss:.6f} "
+            f"val_target_entropy={validation_metrics.target_entropy:.6f} "
+            f"val_loss_gap={validation_metrics.loss_gap:.6f} "
             f"val_supervised_edges={validation_metrics.num_supervised_edges}",
             flush=True,
         )
@@ -573,6 +589,8 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
     final_validation = history[-1]["validation"]
     print(
         f"validation_total_loss={final_validation.total_loss:.6f} "
+        f"validation_target_entropy={final_validation.target_entropy:.6f} "
+        f"validation_loss_gap={final_validation.loss_gap:.6f} "
         f"validation_supervised_edges={final_validation.num_supervised_edges} "
         f"checkpoint={args.output_checkpoint}",
         flush=True,

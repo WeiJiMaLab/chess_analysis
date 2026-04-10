@@ -799,6 +799,8 @@ class ChildWdlMetrics:
     total_loss: float
     num_examples: int
     num_supervised_edges: int
+    target_entropy: float = 0.0
+    loss_gap: float = 0.0
 
 
 class SupervisedPretrainer:
@@ -1005,7 +1007,7 @@ class ChildWdlPretrainer:
         examples: Sequence[PretrainExample],
         epoch_index: int,
         training: bool,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
     ) -> ChildWdlMetrics:
         if training:
             self.model.train()
@@ -1014,6 +1016,7 @@ class ChildWdlPretrainer:
 
         metric_device = self.model.encoder.device
         total_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
+        target_entropy_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
         total_examples = 0
         total_supervised_edges = 0
 
@@ -1031,6 +1034,10 @@ class ChildWdlPretrainer:
                 log_probs = F.log_softmax(output.edge_logits, dim=-1)
                 per_edge_loss = -(edge_targets * log_probs).sum(dim=-1)
                 total_loss = per_edge_loss.mean()
+                target_log_probs = edge_targets.clamp_min(1e-12).log()
+                per_edge_target_entropy = -(edge_targets * target_log_probs).sum(dim=-1)
+                target_entropy = per_edge_target_entropy.mean()
+                loss_gap = total_loss - target_entropy
 
                 if training:
                     self.optimizer.zero_grad()
@@ -1042,6 +1049,7 @@ class ChildWdlPretrainer:
             total_examples += batch_size
             total_supervised_edges += num_supervised_edges
             total_loss_sum += total_loss.detach() * num_supervised_edges
+            target_entropy_sum += target_entropy.detach() * num_supervised_edges
             if batch_progress_callback is not None:
                 batch_progress_callback(
                     epoch_index,
@@ -1051,13 +1059,19 @@ class ChildWdlPretrainer:
                     total_examples,
                     total_supervised_edges,
                     float(total_loss.item()),
+                    float(target_entropy.item()),
+                    float(loss_gap.item()),
                 )
 
         if total_supervised_edges == 0:
-            return ChildWdlMetrics(total_loss=0.0, num_examples=total_examples, num_supervised_edges=0)
+            return ChildWdlMetrics(total_loss=0.0, target_entropy=0.0, loss_gap=0.0, num_examples=total_examples, num_supervised_edges=0)
 
+        mean_total_loss = float((total_loss_sum / total_supervised_edges).item())
+        mean_target_entropy = float((target_entropy_sum / total_supervised_edges).item())
         return ChildWdlMetrics(
-            total_loss=float((total_loss_sum / total_supervised_edges).item()),
+            total_loss=mean_total_loss,
+            target_entropy=mean_target_entropy,
+            loss_gap=mean_total_loss - mean_target_entropy,
             num_examples=total_examples,
             num_supervised_edges=total_supervised_edges,
         )
@@ -1065,7 +1079,7 @@ class ChildWdlPretrainer:
     def train_epoch(
         self,
         epoch_index: int = 1,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
     ) -> ChildWdlMetrics:
         return self._run_epoch(
             self.train_examples,
@@ -1077,7 +1091,7 @@ class ChildWdlPretrainer:
     def validate(
         self,
         epoch_index: int = 1,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
     ) -> ChildWdlMetrics:
         return self._run_epoch(
             self.validation_examples,
@@ -1089,7 +1103,7 @@ class ChildWdlPretrainer:
     def fit(
         self,
         progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
-        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
     ) -> List[Dict[str, ChildWdlMetrics]]:
         history: List[Dict[str, ChildWdlMetrics]] = []
         for epoch_index in range(1, self.config.epochs + 1):
