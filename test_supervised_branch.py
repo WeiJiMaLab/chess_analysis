@@ -415,6 +415,25 @@ class SupervisedBranchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_raw_pretrain_example_paths(manifest_path)
 
+    def test_load_raw_pretrain_example_paths_recurses_through_shard_directories(self):
+        examples = [
+            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_a = os.path.join(tmpdir, "shard_00000")
+            shard_b = os.path.join(tmpdir, "shard_00001")
+            os.makedirs(shard_a, exist_ok=True)
+            os.makedirs(shard_b, exist_ok=True)
+            torch.save(examples[0], os.path.join(shard_a, "000000_root.pt"))
+            torch.save(examples[1], os.path.join(shard_b, "000001_root.pt"))
+
+            paths = load_raw_pretrain_example_paths(tmpdir)
+
+            self.assertEqual(len(paths), 2)
+            self.assertTrue(paths[0].endswith("shard_00000/000000_root.pt"))
+            self.assertTrue(paths[1].endswith("shard_00001/000001_root.pt"))
+
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [
             build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),

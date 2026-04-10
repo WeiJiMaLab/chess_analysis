@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import torch
@@ -368,9 +369,9 @@ def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
 def load_raw_pretrain_example_paths(path: str) -> List[str]:
     if os.path.isdir(path):
         paths = [
-            os.path.join(path, filename)
-            for filename in sorted(os.listdir(path))
-            if filename.endswith(".pt")
+            str(candidate)
+            for candidate in sorted(Path(path).rglob("*.pt"))
+            if candidate.is_file()
         ]
     else:
         if not os.path.isfile(path):
