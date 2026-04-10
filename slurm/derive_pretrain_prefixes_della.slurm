@@ -1,13 +1,13 @@
 #!/bin/bash
 # Usage:
 # sbatch \
-#   --export=ALL,PROJECT_DIR=/home/ysagiv/chess/CTS/uncertainty,INPUT_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_uncertainty/train_manifest.txt,OUTPUT_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_prefixes_uncertainty/train,START_INDEX=0,END_INDEX=500 \
+#   --export=ALL,PROJECT_DIR=/home/ysagiv/chess/CTS/uncertainty,INPUT_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/voc_teacher_trees_96_10x,OUTPUT_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_prefixes_uncertainty/train \
 #   slurm/derive_pretrain_prefixes_della.slurm
 
 #SBATCH --job-name=cts-prefix
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=04:00:00
 
@@ -31,6 +31,7 @@ C_PUCT="${C_PUCT:-1.0}"
 MAX_DEPTH="${MAX_DEPTH:-10}"
 SEED="${SEED:-0}"
 LOG_INTERVAL="${LOG_INTERVAL:-25}"
+NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
 RESUME_FLAG="${RESUME_FLAG:-1}"
 
 mkdir -p "${PROJECT_DIR}/logs"
@@ -57,6 +58,7 @@ echo "search_budget=${SEARCH_BUDGET}"
 echo "c_puct=${C_PUCT}"
 echo "max_depth=${MAX_DEPTH}"
 echo "seed=${SEED}"
+echo "num_workers=${NUM_WORKERS}"
 echo "hostname=$(hostname)"
 date
 
@@ -71,6 +73,7 @@ ARGS=(
   --seed "${SEED}"
   --start-index "${START_INDEX}"
   --log-interval "${LOG_INTERVAL}"
+  --num-workers "${NUM_WORKERS}"
 )
 
 if [[ -n "${END_INDEX:-}" ]]; then

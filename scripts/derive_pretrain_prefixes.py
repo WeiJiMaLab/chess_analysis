@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import random
 import sys
 import time
@@ -38,6 +39,20 @@ def _existing_output_for_index(output_dir: Path, index: int) -> Path | None:
     return matches[0]
 
 
+def _derive_prefix_task(task: tuple[str, int, TeacherSearchConfig, int, int, int]) -> PretrainExample:
+    path_str, global_index, config, min_nodes, max_nodes, base_seed = task
+    example = torch.load(path_str, weights_only=False)
+    _validate_tree_encoder_example_features(example, context=str(path_str))
+    example_rng = random.Random(f"{base_seed}:{global_index}")
+    return derive_prefix_pretrain_example(
+        example,
+        config=config,
+        min_nodes=min_nodes,
+        max_nodes=max_nodes,
+        rng=example_rng,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Derive variable-size root-prefix pretrain examples from existing raw trees."
@@ -53,6 +68,7 @@ def main() -> None:
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--end-index", type=int)
     parser.add_argument("--log-interval", type=int, default=25)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
@@ -62,6 +78,8 @@ def main() -> None:
         raise ValueError("max_nodes must be >= min_nodes.")
     if args.log_interval <= 0:
         raise ValueError("log_interval must be positive.")
+    if args.num_workers < 0:
+        raise ValueError("num_workers must be non-negative.")
     if args.start_index < 0:
         raise ValueError("start_index must be non-negative.")
 
@@ -84,37 +102,62 @@ def main() -> None:
         target_normalization_version="v1",
         search_config_id="prefix_pretrain_v1",
     )
-    rng = random.Random(args.seed)
-
     start_time = time.time()
     saved = 0
     skipped = 0
+    work_items: list[tuple[str, int, str] | tuple[str, int, tuple[str, int, TeacherSearchConfig, int, int, int]]] = []
+    process_tasks: list[tuple[str, int, TeacherSearchConfig, int, int, int]] = []
     for offset, path_str in enumerate(selected_paths):
         global_index = args.start_index + offset
-        existing_output = _existing_output_for_index(output_dir, global_index)
-        if args.resume and existing_output is not None:
-            skipped += 1
-        else:
-            example = torch.load(path_str, weights_only=False)
-            _validate_tree_encoder_example_features(example, context=str(path_str))
-            prefix_example = derive_prefix_pretrain_example(
-                example,
-                config=config,
-                min_nodes=args.min_nodes,
-                max_nodes=args.max_nodes,
-                rng=rng,
-            )
-            save_pretrain_example_to_directory(str(output_dir), prefix_example, global_index)
-            saved += 1
+        if args.resume and _existing_output_for_index(output_dir, global_index) is not None:
+            work_items.append(("skip", global_index, path_str))
+            continue
+        task = (path_str, global_index, config, args.min_nodes, args.max_nodes, args.seed)
+        work_items.append(("process", global_index, task))
+        process_tasks.append(task)
 
-        completed = offset + 1
-        if completed % args.log_interval == 0 or completed == len(selected_paths):
-            elapsed = time.time() - start_time
-            print(
-                f"progress={completed}/{len(selected_paths)} saved={saved} skipped={skipped} "
-                f"elapsed_s={elapsed:.1f} base_examples_per_s={completed / max(elapsed, 1e-6):.2f}",
-                flush=True,
-            )
+    if args.num_workers <= 1:
+        result_iter = iter(map(_derive_prefix_task, process_tasks))
+        for offset, work_item in enumerate(work_items):
+            mode = work_item[0]
+            global_index = work_item[1]
+            if mode == "skip":
+                skipped += 1
+            else:
+                prefix_example = next(result_iter)
+                save_pretrain_example_to_directory(str(output_dir), prefix_example, global_index)
+                saved += 1
+
+            completed = offset + 1
+            if completed % args.log_interval == 0 or completed == len(selected_paths):
+                elapsed = time.time() - start_time
+                print(
+                    f"progress={completed}/{len(selected_paths)} saved={saved} skipped={skipped} "
+                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed / max(elapsed, 1e-6):.2f}",
+                    flush=True,
+                )
+        return
+
+    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+        result_iter = iter(executor.map(_derive_prefix_task, process_tasks))
+        for offset, work_item in enumerate(work_items):
+            mode = work_item[0]
+            global_index = work_item[1]
+            if mode == "skip":
+                skipped += 1
+            else:
+                prefix_example = next(result_iter)
+                save_pretrain_example_to_directory(str(output_dir), prefix_example, global_index)
+                saved += 1
+
+            completed = offset + 1
+            if completed % args.log_interval == 0 or completed == len(selected_paths):
+                elapsed = time.time() - start_time
+                print(
+                    f"progress={completed}/{len(selected_paths)} saved={saved} skipped={skipped} "
+                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed / max(elapsed, 1e-6):.2f}",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

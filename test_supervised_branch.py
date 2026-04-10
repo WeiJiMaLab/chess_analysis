@@ -3,9 +3,12 @@ import json
 import math
 import os
 import random
+import subprocess
+import sys
 import tempfile
 import unittest
 from collections import Counter
+from pathlib import Path
 from unittest.mock import patch
 
 import torch
@@ -337,6 +340,53 @@ class SupervisedBranchTests(unittest.TestCase):
             recomputed_target = recomputed.edge_target_wdls[edge_key]
             for actual, expected in zip(target, recomputed_target):
                 self.assertAlmostEqual(actual, expected)
+
+    def test_derive_pretrain_prefixes_script_supports_multiprocessing(self):
+        repo_root = Path(__file__).resolve().parent
+        script_path = repo_root / "scripts" / "derive_pretrain_prefixes.py"
+        examples = [
+            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+        ]
+
+        with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
+            for index, example in enumerate(examples):
+                torch.save(example, os.path.join(input_dir, f"{index:06d}.pt"))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--input-data",
+                    input_dir,
+                    "--output-dir",
+                    output_dir,
+                    "--min-nodes",
+                    "3",
+                    "--max-nodes",
+                    "5",
+                    "--search-budget",
+                    "8",
+                    "--c-puct",
+                    "1.0",
+                    "--max-depth",
+                    "2",
+                    "--seed",
+                    "0",
+                    "--log-interval",
+                    "1",
+                    "--num-workers",
+                    "2",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("base_examples_per_s=", result.stdout)
+            output_paths = sorted(Path(output_dir).glob("*.pt"))
+            self.assertEqual(len(output_paths), 2)
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
