@@ -765,3 +765,29 @@ Outcome:
 Conclusion:
 - The branch is back to a semantically aligned child-WDL pretraining pipeline.
 - The remaining work is operational: regenerate raw examples so they actually carry the corrected `edge_wdl_targets`, then rerun any packing/training on top of those regenerated examples.
+
+## 2026-04-10
+
+Intent:
+- Reuse the existing fixed-size WDL trees by deriving variable-size root prefixes instead of recollecting fresh raw trees from lc0.
+
+Meaningful change:
+- Added prefix-derivation helpers in `cts_pretrain.py`:
+  - `prefix_node_count_schedule(...)`
+  - `sample_prefix_expansion_count_for_node_budget(...)`
+  - `derive_prefix_pretrain_example(...)`
+- Added `scripts/derive_pretrain_prefixes.py`:
+  - reads existing raw pretrain examples
+  - samples one root prefix per source example with actual node count in `[min_nodes, max_nodes]`
+  - recomputes consolidated scalar and edge-WDL targets on the prefix
+  - saves new raw `PretrainExample`s with throughput logging
+
+Outcome:
+- Validation:
+  - `/opt/miniconda3/envs/trm/bin/python -m pytest test_supervised_branch.py -q`
+  - `/opt/miniconda3/envs/trm/bin/python scripts/derive_pretrain_prefixes.py --help`
+  - `/opt/miniconda3/envs/trm/bin/python -m pytest -q`
+- Final result: `93 passed`
+
+Conclusion:
+- We can now build a variable-size raw dataset from the existing 96-node WDL trees without new engine calls.

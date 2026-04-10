@@ -46,10 +46,12 @@ from supervised_branch import (
     build_tree_from_provider,
     consolidate_generated_tree,
     compute_teacher_targets,
+    derive_prefix_pretrain_example,
     evaluate_controller,
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
     normalize_prior_scores,
+    prefix_node_count_schedule,
     _backup_target_from_child_q,
 )
 from tensorizer import TreeTensorizer, tensorize_tree_with_targets
@@ -302,6 +304,39 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(example.metadata["search_config_id"], self.config.search_config_id)
         self.assertEqual(example.metadata["provider_metadata"]["provider"], "dummy")
         self.assertEqual(example.metadata["edge_wdl_target_generation_version"], "search_consolidated_edge_wdl_v1")
+
+    def test_prefix_node_count_schedule_tracks_root_prefix_sizes(self):
+        tree = build_tree_from_provider("root", self.provider, self.config)
+        counts = prefix_node_count_schedule(tree)
+
+        self.assertEqual(counts[0], 1)
+        self.assertEqual(counts[-1], tree.num_nodes())
+        self.assertTrue(all(left < right for left, right in zip(counts, counts[1:])))
+
+    def test_derive_prefix_pretrain_example_uses_root_prefix_and_recomputes_targets(self):
+        source_example = build_pretrain_example("root", self.provider, self.config, root_position_id="p0")
+        prefix_example = derive_prefix_pretrain_example(
+            source_example,
+            config=self.config,
+            min_nodes=3,
+            max_nodes=5,
+            rng=random.Random(0),
+        )
+
+        self.assertGreaterEqual(prefix_example.tree.num_nodes(), 3)
+        self.assertLessEqual(prefix_example.tree.num_nodes(), 5)
+        self.assertEqual(prefix_example.tree.root_id, 0)
+        self.assertEqual(prefix_example.metadata["source_root_position_id"], "p0")
+        self.assertEqual(prefix_example.metadata["prefix_node_count"], prefix_example.tree.num_nodes())
+        self.assertEqual(len(prefix_example.edge_wdl_targets), prefix_example.tree.num_edges())
+
+        recomputed = compute_teacher_targets(prefix_example.tree, self.config)
+        self.assertEqual(prefix_example.node_target_values, recomputed.node_target_values)
+        self.assertEqual(set(prefix_example.edge_wdl_targets), set(recomputed.edge_target_wdls))
+        for edge_key, target in prefix_example.edge_wdl_targets.items():
+            recomputed_target = recomputed.edge_target_wdls[edge_key]
+            for actual, expected in zip(target, recomputed_target):
+                self.assertAlmostEqual(actual, expected)
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
