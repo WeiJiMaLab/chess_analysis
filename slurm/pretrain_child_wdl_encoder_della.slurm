@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
 DEFAULT_PACKED_ROOT="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_uncertainty"
 DEFAULT_SPLIT_ROOT="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_uncertainty"
 if [[ -z "${TRAIN_DIR:-}" ]]; then
