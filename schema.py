@@ -77,5 +77,5 @@ def require_tree_encoder_scalar_features(scalar_features: Mapping[str, float], *
     if missing:
         raise ValueError(
             f"{context} is missing required tree encoder features {missing}. "
-            "Regenerate the raw teacher trees with WDL valuehead features before tensorization or pretraining."
+            "Regenerate the teacher trees with WDL valuehead features before VOC preprocessing."
         )
