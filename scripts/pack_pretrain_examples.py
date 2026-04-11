@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import sys
 import time
@@ -84,9 +84,13 @@ def _load_tensorized_examples(
                 )
         return results
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        results = []
-        for completed_in_shard, tensorized in enumerate(executor.map(_tensorize_example_path, tasks), start=1):
-            results.append(tensorized)
+        futures = {
+            executor.submit(_tensorize_example_path, task): index
+            for index, task in enumerate(tasks)
+        }
+        results = [None] * len(tasks)
+        for completed_in_shard, future in enumerate(as_completed(futures), start=1):
+            results[futures[future]] = future.result()
             if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
                 elapsed = time.time() - start_time
                 completed_total = total_examples_before_shard + completed_in_shard
