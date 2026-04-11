@@ -58,12 +58,46 @@ def _load_tensorized_examples(
     shard_paths: list[Path],
     schema: NodeFeatureSchema,
     num_workers: int,
+    *,
+    split_name: str,
+    shard_index: int,
+    total_shards: int,
+    total_examples_before_shard: int,
+    total_examples_in_split: int,
+    start_time: float,
+    log_interval: int,
 ) -> list[object]:
     tasks = [(str(path), tuple(schema.feature_names)) for path in shard_paths]
     if num_workers <= 1:
-        return [_tensorize_example_path(task) for task in tasks]
+        results = []
+        for completed_in_shard, task in enumerate(tasks, start=1):
+            results.append(_tensorize_example_path(task))
+            if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
+                elapsed = time.time() - start_time
+                completed_total = total_examples_before_shard + completed_in_shard
+                print(
+                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                    f"shard_examples={completed_in_shard}/{len(tasks)} "
+                    f"packed_examples={completed_total}/{total_examples_in_split} "
+                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
+                    flush=True,
+                )
+        return results
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        return list(executor.map(_tensorize_example_path, tasks))
+        results = []
+        for completed_in_shard, tensorized in enumerate(executor.map(_tensorize_example_path, tasks), start=1):
+            results.append(tensorized)
+            if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
+                elapsed = time.time() - start_time
+                completed_total = total_examples_before_shard + completed_in_shard
+                print(
+                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                    f"shard_examples={completed_in_shard}/{len(tasks)} "
+                    f"packed_examples={completed_total}/{total_examples_in_split} "
+                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
+                    flush=True,
+                )
+        return results
 
 
 def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_workers: int, log_interval: int) -> tuple[Path, int]:
@@ -80,7 +114,18 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
-        tensorized_examples = _load_tensorized_examples(shard_paths, schema, num_workers)
+        tensorized_examples = _load_tensorized_examples(
+            shard_paths,
+            schema,
+            num_workers,
+            split_name=split_name,
+            shard_index=shard_index,
+            total_shards=total_shards,
+            total_examples_before_shard=total_examples,
+            total_examples_in_split=len(example_paths),
+            start_time=start_time,
+            log_interval=log_interval,
+        )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         node_ptr = [0]
         edge_ptr = [0]
@@ -136,14 +181,6 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
             }
         )
         total_examples += len(tensorized_examples)
-        elapsed = time.time() - start_time
-        if (shard_index + 1) % log_interval == 0 or shard_index + 1 == total_shards:
-            print(
-                f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                f"packed_examples={total_examples}/{len(example_paths)} "
-                f"elapsed_s={elapsed:.1f} base_examples_per_s={total_examples / max(elapsed, 1e-6):.2f}",
-                flush=True,
-            )
 
     packed_manifest_path = output_root / f"{split_name}_manifest.json"
     with packed_manifest_path.open("w", encoding="utf-8") as handle:
