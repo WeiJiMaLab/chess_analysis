@@ -426,6 +426,52 @@ class SupervisedBranchTests(unittest.TestCase):
             output_paths = sorted(Path(output_dir).glob("*.pt"))
             self.assertEqual(len(output_paths), 2)
 
+    def test_pack_pretrain_examples_script_supports_multiprocessing(self):
+        repo_root = Path(__file__).resolve().parent
+        script_path = repo_root / "scripts" / "pack_pretrain_examples.py"
+        examples = [
+            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+        ]
+
+        with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as split_root, tempfile.TemporaryDirectory() as output_root:
+            raw_paths = []
+            for index, example in enumerate(examples):
+                raw_path = os.path.join(raw_dir, f"{index:06d}.pt")
+                torch.save(example, raw_path)
+                raw_paths.append(raw_path)
+
+            train_manifest = Path(split_root) / "train_manifest.txt"
+            validation_manifest = Path(split_root) / "validation_manifest.txt"
+            train_manifest.write_text(f"{raw_paths[0]}\n", encoding="utf-8")
+            validation_manifest.write_text(f"{raw_paths[1]}\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--split-root",
+                    split_root,
+                    "--output-root",
+                    output_root,
+                    "--shard-size",
+                    "1",
+                    "--num-workers",
+                    "2",
+                    "--log-interval",
+                    "1",
+                    "--clear",
+                ],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("base_examples_per_s=", result.stdout)
+            self.assertTrue((Path(output_root) / "train_manifest.json").exists())
+            self.assertTrue((Path(output_root) / "validation_manifest.json").exists())
+
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
             build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
