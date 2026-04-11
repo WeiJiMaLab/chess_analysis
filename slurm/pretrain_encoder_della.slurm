@@ -62,6 +62,12 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate CTS
 set -u
 
+# OpenMP/BLAS: one thread per process avoids oversubscription (main + NUM_WORKERS dataloader
+# processes each on the same SLURM allocation) and fork+OpenMP deadlocks. This is unrelated to
+# --cpus-per-task; those cores are for parallel worker processes, not multiplying threads inside each.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+
 cd "${PROJECT_DIR}"
 
 echo "project_dir=${PROJECT_DIR}"
@@ -70,6 +76,7 @@ echo "validation_dir=${VALIDATION_DIR}"
 echo "output_checkpoint=${OUTPUT_CHECKPOINT}"
 echo "device=${DEVICE}"
 echo "num_workers=${NUM_WORKERS}"
+echo "OMP_NUM_THREADS=${OMP_NUM_THREADS}"
 echo "hostname=$(hostname)"
 nvidia-smi -L || true
 date

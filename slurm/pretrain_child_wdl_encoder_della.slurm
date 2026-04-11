@@ -12,7 +12,16 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
-DEFAULT_PACKED_ROOT="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_uncertainty_prefixes"
+# Prefer the OMP-fixed parallel pack; fall back if only the non-parallel directory exists.
+_PACKED_PARALLEL="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_uncertainty_prefixes_parallel"
+_PACKED_FALLBACK="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_uncertainty_prefixes"
+if [[ -f "${_PACKED_PARALLEL}/train_manifest.json" ]]; then
+  DEFAULT_PACKED_ROOT="${_PACKED_PARALLEL}"
+elif [[ -f "${_PACKED_FALLBACK}/train_manifest.json" ]]; then
+  DEFAULT_PACKED_ROOT="${_PACKED_FALLBACK}"
+else
+  DEFAULT_PACKED_ROOT="${_PACKED_PARALLEL}"
+fi
 DEFAULT_SPLIT_ROOT="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_uncertainty_prefixes"
 if [[ -z "${TRAIN_DIR:-}" ]]; then
   if [[ -f "${DEFAULT_PACKED_ROOT}/train_manifest.json" ]]; then
@@ -39,7 +48,9 @@ N_HEADS="${N_HEADS:-4}"
 D_ATT="${D_ATT:-32}"
 DECODER_HIDDEN="${DECODER_HIDDEN:-128}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
-NUM_WORKERS="${NUM_WORKERS:-0}"
+# DataLoader workers: overlap CPU load/pin_memory with GPU; safe with OMP_NUM_THREADS=1 (avoids
+# fork+OpenMP deadlocks). Packing used ProcessPoolExecutor + high OMP — different code path.
+NUM_WORKERS="${NUM_WORKERS:-4}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 LEARNING_RATE="${LEARNING_RATE:-1e-3}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
@@ -51,7 +62,7 @@ mkdir -p "${PROJECT_DIR}/logs"
 mkdir -p "$(dirname "${OUTPUT_CHECKPOINT}")"
 
 set +u
-module purge
+module --force purge >/dev/null 2>&1 || true
 module load anaconda3/2023.3
 module load cudatoolkit/12.8
 export CUDA_HOME=/usr/local/cuda-12.8
@@ -63,6 +74,8 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate CTS
 set -u
 
+# OpenMP/BLAS: one thread per process avoids oversubscription (main + NUM_WORKERS workers on the
+# same SLURM allocation) and fork+OpenMP issues inside DataLoader workers.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
