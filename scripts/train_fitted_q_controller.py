@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 import time
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -251,6 +253,238 @@ class FittedQCollator:
             oracle_stop_steps=oracle_stop_steps,
             oracle_values=oracle_values,
             skipped=len(episodes) - len(valid),
+        )
+
+
+@dataclass(frozen=True)
+class PackedControllerEpisode:
+    """A single episode extracted from a packed shard, ready for collation."""
+    path: str
+    step_node_features: List[torch.Tensor]
+    step_parent_index: List[torch.Tensor]
+    step_edge_parent: List[torch.Tensor]
+    step_edge_child: List[torch.Tensor]
+    step_edge_slot: List[torch.Tensor]
+    step_depth: List[torch.Tensor]
+    halt_rewards: List[float]
+    q_targets: torch.Tensor
+    oracle_stop_step: int
+    oracle_value: float
+
+
+class PackedControllerEpisodeDataset(Dataset):
+    """Loads pre-packed controller episode shards and serves individual episodes."""
+
+    def __init__(self, manifest_path: str) -> None:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+
+        entries = manifest.get("entries", [])
+        if not entries:
+            raise ValueError(f"No packed shard entries in manifest: {manifest_path}")
+
+        self.shard_paths: List[str] = []
+        self.cumulative_sizes: List[int] = []
+        total = 0
+        for entry in entries:
+            num_episodes = int(entry["num_episodes"])
+            if num_episodes <= 0:
+                continue
+            total += num_episodes
+            self.shard_paths.append(entry["path"])
+            self.cumulative_sizes.append(total)
+
+        if not self.shard_paths:
+            raise ValueError(f"All shards empty in manifest: {manifest_path}")
+
+        self._loaded_shard_index: Optional[int] = None
+        self._loaded_payload: Optional[Dict[str, Any]] = None
+
+    def __len__(self) -> int:
+        return self.cumulative_sizes[-1]
+
+    def _load_shard(self, shard_index: int) -> Dict[str, Any]:
+        if self._loaded_shard_index != shard_index:
+            payload = torch.load(self.shard_paths[shard_index], weights_only=False)
+            if not isinstance(payload, dict) or payload.get("format") != "cts_controller_episode_shard_v1":
+                raise ValueError(f"Unexpected shard format: {self.shard_paths[shard_index]}")
+            self._loaded_shard_index = shard_index
+            self._loaded_payload = payload
+        assert self._loaded_payload is not None
+        return self._loaded_payload
+
+    def __getitem__(self, index: int) -> PackedControllerEpisode:
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+
+        shard_index = bisect_right(self.cumulative_sizes, index)
+        shard_start = 0 if shard_index == 0 else self.cumulative_sizes[shard_index - 1]
+        episode_offset = index - shard_start
+
+        payload = self._load_shard(shard_index)
+
+        episode_step_ptr = payload["episode_step_ptr"]
+        step_begin = int(episode_step_ptr[episode_offset].item())
+        step_end = int(episode_step_ptr[episode_offset + 1].item())
+        num_steps = step_end - step_begin
+
+        step_node_ptr = payload["step_node_ptr"]
+        step_edge_ptr = payload["step_edge_ptr"]
+        feature_names = tuple(payload["feature_names"])
+
+        step_nf = []
+        step_pi = []
+        step_ep = []
+        step_ec = []
+        step_es = []
+        step_d = []
+
+        for s in range(step_begin, step_end):
+            n_start = int(step_node_ptr[s].item())
+            n_end = int(step_node_ptr[s + 1].item())
+            e_start = int(step_edge_ptr[s].item())
+            e_end = int(step_edge_ptr[s + 1].item())
+
+            step_nf.append(payload["node_features"][n_start:n_end])
+            step_pi.append(payload["parent_index"][n_start:n_end])
+            step_d.append(payload["depth"][n_start:n_end])
+            step_ep.append(payload["edge_parent"][e_start:e_end])
+            step_ec.append(payload["edge_child"][e_start:e_end])
+            step_es.append(payload["edge_slot"][e_start:e_end])
+
+        halt_start = int(episode_step_ptr[episode_offset].item())
+        halt_end = int(episode_step_ptr[episode_offset + 1].item())
+        halt_rewards_tensor = payload["halt_rewards"][halt_start:halt_end]
+        q_targets = payload["q_targets"][halt_start:halt_end]
+
+        return PackedControllerEpisode(
+            path=payload["source_paths"][episode_offset],
+            step_node_features=step_nf,
+            step_parent_index=step_pi,
+            step_edge_parent=step_ep,
+            step_edge_child=step_ec,
+            step_edge_slot=step_es,
+            step_depth=step_d,
+            halt_rewards=halt_rewards_tensor.tolist(),
+            q_targets=q_targets,
+            oracle_stop_step=int(payload["oracle_stop_steps"][episode_offset].item()),
+            oracle_value=float(payload["oracle_values"][episode_offset].item()),
+        )
+
+
+class PackedControllerCollator:
+    """Collates PackedControllerEpisode objects into FittedQBatch."""
+
+    def __call__(self, episodes: Sequence[PackedControllerEpisode]) -> FittedQBatch | None:
+        if not episodes:
+            return None
+
+        all_node_features = []
+        all_parent_index = []
+        all_edge_parent = []
+        all_edge_child = []
+        all_edge_slot = []
+        all_depth = []
+        all_tree_index = []
+        root_index = []
+        child_ptr_parts = []
+
+        q_targets_list = []
+        paths = []
+        path_lengths = []
+        halt_rewards = []
+        oracle_stop_steps = []
+        oracle_values = []
+
+        node_offset = 0
+        tree_idx = 0
+
+        for episode in episodes:
+            for step_nf, step_pi, step_ep, step_ec, step_es, step_d in zip(
+                episode.step_node_features,
+                episode.step_parent_index,
+                episode.step_edge_parent,
+                episode.step_edge_child,
+                episode.step_edge_slot,
+                episode.step_depth,
+            ):
+                num_nodes = step_nf.shape[0]
+
+                all_node_features.append(step_nf)
+                all_depth.append(step_d)
+                all_tree_index.append(torch.full((num_nodes,), tree_idx, dtype=torch.long))
+
+                root_index.append(node_offset)
+
+                pi = step_pi.clone()
+                has_parent = pi >= 0
+                pi[has_parent] += node_offset
+                all_parent_index.append(pi)
+
+                if step_ep.numel() > 0:
+                    all_edge_parent.append(step_ep + node_offset)
+                    all_edge_child.append(step_ec + node_offset)
+                    all_edge_slot.append(step_es)
+
+                node_offset += num_nodes
+                tree_idx += 1
+
+            q_targets_list.append(episode.q_targets)
+            paths.append(episode.path)
+            path_lengths.append(len(episode.step_node_features))
+            halt_rewards.append(episode.halt_rewards)
+            oracle_stop_steps.append(episode.oracle_stop_step)
+            oracle_values.append(episode.oracle_value)
+
+        node_features = torch.cat(all_node_features, dim=0)
+        parent_index = torch.cat(all_parent_index, dim=0)
+        depth = torch.cat(all_depth, dim=0)
+        tree_index = torch.cat(all_tree_index, dim=0)
+        root_index_tensor = torch.tensor(root_index, dtype=torch.long)
+
+        if all_edge_parent:
+            edge_parent = torch.cat(all_edge_parent, dim=0)
+            edge_child = torch.cat(all_edge_child, dim=0)
+            edge_slot = torch.cat(all_edge_slot, dim=0)
+            children_index = edge_child
+            child_counts = torch.bincount(edge_parent, minlength=node_features.shape[0])
+            child_ptr = torch.zeros(node_features.shape[0] + 1, dtype=torch.long)
+            child_ptr[1:] = torch.cumsum(child_counts, dim=0)
+        else:
+            edge_parent = torch.empty(0, dtype=torch.long)
+            edge_child = torch.empty(0, dtype=torch.long)
+            edge_slot = torch.empty(0, dtype=torch.long)
+            children_index = torch.empty(0, dtype=torch.long)
+            child_ptr = torch.zeros(node_features.shape[0] + 1, dtype=torch.long)
+
+        tree_batch = TreeBatch(
+            node_features=node_features,
+            tree_index=tree_index,
+            parent_index=parent_index,
+            root_index=root_index_tensor,
+            edge_parent=edge_parent,
+            edge_child=edge_child,
+            edge_slot=edge_slot,
+            child_ptr=child_ptr,
+            children_index=children_index,
+            depth=depth,
+            feature_names=("packed",),
+            batch_size=tree_idx,
+            num_nodes=int(node_features.shape[0]),
+            num_edges=int(edge_parent.shape[0]),
+        )
+
+        return FittedQBatch(
+            tree_batch=tree_batch,
+            q_targets=torch.cat(q_targets_list, dim=0),
+            paths=paths,
+            path_lengths=path_lengths,
+            halt_rewards=halt_rewards,
+            oracle_stop_steps=oracle_stop_steps,
+            oracle_values=oracle_values,
+            skipped=0,
         )
 
 
@@ -870,14 +1104,44 @@ def _linear_advantage_summary(model: LinearComputeAdvantageModel) -> tuple[List[
     return [float(item) for item in weight], bias
 
 
+def _build_packed_loader(
+    manifest_path: str,
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+    num_workers: int,
+) -> DataLoader:
+    dataset = PackedControllerEpisodeDataset(manifest_path)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=PackedControllerCollator(),
+        generator=generator if shuffle else None,
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Train an offline counterfactual compute-advantage controller on generated tree snapshot trajectories."
         )
     )
-    parser.add_argument("--train-data", required=True)
-    parser.add_argument("--validation-data", required=True)
+    parser.add_argument("--train-data", default=None)
+    parser.add_argument("--validation-data", default=None)
+    parser.add_argument(
+        "--packed-train-data",
+        default=None,
+        help="Path to packed controller episode manifest JSON (train). Mutually exclusive with --train-data.",
+    )
+    parser.add_argument(
+        "--packed-validation-data",
+        default=None,
+        help="Path to packed controller episode manifest JSON (validation). Mutually exclusive with --validation-data.",
+    )
     parser.add_argument("--encoder-checkpoint")
     parser.add_argument("--output-checkpoint")
     parser.add_argument("--representation", choices=["tree", "oracle-action-now"], default="tree")
@@ -919,28 +1183,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+
+    use_packed = args.packed_train_data is not None or args.packed_validation_data is not None
+    if use_packed:
+        if args.packed_train_data is None or args.packed_validation_data is None:
+            raise ValueError("--packed-train-data and --packed-validation-data must both be provided.")
+        if args.train_data is not None or args.validation_data is not None:
+            raise ValueError("Cannot specify both --train-data/--validation-data and --packed-*-data.")
+    else:
+        if args.train_data is None or args.validation_data is None:
+            raise ValueError("Either --train-data/--validation-data or --packed-train-data/--packed-validation-data required.")
+
     if args.representation == "tree" and not args.encoder_checkpoint:
         raise ValueError("--encoder-checkpoint is required when --representation tree.")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    print("[compute_advantage] stage=load_paths", flush=True)
-    train_paths = _sample_paths(load_raw_pretrain_example_paths(args.train_data), args.max_train_examples, args.seed)
-    validation_paths = _sample_paths(
-        load_raw_pretrain_example_paths(args.validation_data),
-        args.max_validation_examples,
-        args.seed + 1,
-    )
-    print(
-        f"[compute_advantage] representation={args.representation} "
-        f"train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
-        flush=True,
-    )
-
-    schema = _feature_schema() if args.representation == "tree" else _oracle_action_now_schema()
-    tensorizer = TreeTensorizer(schema, device="cpu")
-    quality_config = _quality_config(args)
     device = torch.device(args.device)
+    schema = _feature_schema() if args.representation == "tree" else _oracle_action_now_schema()
+    quality_config = _quality_config(args)
+    validation_paths: List[str] | None = None
+    tensorizer: TreeTensorizer | None = None
 
     print("[compute_advantage] stage=build_model", flush=True)
     if args.representation == "tree":
@@ -969,124 +1232,204 @@ def main() -> None:
 
     train_episodes: List[OracleActionNowEpisode] | List[MaterializedAdvantageEpisode] | None = None
     validation_episodes: List[OracleActionNowEpisode] | List[MaterializedAdvantageEpisode] | None = None
-    if args.representation == "oracle-action-now":
-        print("[compute_advantage] stage=materialize_train", flush=True)
-        train_episodes = _load_oracle_action_now_episodes(
-            train_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.min_decision_margin,
-            args.log_interval,
+
+    if use_packed:
+        assert args.packed_train_data is not None and args.packed_validation_data is not None
+        print(
+            f"[compute_advantage] stage=load_packed_data "
+            f"train={args.packed_train_data} validation={args.packed_validation_data}",
+            flush=True,
         )
-        print("[compute_advantage] stage=materialize_validation", flush=True)
-        validation_episodes = _load_oracle_action_now_episodes(
-            validation_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.min_decision_margin,
-            args.log_interval,
-        )
-        train_loader = _build_tensor_loader(
-            _oracle_action_now_tensor_dataset(train_episodes),
-            batch_size=args.batch_size,
-            shuffle=True,
-            seed=args.seed,
-            device=device,
-        )
-        validation_loader = _build_tensor_loader(
-            _oracle_action_now_tensor_dataset(validation_episodes),
-            batch_size=args.batch_size,
-            shuffle=False,
-            seed=args.seed,
-            device=device,
-        )
-    elif not args.unfreeze_encoder:
-        raw_train_loader = _build_loader(
-            train_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.representation,
-            args.min_decision_margin,
-            tensorizer,
+        raw_train_loader = _build_packed_loader(
+            args.packed_train_data,
             batch_size=args.episode_batch_size,
             shuffle=True,
             seed=args.seed,
             num_workers=args.num_workers,
         )
-        raw_validation_loader = _build_loader(
-            validation_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.representation,
-            args.min_decision_margin,
-            tensorizer,
+        raw_validation_loader = _build_packed_loader(
+            args.packed_validation_data,
             batch_size=args.episode_batch_size,
             shuffle=False,
             seed=args.seed,
             num_workers=args.num_workers,
         )
-        assert isinstance(model, ComputeAdvantageTreeSearchModel)
-        print("[compute_advantage] stage=materialize_train_encoder", flush=True)
-        train_episodes = _materialize_tree_encoder_episodes(
-            model,
-            raw_train_loader,
-            device=device,
-            log_interval=args.log_interval,
-            split_name="train",
+        print(
+            f"[compute_advantage] packed_train_episodes={len(raw_train_loader.dataset)} "
+            f"packed_validation_episodes={len(raw_validation_loader.dataset)}",
+            flush=True,
         )
-        print("[compute_advantage] stage=materialize_validation_encoder", flush=True)
-        validation_episodes = _materialize_tree_encoder_episodes(
-            model,
-            raw_validation_loader,
-            device=device,
-            log_interval=args.log_interval,
-            split_name="validation",
-        )
-        train_loader = _build_tensor_loader(
-            _materialized_tensor_dataset(train_episodes),
-            batch_size=args.batch_size,
-            shuffle=True,
-            seed=args.seed,
-            device=device,
-        )
-        validation_loader = _build_tensor_loader(
-            _materialized_tensor_dataset(validation_episodes),
-            batch_size=args.batch_size,
-            shuffle=False,
-            seed=args.seed,
-            device=device,
-        )
+
+        if not args.unfreeze_encoder and isinstance(model, ComputeAdvantageTreeSearchModel):
+            print("[compute_advantage] stage=materialize_train_encoder (packed)", flush=True)
+            train_episodes = _materialize_tree_encoder_episodes(
+                model,
+                raw_train_loader,
+                device=device,
+                log_interval=args.log_interval,
+                split_name="train",
+            )
+            print("[compute_advantage] stage=materialize_validation_encoder (packed)", flush=True)
+            validation_episodes = _materialize_tree_encoder_episodes(
+                model,
+                raw_validation_loader,
+                device=device,
+                log_interval=args.log_interval,
+                split_name="validation",
+            )
+            train_loader = _build_tensor_loader(
+                _materialized_tensor_dataset(train_episodes),
+                batch_size=args.batch_size,
+                shuffle=True,
+                seed=args.seed,
+                device=device,
+            )
+            validation_loader = _build_tensor_loader(
+                _materialized_tensor_dataset(validation_episodes),
+                batch_size=args.batch_size,
+                shuffle=False,
+                seed=args.seed,
+                device=device,
+            )
+        else:
+            train_loader = raw_train_loader
+            validation_loader = raw_validation_loader
+
     else:
-        train_loader = _build_loader(
-            train_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.representation,
-            args.min_decision_margin,
-            tensorizer,
-            batch_size=args.episode_batch_size,
-            shuffle=True,
-            seed=args.seed,
-            num_workers=args.num_workers,
+        print("[compute_advantage] stage=load_paths", flush=True)
+        train_paths = _sample_paths(
+            load_raw_pretrain_example_paths(args.train_data), args.max_train_examples, args.seed,
         )
-        validation_loader = _build_loader(
-            validation_paths,
-            quality_config,
-            args.continue_cost,
-            args.reward_scale,
-            args.representation,
-            args.min_decision_margin,
-            tensorizer,
-            batch_size=args.episode_batch_size,
-            shuffle=False,
-            seed=args.seed,
-            num_workers=args.num_workers,
+        validation_paths = _sample_paths(
+            load_raw_pretrain_example_paths(args.validation_data),
+            args.max_validation_examples,
+            args.seed + 1,
         )
+        print(
+            f"[compute_advantage] representation={args.representation} "
+            f"train_examples={len(train_paths)} validation_examples={len(validation_paths)}",
+            flush=True,
+        )
+        tensorizer = TreeTensorizer(schema, device="cpu")
+
+        if args.representation == "oracle-action-now":
+            print("[compute_advantage] stage=materialize_train", flush=True)
+            train_episodes = _load_oracle_action_now_episodes(
+                train_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.min_decision_margin,
+                args.log_interval,
+            )
+            print("[compute_advantage] stage=materialize_validation", flush=True)
+            validation_episodes = _load_oracle_action_now_episodes(
+                validation_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.min_decision_margin,
+                args.log_interval,
+            )
+            train_loader = _build_tensor_loader(
+                _oracle_action_now_tensor_dataset(train_episodes),
+                batch_size=args.batch_size,
+                shuffle=True,
+                seed=args.seed,
+                device=device,
+            )
+            validation_loader = _build_tensor_loader(
+                _oracle_action_now_tensor_dataset(validation_episodes),
+                batch_size=args.batch_size,
+                shuffle=False,
+                seed=args.seed,
+                device=device,
+            )
+        elif not args.unfreeze_encoder:
+            raw_train_loader = _build_loader(
+                train_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.representation,
+                args.min_decision_margin,
+                tensorizer,
+                batch_size=args.episode_batch_size,
+                shuffle=True,
+                seed=args.seed,
+                num_workers=args.num_workers,
+            )
+            raw_validation_loader = _build_loader(
+                validation_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.representation,
+                args.min_decision_margin,
+                tensorizer,
+                batch_size=args.episode_batch_size,
+                shuffle=False,
+                seed=args.seed,
+                num_workers=args.num_workers,
+            )
+            assert isinstance(model, ComputeAdvantageTreeSearchModel)
+            print("[compute_advantage] stage=materialize_train_encoder", flush=True)
+            train_episodes = _materialize_tree_encoder_episodes(
+                model,
+                raw_train_loader,
+                device=device,
+                log_interval=args.log_interval,
+                split_name="train",
+            )
+            print("[compute_advantage] stage=materialize_validation_encoder", flush=True)
+            validation_episodes = _materialize_tree_encoder_episodes(
+                model,
+                raw_validation_loader,
+                device=device,
+                log_interval=args.log_interval,
+                split_name="validation",
+            )
+            train_loader = _build_tensor_loader(
+                _materialized_tensor_dataset(train_episodes),
+                batch_size=args.batch_size,
+                shuffle=True,
+                seed=args.seed,
+                device=device,
+            )
+            validation_loader = _build_tensor_loader(
+                _materialized_tensor_dataset(validation_episodes),
+                batch_size=args.batch_size,
+                shuffle=False,
+                seed=args.seed,
+                device=device,
+            )
+        else:
+            train_loader = _build_loader(
+                train_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.representation,
+                args.min_decision_margin,
+                tensorizer,
+                batch_size=args.episode_batch_size,
+                shuffle=True,
+                seed=args.seed,
+                num_workers=args.num_workers,
+            )
+            validation_loader = _build_loader(
+                validation_paths,
+                quality_config,
+                args.continue_cost,
+                args.reward_scale,
+                args.representation,
+                args.min_decision_margin,
+                tensorizer,
+                batch_size=args.episode_batch_size,
+                shuffle=False,
+                seed=args.seed,
+                num_workers=args.num_workers,
+            )
 
     best_validation_advantage_mse = float("inf")
     best_metadata: dict | None = None
@@ -1154,8 +1497,8 @@ def main() -> None:
                     _save_checkpoint(args.output_checkpoint, model, best_metadata)
 
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
+            greedy_metrics: GreedyPolicyMetrics | None = None
             if validation_episodes is not None:
-                assert validation_episodes is not None
                 greedy_metrics = evaluate_materialized_greedy_policy(
                     model,
                     validation_episodes,
@@ -1163,7 +1506,7 @@ def main() -> None:
                     device=device,
                     log_interval=args.log_interval,
                 )
-            else:
+            elif validation_paths is not None and tensorizer is not None:
                 greedy_metrics = evaluate_greedy_policy(
                     model,
                     validation_paths,
@@ -1175,18 +1518,19 @@ def main() -> None:
                     tensorizer,
                     log_interval=args.log_interval,
                 )
-            print(
-                f"greedy_epoch={epoch}/{args.epochs} "
-                f"exact_stop_step_accuracy={greedy_metrics.exact_stop_step_accuracy:.3f} "
-                f"first_action_accuracy={greedy_metrics.first_action_accuracy:.3f} "
-                f"average_return={greedy_metrics.average_return:.3f} "
-                f"average_oracle_value={greedy_metrics.average_oracle_value:.3f} "
-                f"average_regret={greedy_metrics.average_regret:.3f} "
-                f"average_expansions={greedy_metrics.average_expansions:.3f} "
-                f"evaluated_episodes={greedy_metrics.evaluated_episodes} "
-                f"skipped_episodes={greedy_metrics.skipped_episodes}",
-                flush=True,
-            )
+            if greedy_metrics is not None:
+                print(
+                    f"greedy_epoch={epoch}/{args.epochs} "
+                    f"exact_stop_step_accuracy={greedy_metrics.exact_stop_step_accuracy:.3f} "
+                    f"first_action_accuracy={greedy_metrics.first_action_accuracy:.3f} "
+                    f"average_return={greedy_metrics.average_return:.3f} "
+                    f"average_oracle_value={greedy_metrics.average_oracle_value:.3f} "
+                    f"average_regret={greedy_metrics.average_regret:.3f} "
+                    f"average_expansions={greedy_metrics.average_expansions:.3f} "
+                    f"evaluated_episodes={greedy_metrics.evaluated_episodes} "
+                    f"skipped_episodes={greedy_metrics.skipped_episodes}",
+                    flush=True,
+                )
 
     if isinstance(model, LinearComputeAdvantageModel):
         weight, bias = _linear_advantage_summary(model)

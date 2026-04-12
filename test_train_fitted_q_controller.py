@@ -1,3 +1,6 @@
+import json
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +14,8 @@ from scripts.train_fitted_q_controller import (
     FittedQEpisodeDataset,
     LinearComputeAdvantageModel,
     OracleActionNowEpisode,
+    PackedControllerCollator,
+    PackedControllerEpisodeDataset,
     _advantage_loss_components,
     _oracle_action_now_schema,
     _oracle_action_now_tensor_dataset,
@@ -20,7 +25,7 @@ from scripts.train_fitted_q_controller import (
     bellman_q_targets,
 )
 from supervised_branch import TeacherSearchConfig
-from tensorizer import TreeTensorizer
+from tensorizer import TreeBatch, TreeTensorizer
 from tree import SearchTree
 
 
@@ -218,6 +223,106 @@ class TrainFittedQControllerTests(unittest.TestCase):
             model.advantage_head[-1].bias.fill_(1.0)
 
         self.assertEqual(_predict_stop_step(model, tensorizer, episode), 1)
+
+
+    def test_packed_controller_episode_round_trip(self):
+        """Build a shard from hand-crafted tree data and verify the dataset+collator recovers a valid TreeBatch."""
+        schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
+        tensorizer = TreeTensorizer(schema, device="cpu")
+
+        tree_a = SearchTree()
+        tree_a.create_root("r_a", {"value": 0.1, "prior": 1.0})
+        tree_b = SearchTree()
+        tree_b.create_root("r_b", {"value": 0.2, "prior": 1.0})
+        tree_c = SearchTree()
+        tree_c.create_root("r_c", {"value": 0.5, "prior": 1.0})
+
+        batch_a = tensorizer.tensorize_tree(tree_a, validate=False)
+        batch_b = tensorizer.tensorize_tree(tree_b, validate=False)
+        batch_c = tensorizer.tensorize_tree(tree_c, validate=False)
+
+        episode_step_ptr = torch.tensor([0, 2, 3], dtype=torch.long)
+        step_node_ptr = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+        step_edge_ptr = torch.tensor([0, 0, 0, 0], dtype=torch.long)
+
+        node_features = torch.cat([batch_a.node_features, batch_b.node_features, batch_c.node_features], dim=0)
+        parent_index = torch.cat([batch_a.parent_index, batch_b.parent_index, batch_c.parent_index], dim=0)
+        depth = torch.cat([batch_a.depth, batch_b.depth, batch_c.depth], dim=0)
+
+        halt_rewards = torch.tensor([0.0, 0.2, 0.5], dtype=torch.float32)
+        q_targets = torch.tensor([[0.1, 0.0], [0.3, 0.2], [0.4, 0.5]], dtype=torch.float32)
+        target_advantages = q_targets[:, 0] - q_targets[:, 1]
+        oracle_stop_steps = torch.tensor([1, 2], dtype=torch.long)
+        oracle_values = torch.tensor([0.1, 0.4], dtype=torch.float32)
+
+        payload = {
+            "format": "cts_controller_episode_shard_v1",
+            "num_episodes": 2,
+            "feature_names": list(schema.feature_names),
+            "continue_cost": 0.001,
+            "reward_scale": 1.0,
+            "episode_step_ptr": episode_step_ptr,
+            "step_node_ptr": step_node_ptr,
+            "step_edge_ptr": step_edge_ptr,
+            "node_features": node_features,
+            "parent_index": parent_index,
+            "edge_parent": torch.empty(0, dtype=torch.long),
+            "edge_child": torch.empty(0, dtype=torch.long),
+            "edge_slot": torch.empty(0, dtype=torch.long),
+            "depth": depth,
+            "halt_rewards": halt_rewards,
+            "q_targets": q_targets,
+            "target_advantages": target_advantages,
+            "oracle_stop_steps": oracle_stop_steps,
+            "oracle_values": oracle_values,
+            "source_paths": ["ep_0.pt", "ep_1.pt"],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = os.path.join(tmpdir, "shard_00000.pt")
+            torch.save(payload, shard_path)
+
+            manifest = {
+                "format": "cts_controller_episode_manifest_v1",
+                "split": "test",
+                "total_episodes": 2,
+                "total_skipped": 0,
+                "continue_cost": 0.001,
+                "reward_scale": 1.0,
+                "min_decision_margin": 0.0,
+                "entries": [{"path": shard_path, "num_episodes": 2, "shard_index": 0}],
+            }
+            manifest_path = os.path.join(tmpdir, "test_manifest.json")
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+
+            dataset = PackedControllerEpisodeDataset(manifest_path)
+            self.assertEqual(len(dataset), 2)
+
+            ep0 = dataset[0]
+            self.assertEqual(len(ep0.step_node_features), 2)
+            self.assertEqual(ep0.oracle_stop_step, 1)
+            self.assertEqual(ep0.path, "ep_0.pt")
+            self.assertAlmostEqual(ep0.halt_rewards[0], 0.0)
+            self.assertAlmostEqual(ep0.halt_rewards[1], 0.2)
+
+            ep1 = dataset[1]
+            self.assertEqual(len(ep1.step_node_features), 1)
+            self.assertEqual(ep1.oracle_stop_step, 2)
+            self.assertEqual(ep1.path, "ep_1.pt")
+
+            collator = PackedControllerCollator()
+            batch = collator([ep0, ep1])
+            self.assertIsNotNone(batch)
+            assert batch is not None
+            self.assertIsInstance(batch.tree_batch, TreeBatch)
+            self.assertEqual(batch.tree_batch.batch_size, 3)
+            self.assertEqual(batch.tree_batch.num_nodes, 3)
+            self.assertEqual(batch.q_targets.shape, (3, 2))
+            self.assertEqual(batch.path_lengths, [2, 1])
+            self.assertEqual(batch.paths, ["ep_0.pt", "ep_1.pt"])
+            self.assertTrue(torch.allclose(batch.tree_batch.node_features[0], batch_a.node_features[0]))
+            self.assertTrue(torch.allclose(batch.tree_batch.node_features[2], batch_c.node_features[0]))
 
 
 if __name__ == "__main__":
