@@ -17,8 +17,9 @@ import argparse
 import json
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -86,6 +87,7 @@ def _pack_split(
     reward_scale: float,
     min_decision_margin: float,
     shard_size: int,
+    num_workers: int,
     log_interval: int,
 ) -> tuple[Path, int, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
@@ -94,7 +96,7 @@ def _pack_split(
 
     example_paths = _read_manifest(manifest_path)
     schema = _feature_schema()
-    tensorizer = TreeTensorizer(schema=schema, device="cpu")
+    feature_names = tuple(schema.feature_names)
     start_time = time.time()
     entries: List[dict] = []
     total_episodes = 0
@@ -103,6 +105,59 @@ def _pack_split(
 
     for shard_index, shard_start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[shard_start: shard_start + shard_size]
+
+        tasks = [
+            (
+                str(path),
+                quality_config.max_depth,
+                quality_config.search_budget,
+                quality_config.c_puct,
+                quality_config.target_normalization_version,
+                quality_config.search_config_id,
+                continue_cost,
+                reward_scale,
+                min_decision_margin,
+                feature_names,
+            )
+            for path in shard_paths
+        ]
+
+        results: List[Optional[dict]]
+        if num_workers <= 0:
+            results = []
+            for completed_in_shard, task in enumerate(tasks, start=1):
+                results.append(_process_one_task(task))
+                if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
+                    elapsed = time.time() - start_time
+                    accepted_so_far = total_episodes + sum(1 for r in results if r is not None)
+                    skipped_so_far = total_skipped + sum(1 for r in results if r is None)
+                    print(
+                        f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                        f"shard_progress={completed_in_shard}/{len(tasks)} "
+                        f"accepted={accepted_so_far} skipped={skipped_so_far} "
+                        f"elapsed_s={elapsed:.1f}",
+                        flush=True,
+                    )
+        else:
+            results = [None] * len(tasks)
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                futures = {
+                    executor.submit(_process_one_task, task): idx
+                    for idx, task in enumerate(tasks)
+                }
+                for completed_in_shard, future in enumerate(as_completed(futures), start=1):
+                    results[futures[future]] = future.result()
+                    if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
+                        elapsed = time.time() - start_time
+                        accepted_so_far = total_episodes + sum(1 for r in results if r is not None)
+                        skipped_so_far = total_skipped + sum(1 for r in results if r is None)
+                        print(
+                            f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                            f"shard_progress={completed_in_shard}/{len(tasks)} "
+                            f"accepted={accepted_so_far} skipped={skipped_so_far} "
+                            f"elapsed_s={elapsed:.1f}",
+                            flush=True,
+                        )
 
         episode_step_ptr = [0]
         step_node_ptr = [0]
@@ -121,12 +176,7 @@ def _pack_split(
         source_paths: List[str] = []
         shard_episodes = 0
 
-        for i, path in enumerate(shard_paths, start=1):
-            episode_data = _process_one(
-                str(path), quality_config, continue_cost,
-                reward_scale, min_decision_margin,
-                tensorizer,
-            )
+        for episode_data in results:
             if episode_data is None:
                 total_skipped += 1
             else:
@@ -157,16 +207,6 @@ def _pack_split(
                 all_oracle_values.append(episode_data["oracle_value"])
                 source_paths.append(episode_data["source_path"])
                 shard_episodes += 1
-
-            if i % log_interval == 0 or i == len(shard_paths):
-                elapsed = time.time() - start_time
-                print(
-                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                    f"shard_progress={i}/{len(shard_paths)} "
-                    f"accepted={total_episodes + shard_episodes} skipped={total_skipped} "
-                    f"elapsed_s={elapsed:.1f}",
-                    flush=True,
-                )
 
         if shard_episodes == 0:
             continue
@@ -222,15 +262,29 @@ def _pack_split(
     return packed_manifest_path, total_episodes, total_skipped
 
 
-def _process_one(
-    path_str: str,
-    quality_config: TeacherSearchConfig,
-    continue_cost: float,
-    reward_scale: float,
-    min_decision_margin: float,
-    tensorizer: TreeTensorizer,
+def _process_one_task(
+    task: Tuple[str, int, int, float, str, str, float, float, float, Tuple[str, ...]],
 ) -> Optional[dict]:
-    """Load a raw PretrainExample, build the episode, tensorize, compute targets."""
+    """Top-level picklable worker: unpack task tuple, load example, build episode, tensorize."""
+    (
+        path_str, max_depth, search_budget, c_puct,
+        target_normalization_version, search_config_id,
+        continue_cost, reward_scale, min_decision_margin,
+        feature_names,
+    ) = task
+
+    quality_config = TeacherSearchConfig(
+        max_depth=max_depth,
+        search_budget=search_budget,
+        c_puct=c_puct,
+        prior_feature="prior",
+        value_feature="value",
+        target_normalization_version=target_normalization_version,
+        search_config_id=search_config_id,
+    )
+    schema = NodeFeatureSchema(feature_names)
+    tensorizer = TreeTensorizer(schema=schema, device="cpu")
+
     try:
         example = torch.load(path_str, weights_only=False)
         if not isinstance(example, PretrainExample):
@@ -300,6 +354,7 @@ def main() -> None:
         default="/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed",
     )
     parser.add_argument("--shard-size", type=int, default=500)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--continue-cost", type=float, default=0.001)
     parser.add_argument("--reward-scale", type=float, default=1.0)
@@ -331,6 +386,7 @@ def main() -> None:
 
     print(f"split_root={split_root}", flush=True)
     print(f"output_root={output_root}", flush=True)
+    print(f"num_workers={args.num_workers}", flush=True)
     print(f"continue_cost={args.continue_cost}", flush=True)
     print(f"reward_scale={args.reward_scale}", flush=True)
     print(f"min_decision_margin={args.min_decision_margin}", flush=True)
@@ -338,12 +394,12 @@ def main() -> None:
     train_manifest_out, train_count, train_skipped = _pack_split(
         train_manifest, output_root, quality_config,
         args.continue_cost, args.reward_scale, args.min_decision_margin,
-        args.shard_size, args.log_interval,
+        args.shard_size, args.num_workers, args.log_interval,
     )
     validation_manifest_out, val_count, val_skipped = _pack_split(
         validation_manifest, output_root, quality_config,
         args.continue_cost, args.reward_scale, args.min_decision_margin,
-        args.shard_size, args.log_interval,
+        args.shard_size, args.num_workers, args.log_interval,
     )
 
     print(f"train_manifest={train_manifest_out}")
