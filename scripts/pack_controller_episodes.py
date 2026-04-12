@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import numpy as np
 import torch
 
 from controller_oracle import compute_oracle_policy, has_strong_optimal_margins
@@ -176,10 +177,11 @@ def _pack_split(
         source_paths: List[str] = []
         shard_episodes = 0
 
-        for episode_data in results:
-            if episode_data is None:
+        for raw_result in results:
+            if raw_result is None:
                 total_skipped += 1
             else:
+                episode_data = _numpy_to_torch(raw_result)
                 num_steps = episode_data["num_steps"]
                 episode_step_ptr.append(episode_step_ptr[-1] + num_steps)
 
@@ -317,12 +319,12 @@ def _process_one_task(
 
     for snapshot in episode.snapshots:
         batch = tensorizer.tensorize_tree(snapshot, validate=False)
-        step_node_features.append(batch.node_features)
-        step_parent_index.append(batch.parent_index)
-        step_edge_parent.append(batch.edge_parent)
-        step_edge_child.append(batch.edge_child)
-        step_edge_slot.append(batch.edge_slot)
-        step_depth.append(batch.depth)
+        step_node_features.append(batch.node_features.numpy())
+        step_parent_index.append(batch.parent_index.numpy())
+        step_edge_parent.append(batch.edge_parent.numpy())
+        step_edge_child.append(batch.edge_child.numpy())
+        step_edge_slot.append(batch.edge_slot.numpy())
+        step_depth.append(batch.depth.numpy())
 
     return {
         "num_steps": len(episode.snapshots),
@@ -332,12 +334,31 @@ def _process_one_task(
         "step_edge_child": step_edge_child,
         "step_edge_slot": step_edge_slot,
         "step_depth": step_depth,
-        "halt_rewards": torch.tensor(scaled_rewards, dtype=torch.float32),
-        "q_targets": q_targets,
-        "target_advantages": target_advantages,
+        "halt_rewards": np.array(scaled_rewards, dtype=np.float32),
+        "q_targets": q_targets.numpy(),
+        "target_advantages": target_advantages.numpy(),
         "oracle_stop_step": oracle_stop_step,
         "oracle_value": oracle_value,
         "source_path": path_str,
+    }
+
+
+def _numpy_to_torch(result: dict) -> dict:
+    """Convert numpy arrays back to torch tensors after IPC."""
+    return {
+        "num_steps": result["num_steps"],
+        "step_node_features": [torch.from_numpy(a) for a in result["step_node_features"]],
+        "step_parent_index": [torch.from_numpy(a) for a in result["step_parent_index"]],
+        "step_edge_parent": [torch.from_numpy(a) for a in result["step_edge_parent"]],
+        "step_edge_child": [torch.from_numpy(a) for a in result["step_edge_child"]],
+        "step_edge_slot": [torch.from_numpy(a) for a in result["step_edge_slot"]],
+        "step_depth": [torch.from_numpy(a) for a in result["step_depth"]],
+        "halt_rewards": torch.from_numpy(result["halt_rewards"]),
+        "q_targets": torch.from_numpy(result["q_targets"]),
+        "target_advantages": torch.from_numpy(result["target_advantages"]),
+        "oracle_stop_step": result["oracle_stop_step"],
+        "oracle_value": result["oracle_value"],
+        "source_path": result["source_path"],
     }
 
 
