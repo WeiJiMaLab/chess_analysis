@@ -15,7 +15,7 @@ import resource
 from joblib.externals.loky.process_executor import TerminatedWorkerError
 
 SHALLOW_DEPTH = 1   # proxy for "no computation" — what you'd play immediately
-DEEP_DEPTH = 15     # proxy for "full computation" — Russek at depth 15
+DEEP_DEPTH = 14     # proxy for "full computation" — Russek at depth 15
 TIME_LIMIT = 5.0   # hard ceiling per analysis call to prevent engine hangs
 
 def score_to_wp(score, board_after):
@@ -28,7 +28,7 @@ def score_to_wp(score, board_after):
         wp_white = wdl.wins / 1000.0
         return wp_white if not board_after.turn == chess.WHITE else 1.0 - wp_white
     except:
-        return None
+        return Nonepy
 
 def compute_voc(board, engine, candidate_moves, deep_depth, time_limit):
     """
@@ -51,11 +51,10 @@ def compute_voc(board, engine, candidate_moves, deep_depth, time_limit):
         engine.configure({"Clear Hash": True})
         try: info = engine.analyse(board_after, chess.engine.Limit(depth=deep_depth, time=time_limit))
         except Exception: continue
+        
         wp = score_to_wp(info["score"], board_after)
         if wp is not None: scores[move] = wp
     return scores
-
-
 
 def analyze_position(position):
     engine = None
@@ -119,7 +118,6 @@ def analyze_data(df):
     print(f"VOC_sqrt coef: {m_nonzero.params['voc_sqrt']:.4f}, p={m_nonzero.pvalues['voc_sqrt']:.4f}")
 
     print(f"\nDelta AIC (linear - sqrt): {m_full.aic - m_sqrt.aic:.2f}")
-
     return df
 
 def plot_data(df):
@@ -205,8 +203,6 @@ def plot_data(df):
     plt.savefig("voc_sqrt_vs_move_time.png", dpi=300)
     plt.close()
     print("Plot saved: voc_sqrt_vs_move_time.png")
-
-
 
 if __name__ == "__main__":
     # Prevent Stockfish crashes from writing large core.* files.

@@ -23,7 +23,10 @@ Optional: Jupyter for running `test_db.ipynb`, and matplotlib for plots.
    pip install duckdb pandas chess matplotlib jupyter
    ```
 
-2. **Stockfish**: Use a Stockfish executable that works on your system (e.g. built from [official-stockfish/Stockfish](https://github.com/official-stockfish/Stockfish) with `make build ARCH=x86-64-avx2`). Set the path in the notebook or in `utils.STOCKFISH_PATH`.
+2. **Stockfish** (defaults in `utils.py`, under your home directory on Della):
+   - **SF14**: `~/stockfish/src/stockfish` (SF14 tree, portable NNUE bundled in the binary).
+   - **SF15**: `~/stockfish-sf_15/src/stockfish` with NNUE `nn-6877cd24400e.nnue` in the same `src/` directory (clone `sf_15` from [official-stockfish/Stockfish](https://github.com/official-stockfish/Stockfish), then `cd src && make -j build ARCH=x86-64-avx2`).
+   - Override by passing `path=` to `get_stockfish_engine()` or by editing `STOCKFISH_SF14_PATH` / `STOCKFISH_SF15_PATH` in `utils.py`.
 
 3. **Lichess database** (optional): The notebook can attach a read-only DuckDB database (e.g. `lichess.db`). Set the path in the notebook when attaching.
 

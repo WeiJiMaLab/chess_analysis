@@ -11,15 +11,23 @@ import chess.svg
 import chess.engine
 from IPython.display import SVG, display
 import duckdb
+from collections import defaultdict
+import numpy as np
+import matplotlib.pyplot as plt
 
-STOCKFISH_SF14_PATH = "/scratch/hl4291/Stockfish-sf_14/src/stockfish"
-STOCKFISH_SF15_PATH = "/scratch/hl4291/Stockfish-sf_15/src/stockfish"
-STOCKFISH_SF15_DIR  = "/scratch/hl4291/Stockfish-sf_15/src"
-NNUE_SF15           = "nn-6877cd24400e.nnue"
+# Stockfish lives under home (not scratch). SF14: copied tree; SF15: built from official-stockfish sf_15.
+_STOCKFISH_HOME = os.path.expanduser("~/stockfish")
+_STOCKFISH_SF15_HOME = os.path.expanduser("~/stockfish-sf_15")
 
-# Keep old names pointing at SF15 for backward compat
-STOCKFISH_PATH = STOCKFISH_SF15_PATH
-STOCKFISH_DIR  = STOCKFISH_SF15_DIR
+STOCKFISH_SF14_DIR = os.path.join(_STOCKFISH_HOME, "src")
+STOCKFISH_SF14_PATH = os.path.join(STOCKFISH_SF14_DIR, "stockfish")
+STOCKFISH_SF15_PATH = os.path.join(_STOCKFISH_SF15_HOME, "src", "stockfish")
+STOCKFISH_SF15_DIR = os.path.join(_STOCKFISH_SF15_HOME, "src")
+NNUE_SF15 = "nn-6877cd24400e.nnue"
+
+# Default binary and working dir: Stockfish 14 (matches get_stockfish_engine() default).
+STOCKFISH_PATH = STOCKFISH_SF14_PATH
+STOCKFISH_DIR = STOCKFISH_SF14_DIR
 
 def get_stockfish_engine(
     path: str | None = None,
@@ -41,7 +49,7 @@ def get_stockfish_engine(
         nnue_path = None
     elif version == 14:
         engine_path = STOCKFISH_SF14_PATH
-        work_dir = os.path.dirname(STOCKFISH_SF14_PATH)
+        work_dir = STOCKFISH_SF14_DIR
         nnue_path = None  # bundled
     elif version == 15:
         engine_path = STOCKFISH_SF15_PATH
@@ -89,26 +97,70 @@ def get_db_connection(
         **kwargs,
     }
     return duckdb.connect(database=database, config=config)
-    """
-    Spawn a Stockfish 15 UCI engine process. Caller must call engine.quit() when done.
 
-    SF15 uses a single NNUE network (no small net) with hybrid classical+NNUE eval,
-    which gives more VOC variance at shallow depths than SF17+.
-    Single-thread / modest hash reduces EngineTerminatedError (segfault) risk.
-    """
-    engine_path = path or STOCKFISH_PATH
-    work_dir = cwd or STOCKFISH_DIR
-    nnue_path = os.path.join(work_dir, NNUE_BIG)
+# Compute bootstrapped confidence interval for the mean
+def bootstrapped_ci(data, n_bootstraps=1000):
+    if len(data) <= 1:
+        return (np.nan, np.nan)
+    bootstrap_means = []
+    data = np.array(data)
+    for _ in range(n_bootstraps):
+        bootstrap_sample = np.random.choice(data, size=len(data), replace=True)
+        bootstrap_means.append(np.mean(bootstrap_sample))
+    return np.percentile(bootstrap_means, [2.5, 97.5])
 
-    if not os.path.exists(engine_path):
-        raise FileNotFoundError(f"Stockfish binary not found at {engine_path}")
-    if not os.path.exists(nnue_path):
-        raise FileNotFoundError(f"NNUE file not found at {nnue_path}")
+def compute_metrics_by_bin(data):
+    metrics = defaultdict(list)
+    for x in sorted(data["bin"].unique()):
+        bin_data = data[data["bin"] == x]["move_time"]
+        n = len(bin_data)
+        if n > 1:
+            mean = bin_data.mean()
+            ci = bootstrapped_ci(bin_data)
+        elif n == 1:
+            mean = bin_data.iloc[0]
+            ci = (mean, mean)
+        else:
+            continue  # skip bins with no data
+        metrics["x"].append(x)
+        metrics["y"].append(mean)
+        metrics["ci_lower"].append(ci[0])
+        metrics["ci_upper"].append(ci[1])
+    return metrics
 
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path, cwd=work_dir)
-    engine.configure({
-        "Threads": threads,
-        "Hash": hash_mb,
-        "EvalFile": nnue_path,
-    })
-    return engine
+def compute_metrics_by_qbin(data, qbin_edges):
+    metrics = defaultdict(list)
+    # Use range of number of bins, not the sorted unique qbin (which might have missing bins)
+    n_bins = len(qbin_edges) - 1
+    for q in range(n_bins):
+        bin_data = data[data["qbins"] == q]["move_time"]
+        n = len(bin_data)
+        if n > 1:
+            mean = bin_data.mean()
+            ci = bootstrapped_ci(bin_data)
+        elif n == 1:
+            mean = bin_data.iloc[0]
+            ci = (mean, mean)
+        else:
+            continue  # skip bins with no data
+        left_edge = qbin_edges[q]
+        right_edge = qbin_edges[q + 1]
+        bin_mid = (left_edge + right_edge) / 2
+        metrics["x"].append(bin_mid)
+        metrics["y"].append(mean)
+        metrics["ci_lower"].append(ci[0])
+        metrics["ci_upper"].append(ci[1])
+    return metrics
+
+def plot_metrics(metrics, color="#4682B4", ax=None):
+    if ax is None:
+        ax = plt.gca()
+    ax.plot(metrics["x"], metrics["y"], label="mean", color=color)
+    ax.fill_between(
+        metrics["x"],
+        metrics["ci_lower"],
+        metrics["ci_upper"],
+        color=color,
+        alpha=0.2,
+        label="95% CI",
+    )
