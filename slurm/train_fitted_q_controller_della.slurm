@@ -26,9 +26,6 @@ D_MESSAGE="${D_MESSAGE:-128}"
 N_HEADS="${N_HEADS:-4}"
 D_ATT="${D_ATT:-32}"
 Q_HIDDEN="${Q_HIDDEN:-128}"
-CONTINUE_COST="${CONTINUE_COST:-0.001}"
-REWARD_SCALE="${REWARD_SCALE:-1.0}"
-MIN_DECISION_MARGIN="${MIN_DECISION_MARGIN:-0.0}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 EPISODE_BATCH_SIZE="${EPISODE_BATCH_SIZE:-8}"
 EPOCHS="${EPOCHS:-20}"
@@ -39,7 +36,17 @@ NUM_WORKERS="${NUM_WORKERS:-0}"
 LOG_INTERVAL="${LOG_INTERVAL:-10}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-1}"
 GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-1}"
+OUTPUT_DIAGNOSTICS="${OUTPUT_DIAGNOSTICS:-${OUTPUT_CHECKPOINT%.pt}_diagnostics.jsonl}"
 UNFREEZE_ENCODER="${UNFREEZE_ENCODER:-0}"
+MAINTENANCE_SCALE="${MAINTENANCE_SCALE:-0.01}"
+MAINTENANCE_REF_NODES="${MAINTENANCE_REF_NODES:-30.0}"
+MAINTENANCE_EXPONENT="${MAINTENANCE_EXPONENT:-1.1}"
+TIME_LAMBDA="${TIME_LAMBDA:-18.537}"
+TIME_P="${TIME_P:-2.8}"
+TIME_TAU="${TIME_TAU:-2.5}"
+TIME_DELTA="${TIME_DELTA:-1}"
+TIMEOUT_VALUE="${TIMEOUT_VALUE:--1.0}"
+SAMPLES_PER_BUCKET="${SAMPLES_PER_BUCKET:-2}"
 
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
@@ -63,6 +70,7 @@ echo "packed_train_data=${PACKED_TRAIN_DATA}"
 echo "packed_validation_data=${PACKED_VALIDATION_DATA}"
 echo "encoder_checkpoint=${ENCODER_CHECKPOINT}"
 echo "output_checkpoint=${OUTPUT_CHECKPOINT}"
+echo "output_diagnostics=${OUTPUT_DIAGNOSTICS}"
 echo "device=${DEVICE}"
 echo "k=${K}"
 echo "epochs=${EPOCHS}"
@@ -89,9 +97,6 @@ python3 scripts/train_fitted_q_controller.py \
   --n-heads "${N_HEADS}" \
   --d-att "${D_ATT}" \
   --q-hidden "${Q_HIDDEN}" \
-  --continue-cost "${CONTINUE_COST}" \
-  --reward-scale "${REWARD_SCALE}" \
-  --min-decision-margin "${MIN_DECISION_MARGIN}" \
   --batch-size "${BATCH_SIZE}" \
   --episode-batch-size "${EPISODE_BATCH_SIZE}" \
   --epochs "${EPOCHS}" \
@@ -102,6 +107,16 @@ python3 scripts/train_fitted_q_controller.py \
   --log-interval "${LOG_INTERVAL}" \
   --validation-interval "${VALIDATION_INTERVAL}" \
   --greedy-eval-interval "${GREEDY_EVAL_INTERVAL}" \
+  --output-diagnostics "${OUTPUT_DIAGNOSTICS}" \
+  --maintenance-scale "${MAINTENANCE_SCALE}" \
+  --maintenance-ref-nodes "${MAINTENANCE_REF_NODES}" \
+  --maintenance-exponent "${MAINTENANCE_EXPONENT}" \
+  --time-lambda "${TIME_LAMBDA}" \
+  --time-p "${TIME_P}" \
+  --time-tau "${TIME_TAU}" \
+  --time-delta "${TIME_DELTA}" \
+  --timeout-value "${TIMEOUT_VALUE}" \
+  --samples-per-bucket "${SAMPLES_PER_BUCKET}" \
   "${EXTRA_ARGS[@]}"
 
 date

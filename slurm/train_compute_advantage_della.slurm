@@ -12,24 +12,14 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS}"
-SPLIT_ROOT="${SPLIT_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split}"
-TRAIN_DATA="${TRAIN_DATA:-${SPLIT_ROOT}/train_manifest.txt}"
-VALIDATION_DATA="${VALIDATION_DATA:-${SPLIT_ROOT}/validation_manifest.txt}"
+PACKED_ROOT="${PACKED_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed}"
+PACKED_TRAIN_DATA="${PACKED_TRAIN_DATA:-${PACKED_ROOT}/train_manifest.json}"
+PACKED_VALIDATION_DATA="${PACKED_VALIDATION_DATA:-${PACKED_ROOT}/validation_manifest.json}"
 ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_pretrain_interactive.pt}"
 OUTPUT_CHECKPOINT="${OUTPUT_CHECKPOINT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_controller_compute_adv_full.pt}"
 
-REPRESENTATION="${REPRESENTATION:-tree}"
 DEVICE="${DEVICE:-cuda}"
 SEED="${SEED:-0}"
-CONTINUE_COST="${CONTINUE_COST:-0.001}"
-REWARD_SCALE="${REWARD_SCALE:-1.0}"
-MIN_DECISION_MARGIN="${MIN_DECISION_MARGIN:-0.0}"
-SEARCH_BUDGET="${SEARCH_BUDGET:-64}"
-MAX_DEPTH="${MAX_DEPTH:-10}"
-C_PUCT="${C_PUCT:-1.0}"
-MAX_TRAIN_EXAMPLES="${MAX_TRAIN_EXAMPLES:-0}"
-MAX_VALIDATION_EXAMPLES="${MAX_VALIDATION_EXAMPLES:-0}"
-
 K="${K:-2}"
 NODE_EMBED_HIDDEN="${NODE_EMBED_HIDDEN:-128}"
 D_EMBED="${D_EMBED:-128}"
@@ -49,6 +39,15 @@ LOG_INTERVAL="${LOG_INTERVAL:-250}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-5}"
 GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-5}"
 UNFREEZE_ENCODER="${UNFREEZE_ENCODER:-0}"
+MAINTENANCE_SCALE="${MAINTENANCE_SCALE:-0.01}"
+MAINTENANCE_REF_NODES="${MAINTENANCE_REF_NODES:-30.0}"
+MAINTENANCE_EXPONENT="${MAINTENANCE_EXPONENT:-1.1}"
+TIME_LAMBDA="${TIME_LAMBDA:-18.537}"
+TIME_P="${TIME_P:-2.8}"
+TIME_TAU="${TIME_TAU:-2.5}"
+TIME_DELTA="${TIME_DELTA:-1}"
+TIMEOUT_VALUE="${TIMEOUT_VALUE:--1.0}"
+SAMPLES_PER_BUCKET="${SAMPLES_PER_BUCKET:-2}"
 
 mkdir -p "${PROJECT_DIR}/logs"
 mkdir -p "$(dirname "${OUTPUT_CHECKPOINT}")"
@@ -69,11 +68,10 @@ set -u
 cd "${PROJECT_DIR}"
 
 echo "project_dir=${PROJECT_DIR}"
-echo "train_data=${TRAIN_DATA}"
-echo "validation_data=${VALIDATION_DATA}"
+echo "packed_train_data=${PACKED_TRAIN_DATA}"
+echo "packed_validation_data=${PACKED_VALIDATION_DATA}"
 echo "encoder_checkpoint=${ENCODER_CHECKPOINT}"
 echo "output_checkpoint=${OUTPUT_CHECKPOINT}"
-echo "representation=${REPRESENTATION}"
 echo "device=${DEVICE}"
 echo "epochs=${EPOCHS}"
 echo "batch_size=${BATCH_SIZE}"
@@ -87,25 +85,14 @@ if [[ "${UNFREEZE_ENCODER}" == "1" ]]; then
   EXTRA_ARGS+=(--unfreeze-encoder)
 fi
 
-if [[ "${REPRESENTATION}" == "tree" ]]; then
-  EXTRA_ARGS+=(--encoder-checkpoint "${ENCODER_CHECKPOINT}")
-fi
+EXTRA_ARGS+=(--encoder-checkpoint "${ENCODER_CHECKPOINT}")
 
 python3 scripts/train_fitted_q_controller.py \
-  --train-data "${TRAIN_DATA}" \
-  --validation-data "${VALIDATION_DATA}" \
+  --packed-train-data "${PACKED_TRAIN_DATA}" \
+  --packed-validation-data "${PACKED_VALIDATION_DATA}" \
   --output-checkpoint "${OUTPUT_CHECKPOINT}" \
-  --representation "${REPRESENTATION}" \
   --device "${DEVICE}" \
   --seed "${SEED}" \
-  --continue-cost "${CONTINUE_COST}" \
-  --reward-scale "${REWARD_SCALE}" \
-  --min-decision-margin "${MIN_DECISION_MARGIN}" \
-  --search-budget "${SEARCH_BUDGET}" \
-  --max-depth "${MAX_DEPTH}" \
-  --c-puct "${C_PUCT}" \
-  --max-train-examples "${MAX_TRAIN_EXAMPLES}" \
-  --max-validation-examples "${MAX_VALIDATION_EXAMPLES}" \
   --k "${K}" \
   --node-embed-hidden "${NODE_EMBED_HIDDEN}" \
   --d-embed "${D_EMBED}" \
@@ -123,6 +110,15 @@ python3 scripts/train_fitted_q_controller.py \
   --log-interval "${LOG_INTERVAL}" \
   --validation-interval "${VALIDATION_INTERVAL}" \
   --greedy-eval-interval "${GREEDY_EVAL_INTERVAL}" \
+  --maintenance-scale "${MAINTENANCE_SCALE}" \
+  --maintenance-ref-nodes "${MAINTENANCE_REF_NODES}" \
+  --maintenance-exponent "${MAINTENANCE_EXPONENT}" \
+  --time-lambda "${TIME_LAMBDA}" \
+  --time-p "${TIME_P}" \
+  --time-tau "${TIME_TAU}" \
+  --time-delta "${TIME_DELTA}" \
+  --timeout-value "${TIMEOUT_VALUE}" \
+  --samples-per-bucket "${SAMPLES_PER_BUCKET}" \
   "${EXTRA_ARGS[@]}"
 
 date

@@ -2,30 +2,26 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import torch
 
+from budgeted_controller_oracle import (
+    BudgetedOracleConfig,
+    compute_budgeted_oracle,
+    deterministic_starting_budgets,
+    return_for_stop_step,
+)
 from schema import NodeFeatureSchema
 from scripts.train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
-    FittedQCollator,
-    FittedQEpisode,
-    FittedQEpisodeDataset,
-    LinearComputeAdvantageModel,
-    OracleActionNowEpisode,
+    MaterializedAdvantageEpisode,
     PackedControllerCollator,
+    PackedControllerEpisode,
     PackedControllerEpisodeDataset,
-    _advantage_loss_components,
-    _oracle_action_now_schema,
-    _oracle_action_now_tensor_dataset,
-    _oracle_action_now_tree,
-    _oracle_actions_from_targets,
+    _materialized_tensor_dataset,
     _predict_stop_step,
-    bellman_q_targets,
 )
-from supervised_branch import TeacherSearchConfig
-from tensorizer import TreeBatch, TreeTensorizer
+from tensorizer import TreeTensorizer
 from tree import SearchTree
 
 
@@ -35,50 +31,51 @@ def _root_tree(value: float) -> SearchTree:
     return tree
 
 
+class BudgetedControllerOracleTests(unittest.TestCase):
+    def test_large_budget_modest_tree_favors_continue(self):
+        policy = compute_budgeted_oracle([0.0, 0.6], [5, 5], 20, BudgetedOracleConfig())
+        self.assertEqual(policy.optimal_stop_step, 1)
+        self.assertGreater(policy.target_advantages[0], 0.0)
+
+    def test_low_budget_flips_to_halt(self):
+        policy = compute_budgeted_oracle([0.0, 0.6], [5, 5], 1, BudgetedOracleConfig())
+        self.assertEqual(policy.optimal_stop_step, 0)
+        self.assertLess(policy.target_advantages[0], 0.0)
+
+    def test_large_tree_flips_to_halt_via_maintenance_cost(self):
+        policy = compute_budgeted_oracle([0.0, 0.6], [3000, 3000], 20, BudgetedOracleConfig())
+        self.assertEqual(policy.optimal_stop_step, 0)
+        self.assertLess(policy.target_advantages[0], 0.0)
+
+    def test_timeout_boundary_at_t1_uses_absorbing_loss(self):
+        policy = compute_budgeted_oracle([0.2, 0.9], [5, 5], 1, BudgetedOracleConfig())
+        self.assertEqual(policy.time_budgets, [1])
+        self.assertAlmostEqual(policy.continue_values[0], policy.target_advantages[0] + policy.halt_rewards[0], places=6)
+        self.assertLess(policy.continue_values[0], 0.0)
+        self.assertEqual(policy.optimal_stop_step, 0)
+
+    def test_return_for_stop_step_matches_oracle_value(self):
+        config = BudgetedOracleConfig()
+        policy = compute_budgeted_oracle([0.0, 0.6], [5, 5], 20, config)
+        realized = return_for_stop_step(
+            policy.halt_rewards,
+            policy.tree_sizes,
+            policy.time_budgets,
+            policy.optimal_stop_step,
+            config,
+        )
+        self.assertAlmostEqual(realized, policy.oracle_value, places=6)
+
+    def test_deterministic_budget_sampling_is_stable(self):
+        config = BudgetedOracleConfig(seed=17)
+        first = deterministic_starting_budgets("example.pt", config)
+        second = deterministic_starting_budgets("example.pt", config)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), len(config.budget_buckets) * config.samples_per_bucket)
+
+
 class TrainFittedQControllerTests(unittest.TestCase):
-    def test_bellman_q_targets_use_action_order_continue_then_halt(self):
-        q_targets, oracle_stop_step, oracle_value = bellman_q_targets(
-            [0.0, 0.2, 0.5],
-            continue_cost=0.1,
-        )
-
-        self.assertEqual(oracle_stop_step, 2)
-        self.assertAlmostEqual(oracle_value, 0.3)
-        self.assertTrue(
-            torch.allclose(
-                q_targets,
-                torch.tensor(
-                    [
-                        [0.3, 0.0],
-                        [0.4, 0.2],
-                        [0.4, 0.5],
-                    ]
-                ),
-            )
-        )
-
-    def test_fitted_q_collator_flattens_episode_snapshots(self):
-        schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
-        tensorizer = TreeTensorizer(schema, device="cpu")
-        episode = FittedQEpisode(
-            path="example.pt",
-            snapshots=[_root_tree(0.1), _root_tree(0.2)],
-            halt_rewards=[0.0, 0.5],
-            q_targets=torch.tensor([[0.4, 0.0], [0.4, 0.5]], dtype=torch.float32),
-            oracle_stop_step=1,
-            oracle_value=0.4,
-        )
-
-        batch = FittedQCollator(tensorizer)([episode, None])
-
-        self.assertIsNotNone(batch)
-        assert batch is not None
-        self.assertEqual(batch.tree_batch.batch_size, 2)
-        self.assertEqual(batch.paths, ["example.pt"])
-        self.assertEqual(batch.skipped, 1)
-        self.assertTrue(torch.equal(batch.q_targets, episode.q_targets))
-
-    def test_model_outputs_compute_advantage(self):
+    def test_model_appends_literal_tree_size_and_budget_features(self):
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
         tensorizer = TreeTensorizer(schema, device="cpu")
         model = ComputeAdvantageTreeSearchModel(
@@ -92,113 +89,32 @@ class TrainFittedQControllerTests(unittest.TestCase):
             d_att=2,
             q_hidden=4,
         )
-
-        with torch.no_grad():
-            for parameter in model.parameters():
-                parameter.zero_()
-            model.advantage_head[-1].bias.fill_(0.5)
-
-        advantages = model(tensorizer.tensorize_tree(_root_tree(0.0)))
-
-        self.assertTrue(torch.allclose(advantages, torch.tensor([0.5])))
-
-    def test_advantage_loss_components_train_compute_advantage(self):
-        predicted_advantages = torch.tensor([0.5])
-        q_targets = torch.tensor([[0.3, 0.1]])
-
-        advantage_mse, mean_abs_advantage_error, sign_accuracy = _advantage_loss_components(
-            predicted_advantages,
-            q_targets,
+        features = model.encode_with_state_features(
+            tensorizer.tensorize_tree(_root_tree(0.0), validate=False),
+            torch.tensor([7], dtype=torch.long),
+            torch.tensor([11], dtype=torch.long),
         )
-
-        self.assertAlmostEqual(float(advantage_mse.item()), 0.09)
-        self.assertAlmostEqual(float(mean_abs_advantage_error.item()), 0.3)
-        self.assertAlmostEqual(float(sign_accuracy.item()), 1.0)
-
-    def test_oracle_action_now_tree_encodes_target_advantage_sign(self):
-        q_targets = torch.tensor([[0.3, 0.1], [0.2, 0.2], [0.1, 0.4]])
-
-        actions = _oracle_actions_from_targets(q_targets)
-
-        self.assertEqual(actions, [0, 1, 1])
-        tree = _oracle_action_now_tree(actions[0])
-        root_features = tree.get_node(tree.root_id).scalar_features
-        self.assertEqual(root_features["action_0"], 1.0)
-        self.assertEqual(root_features["action_1"], 0.0)
-
-    def test_oracle_action_now_dataset_replaces_snapshots_with_one_hot_features(self):
-        dataset = FittedQEpisodeDataset(
-            paths=["example.pt"],
-            quality_config=TeacherSearchConfig(max_depth=1, search_budget=1),
-            continue_cost=0.001,
-            reward_scale=1.0,
-            representation="oracle-action-now",
-            min_decision_margin=0.0,
-        )
-
-        raw_episode = type("RawEpisode", (), {"snapshots": [_root_tree(0.0), _root_tree(0.2)]})()
-        with (
-            patch("scripts.train_fitted_q_controller.torch.load", return_value={"raw": True}),
-            patch(
-                "scripts.train_fitted_q_controller.build_trimmed_decision_episode_with_halt_rewards",
-                return_value=(raw_episode, [0.0, 0.2]),
-            ),
-        ):
-            episode = dataset[0]
-
-        self.assertIsNotNone(episode)
-        assert episode is not None
-        first_features = episode.snapshots[0].get_node(episode.snapshots[0].root_id).scalar_features
-        second_features = episode.snapshots[1].get_node(episode.snapshots[1].root_id).scalar_features
-        self.assertEqual(first_features["action_0"], 1.0)
-        self.assertEqual(first_features["action_1"], 0.0)
-        self.assertEqual(second_features["action_0"], 0.0)
-        self.assertEqual(second_features["action_1"], 1.0)
-
-    def test_linear_compute_advantage_model_reads_fixed_features(self):
-        schema = _oracle_action_now_schema()
-        tensorizer = TreeTensorizer(schema, device="cpu")
-        model = LinearComputeAdvantageModel(node_feat=2, device="cpu")
-
-        with torch.no_grad():
-            model.advantage_head.weight.copy_(torch.tensor([[2.0, -3.0]]))
-            model.advantage_head.bias.fill_(0.5)
-
-        advantages = model(
-            tensorizer.tensorize_forest(
-                [_oracle_action_now_tree(0), _oracle_action_now_tree(1)],
-                validate=False,
-            )
-        )
-
-        self.assertTrue(torch.allclose(advantages, torch.tensor([2.5, -2.5])))
-
-    def test_oracle_action_now_tensor_dataset_materializes_features_and_targets(self):
-        episode = OracleActionNowEpisode(
-            path="example.pt",
-            features=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
-            target_advantages=torch.tensor([0.2, -0.3]),
-            halt_rewards=[0.0, 0.1],
-            oracle_stop_step=1,
-            oracle_value=0.2,
-        )
-
-        dataset = _oracle_action_now_tensor_dataset([episode])
-
-        self.assertEqual(len(dataset), 2)
-        self.assertTrue(torch.equal(dataset.tensors[0], episode.features))
-        self.assertTrue(torch.equal(dataset.tensors[1], episode.target_advantages))
+        self.assertEqual(features.shape, (1, model.encoder.d_embed + 2))
+        self.assertTrue(torch.equal(features[:, -2:], torch.tensor([[7.0, 11.0]])))
 
     def test_predict_stop_step_uses_positive_compute_advantage(self):
-        schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
-        tensorizer = TreeTensorizer(schema, device="cpu")
-        episode = FittedQEpisode(
-            path="example.pt",
-            snapshots=[_root_tree(0.0), _root_tree(1.0)],
+        episode = PackedControllerEpisode(
+            path="episode",
+            source_path="source.pt",
+            step_node_features=[torch.tensor([[0.0, 1.0]]), torch.tensor([[1.0, 1.0]])],
+            step_parent_index=[torch.tensor([-1]), torch.tensor([-1])],
+            step_edge_parent=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_edge_child=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_edge_slot=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_depth=[torch.tensor([0]), torch.tensor([0])],
             halt_rewards=[0.0, 1.0],
-            q_targets=torch.tensor([[0.9, 0.0], [0.9, 1.0]], dtype=torch.float32),
+            target_advantages=torch.tensor([0.9, -0.1], dtype=torch.float32),
+            tree_sizes=torch.tensor([1, 1], dtype=torch.long),
+            time_budgets=torch.tensor([10, 9], dtype=torch.long),
             oracle_stop_step=1,
             oracle_value=0.9,
+            starting_budget=10,
+            budget_bucket_name="large",
         )
         model = ComputeAdvantageTreeSearchModel(
             k=1,
@@ -211,118 +127,145 @@ class TrainFittedQControllerTests(unittest.TestCase):
             d_att=2,
             q_hidden=4,
         )
-
         with torch.no_grad():
             for parameter in model.parameters():
                 parameter.zero_()
             model.advantage_head[-1].bias.fill_(-1.0)
-
-        self.assertEqual(_predict_stop_step(model, tensorizer, episode), 0)
+        stop, advantages = _predict_stop_step(model, episode)
+        self.assertEqual(stop, 0)
+        self.assertEqual(len(advantages), 2)
 
         with torch.no_grad():
             model.advantage_head[-1].bias.fill_(1.0)
+        stop, advantages = _predict_stop_step(model, episode)
+        self.assertEqual(stop, 1)
+        self.assertEqual(len(advantages), 2)
 
-        self.assertEqual(_predict_stop_step(model, tensorizer, episode), 1)
-
+    def test_materialized_tensor_dataset_round_trips(self):
+        episode = MaterializedAdvantageEpisode(
+            path="episode",
+            source_path="source.pt",
+            features=torch.tensor([[0.1, 0.2, 5.0, 10.0], [0.3, 0.4, 6.0, 9.0]]),
+            target_advantages=torch.tensor([0.5, -0.25]),
+            halt_rewards=[0.0, 0.3],
+            tree_sizes=[5, 6],
+            time_budgets=[10, 9],
+            oracle_stop_step=1,
+            oracle_value=0.5,
+            starting_budget=10,
+            budget_bucket_name="large",
+        )
+        dataset = _materialized_tensor_dataset([episode])
+        self.assertEqual(len(dataset), 2)
+        self.assertTrue(torch.equal(dataset.tensors[0], episode.features))
+        self.assertTrue(torch.equal(dataset.tensors[1], episode.target_advantages))
 
     def test_packed_controller_episode_round_trip(self):
-        """Build a shard from hand-crafted tree data and verify the dataset+collator recovers a valid TreeBatch."""
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
         tensorizer = TreeTensorizer(schema, device="cpu")
 
-        tree_a = SearchTree()
-        tree_a.create_root("r_a", {"value": 0.1, "prior": 1.0})
-        tree_b = SearchTree()
-        tree_b.create_root("r_b", {"value": 0.2, "prior": 1.0})
-        tree_c = SearchTree()
-        tree_c.create_root("r_c", {"value": 0.5, "prior": 1.0})
-
+        tree_a = _root_tree(0.1)
+        tree_b = _root_tree(0.2)
+        tree_c = _root_tree(0.5)
         batch_a = tensorizer.tensorize_tree(tree_a, validate=False)
         batch_b = tensorizer.tensorize_tree(tree_b, validate=False)
         batch_c = tensorizer.tensorize_tree(tree_c, validate=False)
 
-        episode_step_ptr = torch.tensor([0, 2, 3], dtype=torch.long)
-        step_node_ptr = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-        step_edge_ptr = torch.tensor([0, 0, 0, 0], dtype=torch.long)
-
-        node_features = torch.cat([batch_a.node_features, batch_b.node_features, batch_c.node_features], dim=0)
-        parent_index = torch.cat([batch_a.parent_index, batch_b.parent_index, batch_c.parent_index], dim=0)
-        depth = torch.cat([batch_a.depth, batch_b.depth, batch_c.depth], dim=0)
-
-        halt_rewards = torch.tensor([0.0, 0.2, 0.5], dtype=torch.float32)
-        q_targets = torch.tensor([[0.1, 0.0], [0.3, 0.2], [0.4, 0.5]], dtype=torch.float32)
-        target_advantages = q_targets[:, 0] - q_targets[:, 1]
-        oracle_stop_steps = torch.tensor([1, 2], dtype=torch.long)
-        oracle_values = torch.tensor([0.1, 0.4], dtype=torch.float32)
-
         payload = {
-            "format": "cts_controller_episode_shard_v1",
+            "format": "cts_budgeted_controller_episode_shard_v2",
             "num_episodes": 2,
             "feature_names": list(schema.feature_names),
-            "continue_cost": 0.001,
-            "reward_scale": 1.0,
-            "episode_step_ptr": episode_step_ptr,
-            "step_node_ptr": step_node_ptr,
-            "step_edge_ptr": step_edge_ptr,
-            "node_features": node_features,
-            "parent_index": parent_index,
+            "oracle_type": "budgeted_controller_v1",
+            "maintenance_scale": 0.01,
+            "maintenance_ref_nodes": 30.0,
+            "maintenance_exponent": 1.1,
+            "time_lambda": 18.537,
+            "time_p": 2.8,
+            "time_tau": 2.5,
+            "time_delta": 1,
+            "timeout_value": -1.0,
+            "samples_per_bucket": 2,
+            "budget_seed": 0,
+            "budget_buckets": [
+                {"name": "scramble", "min_time": 1, "max_time": 3},
+                {"name": "medium-small", "min_time": 4, "max_time": 10},
+                {"name": "medium-large", "min_time": 11, "max_time": 25},
+                {"name": "large", "min_time": 26, "max_time": 60},
+                {"name": "very-large", "min_time": 61, "max_time": 120},
+            ],
+            "episode_step_ptr": torch.tensor([0, 2, 3], dtype=torch.long),
+            "step_node_ptr": torch.tensor([0, 1, 2, 3], dtype=torch.long),
+            "step_edge_ptr": torch.tensor([0, 0, 0, 0], dtype=torch.long),
+            "node_features": torch.cat([batch_a.node_features, batch_b.node_features, batch_c.node_features], dim=0),
+            "parent_index": torch.cat([batch_a.parent_index, batch_b.parent_index, batch_c.parent_index], dim=0),
             "edge_parent": torch.empty(0, dtype=torch.long),
             "edge_child": torch.empty(0, dtype=torch.long),
             "edge_slot": torch.empty(0, dtype=torch.long),
-            "depth": depth,
-            "halt_rewards": halt_rewards,
-            "q_targets": q_targets,
-            "target_advantages": target_advantages,
-            "oracle_stop_steps": oracle_stop_steps,
-            "oracle_values": oracle_values,
-            "source_paths": ["ep_0.pt", "ep_1.pt"],
+            "depth": torch.cat([batch_a.depth, batch_b.depth, batch_c.depth], dim=0),
+            "halt_rewards": torch.tensor([0.0, 0.2, 0.5], dtype=torch.float32),
+            "target_advantages": torch.tensor([0.1, -0.1, -0.2], dtype=torch.float32),
+            "tree_sizes": torch.tensor([1, 1, 1], dtype=torch.long),
+            "time_budgets": torch.tensor([10, 9, 3], dtype=torch.long),
+            "oracle_stop_steps": torch.tensor([1, 0], dtype=torch.long),
+            "oracle_values": torch.tensor([0.1, 0.5], dtype=torch.float32),
+            "starting_budgets": torch.tensor([10, 3], dtype=torch.long),
+            "budget_bucket_indices": torch.tensor([3, 0], dtype=torch.long),
+            "budget_bucket_names": ["large", "scramble"],
+            "episode_keys": ["ep_0", "ep_1"],
+            "source_paths": ["raw_0.pt", "raw_1.pt"],
+        }
+
+        manifest = {
+            "format": "cts_budgeted_controller_episode_manifest_v2",
+            "split": "test",
+            "total_episodes": 2,
+            "reward_scale": 1.0,
+            "oracle_type": "budgeted_controller_v1",
+            "maintenance_scale": 0.01,
+            "maintenance_ref_nodes": 30.0,
+            "maintenance_exponent": 1.1,
+            "time_lambda": 18.537,
+            "time_p": 2.8,
+            "time_tau": 2.5,
+            "time_delta": 1,
+            "timeout_value": -1.0,
+            "samples_per_bucket": 2,
+            "budget_seed": 0,
+            "budget_buckets": payload["budget_buckets"],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             shard_path = os.path.join(tmpdir, "shard_00000.pt")
             torch.save(payload, shard_path)
-
-            manifest = {
-                "format": "cts_controller_episode_manifest_v1",
-                "split": "test",
-                "total_episodes": 2,
-                "total_skipped": 0,
-                "continue_cost": 0.001,
-                "reward_scale": 1.0,
-                "min_decision_margin": 0.0,
-                "entries": [{"path": shard_path, "num_episodes": 2, "shard_index": 0}],
-            }
+            manifest["entries"] = [{"path": shard_path, "num_episodes": 2, "shard_index": 0}]
             manifest_path = os.path.join(tmpdir, "test_manifest.json")
-            with open(manifest_path, "w") as f:
-                json.dump(manifest, f)
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle)
 
             dataset = PackedControllerEpisodeDataset(manifest_path)
             self.assertEqual(len(dataset), 2)
 
-            ep0 = dataset[0]
-            self.assertEqual(len(ep0.step_node_features), 2)
-            self.assertEqual(ep0.oracle_stop_step, 1)
-            self.assertEqual(ep0.path, "ep_0.pt")
-            self.assertAlmostEqual(ep0.halt_rewards[0], 0.0)
-            self.assertAlmostEqual(ep0.halt_rewards[1], 0.2)
+            episode0 = dataset[0]
+            self.assertEqual(episode0.path, "ep_0")
+            self.assertEqual(episode0.source_path, "raw_0.pt")
+            self.assertEqual(episode0.starting_budget, 10)
+            self.assertEqual(episode0.time_budgets.tolist(), [10, 9])
+            self.assertEqual(episode0.tree_sizes.tolist(), [1, 1])
 
-            ep1 = dataset[1]
-            self.assertEqual(len(ep1.step_node_features), 1)
-            self.assertEqual(ep1.oracle_stop_step, 2)
-            self.assertEqual(ep1.path, "ep_1.pt")
+            episode1 = dataset[1]
+            self.assertEqual(episode1.path, "ep_1")
+            self.assertEqual(episode1.budget_bucket_name, "scramble")
 
-            collator = PackedControllerCollator()
-            batch = collator([ep0, ep1])
+            batch = PackedControllerCollator()([episode0, episode1])
             self.assertIsNotNone(batch)
             assert batch is not None
-            self.assertIsInstance(batch.tree_batch, TreeBatch)
             self.assertEqual(batch.tree_batch.batch_size, 3)
             self.assertEqual(batch.tree_batch.num_nodes, 3)
-            self.assertEqual(batch.q_targets.shape, (3, 2))
-            self.assertEqual(batch.path_lengths, [2, 1])
-            self.assertEqual(batch.paths, ["ep_0.pt", "ep_1.pt"])
-            self.assertTrue(torch.allclose(batch.tree_batch.node_features[0], batch_a.node_features[0]))
-            self.assertTrue(torch.allclose(batch.tree_batch.node_features[2], batch_c.node_features[0]))
+            self.assertEqual(batch.target_advantages.shape, (3,))
+            self.assertEqual(batch.tree_sizes.tolist(), [1, 1, 1])
+            self.assertEqual(batch.time_budgets.tolist(), [10, 9, 3])
+            self.assertEqual(batch.paths, ["ep_0", "ep_1"])
+            self.assertEqual(batch.source_paths, ["raw_0.pt", "raw_1.pt"])
 
 
 if __name__ == "__main__":
