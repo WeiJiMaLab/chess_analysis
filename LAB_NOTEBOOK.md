@@ -1,5 +1,15 @@
 # Lab Notebook
 
+## Project overview
+
+The motivation is to build a planning model that keeps the abstract tree-search scaffolding but replaces hand-written decision rules with neural networks at each decision point. Conceptually: a meta-controller chooses act in the real environment vs plan inside an internal tree. The act path uses a policy at the root of the current tree; the plan path uses a planning head over the tree representation to choose planning actions—navigation (e.g. move focus in the tree) and expansion / evaluation steps that update the tree via a learned world model and value feedback—before committing to a real move. In principle such a model would be trained AlphaZero-style with self-play.
+
+Current work is intentionally narrower: meta-control of search only (e.g. when to continue expanding vs when to halt), on teacher-generated search trees and offline targets. Given snapshots of a growing search tree, a controller decides whether to continue expanding search or halt and act on the current best move. The setting is offline: trajectories come from teacher search on positions (e.g. drawn from the Lichess database with simple filters), and supervision is derived from counterfactual value-of-computation—how halting at each expansion step compares to continuing under a fixed continue cost and halt rewards defined from the search state.
+
+The main representation pipeline is neural encoding of search trees. A TreeNN-style encoder embeds each snapshot; training combines encoder pretraining (e.g. child-WDL and related targets) with fitted Q-style training of a scalar compute-advantage head that predicts whether continuing is better than halting, rather than policy-gradient RL on the same objective. The scientific questions include whether a simple meta-controller can learn optimal control given this TreeNN representation, what tree encoding features or control features (e.g. continue cost architecture) support optimal control learning, and to what extent the controller's behaviour matches real human choices. That is the first slice that must work on real tree encodings and real halt/continue tradeoffs.
+
+Later, the same tree representation is meant to support a full planning head whose action space includes concrete planning operations (which node to expand, which to evaluate, etc.), still inside the same overall loop sketched above. The lab notebook records experiments along that path—encoders, packing, fitted-Q controller training, diagnostics, and evaluation—not incidental refactors.
+
 This file is the running experimental record for the project.
 
 What belongs here:
@@ -791,3 +801,161 @@ Outcome:
 
 Conclusion:
 - We can now build a variable-size raw dataset from the existing 96-node WDL trees without new engine calls.
+
+## 2026-04-13
+
+### Episode difficulty metrics (data-only) and greedy-eval diagnostics
+
+Intent:
+- Quantify how “interesting” each controller episode is using only halt rewards and `continue_cost`, and log per-episode diagnostics during greedy evaluation so regret can be related to those metrics.
+
+Meaningful change:
+- Added `episode_difficulty.py` with six metrics: halt reward range, optimal-vs-second-best return gap, return variance, softmax entropy over per-stop returns, regret of always halting at step 0, and reward curvature (sign changes in halt-reward differences).
+- Extended `scripts/train_fitted_q_controller.py`:
+  - `--output-diagnostics` writes a JSONL on the final greedy-eval epoch (validation only).
+  - Each record includes halt rewards, oracle/predicted stop, return, regret, **predicted** advantages, and the six difficulty scalars.
+  - `_predict_stop_step` returns `(stop, predicted_advantages)` for logging.
+- Unit tests for the difficulty helpers live in `test_train_fitted_q_controller.py`.
+
+Outcome:
+- Greedy-eval diagnostics are model-dependent (regret uses the fitted policy); difficulty scalars in that JSONL are still data-intrinsic for the same halt-reward sequence and `continue_cost`.
+
+Conclusion:
+- High-regret profile plots compare **oracle stop** (from true rewards) to **predicted** advantages; misalignment is expected under imperfect learning.
+
+### Standalone packed-data difficulty analysis
+
+Intent:
+- Summarize difficulty over full train and validation packed manifests without loading any model.
+
+Meaningful change:
+- Added `scripts/analyze_episode_difficulty.py` and `slurm/analyze_episode_difficulty_della.slurm`.
+- Default output path (unless overridden): `episode_difficulty.jsonl` under the packed-data root.
+
+Outcome (full unfiltered packed data, `continue_cost = 0.001`):
+- Train / validation difficulty summaries were broadly aligned; combined ~71k episodes.
+- Roughly **56%** of episodes had `oracle_stop_step == 0` (halt immediately).
+- Mean difficulty signals indicated a **flat** return landscape (e.g. high softmax entropy near the maximum for the episode length, tiny optimal-vs-second-best gap on average).
+
+Conclusion:
+- The unfiltered distribution is dominated by episodes where stopping time barely affects return; that motivated filtering before retraining the controller.
+
+### Filtering packed episodes and retraining on the subset
+
+Intent:
+- Drop trivially flat episodes and reduce imbalance toward “halt immediately,” using only existing packed shards.
+
+Meaningful change:
+- Added `scripts/filter_packed_episodes.py` and `slurm/filter_packed_episodes_della.slurm`.
+- Filters episodes with `halt_reward_range <` threshold; optional cap per `oracle_stop_step` (stratify-sampling).
+- First cluster run hit OOM at 16G (all kept episodes held in RAM); reran with **64G**.
+
+Configuration used:
+- `MIN_HALT_REWARD_RANGE = 0.10`
+- `MAX_PER_STOP_STEP = 500`
+- Output directory: `.../controller_packed/filtered/`
+
+Counts:
+- Train: `68044 → 16155` (range filter) → `6384` (stratify).
+- Validation: `3581 → 848` → `848` (stratify did not bind on validation).
+
+Fitted-Q retrain (filtered manifests, same `continue_cost = 0.001` and linear cost as before — **no** nonlinear cost or cost sweep in code yet):
+- Checkpoints and diagnostics (examples):
+  - `fittedq_controller_async_filtered.pt` + `fittedq_controller_async_filtered_diagnostics.jsonl`
+  - `fittedq_controller_sync_filtered.pt` + `fittedq_controller_sync_filtered_diagnostics.jsonl`
+- Validation greedy (848 episodes):
+  - **Async:** `average_regret ≈ 0.016`, `first_action_accuracy ≈ 0.731`, `exact_stop_step_accuracy ≈ 0.042`.
+  - **Sync:** `average_regret ≈ 0.040`, `first_action_accuracy ≈ 0.697`, `exact_stop_step_accuracy ≈ 0.052`.
+- On unfiltered data, sync and async had been nearly tied on average regret; on filtered data, **async shows clearly lower regret** and fewer high-regret episodes in diagnostics.
+
+Conclusion:
+- Filtering surfaces differences between encoders: async’s message-passing appears to help when episodes are nontrivial.
+- Under-search still carries much higher mean regret than over-search at this `continue_cost`, consistent with cheap extra search vs. missing a better later halt.
+
+### Analysis notebooks
+
+Meaningful change:
+- `regret_landscape.ipynb` — loads paired sync/async **filtered diagnostics** JSONLs; regret distributions, regret vs. difficulty metrics, predicted vs. oracle stop, regret by oracle step, over- vs under-search breakdowns, correlation matrices, sync-vs-async per-episode regret scatter, high-regret trajectory plots.
+- `episode_difficulty_analysis.ipynb` — loads **`episode_difficulty.jsonl`** from `analyze_episode_difficulty.py`; train/val summaries, histograms, oracle-stop distribution, correlations, halt@0 vs continue boxplots, example halt-reward traces.
+
+Cluster copy (example):
+- `scp della:/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed/episode_difficulty.jsonl .`
+
+### Qualitative notes from regret-landscape plots (filtered diagnostics)
+
+- Regret vs. difficulty metrics often shows dense mass near **zero regret**; structures (lines, L-shapes) appear when tying **flat landscapes** (small second-best gap, many near-ties) to small regret even when the stop step is wrong.
+- **Predicted vs. oracle stop:** both models **over-search** more than under-search at this cost (consistent with low `continue_cost` and asymmetric error: under-search mean regret much higher than over-search).
+- **Regret vs. oracle stop step:** largely flat — mistakes are not concentrated at a particular oracle stopping time.
+- **Per-episode sync vs. async regret:** mean can favor async while head-to-head “who wins more rows” can favor sync if async wins a **few** episodes by large margins and sync wins **many** by tiny amounts.
+
+### Not done in this thread (future)
+
+- Nonlinear / superlinear continue cost in training or packing.
+- Systematic `continue_cost` sweep with re-packing or live targets.
+- Prior-entropy pre-filter at raw FEN generation time.
+
+## 2026-04-14
+
+### Budget-aware controller oracle and packed-data augmentation
+
+Intent:
+- Replace the old scalar `continue_cost` fitted-Q controller setup with a budget-aware offline controller whose decision state is the learned tree encoding together with literal tree size and remaining synthetic planning budget.
+
+Meaningful change:
+- Added `budgeted_controller_oracle.py` with the new recursion
+  - `c_maint(N) = 0.01 * (N / 30) ^ 1.1`
+  - `c_time(T) = lambda * ((T - 1 + tau)^(-(p-1)) - (T + tau)^(-(p-1)))`
+  - defaults: `lambda = 18.537`, `p = 2.8`, `tau = 2.5`, timeout value `-1`
+  - `V_t = max(H_t, -c_maint(N_t) - c_time(T_t) + V_{t+1})`
+- `scripts/pack_controller_episodes.py` now:
+  - computes raw trimmed controller episodes once
+  - pre-filters by raw `halt_reward_range` before augmentation
+  - augments each surviving raw episode with deterministic synthetic starting budgets across five buckets
+  - stores `tree_sizes`, `time_budgets`, `starting_budgets`, bucket metadata, and budget-aware oracle targets in packed shards
+- Packed format bumped to:
+  - manifest: `cts_budgeted_controller_episode_manifest_v2`
+  - shard: `cts_budgeted_controller_episode_shard_v2`
+
+Default augmentation:
+- buckets:
+  - `[1, 3]`
+  - `[4, 10]`
+  - `[11, 25]`
+  - `[26, 60]`
+  - `[61, 120]`
+- `2` samples per bucket
+- pre-filter default in the Slurm wrapper: `MIN_HALT_REWARD_RANGE = 0.10`
+
+Conclusion:
+- The packer now does the sensible order for this workflow: filter on raw episode interestingness first, then replicate into synthetic budgets, instead of writing a huge augmented corpus only to discard most of it later.
+
+### Budget-aware controller training and caching
+
+Intent:
+- Train the offline async controller on `concat(z_t, N_t, T_t)` with supervised advantage regression under the new budget-aware oracle, while avoiding repeated frozen-encoder materialization cost.
+
+Meaningful change:
+- `scripts/train_fitted_q_controller.py` now:
+  - consumes only the packed budget-aware manifests for this path
+  - uses an MLP head on `concat(z_t, N_t, T_t)` (one hidden layer with ReLU)
+  - computes greedy returns/regret under the new budget-aware oracle
+  - writes diagnostics containing `N_t`, `T_t`, starting budget, oracle/predicted stop, oracle/predicted value, target/predicted advantages, and regret
+- Added on-disk cache for frozen-encoder materialization:
+  - first run materializes `[z_t, N_t, T_t]` features from the packed dataset and saves them next to the manifests
+  - later runs reuse those cache files as long as the packed manifest path and encoder checkpoint match
+
+Practical notes:
+- The expensive `materialize_*_encoder` stage is still a full one-pass encoding over the packed dataset; larger `EPISODE_BATCH_SIZE` only improves throughput, not asymptotic cost.
+- The cache is intended to make repeated controller-head retrains cheap once the first frozen-encoder pass has completed.
+
+### Cluster workflow fixes
+
+Meaningful change:
+- Updated Slurm wrappers for packing and training to expose the budget-aware parameters and packed-manifest paths.
+- Fixed an rsync workflow issue during deployment: copying without `-R` polluted the remote repo root with stray duplicates while leaving `scripts/` / `slurm/` unchanged. Subsequent syncs used `rsync -avR ...` to update the active files in place.
+
+Conclusion:
+- Current intended cluster workflow is:
+  1. re-pack with raw-range pre-filter + budget augmentation
+  2. train directly on the repacked manifests
+  3. reuse cached frozen-encoder features on subsequent controller runs

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import torch
 
 from cts_pretrain import PretrainExample, TeacherSearchConfig, TeacherSearchResult, compute_teacher_targets
+from planning_cost import incremental_planning_cost, planning_cost_config
 from tree import SearchTree
 
 
@@ -55,11 +56,25 @@ class ControllerOnlyEnv:
 
 
 class ToyHaltEnv(ControllerOnlyEnv):
-    def __init__(self, tree_snapshots: Sequence[SearchTree], continue_cost: float = 0.05) -> None:
+    def __init__(
+        self,
+        tree_snapshots: Sequence[SearchTree],
+        continue_cost: float = 0.05,
+        *,
+        planning_cost_kind: str = "linear",
+        planning_cost_exponent: float = 1.0,
+    ) -> None:
         if not tree_snapshots:
             raise ValueError("tree_snapshots must be non-empty.")
         self.tree_snapshots = [tree.clone() for tree in tree_snapshots]
-        self.continue_cost = continue_cost
+        self.continue_cost = float(continue_cost)
+        self.planning_cost_kind = planning_cost_kind
+        self.planning_cost_exponent = float(planning_cost_exponent)
+        self.cost_config = planning_cost_config(
+            self.continue_cost,
+            kind=self.planning_cost_kind,
+            exponent=self.planning_cost_exponent,
+        )
         self._snapshot_index = 0
         self._done = False
         self._episode_return = 0.0
@@ -97,7 +112,7 @@ class ToyHaltEnv(ControllerOnlyEnv):
             reward = self._terminal_quality()
             done = True
         else:
-            reward = -self.continue_cost
+            reward = -incremental_planning_cost(self._snapshot_index, self.cost_config)
             if self._snapshot_index + 1 < len(self.tree_snapshots):
                 self._snapshot_index += 1
             else:
@@ -292,6 +307,9 @@ class GeneratedTreeHaltEnv(ControllerOnlyEnv):
         example_paths: Sequence[str],
         quality_config: TeacherSearchConfig,
         continue_cost: float = 0.05,
+        *,
+        planning_cost_kind: str = "linear",
+        planning_cost_exponent: float = 1.0,
         seed: int = 0,
         shuffle: bool = True,
         max_cache_size: int = 32,
@@ -302,6 +320,13 @@ class GeneratedTreeHaltEnv(ControllerOnlyEnv):
         self.example_paths = list(example_paths)
         self.quality_config = quality_config
         self.continue_cost = float(continue_cost)
+        self.planning_cost_kind = planning_cost_kind
+        self.planning_cost_exponent = float(planning_cost_exponent)
+        self.cost_config = planning_cost_config(
+            self.continue_cost,
+            kind=self.planning_cost_kind,
+            exponent=self.planning_cost_exponent,
+        )
         self.shuffle = shuffle
         self._rng = random.Random(seed)
         self._next_index = 0
@@ -375,7 +400,7 @@ class GeneratedTreeHaltEnv(ControllerOnlyEnv):
             reward = self._halt_reward()
             done = True
         else:
-            reward = -self.continue_cost
+            reward = -incremental_planning_cost(self._snapshot_index, self.cost_config)
             if self._snapshot_index + 1 < len(self._snapshots):
                 self._snapshot_index += 1
             else:
