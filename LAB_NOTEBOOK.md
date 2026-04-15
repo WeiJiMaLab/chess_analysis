@@ -959,3 +959,143 @@ Conclusion:
   1. re-pack with raw-range pre-filter + budget augmentation
   2. train directly on the repacked manifests
   3. reuse cached frozen-encoder features on subsequent controller runs
+
+## 2026-04-15
+
+### First budget-aware async controller run: poor final metacontrol despite low regression loss
+
+Run:
+- Packed budget-aware controller data with the original maintenance scale `0.01`.
+- Trained the async frozen-encoder controller with the default small MLP head.
+
+Final greedy metrics on the validation run (`8480` episodes):
+- `average_return = -0.075`
+- `average_oracle_value = 0.080`
+- `average_regret = 0.155`
+- `average_expansions = 2.293`
+
+Immediate interpretation:
+- The run is not failing because the model cannot detect imminent timeout; rather, regret is coming mostly from medium-to-large budget regimes where the controller continues too long.
+- The regression objective plateaus early while greedy metacontrol remains poor, so low advantage MSE by itself is not a sufficient success criterion.
+
+### Saved analysis scripts for budget-aware runs
+
+Meaningful change:
+- Added `scripts/plot_advantage_loss_from_log.py`
+  - parses a training `.out` log and plots train / validation `advantage_mse` over epochs
+- Added `scripts/analyze_budgeted_controller_run.py`
+  - consumes only the diagnostics JSONL and the training `.out`
+  - writes a full report directory with plots and `summary.json`
+  - includes:
+    - loss curves
+    - greedy metrics over epochs
+    - regret by starting-budget bucket
+    - stop error by budget bucket
+    - regret by oracle stop step
+    - regret by stop-step error (`predicted_stop_step - oracle_stop_step`)
+    - sign accuracy by current `T_t`
+    - target-advantage distribution by current `T_t`
+    - predicted vs target advantage
+    - false-continue / false-halt rates by `T_t`
+    - regret by initial tree size
+    - `T_t × N_t` partial-dependence heatmaps
+    - same-tree different-budget consistency
+    - oracle stop distribution
+    - calibration by predicted-advantage magnitude
+    - trivial baseline sweep
+
+Key findings from the diagnostics-only report:
+- Best greedy epoch occurs earlier than the final epoch; continuing training increases average expansions and worsens regret.
+- Regret is small in the `scramble` bucket and substantially larger in `medium-large`, `large`, and `very-large`.
+- Over-search is the dominant failure mode in those larger-budget buckets.
+- Sign accuracy is strongest at very low `T_t`; the bad run is not primarily a “cannot detect low time” problem.
+
+### Regret decomposition: halt-reward term vs maintenance vs time
+
+Meaningful change:
+- Extended `scripts/analyze_budgeted_controller_run.py` with an exact episode-level decomposition:
+  - `oracle_value - predicted_value`
+  - `= (halt_reward@oracle - halt_reward@predicted) + (predicted maintenance paid - oracle maintenance paid) + (predicted time paid - oracle time paid)`
+- Added plots and JSON summaries for that decomposition.
+
+Main result:
+- In large-budget over-search episodes, regret is almost entirely **not** coming from time cost.
+- Example: for `large`, `delta = +6` (`predicted_stop_step - oracle_stop_step = 6`), mean regret is about `0.50`, with roughly:
+  - halt-reward term `≈ 0.21`
+  - maintenance term `≈ 0.28`
+  - time term `≈ 0.008`
+
+Conclusion:
+- Large-budget regret is dominated by two things:
+  1. extra maintenance burden from carrying a larger tree for extra steps
+  2. halting later at a root move whose final-tree score is worse than the oracle-stop move
+- The explicit time-cost term is negligible in those regimes.
+
+### Oracle-stop factor analysis
+
+Meaningful change:
+- Added an oracle-decision-factor decomposition to `scripts/analyze_budgeted_controller_run.py`:
+  - `target_advantage = future_value_gain - maintenance_cost - time_cost`
+  - `future_value_gain = oracle_next_value - halt_reward_now`
+- At the oracle stop step, the report now classifies whether halting is driven by:
+  - `future_already_worse`
+  - `maintenance_dominated`
+  - `time_dominated`
+
+Main result:
+- In the `large` bucket, oracle halting is almost never driven by time cost:
+  - `future_already_worse`: about `97%`
+  - `maintenance_dominated`: about `3%`
+  - `time_dominated`: essentially `0%`
+
+Interpretation:
+- In large-budget regimes, the oracle typically halts because continuing is already worse in value terms before explicit time cost matters.
+- So the metacontroller’s failure there is not just “missing the time term.”
+
+### Move-switch analysis for `future_already_worse`
+
+Meaningful change:
+- Added `scripts/analyze_future_worse_move_switch.py`
+  - reconstructs the trimmed decision episode from each `source_path`
+  - compares the oracle-stop root move to the predicted-stop root move
+  - splits `future_already_worse` episodes into:
+    - `same_move`
+    - `move_switch`
+
+Main result:
+- `same_move` cases:
+  - mean regret `≈ 0.069`
+  - halt-reward term exactly `0`
+  - regret comes almost entirely from maintenance/time cost
+- `move_switch` cases:
+  - mean regret `≈ 0.409`
+  - halt-reward term `≈ 0.346`
+  - maintenance term much smaller than the halt-reward penalty
+
+Large-budget interpretation:
+- If over-search keeps the same root move, regret is basically just extra maintenance cost.
+- The really large regrets come from over-search episodes where the root move changes to one that the final finite-tree evaluation scores worse.
+
+Open concern:
+- This exposes a non-monotonicity in the halt-reward construction: immediate halting can outperform intermediate search, while later search may recover.
+- The current reward target therefore mixes “value of computation” with transient root-action churn along the finite search trajectory.
+
+### Architecture/cost changes queued for the next overnight run
+
+Meaningful change:
+- Strengthened the controller head in `scripts/train_fitted_q_controller.py` and the train Slurm wrappers:
+  - hidden width `256`
+  - `3` hidden layers
+- Reduced the default budgeted maintenance scale by a factor of `4`:
+  - from `0.01` to `0.0025`
+  - updated in:
+    - `budgeted_controller_oracle.py`
+    - `scripts/pack_controller_episodes.py`
+    - `scripts/train_fitted_q_controller.py`
+    - `slurm/pack_controller_episodes_della.slurm`
+    - `slurm/train_fitted_q_controller_della.slurm`
+    - `slurm/train_compute_advantage_della.slurm`
+
+Intent:
+- Lower maintenance burden should reduce the strong immediate-halt bias and make the oracle less dominated by “tree upkeep” penalties.
+- The deeper MLP is a straightforward capacity increase for reading out budget-sensitive controller structure from `concat(z_t, N_t, T_t)`.

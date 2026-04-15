@@ -75,6 +75,25 @@ class BudgetedControllerOracleTests(unittest.TestCase):
 
 
 class TrainFittedQControllerTests(unittest.TestCase):
+    def test_model_builds_multi_layer_advantage_head(self):
+        model = ComputeAdvantageTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=4,
+            d_embed=4,
+            d_message=4,
+            n_heads=1,
+            d_att=2,
+            q_hidden=8,
+            q_hidden_layers=3,
+        )
+        linear_layers = [module for module in model.advantage_head if isinstance(module, torch.nn.Linear)]
+        self.assertEqual(len(linear_layers), 4)
+        self.assertEqual(linear_layers[0].in_features, model.encoder.d_embed + 2)
+        self.assertEqual(linear_layers[0].out_features, 8)
+        self.assertEqual(linear_layers[-1].out_features, 1)
+
     def test_model_appends_literal_tree_size_and_budget_features(self):
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
         tensorizer = TreeTensorizer(schema, device="cpu")
@@ -88,6 +107,7 @@ class TrainFittedQControllerTests(unittest.TestCase):
             n_heads=1,
             d_att=2,
             q_hidden=4,
+            q_hidden_layers=1,
         )
         features = model.encode_with_state_features(
             tensorizer.tensorize_tree(_root_tree(0.0), validate=False),
@@ -126,6 +146,7 @@ class TrainFittedQControllerTests(unittest.TestCase):
             n_heads=1,
             d_att=2,
             q_hidden=4,
+            q_hidden_layers=1,
         )
         with torch.no_grad():
             for parameter in model.parameters():

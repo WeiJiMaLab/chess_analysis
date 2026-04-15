@@ -102,6 +102,7 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
         n_heads: int,
         d_att: int,
         q_hidden: int,
+        q_hidden_layers: int,
     ) -> None:
         super().__init__()
         self.encoder = TreeNN(
@@ -115,10 +116,13 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
             d_att=d_att,
         )
         resolved_device = self.encoder.device
-        self.advantage_head = nn.Sequential(
-            nn.Linear(self.encoder.d_embed + 2, q_hidden, device=resolved_device),
-            nn.ReLU(),
-            nn.Linear(q_hidden, 1, device=resolved_device),
+        if q_hidden_layers <= 0:
+            raise ValueError("q_hidden_layers must be positive.")
+        self.advantage_head = _build_advantage_head(
+            input_dim=self.encoder.d_embed + 2,
+            hidden_dim=q_hidden,
+            hidden_layers=q_hidden_layers,
+            device=resolved_device,
         )
 
     def freeze_encoder(self) -> None:
@@ -266,6 +270,23 @@ class PackedControllerEpisodeDataset(Dataset):
             starting_budget=int(payload["starting_budgets"][episode_offset].item()),
             budget_bucket_name=payload["budget_bucket_names"][episode_offset],
         )
+
+
+def _build_advantage_head(
+    *,
+    input_dim: int,
+    hidden_dim: int,
+    hidden_layers: int,
+    device: torch.device,
+) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    current_dim = input_dim
+    for _ in range(hidden_layers):
+        layers.append(nn.Linear(current_dim, hidden_dim, device=device))
+        layers.append(nn.ReLU())
+        current_dim = hidden_dim
+    layers.append(nn.Linear(current_dim, 1, device=device))
+    return nn.Sequential(*layers)
 
 
 class PackedControllerCollator:
@@ -1055,7 +1076,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-message", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--d-att", type=int, default=32)
-    parser.add_argument("--q-hidden", type=int, default=128)
+    parser.add_argument("--q-hidden", type=int, default=256)
+    parser.add_argument("--q-hidden-layers", type=int, default=3)
     parser.add_argument("--unfreeze-encoder", action="store_true")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--episode-batch-size", type=int, default=8)
@@ -1068,7 +1090,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--greedy-eval-interval", type=int, default=1)
     parser.add_argument("--output-diagnostics", default=None)
-    parser.add_argument("--maintenance-scale", type=float, default=0.01)
+    parser.add_argument("--maintenance-scale", type=float, default=0.0025)
     parser.add_argument("--maintenance-ref-nodes", type=float, default=30.0)
     parser.add_argument("--maintenance-exponent", type=float, default=1.1)
     parser.add_argument("--time-lambda", type=float, default=18.537)
@@ -1122,6 +1144,7 @@ def main() -> None:
         n_heads=args.n_heads,
         d_att=args.d_att,
         q_hidden=args.q_hidden,
+        q_hidden_layers=args.q_hidden_layers,
     )
     load_encoder_checkpoint(args.encoder_checkpoint, model.encoder)
     if not args.unfreeze_encoder:
