@@ -193,6 +193,29 @@ def _root_q_values_from_teacher_result(
     return root_q_values
 
 
+def oracle_root_q_trace_for_example(
+    example: PretrainExample,
+) -> Optional[Tuple[List[int], List[Dict[str, float]], List[str], Dict[str, float]]]:
+    if not example.oracle_root_q_trace or not example.oracle_root_moves:
+        return None
+    q_maps = [
+        {
+            move: float(value)
+            for move, value in zip(example.oracle_root_moves, row)
+        }
+        for row in example.oracle_root_q_trace
+    ]
+    final_root_q_values = dict(example.oracle_final_root_q_values)
+    if not final_root_q_values and q_maps:
+        final_root_q_values = dict(q_maps[-1])
+    return (
+        list(example.oracle_trace_expansion_counts),
+        q_maps,
+        list(example.oracle_best_move_trace),
+        final_root_q_values,
+    )
+
+
 def build_snapshot_episode(
     example: PretrainExample,
     quality_config: TeacherSearchConfig,
@@ -212,6 +235,38 @@ def build_snapshot_episode_metadata(
     best_moves: List[Optional[str]] = []
     final_root_q_values: Dict[str, float] = {}
     final_best_quality = float("nan")
+    stored_trace = oracle_root_q_trace_for_example(example)
+    if stored_trace is not None:
+        trace_counts, q_maps, trace_best_moves, final_root_q_values = stored_trace
+        count_to_trace_idx = {int(count): idx for idx, count in enumerate(trace_counts)}
+        if len(trace_counts) != len(expansion_parent_ids):
+            raise ValueError(
+                "Stored oracle trace must align with the original expansion sequence for generated examples."
+            )
+        if set(trace_counts) != set(range(1, len(expansion_parent_ids) + 1)):
+            raise ValueError("Stored oracle trace must contain one row for each positive expansion count.")
+        if final_root_q_values:
+            final_best_quality = float(max(final_root_q_values.values()))
+        else:
+            final_best_quality = float(tree.get_node(tree.root_id).scalar_features["value"])
+
+        for expansion_count in range(len(expansion_parent_ids) + 1):
+            snapshot = _truncate_tree_at_expansion_count(tree, expansion_count)
+            snapshots.append(snapshot)
+            if expansion_count == 0:
+                qualities.append(float(snapshot.get_node(snapshot.root_id).scalar_features["value"]))
+                best_moves.append(None)
+                continue
+            trace_idx = count_to_trace_idx.get(expansion_count)
+            if trace_idx is None:
+                raise ValueError(f"Stored oracle trace is missing expansion_count={expansion_count}.")
+            root_q_values = q_maps[trace_idx]
+            if not root_q_values:
+                raise ValueError(f"Stored oracle trace at expansion_count={expansion_count} has no root q-values.")
+            qualities.append(float(max(root_q_values.values())))
+            best_moves.append(str(trace_best_moves[trace_idx]))
+        return snapshots, qualities, best_moves, final_root_q_values, final_best_quality
+
     for expansion_count in range(len(expansion_parent_ids) + 1):
         snapshot = _truncate_tree_at_expansion_count(tree, expansion_count)
         teacher_result = compute_teacher_targets(snapshot, quality_config, validate=False)

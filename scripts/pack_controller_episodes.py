@@ -422,7 +422,7 @@ def main() -> None:
     parser.add_argument("--search-budget", type=int, default=64)
     parser.add_argument("--max-depth", type=int, default=10)
     parser.add_argument("--c-puct", type=float, default=1.0)
-    parser.add_argument("--maintenance-scale", type=float, default=0.0025)
+    parser.add_argument("--maintenance-scale", type=float, default=0.0)
     parser.add_argument("--maintenance-ref-nodes", type=float, default=30.0)
     parser.add_argument("--maintenance-exponent", type=float, default=1.1)
     parser.add_argument("--time-lambda", type=float, default=18.537)

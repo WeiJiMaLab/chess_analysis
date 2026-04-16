@@ -1345,6 +1345,54 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(halt_rewards, [episode.final_root_q_values[move] for move in episode.best_moves])
         self.assertTrue(all(snapshot.root_children() for snapshot in episode.snapshots))
 
+    def test_generated_examples_store_oracle_root_trace(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
+            rng=random.Random(5),
+        )
+
+        self.assertEqual(
+            example.oracle_trace_expansion_counts,
+            list(range(1, len(example.tree.ordered_expansion_parent_ids()) + 1)),
+        )
+        self.assertEqual(len(example.oracle_root_q_trace), len(example.oracle_trace_expansion_counts))
+        self.assertEqual(len(example.oracle_best_move_trace), len(example.oracle_trace_expansion_counts))
+        self.assertTrue(example.oracle_root_moves)
+        self.assertEqual(
+            example.oracle_final_root_q_values,
+            {
+                move: q_value
+                for move, q_value in zip(example.oracle_root_moves, example.oracle_root_q_trace[-1])
+            },
+        )
+
+    def test_snapshot_episode_metadata_uses_stored_oracle_trace_without_research(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
+            rng=random.Random(9),
+        )
+
+        with patch("cts_episode_envs.compute_teacher_targets", side_effect=AssertionError("should not re-search")):
+            snapshots, qualities, best_moves, final_root_q_values, final_best_quality = build_snapshot_episode_metadata(
+                example,
+                self.config,
+            )
+
+        self.assertEqual(len(snapshots), len(example.tree.ordered_expansion_parent_ids()) + 1)
+        self.assertEqual(best_moves[1:], example.oracle_best_move_trace)
+        self.assertEqual(final_root_q_values, example.oracle_final_root_q_values)
+        self.assertAlmostEqual(final_best_quality, max(example.oracle_final_root_q_values.values()))
+        self.assertEqual(
+            qualities[1:],
+            [max(row) for row in example.oracle_root_q_trace],
+        )
+
     def test_snapshot_reconstruction_handles_nontrivial_expansion_order(self):
         tree = SearchTree()
         root_id = tree.create_root("root", {"value": 0.0, "prior": 1.0})

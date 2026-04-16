@@ -1090,7 +1090,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--greedy-eval-interval", type=int, default=1)
     parser.add_argument("--output-diagnostics", default=None)
-    parser.add_argument("--maintenance-scale", type=float, default=0.0025)
+    parser.add_argument("--maintenance-scale", type=float, default=0.0)
     parser.add_argument("--maintenance-ref-nodes", type=float, default=30.0)
     parser.add_argument("--maintenance-exponent", type=float, default=1.1)
     parser.add_argument("--time-lambda", type=float, default=18.537)

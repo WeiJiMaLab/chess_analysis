@@ -122,6 +122,10 @@ class GeneratedTree:
     edge_stats: Dict[Tuple[int, int], EdgeStats]
     sampled_node_budget: int
     num_expansions: int
+    oracle_trace_expansion_counts: List[int] = field(default_factory=list)
+    oracle_root_moves: List[str] = field(default_factory=list)
+    oracle_root_q_trace: List[List[float]] = field(default_factory=list)
+    oracle_best_move_trace: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -130,6 +134,11 @@ class PretrainExample:
     node_target_values: List[float]
     edge_wdl_targets: Dict[Tuple[int, int], Tuple[float, float, float]] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    oracle_trace_expansion_counts: List[int] = field(default_factory=list)
+    oracle_root_moves: List[str] = field(default_factory=list)
+    oracle_root_q_trace: List[List[float]] = field(default_factory=list)
+    oracle_best_move_trace: List[str] = field(default_factory=list)
+    oracle_final_root_q_values: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.node_target_values = [float(value) for value in self.node_target_values]
@@ -138,15 +147,57 @@ class PretrainExample:
             for (parent_id, child_id), target in dict(self.edge_wdl_targets).items()
         }
         self.metadata = dict(self.metadata)
+        self.oracle_trace_expansion_counts = [int(value) for value in self.oracle_trace_expansion_counts]
+        self.oracle_root_moves = [str(move) for move in self.oracle_root_moves]
+        self.oracle_root_q_trace = [
+            [float(value) for value in row]
+            for row in self.oracle_root_q_trace
+        ]
+        self.oracle_best_move_trace = [str(move) for move in self.oracle_best_move_trace]
+        self.oracle_final_root_q_values = {
+            str(move): float(value)
+            for move, value in dict(self.oracle_final_root_q_values).items()
+        }
         if len(self.node_target_values) != self.tree.num_nodes():
             raise ValueError("node_target_values must match tree.num_nodes().")
         if self.edge_wdl_targets and len(self.edge_wdl_targets) != self.tree.num_edges():
             raise ValueError("edge_wdl_targets must match tree.num_edges().")
+        if self.oracle_trace_expansion_counts or self.oracle_root_q_trace or self.oracle_best_move_trace:
+            if not self.oracle_root_moves:
+                raise ValueError("oracle_root_moves must be provided when oracle traces are stored.")
+            if len(self.oracle_trace_expansion_counts) != len(self.oracle_root_q_trace):
+                raise ValueError("oracle_trace_expansion_counts and oracle_root_q_trace must have the same length.")
+            if len(self.oracle_trace_expansion_counts) != len(self.oracle_best_move_trace):
+                raise ValueError("oracle_trace_expansion_counts and oracle_best_move_trace must have the same length.")
+            if any(len(row) != len(self.oracle_root_moves) for row in self.oracle_root_q_trace):
+                raise ValueError("Each oracle_root_q_trace row must align with oracle_root_moves.")
+            if any(move not in self.oracle_root_moves for move in self.oracle_best_move_trace):
+                raise ValueError("oracle_best_move_trace contains a move outside oracle_root_moves.")
+            if any(count <= 0 for count in self.oracle_trace_expansion_counts):
+                raise ValueError("oracle trace expansion counts must be positive.")
+            if any(
+                right <= left
+                for left, right in zip(self.oracle_trace_expansion_counts, self.oracle_trace_expansion_counts[1:])
+            ):
+                raise ValueError("oracle trace expansion counts must be strictly increasing.")
+        if self.oracle_final_root_q_values and self.oracle_root_moves:
+            if set(self.oracle_final_root_q_values) != set(self.oracle_root_moves):
+                raise ValueError("oracle_final_root_q_values must align with oracle_root_moves.")
 
     def __setstate__(self, state: Mapping[str, Any]) -> None:
         self.__dict__.update(state)
         if "edge_wdl_targets" not in self.__dict__:
             self.edge_wdl_targets = {}
+        if "oracle_trace_expansion_counts" not in self.__dict__:
+            self.oracle_trace_expansion_counts = []
+        if "oracle_root_moves" not in self.__dict__:
+            self.oracle_root_moves = []
+        if "oracle_root_q_trace" not in self.__dict__:
+            self.oracle_root_q_trace = []
+        if "oracle_best_move_trace" not in self.__dict__:
+            self.oracle_best_move_trace = []
+        if "oracle_final_root_q_values" not in self.__dict__:
+            self.oracle_final_root_q_values = {}
         self.__post_init__()
 
 
@@ -616,6 +667,24 @@ def _edge_target_wdls_from_edge_stats(
     return edge_targets
 
 
+def _root_q_values_from_edge_stats(
+    tree: SearchTree,
+    edge_stats: Mapping[Tuple[int, int], EdgeStats],
+) -> Dict[str, float]:
+    root_id = tree.root_id
+    if root_id is None:
+        raise ValueError("Tree must contain a root.")
+
+    root_q_values: Dict[str, float] = {}
+    for child_id in tree.root_children():
+        move_uci = tree.get_node(child_id).incoming_move_uci
+        if move_uci is None:
+            raise ValueError(f"Root child {child_id} is missing an incoming move.")
+        stats = edge_stats.get((root_id, child_id))
+        root_q_values[str(move_uci)] = float(stats.q_value) if stats is not None else 0.0
+    return root_q_values
+
+
 def generate_partial_tree_from_provider(
     root_fen: str,
     provider: TreeExpansionProvider,
@@ -634,6 +703,31 @@ def generate_partial_tree_from_provider(
     )
     edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
     num_expansions = 0
+    oracle_trace_expansion_counts: List[int] = []
+    oracle_root_moves: List[str] = []
+    oracle_root_q_trace: List[List[float]] = []
+    oracle_best_move_trace: List[str] = []
+
+    def _record_oracle_root_trace() -> None:
+        nonlocal oracle_root_moves
+        if tree.root_id is None:
+            return
+        root_children = tree.root_children()
+        if not root_children:
+            return
+        if not oracle_root_moves:
+            oracle_root_moves = []
+            for child_id in root_children:
+                move_uci = tree.get_node(child_id).incoming_move_uci
+                if move_uci is None:
+                    raise ValueError(f"Root child {child_id} is missing an incoming move.")
+                oracle_root_moves.append(str(move_uci))
+        root_q_values = _root_q_values_from_edge_stats(tree, edge_stats)
+        row = [float(root_q_values[move]) for move in oracle_root_moves]
+        best_move = oracle_root_moves[max(range(len(row)), key=row.__getitem__)]
+        oracle_trace_expansion_counts.append(num_expansions)
+        oracle_root_q_trace.append(row)
+        oracle_best_move_trace.append(best_move)
 
     while num_expansions < sampled_node_budget and _has_expandable_frontier(tree, config):
         node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
@@ -661,12 +755,17 @@ def generate_partial_tree_from_provider(
             edge_stats[(node_id, child_id)] = EdgeStats()
         num_expansions += 1
         _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
+        _record_oracle_root_trace()
 
     return GeneratedTree(
         tree=tree,
         edge_stats=edge_stats,
         sampled_node_budget=sampled_node_budget,
         num_expansions=num_expansions,
+        oracle_trace_expansion_counts=oracle_trace_expansion_counts,
+        oracle_root_moves=oracle_root_moves,
+        oracle_root_q_trace=oracle_root_q_trace,
+        oracle_best_move_trace=oracle_best_move_trace,
     )
 
 
@@ -786,11 +885,28 @@ def build_pretrain_example(
         "target_generation_version": config.target_normalization_version,
         "edge_wdl_target_generation_version": "search_consolidated_edge_wdl_v1",
     }
+    oracle_trace_expansion_counts: List[int] = []
+    oracle_root_moves: List[str] = []
+    oracle_root_q_trace: List[List[float]] = []
+    oracle_best_move_trace: List[str] = []
+    oracle_final_root_q_values: Dict[str, float] = {}
+    if node_budget_distribution is not None:
+        oracle_trace_expansion_counts = list(generated_tree.oracle_trace_expansion_counts)
+        oracle_root_moves = list(generated_tree.oracle_root_moves)
+        oracle_root_q_trace = [list(row) for row in generated_tree.oracle_root_q_trace]
+        oracle_best_move_trace = list(generated_tree.oracle_best_move_trace)
+        oracle_final_root_q_values = _root_q_values_from_edge_stats(tree, generated_tree.edge_stats)
+        metadata["oracle_trace_generation_version"] = "generated_search_root_q_v1"
     return PretrainExample(
         tree=tree,
         node_target_values=teacher_result.node_target_values,
         edge_wdl_targets=teacher_result.edge_target_wdls,
         metadata=metadata,
+        oracle_trace_expansion_counts=oracle_trace_expansion_counts,
+        oracle_root_moves=oracle_root_moves,
+        oracle_root_q_trace=oracle_root_q_trace,
+        oracle_best_move_trace=oracle_best_move_trace,
+        oracle_final_root_q_values=oracle_final_root_q_values,
     )
 
 

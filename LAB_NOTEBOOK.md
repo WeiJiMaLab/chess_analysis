@@ -1099,3 +1099,38 @@ Meaningful change:
 Intent:
 - Lower maintenance burden should reduce the strong immediate-halt bias and make the oracle less dominated by “tree upkeep” penalties.
 - The deeper MLP is a straightforward capacity increase for reading out budget-sensitive controller structure from `concat(z_t, N_t, T_t)`.
+
+## 2026-04-16
+
+### Oracle-aligned controller data path and churn analysis
+
+Intent:
+- Make the controller supervision semantically consistent with the intended oracle: snapshots should be prefixes of the original generated search, and halt rewards should be derived from the full source-tree oracle rather than from fresh teacher re-search on each prefix.
+
+Meaningful changes:
+- `cts_pretrain.py` now stores oracle trajectory data in generated raw examples:
+  - expansion counts after each original search expansion
+  - root-Q trace over the original search
+  - best-move trace over the original search
+  - final full-source-tree root Q-values
+- `cts_episode_envs.py` now consumes those stored oracle traces when building controller episodes, falling back to the older re-search path only for legacy examples that do not have the new fields.
+- The budgeted-controller path now defaults `maintenance_scale = 0.0`:
+  - `budgeted_controller_oracle.py`
+  - `scripts/pack_controller_episodes.py`
+  - `scripts/train_fitted_q_controller.py`
+  - `slurm/pack_controller_episodes_della.slurm`
+  - `slurm/train_fitted_q_controller_della.slurm`
+  - `slurm/train_compute_advantage_della.slurm`
+- `scripts/analyze_budgeted_controller_run.py` now supports source-path rewrites and root-action churn summaries anchored on the ultimately chosen move:
+  - top-level motif classes `A`, `X*A`, `X*AB*A`
+  - compressed-length and unique-move distributions
+  - first appearance and stabilization of the final move
+  - oracle stop phase relative to first appearance / stabilization
+  - lucky early halts
+
+Result:
+- The code path is now ready for a clean regeneration of the raw `generated_trees` corpus under the oracle-aligned semantics.
+- Existing raw examples remain loadable, but only regenerated examples carry the stored oracle traces and therefore avoid prefix re-search.
+
+Conclusion:
+- Future budgeted-controller experiments should use regenerated raw source trees, then rebuild the split manifests and packed controller data from that new corpus before training.

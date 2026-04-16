@@ -32,7 +32,7 @@ DEFAULT_BUDGET_BUCKETS: tuple[BudgetBucket, ...] = (
 
 @dataclass(frozen=True)
 class BudgetedOracleConfig:
-    maintenance_scale: float = 0.0025
+    maintenance_scale: float = 0.0
     maintenance_ref_nodes: float = 30.0
     maintenance_exponent: float = 1.1
     time_lambda: float = 18.537
