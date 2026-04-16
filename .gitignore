@@ -40,3 +40,7 @@ dist/
 
 # Logs
 *.log
+
+# Shared engine + nets
+engines/
+weights/
