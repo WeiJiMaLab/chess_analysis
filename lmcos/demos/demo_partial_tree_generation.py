@@ -21,6 +21,7 @@ from cts_pretrain import (
     TeacherSearchConfig,
     _backup_target_from_child_wdl,
     generate_partial_tree_from_provider,
+    consolidate_generated_tree,
 )
 from tree import SearchTree
 
@@ -45,7 +46,29 @@ def build_teacher_config(args: argparse.Namespace) -> TeacherSearchConfig:
     )
 
 
-def build_provider(*, engine_path: str, weights_path: Optional[str]):
+class BreadthLimitedProvider:
+    """Wraps a provider to only return the top-N children by prior score."""
+    def __init__(self, base_provider: TreeExpansionProvider, max_children: int = 2):
+        self.base_provider = base_provider
+        self.max_children = max_children
+
+    def root_features(self, fen: str):
+        return self.base_provider.root_features(fen)
+
+    def root_metadata(self, fen: str):
+        return self.base_provider.root_metadata(fen)
+
+    def expand_node(self, fen: str, depth: int):
+        children = list(self.base_provider.expand_node(fen, depth))
+        # Sort by 'prior' score from lc0 (higher is better)
+        children.sort(key=lambda c: c.scalar_features.get("prior", 0), reverse=True)
+        return children[:self.max_children]
+
+    def provider_metadata(self):
+        return self.base_provider.provider_metadata()
+
+
+def build_provider(*, engine_path: str, weights_path: Optional[str], max_breadth: int = 2):
     from cts_uci_process import UciEngineConfig, UciEngineProcess
     from uci_provider import Lc0DirectEvalProvider
 
@@ -145,172 +168,162 @@ def _format_wdl(triple: tuple[float, float, float]) -> str:
     return f"{w:.2f}/{d:.2f}/{l:.2f}"
 
 
-def render_tree_svg(
-    tree: SearchTree,
+def render_unified_prefix_svg(
+    oracle_tree: SearchTree,
+    partial_node_ids: set[int],
     out_path: Path,
     *,
-    teacher_line_is_backup: dict[int, bool],
-    node_teacher_wdl: dict[int, tuple[float, float, float]],
+    input_wdl: dict[int, tuple[float, float, float]],
+    target_wdl: dict[int, tuple[float, float, float]],
 ) -> None:
-    # Preorder per depth keeps subtrees contiguous and avoids crossing lines.
-    if tree.root_id is None:
-        raise ValueError("Tree has no root.")
+    """Renders one unified tree where Partial nodes are highlighted and Future nodes are ghosted."""
+    node_w, node_h = 240, 260
+    col_gap, depth_step_y = 30, 320
+    margin_x, margin_y = 40, 80
+
+    # 1. Standard Layout calculation for the Oracle tree
     nodes_by_depth: dict[int, list[int]] = {}
-
-    def visit(node_id: int) -> None:
-        node = tree.get_node(node_id)
+    def visit(node_id: int):
+        node = oracle_tree.get_node(node_id)
         nodes_by_depth.setdefault(node.depth, []).append(node_id)
-        for child_id in tree.child_ids(node_id):
+        for child_id in oracle_tree.child_ids(node_id):
             visit(child_id)
-
-    visit(tree.root_id)
-
-    max_depth = max(nodes_by_depth)
-    node_w, node_h = 220, 268
-    col_gap, depth_step_y = 20, 360
-    margin_x, margin_y = 40, 40
-    legend_h = 28
-
+    if oracle_tree.root_id is not None:
+        visit(oracle_tree.root_id)
+    
     positions: dict[int, tuple[float, float]] = {}
-    max_row_width = 0.0
-    for depth in range(max_depth + 1):
+    max_row_width = 0
+    for depth in range(max(nodes_by_depth or [0]) + 1):
         ids = nodes_by_depth.get(depth, [])
         row_width = len(ids) * node_w + max(0, len(ids) - 1) * col_gap
         max_row_width = max(max_row_width, row_width)
         x = margin_x
-        y = margin_y + legend_h + depth * depth_step_y
+        y = margin_y + depth * depth_step_y
         for node_id in ids:
             positions[node_id] = (x, y)
             x += node_w + col_gap
 
     canvas_w = int(max_row_width + 2 * margin_x)
-    canvas_h = int(margin_y + legend_h + (max_depth + 1) * depth_step_y + node_h)
+    max_d = max(node.depth for node in oracle_tree.iter_nodes()) if oracle_tree.num_nodes() > 0 else 0
+    canvas_h = int(margin_y + (max_d + 1) * depth_step_y + node_h)
 
     svg: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_w}" height="{canvas_h}" viewBox="0 0 {canvas_w} {canvas_h}">',
         '<defs><marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" /></marker></defs>',
         '<rect width="100%" height="100%" fill="#f8fafc"/>',
-        f'<text x="{margin_x:.0f}" y="18" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#64748b">'
-        f'{escape_xml("teacher WDL: ")}'
-        f'<tspan fill="#1d4ed8" font-weight="600">{escape_xml("blue")}</tspan>'
-        f'{escape_xml(" = visit-weighted from children; ")}'
-        f'<tspan fill="#94a3b8" font-weight="600">{escape_xml("gray")}</tspan>'
-        f'{escape_xml(" = static (network) fallback")}'
-        f"</text>",
+        f'<text x="{margin_x:.0f}" y="35" font-family="Inter, sans-serif" font-size="24" font-weight="bold" fill="#0f172a">Unified Search Context: Input vs Target</text>',
+        f'<text x="{margin_x:.0f}" y="60" font-family="Inter, sans-serif" font-size="14" fill="#64748b">'
+        f'<tspan fill="#3b82f6" font-weight="bold">Blue Solid</tspan> = Known by GNN (Input) | '
+        f'<tspan fill="#94a3b8" font-style="italic">Gray Dashed</tspan> = The "Future" (Oracle Targets)'
+        f'</text>',
     ]
 
-    for node in tree.iter_nodes():
+    # Edges
+    for node in oracle_tree.iter_nodes():
         px, py = positions[node.node_id]
         x1, y1 = px + node_w / 2, py + node_h
-        for child_id in tree.child_ids(node.node_id):
+        for child_id in oracle_tree.child_ids(node.node_id):
             cx, cy = positions[child_id]
             x2, y2 = cx + node_w / 2, cy
-            svg.append(
-                f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#arrow)"/>'
-            )
-
-    for node in tree.iter_nodes():
+            stroke = "#cbd5e1" if child_id in partial_node_ids else "#e2e8f0"
+            dash = 'stroke-dasharray="4 2"' if child_id not in partial_node_ids else ""
+            svg.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke}" stroke-width="1.4" {dash} marker-end="url(#arrow)"/>')
+    
+    # Nodes
+    for node in oracle_tree.iter_nodes():
         x, y = positions[node.node_id]
-        move = node.incoming_move_uci if node.incoming_move_uci is not None else "<root>"
-        is_backup = teacher_line_is_backup[node.node_id]
-        wdl_fill = "#1d4ed8" if is_backup else "#94a3b8"
-        static_wdl = _static_wdl_triple(node)
-        line1 = f"move: {move}"
-        line2 = (
-            f"wdl(s): {_format_wdl(static_wdl)}"
-            if static_wdl is not None
-            else "wdl(s): (missing)"
-        )
-        tw = node_teacher_wdl[node.node_id]
-        line3 = f"teacher WDL: {_format_wdl(tw)}"
+        move = node.incoming_move_uci or "<root>"
+        is_input = node.node_id in partial_node_ids
+        
+        border_color = "#3b82f6" if is_input else "#cbd5e1"
+        bg_color = "#ffffff" if is_input else "#f8fafc"
+        stroke_dash = "" if is_input else 'stroke-dasharray="8 4"'
+        opacity = "1.0" if is_input else "0.6"
+
+        svg.append(f'<g opacity="{opacity}">')
+        svg.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{node_w}" height="{node_h}" rx="12" ry="12" fill="{bg_color}" stroke="{border_color}" stroke-width="2.5" {stroke_dash}/>')
+        
+        # Header / Move
+        svg.append(f'<text x="{x + node_w / 2:.1f}" y="{y + 25:.1f}" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="bold" fill="#0f172a">{escape_xml(move)}</text>')
+        
+        # Values
+        if is_input:
+            svg.append(f'<text x="{x + 15}" y="{y + 45}" font-family="Inter, sans-serif" font-size="10" fill="#64748b">INPUT:</text>')
+            svg.append(f'<text x="{x + 65}" y="{y + 45}" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#1e293b">{_format_wdl(input_wdl[node.node_id])}</text>')
+            svg.append(f'<text x="{x + 15}" y="{y + 60}" font-family="Inter, sans-serif" font-size="10" fill="#64748b">TARGET:</text>')
+            svg.append(f'<text x="{x + 65}" y="{y + 60}" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#3b82f6">{_format_wdl(target_wdl[node.node_id])}</text>')
+        else:
+            svg.append(f'<text x="{x + 15}" y="{y + 50}" font-family="Inter, sans-serif" font-size="10" fill="#94a3b8" font-style="italic">Future Node</text>')
+            svg.append(f'<text x="{x + 15}" y="{y + 65}" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#94a3b8">{_format_wdl(target_wdl[node.node_id])}</text>')
+
+        svg.append(f'<line x1="{x+10}" y1="{y+75}" x2="{x+node_w-10}" y2="{y+75}" stroke="#e2e8f0" />')
         lines = board_lines(node.fen)
-
-        svg.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{node_w}" height="{node_h}" rx="10" ry="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.0"/>'
-        )
-        svg.append(
-            f'<text x="{x + node_w / 2:.1f}" y="{y + 18:.1f}" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="12" fill="#0f172a">{escape_xml(line1)}</text>'
-        )
-        svg.append(
-            f'<text x="{x + node_w / 2:.1f}" y="{y + 36:.1f}" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#334155">{escape_xml(line2)}</text>'
-        )
-        svg.append(
-            f'<text x="{x + node_w / 2:.1f}" y="{y + 54:.1f}" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" font-weight="500" fill="{wdl_fill}">{escape_xml(line3)}</text>'
-        )
-        svg.append(
-            f'<line x1="{x + 8:.1f}" y1="{y + 62:.1f}" x2="{x + node_w - 8:.1f}" y2="{y + 62:.1f}" stroke="#e2e8f0" stroke-width="1"/>'
-        )
-
-        start_y = y + 80
         for i, line in enumerate(lines):
-            svg.append(
-                f'<text x="{x + node_w / 2:.1f}" y="{start_y + i * 22:.1f}" text-anchor="middle" font-family="Menlo, Monaco, monospace" font-size="17" fill="#1e293b">{escape_xml(line)}</text>'
-            )
+            svg.append(f'<text x="{x + node_w / 2:.1f}" y="{y + 95 + i * 19:.1f}" text-anchor="middle" font-family="Menlo, monospace" font-size="16" fill="#1e293b">{escape_xml(line)}</text>')
+        svg.append('</g>')
 
     svg.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(svg) + "\n", encoding="utf-8")
+    out_path.write_text("\n".join(svg), encoding="utf-8")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Demo: build a budgeted partial tree (provider + PUCT), then render WDL (static vs "
-            "visit-weighted teacher backup) as SVG.\n"
-            "Important: this builds a Python-side tree; it is not lc0's internal tree."
-        )
-    )
-    parser.add_argument("--fen", required=True, help="Root FEN to expand.")
-    parser.add_argument("--engine-path", default=default_lc0_engine_path(), help="Path to lc0 binary.")
-    parser.add_argument("--weights-path", default=default_lc0_weights_path(), help="Path to lc0 weights.")
+    parser = argparse.ArgumentParser(description="Side-by-side demo of Prefix Sampling.")
+    parser.add_argument("--fen", default="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", help="Root FEN to expand.")
+    parser.add_argument("--engine-path", default=default_lc0_engine_path())
+    parser.add_argument("--weights-path", default=default_lc0_weights_path())
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--search-budget", type=int, default=64)
     parser.add_argument("--c-puct", type=float, default=1.0)
-    parser.add_argument("--min-nodes", type=int, default=2)
-    parser.add_argument("--max-nodes", type=int, default=3)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--out-svg", default="demos/out.svg")
+    parser.add_argument("--oracle-nodes", type=int, default=12, help="Size of the deep tree.")
+    parser.add_argument("--prefix-nodes", type=int, default=4, help="Size of the chopped tree.")
+    parser.add_argument("--out-svg", default="demos/figures/prefix_demo.svg")
     args = parser.parse_args()
 
     config = build_teacher_config(args)
-    node_budget_distribution = NodeBudgetDistribution(args.min_nodes, args.max_nodes)
-    rng = random.Random(args.seed)
-
     engines, provider = build_provider(engine_path=args.engine_path, weights_path=args.weights_path)
+    
     try:
-        for engine in engines:
-            engine.start()
-        generated = generate_partial_tree_from_provider(
+        for engine in engines: engine.start()
+        
+        # 1. Generate the Oracle Tree (The Deep Future)
+        oracle_gen = generate_partial_tree_from_provider(
             root_fen=args.fen.strip(),
             provider=provider,
             config=config,
-            node_budget_distribution=node_budget_distribution,
-            rng=rng,
+            node_budget_distribution=NodeBudgetDistribution(args.oracle_nodes, args.oracle_nodes)
         )
+        
+        # 2. Chop the Tree (Perform Prefix Sampling)
+        # We simulate what the tree looked like after only 'prefix_nodes' expansions.
+        partial_tree = oracle_gen.tree.clone_expansion_prefix(args.prefix_nodes)
+        
+        # 3. Calculate WDL for both
+        # Oracle WDL uses the full results. Partial WDL uses just the static heuristics of the root-prefix.
+        oracle_res = consolidate_generated_tree(oracle_gen, config)
+        target_wdl = {node.node_id: _backup_target_from_child_wdl(oracle_gen.tree, node.node_id, oracle_gen.edge_stats) 
+                      for node in oracle_gen.tree.iter_nodes()}
+        
+        # For the partial nodes, we show what they looked like BEFORE the search deepened.
+        input_wdl = {node.node_id: _static_wdl_triple(node) or (0,0,0) 
+                     for node in partial_tree.iter_nodes()}
+        
+        # Mapping: partial_tree nodes to oracle_tree nodes (since IDs might shift during cloning)
+        # However, clone_expansion_prefix preserves IDs for the prefix nodes.
+        partial_node_ids = {node.node_id for node in partial_tree.iter_nodes()}
+
+        render_unified_prefix_svg(
+            oracle_gen.tree, partial_node_ids, Path(args.out_svg),
+            input_wdl=input_wdl, target_wdl=target_wdl
+        )
+        print(f"Rendered unified prefix demo to {args.out_svg}")
+
     finally:
-        for engine in engines:
-            try:
-                engine.close()
-            except Exception:
-                pass
+        for engine in engines: engine.close()
 
-    teacher_line_is_backup = {
-        node.node_id: teacher_line_uses_child_backup(generated.tree, generated.edge_stats, node.node_id)
-        for node in generated.tree.iter_nodes()
-    }
-    node_teacher_wdl = {
-        node.node_id: _backup_target_from_child_wdl(generated.tree, node.node_id, generated.edge_stats)
-        for node in generated.tree.iter_nodes()
-    }
 
-    out_svg = Path(args.out_svg)
-    render_tree_svg(
-        generated.tree,
-        out_svg,
-        teacher_line_is_backup=teacher_line_is_backup,
-        node_teacher_wdl=node_teacher_wdl,
-    )
-    print(f"wrote_svg={out_svg} nodes={generated.tree.num_nodes()} edges={generated.tree.num_edges()}")
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
