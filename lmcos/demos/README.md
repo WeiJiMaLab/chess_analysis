@@ -8,7 +8,7 @@ The repo is a **data pipeline → tensorization → encoder → controller** sta
 
 | Stage | Name | Description | Demo |
 | :--- | :--- | :--- | :--- |
-| **1** | **Tree Growth** | Building a search tree using PUCT and `lc0`. | `demo_partial_tree_generation.py` |
+| **1** | **Tree Growth** | Building a search tree using PUCT and `lc0`. | `prefix_demo.py` |
 | **2** | **Packing** | Saving/loading `PretrainExample` datasets. | *(Internal scripts)* |
 | **3** | **Tensorization** | Turning trees into batched PyTorch tensors. | *(Planned: demo_tensorization.py)* |
 | **4** | **Tree Encoder** | Message passing over the tree via `TreeNN`. | *(Planned: demo_tree_nn.py)* |
@@ -32,23 +32,19 @@ The repo is a **data pipeline → tensorization → encoder → controller** sta
 
 ---
 
-### `demo_partial_tree_generation.py`
+### `prefix_demo.py`
 
-Builds a small **partial tree** (Mode 2) from a root FEN and renders the WDL statistics (static vs. visit-weighted teacher targets) as an SVG.
+Visualizes **Prefix Sampling**—how we create training pairs by "chopping" an Oracle tree.
 
-*   **Move:** The move that reached this node.
-*   **wdl(s):** Static win/draw/loss from the `lc0` value-head.
-*   **teacher WDL:** The search-weighted target.
-    *   **Blue**: Consolidated from child edge statistics (at least one visit).
-    *   **Gray**: Static fallback (leaf or node with zero visits).
+*   **Unified Tree:** Renders a single search context that blends the past (GNN Input) and the future (Oracle Signal).
+*   **Blue Solid Nodes:** Nodes available to the GNN. Shows both the **INPUT** (static heuristic) and the **TARGET** (final search value).
+*   **Gray Dashed Nodes:** The "future" expansions that justify the targets in the blue nodes.
 
 **Example:**
 ```bash
-python demos/demo_partial_tree_generation.py \
-  --fen "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" \
-  --max-depth 3 \
-  --min-nodes 2 \
-  --max-nodes 3 \
-  --out-svg demos/figures/demo_partial_tree_generation.svg
+python demos/prefix_demo.py \
+  --oracle-nodes 12 \
+  --prefix-nodes 4 \
+  --out-svg demos/figures/prefix_demo.svg
 ```
 

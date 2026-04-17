@@ -21,6 +21,51 @@ Even if we can predict the future of the search, we need to know if the improvem
     *   **Value of Continuing:** $R(\text{continue}, k) = \text{Value}(\text{next state}) - \text{incremental\_cost}(k)$.
 *   **The DP Sweep:** Since we have the full sequence $\omega$, we can work backward from the budget cap (where you MUST halt) to find the optimal policy for every intermediate step.
 
+## GNN Architecture: The "Search Accelerator"
+
+The GNN performs **representation learning** over the tree structure. It is designed to "compress" the deep information of the search tree into a summary at the root.
+
+### 1. Initial Encoding
+*   **Node MLP:** Each node's raw scalars are embedded into a high-dimensional vector.
+*   **Slot Encoding:** Edges are augmented with **Sinusoidal Slot Encodings**. This gives the GNN "spatial" awareness—it knows which child corresponds to which move slot (e.g., move 1 vs move 50).
+
+### 2. Message Passing (Mixing Information)
+The GNN runs $k$ rounds of alternating messages:
+*   **Upward (Children $\to$ Parent):** Uses **Multi-Head Attention (MHA)**. The parent "listens" more closely to promising or complex branches while ignoring noisy ones.
+*   **Downward (Parent $\to$ Child):** A linear projection that gives each node context about the global goal (the root's perspective).
+*   **Sequential Propagation:** This is a key trick. By iterating in topological order (leaves-to-root), information can travel across the entire tree depth in a single round.
+
+### 3. The State Update (GRU)
+Each node's representation is updated via a **GRU (Gated Recurrent Unit)**.
+*   **Input:** The incoming message (Upward or Downward).
+*   **Hidden State:** The node's current understanding.
+*   **Why?** The GRU helps the node "remember" its original heuristic value while integrating new information from its neighbors, preventing the signal from fading.
+
+### The "Flattened Forest" (Tensorization)
+Because GPUs prefer contiguous memory, we pack multiple trees into a single batch of tensors. This transforms a set of hierarchical objects into a flat "Parts Catalog."
+
+```mermaid
+graph TD
+    subgraph TreeBatch_Memory
+        BatchNodes[Node Features Matrix]
+        Roots[Root Indices: 0, 4, ...]
+        Parents[Parent Index Vector]
+    end
+
+    subgraph Tree_A
+        A0[Node 0: Root] --> A1[Node 1]
+        A0 --> A2[Node 2]
+    end
+
+    subgraph Tree_B
+        B0[Node 4: Root] --> B1[Node 5]
+        B1 --> B2[Node 6]
+    end
+
+    A0 -.-> BatchNodes
+    B0 -.-> BatchNodes
+```
+
 ## Code Map
 
 | Concept | File | Key Function/Class |
@@ -30,6 +75,7 @@ Even if we can predict the future of the search, we need to know if the improvem
 | **Prefix Sampling**| `cts_pretrain.py` | `derive_prefix_pretrain_example` |
 | **GNN Encoder** | `GNN.py` | `TreeNN` |
 | **Slot Querying** | `GNN.py` | `ChildWdlHead` |
+| **Slot Encoding** | `GNN.py` | `SinusoidalSlotEncoding` |
 | **DP / Oracle** | `controller_oracle.py` | `compute_oracle_policy` |
 | **Environment** | `cts_episode_envs.py` | `GeneratedTreeHaltEnv` |
 
@@ -38,3 +84,4 @@ Even if we can predict the future of the search, we need to know if the improvem
 *   **Oracle ($\omega$):** A deeply searched tree used as ground truth.
 *   **Thinking Cost ($C$):** A penalty (usually linear) applied to each expansion step.
 *   **Consolidation:** The process of turning raw edge statistics (visits/Q-values) into per-node teacher labels.
+*   **Topological Sweep:** Processing nodes in order from leaves to root (or vice versa) so that information propagates fully in one pass.
