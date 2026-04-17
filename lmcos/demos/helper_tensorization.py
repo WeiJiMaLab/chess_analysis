@@ -48,7 +48,8 @@ def summarize_batch_structure(batch):
     print(f"\n--- ENCODING THE HIERARCHY ---")
     print(f"Depth Vector:  {batch.depth.tolist()}")
     print(f"Parent Index: {batch.parent_index.tolist()}")
-    print(f"\n--- TREE BOUNDARIES ---")
+    print(f"Edge Slots:   {batch.edge_slot.tolist()}")
+    print(f"  (Note: -1 means the node is a Root)")
     print(f"Root Indices: {batch.root_index.tolist()}")
 
 def visualize_sweep_order(batch):
