@@ -2,17 +2,21 @@
 
 This directory contains small, self-contained scripts intended to make the `lmcos` components easier to understand one-by-one.
 
-### How `lmcos` fits together
+### Tutorial Series: GNN Training Pipeline
 
-The repo is a **data pipeline → tensorization → encoder → controller** stack.
+This directory is organized into a didactic curriculum to help you understand how `lmcos` processes irregular search trees.
 
-| Stage | Name | Description | Demo |
+| Order | Tutorial | Mechanistic Focus | Key File |
 | :--- | :--- | :--- | :--- |
-| **1** | **Tree Growth** | Building a search tree using PUCT and `lc0`. | `prefix_demo.py` |
-| **2** | **Packing** | Saving/loading `PretrainExample` datasets. | *(Internal scripts)* |
-| **3** | **Tensorization** | Turning trees into batched PyTorch tensors. | *(Planned: demo_tensorization.py)* |
-| **4** | **Tree Encoder** | Message passing over the tree via `TreeNN`. | *(Planned: demo_tree_nn.py)* |
-| **5** | **Controller** | RL environment for halt/continue decisions. | *(Planned: demo_meta_controller.py)* |
+| 1 | [01_prefix_tutorial.ipynb](./01_prefix_tutorial.ipynb) | **Data:** Prefix Sampling & Consolidation | `cts_pretrain.py` |
+| 2 | [02_tensorization_tutorial.ipynb](./02_tensorization_tutorial.ipynb) | **Representation:** Flat-forest Tensorization | `tensorizer.py` |
+| 3 | [03_gnn_tutorial.ipynb](./03_gnn_tutorial.ipynb) | **Compute:** Bidirectional Sequential Sweep | `GNN.py` |
+
+## Design Intuition
+See [understanding.md](./understanding.md) for deep-dives into:
+*   The **"Flattened Forest"** memory layout.
+*   The **"Bidirectional Synchronized Round"** (Top-to-bottom and bottom-to-top propagation).
+*   The **"Search Accelerator"** (GNN) architecture details.
 
 ---
 

@@ -1,108 +1,91 @@
 from __future__ import annotations
 
 import graphviz
+import numpy as np
+import torch
 
 # Symmetrical Minimalist Constants
 FONT = "Inter, Arial, sans-serif"
 ACCENT = "#4338ca"
-BORDER = "#e2e8f0"
+BORDER_MODULE = "#475569" # Slate
+BORDER_VECTOR = "#94a3b8" # Light Slate
 
-def apply_clean_styles(dot):
+def fmt_h(label, h):
+    """Formats a labeled vector into a clean 2pd string."""
+    if h is None: return f"{label}: ???"
+    if isinstance(h, torch.Tensor):
+        h = h.detach().numpy()
+    return f"{label}\n{np.around(h, 2)}"
+
+def apply_formal_styles(dot):
     dot.attr(fontname=FONT, fontsize='11', rankdir='TB', splines='ortho')
     dot.attr('node', fontname=FONT, fontsize='10', shape='rect', style='rounded,filled', 
-             fillcolor='#ffffff', color='#94a3b8', penwidth='1.2', width='1.6')
+             fillcolor='#f8fafc', color=BORDER_MODULE, penwidth='1.5')
     dot.attr('edge', fontname=FONT, fontsize='9', color='#64748b', arrowsize='0.7')
 
-def visualize_upward_step():
-    """Formally detailed Phase 1: Children to Parent."""
+def visualize_upward_step(h_parent=None, h_c1=None, h_c2=None):
+    """Phase 1: Upward pass with labeled vectors."""
     dot = graphviz.Digraph(comment="Upward Pass")
-    apply_clean_styles(dot)
+    apply_formal_styles(dot)
     dot.attr(rankdir='BT') 
     
-    # Children at bottom
-    dot.node('c1', "Child 1"); dot.node('c2', "Child 2"); dot.node('c3', "Child 3")
+    dot.node('vec_c1', fmt_h("h_child1", h_c1), style='rounded', color=BORDER_VECTOR)
+    dot.node('vec_c2', fmt_h("h_child2", h_c2), style='rounded', color=BORDER_VECTOR)
+    dot.node('vec_p', fmt_h("h_parent", h_parent), style='rounded', color=ACCENT)
     
-    # Aggregator
-    dot.node('mha', "Attention Aggregator", shape='rect', color=ACCENT)
-    
-    # Node Compute
-    dot.node('gru1', "Node Update (GRU)", fillcolor=ACCENT, fontcolor="white", color=ACCENT)
-    dot.node('p', "Parent Module", shape='rect')
+    dot.node('mod_mha', "Attention Aggregator", fillcolor='#eef2ff', color=ACCENT)
+    dot.node('mod_gru', "Node GRU Update", fillcolor=ACCENT, fontcolor="white", color=ACCENT)
 
-    # Connections
-    dot.edge('c1', 'mha', label=" v_c1"); dot.edge('c2', 'mha', label=" v_c2"); dot.edge('c3', 'mha', label=" v_c3")
-    dot.edge('mha', 'gru1', label=" v_children")
-    dot.edge('gru1', 'p', label=" v_p_msg")
+    dot.edge('vec_c1', 'mod_mha'); dot.edge('vec_c2', 'mod_mha')
+    dot.edge('mod_mha', 'mod_gru', label=" v_children")
+    dot.edge('mod_gru', 'vec_p')
     
-    dot.attr(label="PHASE 1: UPWARD (Evidence Gathering)")
+    dot.attr(label="PHASE 1: UPWARD (Evidence Summarization)")
     return dot
 
-def visualize_downward_step():
-    """Formally detailed Phase 2: Parent to Children."""
+def visualize_downward_step(h_parent=None, h_c1=None, h_c2=None):
+    """Phase 2: Downward pass with labeled vectors."""
     dot = graphviz.Digraph(comment="Downward Pass")
-    apply_clean_styles(dot)
-    dot.attr(rankdir='TB')
+    apply_formal_styles(dot)
+    dot.attr(rankdir='TB') 
     
-    # Parent at Top
-    dot.node('p', "Parent Module", shape='rect')
-    dot.node('proj', "Linear Projection", shape='rect', color=ACCENT)
+    dot.node('vec_p', fmt_h("h_parent", h_parent), style='rounded', color=BORDER_VECTOR)
+    dot.node('vec_c1', fmt_h("h_child1", h_c1), style='rounded', color="#059669")
+    dot.node('vec_c2', fmt_h("h_child2", h_c2), style='rounded', color="#059669")
     
-    # Node Compute
-    dot.node('gru2', "Node Update (GRU)", fillcolor="#059669", fontcolor="white", color="#059669")
-    
-    # Children at Bottom
-    dot.node('c1', "Child 1"); dot.node('c2', "Child 2"); dot.node('c3', "Child 3")
+    dot.node('mod_proj', "Linear Projection", fillcolor='#ecfdf5', color="#059669")
+    dot.node('mod_gru', "Node GRU Update", fillcolor="#059669", fontcolor="white", color="#059669")
 
-    # Connections
-    dot.edge('p', 'proj', label=" v_p_msg")
-    dot.edge('proj', 'gru2', label=" v_ctx")
-    dot.edge('gru2', 'c1', label=" v_c1_ctx"); dot.edge('gru2', 'c2', label=" v_c2_ctx"); dot.edge('gru2', 'c3', label=" v_c3_ctx")
+    dot.edge('vec_p', 'mod_proj')
+    dot.edge('mod_proj', 'mod_gru', label=" v_context")
+    dot.edge('mod_gru', 'vec_c1'); dot.edge('mod_gru', 'vec_c2')
     
-    dot.attr(label="PHASE 2: DOWNWARD (Context Distribution)")
+    dot.attr(label="PHASE 2: DOWNWARD (Global Broadcasting)")
     return dot
 
-def visualize_dual_pass():
-    """Symmetrical layout: Multiple children funneling UP and broadcasting DOWN."""
-    dot = graphviz.Digraph(comment="Symmetrical Sync")
-    dot.attr(rankdir='TB', size='12,12', splines='polyline')
-    apply_clean_styles(dot)
+def visualize_dual_pass(h_parent=None, h_c1=None, h_c2=None):
+    """Symmetrical Summary with ALL children and labels."""
+    dot = graphviz.Digraph(comment="Dual Formal Summary")
+    dot.attr(rankdir='LR', size='12,12')
+    apply_formal_styles(dot)
 
-    # 1. TOP RANK (Parents)
-    dot.node('u_p', "Upward Parent", fillcolor="#fffbeb")
-    dot.node('d_p', "Downward Parent", fillcolor="#f0fdf4")
-    
-    # 2. MID RANK (The Compute Junciton)
-    dot.node('u_gru', "GRU Update #1", fillcolor=ACCENT, fontcolor="white")
-    dot.node('d_gru', "GRU Update #2", fillcolor="#059669", fontcolor="white")
-    
-    # 3. BOTTOM RANK (The Fan-Out)
-    with dot.subgraph(name='cluster_u_children') as sc:
-        sc.attr(style='invis')
-        sc.node('u_c1', "Child 1"); sc.node('u_c2', "Child 2"); sc.node('u_c3', "Child 3")
-    with dot.subgraph(name='cluster_d_children') as sc:
-        sc.attr(style='invis')
-        sc.node('d_c1', "Child 1"); sc.node('d_c2', "Child 2"); sc.node('d_c3', "Child 3")
+    with dot.subgraph(name='cluster_up') as u:
+        u.attr(label="1. UPWARD", bgcolor="#fffbeb", style="rounded", rankdir='BT')
+        u.node('u_v_c1', fmt_h("h_child1", h_c1), style='rounded')
+        u.node('u_v_c2', fmt_h("h_child2", h_c2), style='rounded')
+        u.node('u_mod', "Aggregation", style='rounded,filled', fillcolor='#ffffff')
+        u.node('u_v_p', fmt_h("h_parent", h_parent), style='rounded', color=ACCENT)
+        u.edge('u_v_c1', 'u_mod'); u.edge('u_v_c2', 'u_mod'); u.edge('u_mod', 'u_v_p')
 
-    # Force Ranks
-    with dot.subgraph() as s:
-        s.attr(rank='same'); s.node('u_p'); s.node('d_p')
-    with dot.subgraph() as s:
-        s.attr(rank='same'); s.node('u_gru'); s.node('d_gru')
-    with dot.subgraph() as s:
-        s.attr(rank='same'); s.node('u_c1'); s.node('u_c2'); s.node('u_c3')
-        s.node('d_c1'); s.node('d_c2'); s.node('d_c3')
+    with dot.subgraph(name='cluster_dn') as d:
+        d.attr(label="2. DOWNWARD", bgcolor="#f0fdf4", style="rounded", rankdir='TB')
+        d.node('d_v_p', fmt_h("h_parent", h_parent), style='rounded')
+        d.node('d_mod', "Broadcasting", style='rounded,filled', fillcolor='#ffffff')
+        d.node('d_v_c1', fmt_h("h_child1", h_c1), style='rounded', color="#059669")
+        d.node('d_v_c2', fmt_h("h_child2", h_c2), style='rounded', color="#059669")
+        d.edge('d_v_p', 'd_mod'); d.edge('d_mod', 'd_v_c1'); d.edge('d_mod', 'd_v_c2')
 
-    # LEFT SIDE: UPWARD (Evidence Funnel)
-    dot.edge('u_c1', 'u_gru', color=ACCENT); dot.edge('u_c2', 'u_gru', color=ACCENT); dot.edge('u_c3', 'u_gru', color=ACCENT)
-    dot.edge('u_gru', 'u_p', label=" [Summary]", color=ACCENT)
+    # Handshake
+    dot.edge('u_v_p', 'd_v_p', label=" Sync ", style='dashed', color=ACCENT, penwidth='2')
 
-    # RIGHT SIDE: DOWNWARD (Strategy Broadcast)
-    dot.edge('d_p', 'd_gru', label=" [Context]", color="#059669")
-    dot.edge('d_gru', 'd_c1', color="#059669"); dot.edge('d_gru', 'd_c2', color="#059669"); dot.edge('d_gru', 'd_c3', color="#059669")
-
-    # THE HANDSHAKE
-    dot.edge('u_gru', 'd_gru', label=" h_interm ", style='dashed', 
-             color=ACCENT, constraint='false', penwidth='2')
-
-    dot.attr(label="\nThe Full Bidirectional Synchronization Round\nFan-In (Upward Evidence) <---> Fan-Out (Downward Context)")
     return dot

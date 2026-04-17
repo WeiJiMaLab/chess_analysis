@@ -70,11 +70,14 @@ graph TD
 
 | Concept | File | Key Function/Class |
 | :--- | :--- | :--- |
-| **Search Logic** | `tree.py` | `SearchTree` |
-| **Tree Growth** | `cts_pretrain.py` | `generate_partial_tree_from_provider` |
-| **Prefix Sampling**| `cts_pretrain.py` | `derive_prefix_pretrain_example` |
-| **GNN Encoder** | `GNN.py` | `TreeNN` |
-| **Slot Querying** | `GNN.py` | `ChildWdlHead` |
+| **Prefix Sampling** | `cts_pretrain.py` | `generate_partial_tree_from_provider` |
+| **Target Consolidation** | `cts_pretrain.py` | `consolidate_generated_tree` |
+| **Tensorization** | `tensorizer.py` | `TreeTensorizer.tensorize_forest` |
+| **Structural Metadata** | `tensorizer.py` | `TreeBatch` (Tensors: `depth`, `parent_index`) |
+| **GNN Sweep** | `GNN.py` | `TreeNN._forward_sequential` |
+| **Upward Messaging** | `GNN.py` | `TreeAttMsgLayer` (Multi-Head Attention) |
+| **Downward Messaging**| `GNN.py` | `TreeNN.downward_msg` (Linear Projection) |
+| **State Update** | `GNN.py` | `torch.nn.GRUCell` |
 | **Slot Encoding** | `GNN.py` | `SinusoidalSlotEncoding` |
 | **DP / Oracle** | `controller_oracle.py` | `compute_oracle_policy` |
 | **Environment** | `cts_episode_envs.py` | `GeneratedTreeHaltEnv` |

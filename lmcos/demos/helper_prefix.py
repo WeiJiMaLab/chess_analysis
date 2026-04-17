@@ -53,9 +53,15 @@ def visualize_unified_tree(
 ):
     """Renders a unified tree using Graphviz with embedded boards."""
     import graphviz
+    
+    # Symmetrical Minimalist Constants
+    FONT = "Inter, Arial, sans-serif"
+    ACCENT = "#4338ca"        # Indigo (Active Input)
+    BORDER_NODE = "#cbd5e1"   # Light Slate
+    
     dot = graphviz.Digraph(comment="Unified Prefix Context")
     dot.attr(rankdir='TB', size='10,12')
-    dot.attr('node', shape='none', fontname='Inter, Arial', fontsize='10')
+    dot.attr('node', shape='none', fontname=FONT, fontsize='10')
 
     for node in oracle_tree.iter_nodes():
         node_id = str(node.node_id)
@@ -63,7 +69,7 @@ def visualize_unified_tree(
         move = node.incoming_move_uci or "ROOT"
         
         # Color & Border
-        border_color = "#3b82f6" if is_input else "#cbd5e1"
+        border_color = ACCENT if is_input else BORDER_NODE
         bg_color = "#ffffff" if is_input else "#f8fafc"
         style = "solid" if is_input else "dashed"
         
@@ -76,7 +82,7 @@ def visualize_unified_tree(
         if is_input:
             input_str = _format_wdl(input_wdl.get(node.node_id, (0,0,0)))
             val_content = f'<tr><td align="left"><font color="#64748b">INPUT:</font></td><td align="left"><b>{input_str}</b></td></tr>' \
-                          f'<tr><td align="left"><font color="#64748b">TARGET:</font></td><td align="left"><font color="#3b82f6"><b>{target_str}</b></font></td></tr>'
+                          f'<tr><td align="left"><font color="#64748b">TARGET:</font></td><td align="left"><font color="{ACCENT}"><b>{target_str}</b></font></td></tr>'
         else:
             val_content = f'<tr><td align="left" colspan="2"><font color="#94a3b8"><i>FUTURE</i></font></td></tr>' \
                           f'<tr><td align="left" colspan="2"><font color="#94a3b8"><b>{target_str}</b></font></td></tr>'
@@ -91,8 +97,8 @@ def visualize_unified_tree(
         
         if node.parent_id is not None:
             e_style = "solid" if node.node_id in partial_node_ids else "dashed"
-            e_color = "#3b82f6" if node.node_id in partial_node_ids else "#cbd5e1"
+            e_color = ACCENT if node.node_id in partial_node_ids else BORDER_NODE
             dot.edge(str(node.parent_id), node_id, color=e_color, style=e_style)
 
-    dot.attr(label=f"\nUnified Search Context\nBlue = GNN Input | Gray = Future Signal")
+    dot.attr(label=f"\nUnified Search Context\nIndigo = GNN Input | Gray = Future Signal")
     return dot

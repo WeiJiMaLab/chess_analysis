@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import torch
+import numpy as np
 import graphviz
 from schema import tree_encoder_feature_schema
 from tree import SearchTree, ExpansionChild
+
+# Symmetrical Minimalist Constants
+FONT = "Inter, Arial, sans-serif"
+ACCENT = "#4338ca"        # Indigo (Upward/Root)
+ACCENT_DOWN = "#059669"   # Emerald (Downward/Context)
+BORDER_NODE = "#94a3b8"   # Light Slate
+COLOR_ROOT_BG = "#eef2ff" # Light Indigo
 
 def build_demo_trees() -> list[SearchTree]:
     """Builds two distinct asymmetric trees for demonstration."""
@@ -25,19 +33,30 @@ def build_demo_trees() -> list[SearchTree]:
     
     return [tree_a, tree_b]
 
-def plot_tree(tree: SearchTree, title: str):
-    """Renders a SearchTree using graphviz."""
+def plot_tree(tree: SearchTree, title: str, node_data: dict = None):
+    """Renders a SearchTree using graphviz with optional embedded vectors."""
     dot = graphviz.Digraph(comment=title)
     dot.attr(rankdir='TB', size='10,5')
-    dot.attr('node', shape='rect', style='rounded,filled', fontname='Inter, Arial', fontsize='10')
+    dot.attr('node', shape='rect', style='rounded,filled', fontname=FONT, fontsize='10', color=BORDER_NODE, penwidth='1.5')
 
     for node in tree.iter_nodes():
-        node_id = str(node.node_id)
+        node_id_int = node.node_id
+        node_id_str = str(node_id_int)
         label = node.incoming_move_uci or "ROOT"
-        color = "#e0f2fe" if node.parent_id is None else "#ffffff"
-        dot.node(node_id, f"{label}\nID: {node_id}\nDepth: {node.depth}", fillcolor=color)
+        
+        # Inject data if provided
+        if node_data is not None and node_id_int in node_data:
+            val = node_data[node_id_int]
+            if isinstance(val, torch.Tensor): val = val.detach().numpy()
+            label += f"\nh: {np.around(val, 2)}"
+        else:
+            label += f"\nID: {node_id_int}\nDepth: {node.depth}"
+            
+        color = COLOR_ROOT_BG if node.parent_id is None else "#ffffff"
+        fontcolor = ACCENT if node.parent_id is None else "#0f172a"
+        dot.node(node_id_str, label, fillcolor=color, fontcolor=fontcolor)
         if node.parent_id is not None:
-            dot.edge(str(node.parent_id), node_id)
+            dot.edge(str(node.parent_id), node_id_str, color="#64748b")
     return dot
 
 def summarize_batch_structure(batch):
@@ -69,21 +88,22 @@ def visualize_batch_layout(batch):
     """Draws a 'Memory Map' of the TreeBatch."""
     dot = graphviz.Digraph(comment="Batch Layout")
     dot.attr(rankdir='LR', size='10,4')
-    dot.attr('node', shape='none', fontname='Inter, Arial', fontsize='10')
+    dot.attr('node', shape='none', fontname=FONT, fontsize='10')
 
     rows = []
     for i in range(batch.node_features.shape[0]):
         is_root = i in batch.root_index
-        color = "#e0f2fe" if is_root else "#ffffff"
+        color = COLOR_ROOT_BG if is_root else "#ffffff"
+        fontcolor = ACCENT if is_root else "#0f172a"
         label = f"ROOT {i}" if is_root else f"Node {i}"
-        rows.append(f'<tr><td port="n{i}" bgcolor="{color}">{label}</td></tr>')
+        rows.append(f'<tr><td port="n{i}" bgcolor="{color}"><font color="{fontcolor}">{label}</font></td></tr>')
     
-    table = f'<<table border="0" cellborder="1" cellspacing="0">{"".join(rows)}</table>>'
+    table = f'<<table border="0" cellborder="1" cellspacing="0" color="{BORDER_NODE}">{"".join(rows)}</table>>'
     dot.node('matrix', label=table)
 
     for child_idx, parent_idx in enumerate(batch.parent_index):
         if parent_idx != -1:
-            dot.edge(f'matrix:n{child_idx}', f'matrix:n{parent_idx}', label=" parent", color="#3b82f6")
+            dot.edge(f'matrix:n{child_idx}', f'matrix:n{parent_idx}', label=" parent", color="#64748b")
 
     dot.attr(label="\nTreeBatch Memory Layout\n(Individual trees 'melted' into one contiguous batch)")
     return dot
@@ -92,27 +112,33 @@ def visualize_gnn_sweep_step(batch, depth_to_highlight, direction='up'):
     """Draws the flattened forest with a highlight on nodes at a specific depth."""
     dot = graphviz.Digraph(comment=f"GNN Sweep {direction} depth {depth_to_highlight}")
     dot.attr(rankdir='TB', size='10,6')
-    dot.attr('node', shape='rect', style='rounded,filled', fontname='Inter, Arial', fontsize='10')
+    dot.attr('node', shape='rect', style='rounded,filled', fontname=FONT, fontsize='10', color=BORDER_NODE)
 
-    highlight_color = "#f59e0b" if direction == 'up' else "#10b981" 
-    past_color = "#f1f5f9"
+    highlight_color = ACCENT if direction == 'up' else ACCENT_DOWN 
+    past_color = "#f8fafc"
     future_color = "#e2e8f0"
 
     for i in range(batch.node_features.shape[0]):
         node_depth = batch.depth[i].item()
         if node_depth == depth_to_highlight:
-            state_color = highlight_color
-            penwidth = "3.0"
+            state_color = "#ffffff"
+            penwidth = "2.5"
+            border_color = highlight_color
+            fontcolor = highlight_color
         elif (direction == 'up' and node_depth > depth_to_highlight) or (direction == 'down' and node_depth < depth_to_highlight):
             state_color = past_color
             penwidth = "1.0"
+            border_color = BORDER_NODE
+            fontcolor = "#64748b"
         else:
             state_color = future_color
             penwidth = "1.0"
+            border_color = BORDER_NODE
+            fontcolor = "#94a3b8"
             
         label = f"Node {i}\nDepth {node_depth}"
         if i in batch.root_index: label += "\n[ROOT]"
-        dot.node(str(i), label, fillcolor=state_color, penwidth=penwidth, color="#475569")
+        dot.node(str(i), label, fillcolor=state_color, penwidth=penwidth, color=border_color, fontcolor=fontcolor)
 
     for child_idx, parent_idx in enumerate(batch.parent_index):
         if parent_idx != -1:
@@ -121,12 +147,12 @@ def visualize_gnn_sweep_step(batch, depth_to_highlight, direction='up'):
             # Highlight outgoing edges from children to parents in upward pass
             if direction == 'up' and child_depth == depth_to_highlight:
                 edge_color = highlight_color
-                edge_width = "2.5"
+                edge_width = "2.0"
                 edge_dir = "forward" # From Child to Parent
             # Highlight outgoing edges from parents to children in downward pass
             elif direction == 'down' and parent_depth == depth_to_highlight:
                 edge_color = highlight_color
-                edge_width = "2.5"
+                edge_width = "2.0"
                 edge_dir = "back"    # From Parent to Child
             else:
                 edge_color = "#cbd5e1"
