@@ -164,3 +164,46 @@ def visualize_gnn_sweep_step(batch, depth_to_highlight, direction='up'):
     direction_label = "Leaves-to-Root (Summarizing)" if direction == 'up' else "Root-to-Leaves (Contextualizing)"
     dot.attr(label=f"\nGNN Execution Round: Depth {depth_to_highlight}\nDirection: {direction_label}")
     return dot
+
+def make_synthetic_pretrain_dataset(n_samples=100):
+    """
+    Creates a batch of (TreeBatch, TargetWDL) for didactic training.
+    We ensure every root has 3 siblings so they land in distinct alphabetical slots:
+    Slot 0: d2d4 (Draw)
+    Slot 1: e2e4 (Win)
+    Slot 2: h2h4 (Loss)
+    """
+    from tensorizer import TreeTensorizer
+    import torch
+    
+    schema = tree_encoder_feature_schema()
+    tensorizer = TreeTensorizer(schema)
+    batch_trees = []
+    batch_targets = []
+    
+    # Pure Truth mapping: Move name -> One-Hot WDL Target
+    MOVES = [
+        ("d2d4", [0.0, 1.0, 0.0]), # Draw (100% Certainty)
+        ("e2e4", [1.0, 0.0, 0.0]), # Win (100% Certainty)
+        ("h2h4", [0.0, 0.0, 1.0])  # Loss (100% Certainty)
+    ]
+
+    for _ in range(n_samples):
+        t = SearchTree()
+        feats = {name: 0.5 for name in schema.feature_names}
+        t.create_root("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", feats)
+        
+        # Add ALL THREE moves as siblings. 
+        # alphabetical sort will ensure d2d4=index 0, e2e4=index 1, h2h4=index 2
+        children = [ExpansionChild(m[0], "FEN_X", feats) for m in MOVES]
+        t.add_children(0, children)
+        
+        batch_trees.append(t)
+        # Add targets for all 3 edges (3 targets per tree)
+        batch_targets.extend([m[1] for m in MOVES])
+    
+    # Tensorize everything
+    batch = tensorizer.tensorize_forest(batch_trees)
+    targets = torch.tensor(batch_targets, dtype=torch.float32)
+    
+    return batch, targets

@@ -1,39 +1,25 @@
 # Conceptual Understanding: lmcos Meta-Controller
 
-The goal of `lmcos` is to build a **meta-controller** that decides optimally when to "think" (expand the search tree) versus "halt" (execute a move).
+The `lmcos` architecture is a **meta-controller** suite. It uses Graph Neural Networks (GNNs) to decide optimally when to "halt" search and execute a move.
 
-## The Core Problem
+## 1. The GNN "Search Accelerator"
 
-We want to decide if expanding one more node in a search tree is worth the cost. This is difficult because the "true" value of the search is only known after the search is finished. We break this into two sub-problems:
+The GNN performs **representation learning** over search trees. Its goal is to compress the lopsided information of a search tree into a dense summary at the root node.
 
-### 1. Summarizing the "Thinking Tree" (Supervised Pre-training)
-We need a neural network (the **GNN**) to look at a partial search tree $T$ and summarize its internal state. Specifically, we want to query the GNN for the potential "future" of the search.
+### The Two-Phase Round (Mechanistic Truth)
+A single round of GNN processing consists of two sequential, depth-wise sweeps:
 
-*   **Prefix Sampling:** To train this, we don't just use full trees. We take a finished "Oracle" tree $\omega$ and chop it into prefixes $T_k$ (e.g., the state of the tree after 10, 20, or 40 expansions). This creates a "history" of how the search evolved.
-*   **Slot-Conditioned Readout:** Traditionally, a GNN might output one value for the root. Here, we use a "Slot Head." We provide the GNN with the root embedding AND a specific move (a "slot"). The GNN then predicts the WDL for *that specific move* based on the entire tree structure.
-*   **The Question:** "Given this partial tree $T$, what *would be* the Win/Draw/Loss (WDL) probability of each immediate action $a$ from the root if I were to search much deeper?"
+1.  **Phase 1: Upward (Indigo) - "Evidence Funnel"**
+    *   Information flows from **Leaves to Parent**.
+    *   Uses **Multi-Head Attention (MHA)** to aggregate child vectors.
+    *   The Parent's memory is updated via a **GRU**.
+    *   *Intuition:* "What have my children discovered that changes my own value?"
 
-### 2. Normative Decisions (Optimal Stopping)
-Even if we can predict the future of the search, we need to know if the improvement in move quality is worth the added "cost of thinking" $C$.
-
-*   **The Experiment:** For an oracle sequence of trees $T_0, T_1, \dots, T_{64}$, we can determine the "correct" decision at each step $k$ using Dynamic Programming:
-    *   **Value of Halting:** $R(\text{halt}, k) = V(T_k)$, which is the value of the best action under search state $k$.
-    *   **Value of Continuing:** $R(\text{continue}, k) = \text{Value}(\text{next state}) - \text{incremental\_cost}(k)$.
-*   **The DP Sweep:** Since we have the full sequence $\omega$, we can work backward from the budget cap (where you MUST halt) to find the optimal policy for every intermediate step.
-
-## GNN Architecture: The "Search Accelerator"
-
-The GNN performs **representation learning** over the tree structure. It is designed to "compress" the deep information of the search tree into a summary at the root.
-
-### 1. Initial Encoding
-*   **Node MLP:** Each node's raw scalars are embedded into a high-dimensional vector.
-*   **Slot Encoding:** Edges are augmented with **Sinusoidal Slot Encodings**. This gives the GNN "spatial" awareness—it knows which child corresponds to which move slot (e.g., move 1 vs move 50).
-
-### 2. Message Passing (Mixing Information)
-The GNN runs $k$ rounds of alternating messages:
-*   **Upward (Children $\to$ Parent):** Uses **Multi-Head Attention (MHA)**. The parent "listens" more closely to promising or complex branches while ignoring noisy ones.
-*   **Downward (Parent $\to$ Child):** A linear projection that gives each node context about the global goal (the root's perspective).
-*   **Sequential Propagation:** This is a key trick. By iterating in topological order (leaves-to-root), information can travel across the entire tree depth in a single round.
+2.  **Phase 2: Downward (Emerald) - "Strategy Broadcast"**
+    *   Information flows from **Parent to Children**.
+    *   The Parent's summary is projected via a Linear layer and sent back down.
+    *   Each Child's memory is updated via the *same* **GRU**.
+    *   *Intuition:* "Given what the root now knows about the whole tree, how should my local move-vector change?"
 
 ### 3. The State Update (GRU)
 Each node's representation is updated via a **GRU (Gated Recurrent Unit)**.
@@ -41,50 +27,80 @@ Each node's representation is updated via a **GRU (Gated Recurrent Unit)**.
 *   **Hidden State:** The node's current understanding.
 *   **Why?** The GRU helps the node "remember" its original heuristic value while integrating new information from its neighbors, preventing the signal from fading.
 
-### The "Flattened Forest" (Tensorization)
-Because GPUs prefer contiguous memory, we pack multiple trees into a single batch of tensors. This transforms a set of hierarchical objects into a flat "Parts Catalog."
+---
 
-```mermaid
-graph TD
-    subgraph TreeBatch_Memory
-        BatchNodes[Node Features Matrix]
-        Roots[Root Indices: 0, 4, ...]
-        Parents[Parent Index Vector]
-    end
+## Design Intuition: Sinusoidal Slot Encodings
 
-    subgraph Tree_A
-        A0[Node 0: Root] --> A1[Node 1]
-        A0 --> A2[Node 2]
-    end
+How does the GNN know which branch is the "Best Move" (Slot 0) vs. the "Alternative" (Slot 10)? It uses a **Continuous Address Space**.
 
-    subgraph Tree_B
-        B0[Node 4: Root] --> B1[Node 5]
-        B1 --> B2[Node 6]
-    end
+### The Truth Table Analogy
+Think of the slot encoding like a **Digital Bitmap** in a binary truth table. To represent numbers $0$ to $7$, you use bits that flip at different frequencies:
+*   **LSB (Bit 0):** High Frequency ($0, 1, 0, 1, \dots$)
+*   **Middle (Bit 1):** Medium Frequency ($0, 0, 1, 1, \dots$)
+*   **MSB (Bit 2):** Low Frequency ($0, 0, 0, 0, 1, 1, 1, 1, \dots$)
 
-    A0 -.-> BatchNodes
-    B0 -.-> BatchNodes
-```
+### The Sinusoidal Upgrade
+In `GNN.py`, we replace these sharp "bits" with smooth **Sine and Cosine waves**:
+1.  **Differentiability:** Waves are smooth, so the GNN can learn to interpolate between "addresses."
+2.  **Multiresolution:** High-frequency waves tell the GNN the **exact** move number (high-res), while low-frequency waves provide the **global context** (low-res, e.g., "I am one of the top 3 moves").
+3.  **Numerical Stability:** No matter how many moves are in a position, every value in the address vector stays between $-1$ and $1$.
 
-## Code Map
+This "Digital Address" allows the **ChildWdlHead** to combine a generic state summary (`h_parent`) with a specific target address (`slot_encoding`) to generate a precise prediction for that specific branch.
 
-| Concept | File | Key Function/Class |
+---
+
+### Topological Sequential Propagation
+Unlike standard GNNs that "blur" information with neighbors, the `TreeNN` iterates node-by-node in **Topological Order**. This allows information to travel from the deepest leaf to the absolute root in a single Indigo pulse.
+
+---
+
+## 3. Supervised Pre-training: Representation Learning
+
+The first stage of training is designed to build a powerful "Intuitive Engine." The GNN must learn to predict the **future** of a search tree before it ever learns to **control** it.
+
+### The Learning Task
+We generate training pairs using **Prefix Sampling**:
+*   **Input ($T_{prefix}$):** A partial, shallow search tree.
+*   **Target ($WDL_{oracle}$):** The eventual Win/Draw/Loss probabilities discovered by a deep Oracle search.
+*   **Loss:** Cross-Entropy between the GNN's predicted logits and the Oracle's consolidated probabilities.
+
+### Mechanistic Truth: The Dense Recursive Signal
+A crucial design choice in `lmcos` is that the **ChildWDL Head is not anchored solely to the root.**
+*   **Any Node can be a Parent:** During pre-training, the readout head is applied to **every edge** in the tree batch.
+*   **Dense Gradients:** If a tree has $N$ nodes, we get $N-1$ training signals in a single forward pass. Every node acts as a "Local Root" that must justify its representation by predicting its children's future.
+*   **Recursive Depth Invariance:** This forces the GNN to learn board patterns and subtree relationships that work regardless of whether the node is at depth 0 or depth 10.
+
+---
+
+## Code Map & Curriculum
+
+| Concept | Production File | Tutorial / Demo |
 | :--- | :--- | :--- |
-| **Prefix Sampling** | `cts_pretrain.py` | `generate_partial_tree_from_provider` |
-| **Target Consolidation** | `cts_pretrain.py` | `consolidate_generated_tree` |
-| **Tensorization** | `tensorizer.py` | `TreeTensorizer.tensorize_forest` |
-| **Structural Metadata** | `tensorizer.py` | `TreeBatch` (Tensors: `depth`, `parent_index`) |
-| **GNN Sweep** | `GNN.py` | `TreeNN._forward_sequential` |
-| **Upward Messaging** | `GNN.py` | `TreeAttMsgLayer` (Multi-Head Attention) |
-| **Downward Messaging**| `GNN.py` | `TreeNN.downward_msg` (Linear Projection) |
-| **State Update** | `GNN.py` | `torch.nn.GRUCell` |
-| **Slot Encoding** | `GNN.py` | `SinusoidalSlotEncoding` |
-| **DP / Oracle** | `controller_oracle.py` | `compute_oracle_policy` |
-| **Environment** | `cts_episode_envs.py` | `GeneratedTreeHaltEnv` |
+| **Prefix Sampling** | `cts_pretrain.py` | [01_prefix_tutorial.ipynb](./01_prefix_tutorial.ipynb) |
+| **Tensorization** | `tensorizer.py` | [02_tensorization_tutorial.ipynb](./02_tensorization_tutorial.ipynb) |
+| **Bidirectional Sweep**| `GNN.py` | [03_gnn_tutorial.ipynb](./03_gnn_tutorial.ipynb) |
+| **Supervised Loop** | `cts_pretrain.py` | [04_pretrain_tutorial.ipynb](./04_pretrain_tutorial.ipynb) |
+| **Halt/Continue RL** | `cts_rl.py` | [05_meta_controller_tutorial.ipynb](./05_meta_controller_tutorial.ipynb) |
+
+---
+
+## Visual Vocabulary
+
+When reading the diagrams in this suite, keep these formal distinctions in mind:
+
+| Visual Element | Meaning | Mechanistic Part |
+| :--- | :--- | :--- |
+| **Hollow Box** | **Data Container** | Hidden State ($h$), Messages ($m$) |
+| **Filled Box** | **Neural Module** | GRUCell, Linear, MH-Attention |
+| **Indigo Color** | **Primary/Summary** | Upward Pass, Root States |
+| **Emerald Color** | **Context/Broadcast** | Downward Pass, Child Updates |
+| **Dashed Lines** | **Future Potential** | Oracle Nodes (not yet seen by GNN) |
+
+---
 
 ## Glossary
 
-*   **Oracle ($\omega$):** A deeply searched tree used as ground truth.
-*   **Thinking Cost ($C$):** A penalty (usually linear) applied to each expansion step.
-*   **Consolidation:** The process of turning raw edge statistics (visits/Q-values) into per-node teacher labels.
-*   **Topological Sweep:** Processing nodes in order from leaves to root (or vice versa) so that information propagates fully in one pass.
+*   **Oracle ($\omega$):** A deeply searched tree used as ground truth for supervised training.
+*   **Thinking Cost ($C$):** The linear penalty used to train the meta-controller's halting policy.
+*   **Sinusoidal Slot Encoding:** A method for telling the GNN *which* move an edge represents (e.g., move 1 vs move 3) using periodic functions.
+*   **TreeBatch:** The flattened tensor representation used for parallel GPU execution of tree sweeps.

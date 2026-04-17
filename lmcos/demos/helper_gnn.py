@@ -6,7 +6,9 @@ import torch
 
 # Symmetrical Minimalist Constants
 FONT = "Inter, Arial, sans-serif"
-ACCENT = "#4338ca"
+ACCENT = "#4338ca"        # Indigo
+ACCENT_DOWN = "#059669"   # Emerald
+ACCENT_WDL = "#7c3aed"    # Violet (Readout Head)
 BORDER_MODULE = "#475569" # Slate
 BORDER_VECTOR = "#94a3b8" # Light Slate
 
@@ -88,4 +90,63 @@ def visualize_dual_pass(h_parent=None, h_c1=None, h_c2=None):
     # Handshake
     dot.edge('u_v_p', 'd_v_p', label=" Sync ", style='dashed', color=ACCENT, penwidth='2')
 
+    return dot
+
+def visualize_wdl_readout(h_parent, slot_vector, wdl_probs=None):
+    """Illustrates the Readout head: Parent State + Slot Mapping -> Predictions."""
+    dot = graphviz.Digraph(comment="WDL Readout")
+    apply_formal_styles(dot)
+    dot.attr(rankdir='LR')
+
+    # Input Components (Hollow)
+    dot.node('vec_p', fmt_h("h_parent", h_parent), style='rounded', color=ACCENT)
+    dot.node('vec_s', fmt_h("slot_encoding", slot_vector), style='rounded', color=BORDER_VECTOR)
+
+    # Readout Head (Filled)
+    dot.node('mod_head', "Child WDL Head\n(MLP)", fillcolor=ACCENT_WDL, fontcolor="white", color=ACCENT_WDL)
+
+    # Prediction Output
+    w, d, l = wdl_probs if wdl_probs is not None else (0.33, 0.33, 0.33)
+    wdl_label = f"WDL Predictions\nWin: {w:.2f} | Draw: {d:.2f} | Loss: {l:.2f}"
+    dot.node('out', wdl_label, style='rounded', color=ACCENT_WDL, penwidth='2.0')
+
+    # Flow
+    dot.edge('vec_p', 'mod_head')
+    dot.edge('vec_s', 'mod_head')
+    dot.edge('mod_head', 'out')
+
+    dot.attr(label="FINAL READOUT: Translating Hierarchical Memory into Game Realities")
+    return dot
+
+def visualize_halt_decision(h_root, halt_prob, thinking_cost=0.01):
+    """Illustrates the Halt Head decision: Root State -> [Halt | Continue]."""
+    dot = graphviz.Digraph(comment="Halt Decision")
+    apply_formal_styles(dot)
+    dot.attr(rankdir='LR')
+
+    # Status Color
+    is_halting = halt_prob > 0.5
+    status_bg = "#fee2e2" if is_halting else "#ecfdf5" # Red-ish (Stop) vs Green-ish (Go)
+    status_color = "#dc2626" if is_halting else "#059669"
+    status_text = "HALT (Execute Move)" if is_halting else "CONTINUE (Expand Tree)"
+
+    # Input (Indigo Root)
+    dot.node('vec_r', fmt_h("h_root summary", h_root), style='rounded', color=ACCENT)
+
+    # Controller (Filled)
+    dot.node('mod_halt', "Halt Controller\n(Policy Head)", fillcolor=BORDER_MODULE, fontcolor="white")
+
+    # The Decision Panel
+    decision_label = f"<<table border='0' cellborder='1' cellspacing='0' bgcolor='{status_bg}'>" \
+                     f"<tr><td><b>{status_text}</b></td></tr>" \
+                     f"<tr><td>P(Halt): {halt_prob:.4f}</td></tr>" \
+                     f"<tr><td><font point-size='8'>Thinking Cost (C): {thinking_cost}</font></td></tr>" \
+                     f"</table>>"
+    dot.node('panel', decision_label, shape='none', color=status_color)
+
+    # Flow
+    dot.edge('vec_r', 'mod_halt')
+    dot.edge('mod_halt', 'panel', color=status_color, penwidth='2.0')
+
+    dot.attr(label="\nTHE META-CONTROLLER: Optimizing the Economy of Thought")
     return dot
