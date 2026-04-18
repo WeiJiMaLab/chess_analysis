@@ -145,6 +145,21 @@ class UciProviderTests(unittest.TestCase):
             parse_root_value_features_from_lines(lines)
         self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
 
+    def test_parse_root_value_features_accepts_mate_score_without_wdl(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 39 score mate 1",
+            "bestmove d5g2",
+        ]
+
+        features = parse_root_value_features_from_lines(lines)
+
+        self.assertAlmostEqual(features["value"], 1.0)
+        self.assertAlmostEqual(features["wdl_win"], 1.0)
+        self.assertAlmostEqual(features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(features["wdl_loss"], 0.0)
+        self.assertAlmostEqual(features["wdl_var"], 0.0)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 1.0)
+
     def test_lc0_direct_eval_provider_uses_prior_and_value_engines(self):
         prior_engine = MappingEngineProcess(
             {

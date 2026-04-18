@@ -1436,6 +1436,130 @@ class SupervisedBranchTests(unittest.TestCase):
         for snapshot in snapshots:
             snapshot.validate()
 
+    def test_pretrain_example_compact_serialization_round_trips(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=4, max_nodes=4),
+            rng=random.Random(11),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "example.pt")
+            torch.save(example, path)
+            loaded = torch.load(path, weights_only=False)
+
+        self.assertEqual(loaded.node_target_values, example.node_target_values)
+        self.assertEqual(set(loaded.edge_wdl_targets), set(example.edge_wdl_targets))
+        for edge_key, target in example.edge_wdl_targets.items():
+            loaded_target = loaded.edge_wdl_targets[edge_key]
+            for loaded_value, expected_value in zip(loaded_target, target):
+                self.assertAlmostEqual(loaded_value, expected_value)
+        self.assertEqual(loaded.metadata, example.metadata)
+        self.assertEqual(loaded.oracle_trace_expansion_counts, example.oracle_trace_expansion_counts)
+        self.assertEqual(loaded.oracle_root_moves, example.oracle_root_moves)
+        self.assertEqual(loaded.oracle_root_q_trace, example.oracle_root_q_trace)
+        self.assertEqual(loaded.oracle_best_move_trace, example.oracle_best_move_trace)
+        self.assertEqual(loaded.oracle_final_root_q_values, example.oracle_final_root_q_values)
+        self.assertEqual(loaded.tree.root_id, example.tree.root_id)
+        self.assertEqual(loaded.tree.num_nodes(), example.tree.num_nodes())
+        self.assertEqual(loaded.tree.num_edges(), example.tree.num_edges())
+        for loaded_node, original_node in zip(loaded.tree.iter_nodes(), example.tree.iter_nodes()):
+            self.assertEqual(loaded_node.parent_id, original_node.parent_id)
+            self.assertEqual(loaded_node.incoming_move_uci, original_node.incoming_move_uci)
+            self.assertEqual(loaded_node.fen, original_node.fen)
+            self.assertEqual(loaded_node.depth, original_node.depth)
+            self.assertEqual(loaded_node.is_terminal, original_node.is_terminal)
+            self.assertEqual(loaded_node.is_expanded, original_node.is_expanded)
+            self.assertEqual(loaded_node.scalar_features, original_node.scalar_features)
+            self.assertEqual(loaded_node.metadata, original_node.metadata)
+        loaded.tree.validate()
+
+    def test_pretrain_example_compact_serialization_is_smaller_than_legacy_object_graph(self):
+        tree = SearchTree()
+        root_id = tree.create_root("root-position-spec", make_wdl_features(0.4, 0.2, 0.4, prior=1.0))
+        root_child_ids = tree.add_children(
+            root_id,
+            [
+                ExpansionChild(
+                    f"m{child_index:02d}",
+                    f"root-position-spec moves m{child_index:02d}",
+                    make_wdl_features(0.55, 0.15, 0.30, prior=1.0 / 32.0),
+                )
+                for child_index in range(32)
+            ],
+        )
+        for child_index, child_id in enumerate(root_child_ids):
+            grandchildren = [
+                ExpansionChild(
+                    f"m{child_index:02d}g{grandchild_index:02d}",
+                    f"root-position-spec moves m{child_index:02d} m{child_index:02d}g{grandchild_index:02d}",
+                    make_wdl_features(
+                        0.2 + 0.01 * (grandchild_index % 10),
+                        0.3,
+                        0.5 - 0.01 * (grandchild_index % 10),
+                        prior=1.0 / 8.0,
+                    ),
+                    is_terminal=(grandchild_index % 3 == 0),
+                )
+                for grandchild_index in range(8)
+            ]
+            tree.add_children(child_id, grandchildren)
+
+        edge_wdl_targets = {}
+        for parent_id in range(tree.num_nodes()):
+            for child_id in tree.child_ids(parent_id):
+                edge_wdl_targets[(parent_id, child_id)] = (0.25, 0.35, 0.40)
+
+        oracle_root_moves = [
+            tree.get_node(child_id).incoming_move_uci
+            for child_id in tree.root_children()
+        ]
+        example = PretrainExample(
+            tree=tree,
+            node_target_values=[float(node.depth) / 10.0 for node in tree.iter_nodes()],
+            edge_wdl_targets=edge_wdl_targets,
+            metadata={"root_position_id": "synthetic-large"},
+            oracle_trace_expansion_counts=list(range(1, 1 + len(tree.ordered_expansion_parent_ids()))),
+            oracle_root_moves=oracle_root_moves,
+            oracle_root_q_trace=[
+                [0.1 + 0.001 * idx for idx in range(len(oracle_root_moves))]
+                for _ in range(len(tree.ordered_expansion_parent_ids()))
+            ],
+            oracle_best_move_trace=[oracle_root_moves[-1]] * len(tree.ordered_expansion_parent_ids()),
+            oracle_final_root_q_values={
+                move: 0.1 + 0.001 * idx for idx, move in enumerate(oracle_root_moves)
+            },
+        )
+
+        legacy_tree_state = {
+            "root_id": example.tree.root_id,
+            "_nodes": [copy.deepcopy(node) for node in example.tree.iter_nodes()],
+            "_children": {node_id: list(child_ids) for node_id, child_ids in example.tree._children.items()},
+        }
+        legacy_example_state = {
+            "tree": legacy_tree_state,
+            "node_target_values": list(example.node_target_values),
+            "edge_wdl_targets": dict(example.edge_wdl_targets),
+            "metadata": dict(example.metadata),
+            "oracle_trace_expansion_counts": list(example.oracle_trace_expansion_counts),
+            "oracle_root_moves": list(example.oracle_root_moves),
+            "oracle_root_q_trace": [list(row) for row in example.oracle_root_q_trace],
+            "oracle_best_move_trace": list(example.oracle_best_move_trace),
+            "oracle_final_root_q_values": dict(example.oracle_final_root_q_values),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compact_path = os.path.join(tmpdir, "compact.pt")
+            legacy_path = os.path.join(tmpdir, "legacy.pt")
+            torch.save(example, compact_path)
+            torch.save(legacy_example_state, legacy_path)
+            compact_size = os.path.getsize(compact_path)
+            legacy_size = os.path.getsize(legacy_path)
+
+        self.assertLess(compact_size, legacy_size)
+
 
 if __name__ == "__main__":
     unittest.main()

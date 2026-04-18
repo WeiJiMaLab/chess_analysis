@@ -202,6 +202,17 @@ def parse_root_value_features_from_lines(
         )
 
     if require_wdl:
+        for line in lines:
+            score_match = SCORE_LINE_RE.search(line)
+            if score_match is None:
+                continue
+            if score_match.group("kind") == "mate":
+                return terminal_value_features(
+                    uci_score_to_value(
+                        score_match.group("kind"),
+                        int(score_match.group("score")),
+                    )
+                )
         raise ValueError("Could not parse WDL statistics from engine output.")
 
     for line in lines:

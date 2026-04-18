@@ -184,20 +184,91 @@ class PretrainExample:
             if set(self.oracle_final_root_q_values) != set(self.oracle_root_moves):
                 raise ValueError("oracle_final_root_q_values must align with oracle_root_moves.")
 
+    def __getstate__(self) -> Dict[str, Any]:
+        edge_parent_ids: List[int] = []
+        edge_child_ids: List[int] = []
+        edge_target_wdls: List[Tuple[float, float, float]] = []
+        for (parent_id, child_id), target in sorted(self.edge_wdl_targets.items()):
+            edge_parent_ids.append(int(parent_id))
+            edge_child_ids.append(int(child_id))
+            edge_target_wdls.append(_normalize_wdl_target(target))
+
+        if self.oracle_root_moves and self.oracle_final_root_q_values:
+            oracle_final_root_q_values_aligned = [
+                float(self.oracle_final_root_q_values[move]) for move in self.oracle_root_moves
+            ]
+            oracle_final_root_q_values_sparse = None
+        else:
+            oracle_final_root_q_values_aligned = None
+            oracle_final_root_q_values_sparse = dict(self.oracle_final_root_q_values)
+
+        return {
+            "__format__": "pretrain_example_v2",
+            "tree": self.tree,
+            "node_target_values": list(self.node_target_values),
+            "edge_target_parent_ids": edge_parent_ids,
+            "edge_target_child_ids": edge_child_ids,
+            "edge_target_wdls": edge_target_wdls,
+            "metadata": dict(self.metadata),
+            "oracle_trace_expansion_counts": list(self.oracle_trace_expansion_counts),
+            "oracle_root_moves": list(self.oracle_root_moves),
+            "oracle_root_q_trace": [list(row) for row in self.oracle_root_q_trace],
+            "oracle_best_move_trace": list(self.oracle_best_move_trace),
+            "oracle_final_root_q_values_aligned": oracle_final_root_q_values_aligned,
+            "oracle_final_root_q_values_sparse": oracle_final_root_q_values_sparse,
+        }
+
     def __setstate__(self, state: Mapping[str, Any]) -> None:
-        self.__dict__.update(state)
-        if "edge_wdl_targets" not in self.__dict__:
-            self.edge_wdl_targets = {}
-        if "oracle_trace_expansion_counts" not in self.__dict__:
-            self.oracle_trace_expansion_counts = []
-        if "oracle_root_moves" not in self.__dict__:
-            self.oracle_root_moves = []
-        if "oracle_root_q_trace" not in self.__dict__:
-            self.oracle_root_q_trace = []
-        if "oracle_best_move_trace" not in self.__dict__:
-            self.oracle_best_move_trace = []
-        if "oracle_final_root_q_values" not in self.__dict__:
-            self.oracle_final_root_q_values = {}
+        if state.get("__format__") == "pretrain_example_v2":
+            edge_parent_ids = list(state.get("edge_target_parent_ids", []))
+            edge_child_ids = list(state.get("edge_target_child_ids", []))
+            edge_target_wdls = list(state.get("edge_target_wdls", []))
+            if not (len(edge_parent_ids) == len(edge_child_ids) == len(edge_target_wdls)):
+                raise ValueError("Stored edge target arrays must have the same length.")
+
+            oracle_root_moves = list(state.get("oracle_root_moves", []))
+            oracle_final_root_q_values_aligned = state.get("oracle_final_root_q_values_aligned")
+            oracle_final_root_q_values_sparse = state.get("oracle_final_root_q_values_sparse")
+            if oracle_final_root_q_values_aligned is not None:
+                if len(oracle_final_root_q_values_aligned) != len(oracle_root_moves):
+                    raise ValueError("Aligned oracle final root q-values must match oracle_root_moves.")
+                oracle_final_root_q_values = {
+                    str(move): float(value)
+                    for move, value in zip(oracle_root_moves, oracle_final_root_q_values_aligned)
+                }
+            else:
+                oracle_final_root_q_values = dict(oracle_final_root_q_values_sparse or {})
+
+            self.__dict__.update(
+                {
+                    "tree": state["tree"],
+                    "node_target_values": list(state["node_target_values"]),
+                    "edge_wdl_targets": {
+                        (int(parent_id), int(child_id)): _normalize_wdl_target(target)
+                        for parent_id, child_id, target in zip(edge_parent_ids, edge_child_ids, edge_target_wdls)
+                    },
+                    "metadata": dict(state.get("metadata", {})),
+                    "oracle_trace_expansion_counts": list(state.get("oracle_trace_expansion_counts", [])),
+                    "oracle_root_moves": oracle_root_moves,
+                    "oracle_root_q_trace": [list(row) for row in state.get("oracle_root_q_trace", [])],
+                    "oracle_best_move_trace": list(state.get("oracle_best_move_trace", [])),
+                    "oracle_final_root_q_values": oracle_final_root_q_values,
+                }
+            )
+        else:
+            self.__dict__.update(state)
+            if "edge_wdl_targets" not in self.__dict__:
+                self.edge_wdl_targets = {}
+            if "oracle_trace_expansion_counts" not in self.__dict__:
+                self.oracle_trace_expansion_counts = []
+            if "oracle_root_moves" not in self.__dict__:
+                self.oracle_root_moves = []
+            if "oracle_root_q_trace" not in self.__dict__:
+                self.oracle_root_q_trace = []
+            if "oracle_best_move_trace" not in self.__dict__:
+                self.oracle_best_move_trace = []
+            if "oracle_final_root_q_values" not in self.__dict__:
+                self.oracle_final_root_q_values = {}
         self.__post_init__()
 
 
