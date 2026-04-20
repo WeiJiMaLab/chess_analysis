@@ -4,16 +4,16 @@ Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engin
 
 from __future__ import annotations
 
+from collections import defaultdict
 import os
 
 import chess
-import chess.svg
 import chess.engine
-from IPython.display import SVG, display
+import chess.svg
 import duckdb
-from collections import defaultdict
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+from IPython.display import SVG, display
 
 # Stockfish lives under home (not scratch). SF14: copied tree; SF15: built from official-stockfish sf_15.
 _STOCKFISH_HOME = os.path.expanduser("~/stockfish")

@@ -1,6 +1,8 @@
-import os
 import argparse
+import os
+
 import pandas as pd
+
 from utils import get_db_connection
 
 
@@ -15,7 +17,7 @@ def main():
     need_reload = not os.path.exists(games_cache)
     conn = get_db_connection(threads=16, memory_limit="6GB")
     start_date = "2022-01-01"
-    end_date = "2022-12-31"
+    end_date = "2022-01-31"
     db_path = '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db'
     try:
         conn.execute(f"ATTACH '{db_path}' AS core (READ_ONLY)")
@@ -32,17 +34,18 @@ def main():
             AND g.clock_increment = 0
             AND g.white_elo >= 2000
             AND g.black_elo >= 2000
-            AND MOD(HASH(g.gid), 1000) < 20  -- ~2% sample
+            AND MOD(HASH(g.gid), 1000) < 50  -- ~5% slice
             LIMIT {n_games}
         )
-   
+
         SELECT m.gid, m.board_position, m.move_time, m.move_ply, m.player_white,
             g.white_elo, g.black_elo, g.initial_clock, g.clock_increment
         FROM core.moves m
+        JOIN picked p ON m.gid = p.gid
         JOIN core.games g ON m.gid = g.gid
-        INNER JOIN picked p ON m.gid = p.gid
         ORDER BY m.gid, m.move_ply
     """).df()
+
     conn.close()
     sample_games.to_parquet(games_cache)
 

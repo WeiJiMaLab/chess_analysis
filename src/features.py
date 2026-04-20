@@ -1,6 +1,6 @@
 import chess
-import numpy as np
 import dask.dataframe as dd
+import numpy as np
 
 def score_to_ev(score, pov): 
     score_obj = score.pov(pov).wdl()

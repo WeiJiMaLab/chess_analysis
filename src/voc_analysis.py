@@ -1,18 +1,19 @@
-import pandas as pd
-import chess
-from chess.engine import EngineTerminatedError
-from tqdm import tqdm
-import numpy as np
-import matplotlib.pyplot as plt
-from utils import get_db_connection, get_stockfish_engine
-import statsmodels.formula.api as smf
-import matplotlib.pyplot as plt
-import seaborn as sns
-from joblib import Parallel, delayed
-import os
 import multiprocessing
+import os
 import resource
+
+import chess
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import statsmodels.formula.api as smf
+from chess.engine import EngineTerminatedError
+from joblib import Parallel, delayed
 from joblib.externals.loky.process_executor import TerminatedWorkerError
+from tqdm import tqdm
+
+from utils import get_db_connection, get_stockfish_engine
 
 SHALLOW_DEPTH = 1   # proxy for "no computation" — what you'd play immediately
 DEEP_DEPTH = 14     # proxy for "full computation" — Russek at depth 15
