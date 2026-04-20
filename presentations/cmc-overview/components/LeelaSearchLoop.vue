@@ -1,59 +1,50 @@
 <script setup lang="ts">
 /**
- * Didactic flow chart for the CMC control loop.
- * Board -> Planner -> Tree -> Meta-Controller -> [Loop or Act]
- * SHRUNK vertically and simplified.
+ * High-Level Horizontal Control Loop.
+ * Board -> Leela -> Meta-Controller -> Halt/Continue.
  */
 </script>
 
 <template>
   <div class="loop-container">
-    <svg viewBox="0 0 400 320" xmlns="http://www.w3.org/2000/svg">
-      <!-- Markers -->
+    <svg viewBox="0 0 600 180" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+        <marker id="arrow-high" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
           <path d="M0,0 L10,5 L0,10 Z" fill="#94a3b8" />
         </marker>
-        <marker id="arrow-indigo" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+        <marker id="arrow-high-indigo" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
           <path d="M0,0 L10,5 L0,10 Z" fill="#6366f1" />
         </marker>
       </defs>
 
       <!-- 1. Board State -->
-      <rect x="135" y="10" width="130" height="25" rx="6" class="box hollow" />
-      <text x="200" y="27" text-anchor="middle" class="label">Board State (s)</text>
+      <rect x="20" y="70" width="100" height="40" rx="6" class="box hollow" />
+      <text x="70" y="95" text-anchor="middle" class="label">Board (s)</text>
 
-      <line x1="200" y1="35" x2="200" y2="55" class="edge" marker-end="url(#arrow)" />
+      <line x1="120" y1="90" x2="160" y2="90" class="edge" marker-end="url(#arrow-high)" />
 
-      <!-- 2. Planner -->
-      <rect x="110" y="55" width="180" height="35" rx="6" class="box filled" />
-      <text x="200" y="77" text-anchor="middle" class="label white">MCTS Planner (Leela)</text>
+      <!-- 2. Leela (Planner) -->
+      <rect x="160" y="60" width="140" height="60" rx="8" class="box filled-slate" />
+      <text x="230" y="90" text-anchor="middle" class="label white bold">Leela</text>
+      <text x="230" y="105" text-anchor="middle" class="tiny white opacity-70">(MCTS Planner)</text>
+
+      <line x1="300" y1="90" x2="340" y2="90" class="edge" marker-end="url(#arrow-high)" />
+
+      <!-- 3. Meta-Controller -->
+      <rect x="340" y="55" width="160" height="70" rx="10" class="box fill-indigo" />
+      <text x="420" y="90" text-anchor="middle" class="label white bold">Meta-Controller</text>
+      <text x="420" y="105" text-anchor="middle" class="tiny white opacity-70">(GNN Evaluator)</text>
+
+      <!-- Decision Points -->
+      <!-- Halt (Success) -->
+      <line x1="500" y1="90" x2="540" y2="90" class="edge" marker-end="url(#arrow-high)" />
       
-      <line x1="200" y1="90" x2="200" y2="110" class="edge" marker-end="url(#arrow)" />
+      <rect x="540" y="70" width="40" height="40" rx="20" class="box success" />
+      <text x="560" y="95" text-anchor="middle" class="label white bold">Act</text>
 
-      <!-- 3. Search Tree -->
-      <rect x="135" y="110" width="130" height="25" rx="6" class="box hollow" />
-      <text x="200" y="127" text-anchor="middle" class="label">Search Tree (T)</text>
-
-      <line x1="200" y1="135" x2="200" y2="155" class="edge" marker-end="url(#arrow)" />
-
-      <!-- 4. Meta-Controller -->
-      <rect x="110" y="155" width="180" height="45" rx="10" class="box highlight" />
-      <text x="200" y="177" text-anchor="middle" class="label white font-bold">Meta-Controller (GNN)</text>
-      <text x="200" y="190" text-anchor="middle" class="sub white opacity-80">Economy of Thought</text>
-
-      <!-- Decision Arrows -->
-      <!-- Branch 1: Continue (Loop Back) -->
-      <path d="M110 177 L60 177 L60 72 L110 72" fill="none" class="edge loop-path" marker-end="url(#arrow-indigo)" />
-      <text x="75" y="115" text-anchor="middle" class="path-label" transform="rotate(-90 75 115)">CONTINUE</text>
-
-      <!-- Branch 2: Halt (Act) -->
-      <line x1="200" y1="200" x2="200" y2="240" class="edge" marker-end="url(#arrow)" />
-      <text x="210" y="225" text-anchor="start" class="path-label">HALT (Play)</text>
-
-      <!-- 5. Best Move -->
-      <rect x="120" y="240" width="160" height="35" rx="6" class="box success" />
-      <text x="200" y="262" text-anchor="middle" class="label white">Execute Best Move</text>
+      <!-- Continue (Loop back) -->
+      <path d="M420 125 L420 160 L230 160 L230 120" fill="none" class="edge loop-path" marker-end="url(#arrow-high-indigo)" />
+      <text x="325" y="155" text-anchor="middle" class="path-label">CONTINUE SEARCH</text>
     </svg>
   </div>
 </template>
@@ -61,8 +52,9 @@
 <style scoped>
 .loop-container {
   width: 100%;
-  max-width: 320px;
+  max-width: 600px;
   margin: 0 auto;
+  padding: 1rem;
 }
 svg {
   width: 100%;
@@ -70,16 +62,16 @@ svg {
   font-family: 'Inter', sans-serif;
 }
 .box { stroke-width: 1.5; }
-.hollow { fill: #fff; stroke: #94a3b8; }
-.filled { fill: #475569; stroke: #475569; }
-.highlight { fill: #6366f1; stroke: #4f46e5; }
-.success { fill: #10b981; stroke: #059669; }
-.label { font-size: 11px; font-weight: 500; fill: #1e293b; }
+.hollow { fill: #fff; stroke: #cbd5e1; }
+.filled-slate { fill: #475569; stroke: none; }
+.fill-indigo { fill: #6366f1; stroke: #4f46e5; }
+.success { fill: #10b981; stroke: none; }
+.label { font-size: 11px; fill: #1e293b; }
 .white { fill: #fff; }
-.font-bold { font-weight: 700; }
-.sub { font-size: 9px; }
-.edge { stroke: #94a3b8; stroke-width: 1.5; }
+.bold { font-weight: 700; }
+.tiny { font-size: 9px; }
+.edge { stroke: #94a3b8; stroke-width: 1.5; fill: none; }
 .loop-path { stroke: #6366f1; stroke-dasharray: 4; }
-.path-label { font-size: 8px; font-weight: 700; fill: #6366f1; text-transform: uppercase; }
-.opacity-80 { opacity: 0.8; }
+.path-label { font-size: 9px; font-weight: 700; fill: #6366f1; text-transform: uppercase; }
+.opacity-70 { opacity: 0.7; }
 </style>

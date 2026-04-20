@@ -33,19 +33,20 @@ p, li {
 
 # Chess Meta-Control (CMC)
 
-**Optimizing the Economy of Thought**
+**Optimizing the Economy of Thought in Complex Search**
 
-<div class="mt-20 text-sm opacity-60">
-
+<div class="mt-40 text-sm opacity-60">
 `lmcos/demos/understanding.md` · `project.md`
-
 </div>
 
 ---
-layout: section
----
 
-# Part 1 — The Problem
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
+    <h1 class="text-4xl text-slate-800">Part 1 — The Problem</h1>
+  </div>
+</div>
 
 ---
 
@@ -60,14 +61,16 @@ layout: section
 </v-clicks>
 
 ---
-layout: section
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section II</div>
+    <h1 class="text-4xl text-slate-800">Part 2 — The Methods</h1>
+  </div>
+</div>
+
 ---
 
-# Part 2 — The Methods
-
-
----
----
 # 1. Control Flow: The Loop
 
 The Meta-Controller sits on top of a standard MCTS planner (like Leela), deciding at each step whether to expand further or act.
@@ -77,22 +80,11 @@ The Meta-Controller sits on top of a standard MCTS planner (like Leela), decidin
 </div>
 
 ---
-layout: two-cols
----
 
 # 2. Representation & Architecture
 
-To learn on a tree, we must first map board states into a fixed-size vector space ($x$) which feeds into our modular controller.
-
-**Under the Hood**
-- **Serialization:** Board $\to$ Leela $\to$ MLP $\to$ $x$.
-- **GNN Backbone:** Processes the vectorized tree.
-- **Readout Head:** Taps the root state to decide.
-
-::right::
-
-<div class="ml-4">
-  <SearchTreeSnapshot />
+<div class="mt-8">
+  <MetaControllerZoom />
 </div>
 
 ---
@@ -114,18 +106,19 @@ The GNN performs representation learning over the tree using two sequential pass
 </v-clicks>
 
 ---
-layout: center
-class: text-center
----
 
 # 4. Decision: The Halt Controller
 
-Once the tree is summarized at the **Root**, we attach a **HaltController** (Policy Head).
+We frame search depth as a learnable policy $\pi_\theta$. The **Halt Controller** solves a stopping problem by maximizing the net value of computation.
 
-$$ R(k) = \text{Value}(T_k) - C \cdot k $$
+**The Economy of Thought**
+The agent seeks an optimal depth $k^*$ that maximizes the expected reward:
+$$ R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k $$
 
-It maps the Root Hidden State $h_{root}$ to a binary choice:
-**CONTINUE** (Expand more) vs **HALT** (Play now).
+**Mechanistic Readout**
+- **Input:** The current root hidden state $\mathbf{h}_{root}$.
+- **Output:** A halting probability $P(\text{halt} | \mathbf{h}_{root})$ predicted by an MLP.
+- **Optimization:** Trained via Policy Gradients ($\nabla_\theta J$) against a DP Oracle to learn the inflection point of the "Thinking Curve."
 
 ---
 
