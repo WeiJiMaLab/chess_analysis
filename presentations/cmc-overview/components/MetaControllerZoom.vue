@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
  * Detailed "Under the Hood" View of the Meta-Controller.
- * Refined geometry: tightened submodule box and increased label salience.
+ * Refined geometry: moved subplot to left, removed redundant arrows.
  */
 </script>
 
 <template>
   <div class="zoom-container">
-    <svg viewBox="0 0 1020 320" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 1020 340" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <marker id="arr-m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
           <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
@@ -20,8 +20,8 @@
         </marker>
       </defs>
 
-      <!-- SUBPLOT: Node Encoding Detail (Upper Right) -->
-      <g transform="translate(680, -15)">
+      <!-- SUBPLOT: Node Encoding Detail (Upper Left - MOVED) -->
+      <g transform="translate(10, -15)">
         <rect x="0" y="0" width="310" height="60" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" />
         <text x="10" y="15" class="title-tiny uppercase bold opacity-60">Node Representation Detail</text>
         
@@ -43,8 +43,8 @@
         <text x="260" y="41" text-anchor="middle" class="label-tiny indigo-txt bold">Vector (x)</text>
       </g>
 
-      <!-- MAIN ARCHITECTURE -->
-      <g transform="translate(0, 40)">
+      <!-- MAIN ARCHITECTURE (Shifted down slightly to clear subplot) -->
+      <g transform="translate(0, 70)">
         <!-- 1. External Board State -->
         <g transform="translate(10, 80)">
           <rect x="0" y="0" width="80" height="40" rx="6" class="box hollow" />
@@ -56,13 +56,13 @@
         <g transform="translate(110, 60)">
           <rect x="0" y="0" width="100" height="80" rx="8" class="box filled-slate" />
           <text x="50" y="30" text-anchor="middle" class="label white bold">Leela</text>
-          <text x="50" y="50" text-anchor="middle" class="tiny white opacity-80">(MCTS)</text>
+          <text x="50" y="50" text-anchor="middle" class="tiny white opacity-70">(MCTS)</text>
           
           <path d="M100 40 L170 40" class="edge" marker-end="url(#arr-m)" />
           <text x="135" y="32" text-anchor="middle" class="tiny italic salient">Tree (T)</text>
         </g>
 
-        <!-- 3. Meta-Controller Wrapper (Tightened around neural modules only) -->
+        <!-- 3. Meta-Controller Wrapper -->
         <g transform="translate(260, 25)">
           <rect x="0" y="0" width="535" height="150" rx="12" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6" />
           <text x="525" y="15" text-anchor="end" class="title-tiny-alt uppercase salient">Meta-Controller Submodules</text>
@@ -96,10 +96,10 @@
             <text x="80" y="85" text-anchor="middle" class="tiny white salient">Logistic/Policy Hub</text>
           </g>
 
-          <!-- Readout OUT connection crosses out of the box -->
+          <!-- Readout OUT connection -->
           <line x1="520" y1="70" x2="550" y2="70" class="edge" stroke="#10b981" marker-end="url(#arr-m)" />
 
-          <!-- Branch Point Junction (Outside the dashed box) -->
+          <!-- Branch Point Junction -->
           <g transform="translate(555, 55)">
             <rect x="0" y="0" width="30" height="30" rx="15" class="box junction" />
             <text x="15" y="20" text-anchor="middle" class="label bold">0/1</text>
@@ -107,17 +107,13 @@
             <!-- Arrow to ACT -->
             <line x1="30" y1="15" x2="80" y2="15" class="edge" marker-end="url(#arr-m)" />
             <text x="85" y="19" class="label bold-large dark-txt">ACT</text>
-            
-            <!-- Connection to CONTINUE -->
-            <line x1="15" y1="30" x2="15" y2="50" class="edge" stroke="#94a3b8" marker-end="url(#arr-m)" />
           </g> 
         </g>
 
-        <!-- RECURSION Path: UNINTERRUPTED -->
-        <!-- Global Junction Bottom is (260+550+15, 25+55+30) = (825, 110) -->
-        <!-- Leela Center-Bottom is (160, 140) -->
-        <path d="M825 110 L825 260 L160 260 L160 142" fill="none" class="edge loop-path" marker-end="url(#arr-m)" />
-        <text x="492" y="254" text-anchor="middle" class="label bold gray-txt salient">CONTINUE: Expand More Nodes</text>
+        <!-- RECURSION Path: (Spurious junction-arrow removed, path starts directly) -->
+        <!-- Global Junction Bottom is (260+555+15, 25+55+30) = (830, 110) -->
+        <path d="M830 110 L830 240 L160 240 L160 142" fill="none" class="edge loop-path" marker-end="url(#arr-m)" />
+        <text x="492" y="234" text-anchor="middle" class="label bold gray-txt salient">CONTINUE: Expand More Nodes</text>
       </g>
     </svg>
   </div>

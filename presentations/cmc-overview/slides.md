@@ -18,16 +18,19 @@ font:
   padding: 3.5rem 5rem !important;
 }
 h1 {
-  @apply text-2xl font-bold mb-4 text-slate-800;
+  @apply text-3xl font-bold mb-6 text-slate-800 tracking-tight;
 }
 h2 {
-  @apply text-lg font-semibold mb-2 text-slate-600;
+  @apply text-xl font-semibold mb-4 text-slate-600;
 }
 p, li {
-  @apply text-sm text-slate-700 leading-relaxed;
+  @apply text-lg text-slate-700 leading-relaxed;
 }
 .caption {
-  @apply text-xs text-slate-500 italic mt-2;
+  @apply text-sm text-slate-500 italic mt-4;
+}
+.takeaway {
+  @apply mt-6 p-4 bg-slate-50 border-l-4 border-indigo-500 text-slate-700 font-medium rounded-r-lg;
 }
 </style>
 
@@ -139,61 +142,77 @@ We use a two-stage pipeline to build an "Intuitive Engine."
 </v-clicks>
 
 ---
-layout: section
----
 
-# Part 3 — Sanity Check: Human Data
+# 1. Move times are heavy-tailed
 
----
-layout: two-cols
-layoutClass: gap-8
----
-
-# Move times are heavy-tailed
-
-Humans exhibit highly variable thinking times. Most moves are quick, while a long tail of "deep thinks" dominates.
-
-We work in **$\ln(T)$** to stabilize variance; effects read as multiplicative changes (%).
-
-::right::
-
-<img class="rounded border border-slate-200" src="/figures/clock_move_analysis/move_time_distribution.png" alt="Raw and log move time distributions" />
-
----
-layout: two-cols
-layoutClass: gap-8
----
-
-# The "Hump" in the Middle
-
-Thinking demand is not flat. Openings and endgames are often fast; the tactically rich **Mid-game** requires the most depth (VOC).
-
-::right::
-
-<img class="rounded border border-slate-200" src="/figures/ply_analysis/ply_impact_comparison.png" alt="Log move time vs ply" />
-
----
-layout: two-cols
-layoutClass: gap-8
----
-
-# Value of Computation (VOC)
-
-**VOC** is the gain in win probability from deep search over a shallow read.
-
-People spend significantly more time in positions where $\sqrt{\text{VOC}}$ is high—a behavioral proof of Meta-Control.
-
-::right::
-
-<img class="rounded border border-slate-200" src="/figures/voc_analysis/voc_quad_view.png" alt="VOC quad view" />
+<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+  <img class="w-full object-contain" src="/figures/clock_move_analysis/move_time_distribution.png" />
+  
+  <div class="takeaway border-slate-300 bg-slate-50/50 text-base py-6">
+    <b>Key Takeaway:</b><br><br>
+    Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
+    <br><br>
+    Log-transforming to <b>$\ln(T)$</b> is required to stabilize variance and isolate the behavioral signal.
+  </div>
+</div>
 
 ---
 
-# Summary: Machine vs. Human
+# 2a. Elasticity: The Naive Aggregate
 
-| Feature | Engine Meta-Control | Human Behavior |
-| :--- | :--- | :--- |
-| **Budget** | Linear Expansion Cost ($C$) | Clock Time Left |
-| **Demand** | Value Gain / Convergence | Value of Computation (VOC) |
-| **Signal** | GNN Tree Summary | Board Intuition |
-| **Goal** | Peak Net Reward $R(k)$ | Winning under Clocks |
+<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt1_naive_trend.png" />
+  
+  <div class="takeaway border-blue-500 bg-blue-50/50 text-base py-6">
+    <b>Attempt 1 (Primary Confound): Opening Theory</b><br><br>
+    The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
+    <br><br>
+    However, this is corrupted by opening moves where players have maximum clocks but move instantly due to preparation.
+  </div>
+</div>
+
+---
+
+# 2b. Elasticity: The Ply Paradox
+
+<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt2_ply_wise_trend.png" />
+  
+  <div class="takeaway border-red-500 bg-red-50/50 text-base py-6">
+    <b>Attempt 2 (Secondary Confound): Selection Bias</b><br><br>
+    Controlling for ply reveals a paradox: while aggregate bins look positive, <b>within-ply slopes are negative</b>. 
+    <br><br>
+    Faster players (who maintain higher clocks) dominate the high-clock buckets, masking the true relation.
+  </div>
+</div>
+
+---
+
+# 2c. Elasticity: The Resolution
+
+<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt3_controlled_trend.png" />
+  
+  <div class="takeaway border-emerald-500 bg-emerald-50/50 text-base py-6">
+    <b>Attempt 3 (The Thinking Hypothesis): Fixed-Effect Control</b><br><br>
+    Accounting for <b>both</b> player identity and game stage resolves the paradox.
+    <br><br>
+    <span class="text-emerald-700 font-bold text-xl">$\beta \approx 0.54$</span><br>
+    A 10% increase in clock time leads to a ~5.4% increase in the thinking budget.
+  </div>
+</div>
+
+---
+
+# 3. Value of Computation (The Demand)
+
+<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+  <img class="w-full object-contain" src="/figures/voc_analysis/voc_quad_view.png" />
+  
+  <div class="takeaway text-base py-6">
+    <b>Key Takeaway:</b><br><br>
+    <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
+    <br><br>
+    <b>$\ln(T) \propto \sqrt{VOC}$</b>: Humans spend the most "thought-capital" on positions where depth matters most.
+  </div>
+</div>
