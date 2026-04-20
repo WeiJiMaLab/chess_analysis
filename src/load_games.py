@@ -22,16 +22,17 @@ def main():
     except Exception as e:
         print(f"Warning attaching database: {e}")
 
+    # use hash-based sampling to get a random sample of 2% of the games
     sample_games = conn.sql(f"""
         WITH picked AS (
             SELECT g.gid
             FROM core.games g
             WHERE g.utc_datetime BETWEEN '{start_date}' AND '{end_date}'
-            AND g.initial_clock == 600
-            AND g.clock_increment == 0
+            AND g.initial_clock = 600
+            AND g.clock_increment = 0
             AND g.white_elo >= 2000
             AND g.black_elo >= 2000
-            ORDER BY g.gid
+            AND MOD(HASH(g.gid), 1000) < 20  -- ~2% sample
             LIMIT {n_games}
         )
    
