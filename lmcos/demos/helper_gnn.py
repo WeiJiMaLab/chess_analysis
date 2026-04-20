@@ -20,6 +20,8 @@ def fmt_h(label, h):
     return f"{label}\n{np.around(h, 2)}"
 
 def apply_formal_styles(dot):
+    if dot is None:
+        return
     dot.attr(fontname=FONT, fontsize='11', rankdir='TB', splines='ortho')
     dot.attr('node', fontname=FONT, fontsize='10', shape='rect', style='rounded,filled', 
              fillcolor='#f8fafc', color=BORDER_MODULE, penwidth='1.5')
@@ -150,3 +152,51 @@ def visualize_halt_decision(h_root, halt_prob, thinking_cost=0.01):
 
     dot.attr(label="\nTHE META-CONTROLLER: Optimizing the Economy of Thought")
     return dot
+
+def visualize_search_trace_dp(values, cost_per_step=0.015):
+    """
+    Plots the 'Thinking Curve' for a search trace.
+    Shows Value, Cost, and Net Reward, highlighting the DP Optimal point.
+    """
+    import matplotlib.pyplot as plt
+    
+    steps = np.arange(len(values))
+    costs = steps * cost_per_step
+    net_rewards = values - costs
+    
+    # Identify DP Optimal Halt Step
+    optimal_step = np.argmax(net_rewards)
+    
+    fig, ax1 = plt.subplots(figsize=(10, 5))
+
+    # Plot Value & Cost
+    ax1.plot(steps, values, marker='o', label="Raw Value (Intuition)", color="#4338ca", linewidth=2)
+    ax1.plot(steps, costs, linestyle='--', label=f"Total Thinking Cost (C={cost_per_step})", color="#dc2626")
+    ax1.set_xlabel("Search Expansions (k)")
+    ax1.set_ylabel("Metric Value")
+    
+    # Plot Net Reward (The objective)
+    ax2 = ax1.twinx()
+    ax2.fill_between(steps, net_rewards, alpha=0.1, color="#059669")
+    ax2.plot(steps, net_rewards, marker='s', label="Net Reward (Oracle Truth)", color="#059669", linewidth=3)
+    ax2.set_ylabel("Net Reward (Value - C*k)")
+    
+    # Highlight Optimal
+    ax1.axvline(optimal_step, color="#059669", alpha=0.5, linestyle=":")
+    ax1.annotate('DP OPTIMAL HALT', xy=(optimal_step, net_rewards[optimal_step]), 
+                xytext=(optimal_step+0.5, net_rewards[optimal_step]+0.05),
+                arrowprops=dict(facecolor='black', shrink=0.05),
+                color="#059669", fontweight='bold')
+
+    # Add logical labels below steps
+    print(f"{'Step (k)':<10} | {'Value':<10} | {'Net Reward':<12} | {'Oracle Action'}")
+    print("-" * 55)
+    for k in steps:
+        action = "CONTINUE" if k < optimal_step else "HALT"
+        print(f"{k:<10} | {values[k]:<10.3f} | {net_rewards[k]:<12.3f} | {action}")
+
+    fig.legend(loc="upper left", bbox_to_anchor=(0.15, 0.85))
+    plt.title("Search Trace Analysis: The Thinking Curve")
+    plt.grid(True, alpha=0.2)
+    plt.tight_layout()
+    plt.show()

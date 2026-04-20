@@ -4,7 +4,9 @@ This directory contains a didactic curriculum and self-contained scripts designe
 
 ### Tutorial Series: GNN Training Pipeline
 
-Follow this sequence to understand how raw search trees are transformed into a neural training signal.
+- **Tutorial 03:** GNN Bidirectional Heartbeat (Upward Attention / Downward MLP)
+- **Tutorial 04:** Supervised Pre-training (Watch the loss collapse)
+- **Tutorial 05:** The Meta-Controller (Optimizing the Economy of Thought)
 
 | Order | Tutorial | Mechanistic Focus | Key File |
 | :--- | :--- | :--- | :--- |

@@ -207,3 +207,26 @@ def make_synthetic_pretrain_dataset(n_samples=100):
     targets = torch.tensor(batch_targets, dtype=torch.float32)
     
     return batch, targets
+
+def build_demo_trees():
+    """Returns a list of demo SearchTrees for visualization."""
+    t1 = SearchTree()
+    t1.create_root("FEN", {"value": 0.5})
+    t1.add_children(0, [ExpansionChild("e2e4", "FEN2", {"value": 0.6})])
+    
+    t2 = SearchTree()
+    t2.create_root("FEN", {"value": 0.5})
+    t2.add_children(0, [
+        ExpansionChild("e2e4", "FEN2", {"value": 0.7}),
+        ExpansionChild("d2d4", "FEN3", {"value": 0.5})
+    ])
+    return [t1, t2]
+
+def simulate_environmental_growth(full_tree=None):
+    """
+    Simulates the 'Search-as-a-Service' environment.
+    Takes a full tree and returns a list of fragments, each representing
+    the tree after an expansion step.
+    """
+    # Simply returning a sequence of growing demo trees
+    return build_demo_trees()

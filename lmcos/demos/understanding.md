@@ -64,6 +64,37 @@ We generate training pairs using **Prefix Sampling**:
 *   **Target ($WDL_{oracle}$):** The eventual Win/Draw/Loss probabilities discovered by a deep Oracle search.
 *   **Loss:** Cross-Entropy between the GNN's predicted logits and the Oracle's consolidated probabilities.
 
+### 5. The Thinking Curve: Solving the Economy of Thought
+
+The Meta-Controller (Tutorial 05) solves an **Optimal Stopping Problem**. It answers one question: *"Is the move-quality I'm about to discover worth the electricity I'm about to spend?"*
+
+#### The Reward Signal ($R$)
+The training logic uses **Dynamic Programming (DP)** to look at a full trace of search snapshots $T_0, T_1, \dots, T_K$. For each snapshot, we calculate a **Net Reward**:
+$$R(k) = \text{Value}(T_k) - (C \cdot k)$$
+*   **Value:** The expected win rate (WDL) of the best move at that moment.
+*   **Cost ($C$):** A constant penalty for each unit of search (expansion).
+
+#### The DP Oracle
+The **Oracle Action** is derived by finding the global peak of this $R(k)$ curve. If search step $k$ is before the peak, the correct action is **CONTINUE**. If we are at or after the peak, the correct action is **HALT**.
+
+By training on thousands of these "Thinking Curves," the Meta-Controller learns to recognize the visual patterns in the tree (e.g. high volatility, close move-scores) that flag a tactical breakthrough is worth the extra wait.
+
+### 6. The Engineering Pipeline: Scaling to Production
+
+While the tutorials focus on single "fragments," the production codebase is optimized to keep the GPU fully saturated. The journey from a raw board position to a trained controller follows this 4-stage pipeline:
+
+#### Stage 1: Massive Dataset Generation (`generate-dataset`)
+We use the `lc0` engine to perform thousands of deep searches (usually 800+ nodes). Each search results in a `.pt` file containing the full `SearchTree` and its eventual outcomes.
+
+#### Stage 2: Data Packing (`pack_pretrain_examples.py`)
+Reading 100,000 tiny files is a massive I/O bottleneck. In production, we "shard" the data. This script tensorizes thousands of trees into giant **"Fat Tensors"** and saves them with a pointer system (`node_ptr`, `edge_ptr`). This allows the trainer to load massive batches in a single disk read.
+
+#### Stage 3: GNN Backbone Training (`pretrain-child-wdl-encoder`)
+We train the GNN core (Tutorial 03-04) on these packed shards. This stage is computationally expensive and is typically run on high-performance clusters (see `slurm/`). The output is a frozen **`tree_encoder.pt`** backbone.
+
+#### Stage 4: Meta-Control Optimization (`frozen-rl-generated`)
+Finally, we attach the `HaltController` (Tutorial 05) to the frozen GNN. We use **PPO (Proximal Policy Optimization)** to help the agent explore the "Thinking Space" and learn the optimal balance between compute-cost and move-quality across live search traces.
+
 ### Mechanistic Truth: The Dense Recursive Signal
 A crucial design choice in `lmcos` is that the **ChildWDL Head is not anchored solely to the root.**
 *   **Any Node can be a Parent:** During pre-training, the readout head is applied to **every edge** in the tree batch.
