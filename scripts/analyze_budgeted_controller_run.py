@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import re
 import statistics
 import sys
@@ -28,12 +29,13 @@ from budgeted_controller_oracle import (
 try:
     import torch
     from cts_episode_envs import build_trimmed_decision_episode
-    from cts_pretrain import PretrainExample, TeacherSearchConfig
+    from cts_pretrain import PretrainExample, TeacherSearchConfig, load_pretrain_example
 except ModuleNotFoundError:
     torch = None
     build_trimmed_decision_episode = None
     PretrainExample = None
     TeacherSearchConfig = None
+    load_pretrain_example = None
 
 
 TRAIN_RE = re.compile(
@@ -149,8 +151,15 @@ def load_diagnostics(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def build_state_rows(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_state_rows(
+    diagnostics: list[dict[str, Any]],
+    *,
+    max_rows: int | None = 500000,
+    seed: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
     rows: list[dict[str, Any]] = []
+    total_rows = 0
+    rng = random.Random(seed)
     for episode in diagnostics:
         for step_index, (tree_size, time_budget, pred_adv, target_adv) in enumerate(
             zip(
@@ -162,35 +171,40 @@ def build_state_rows(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ):
             pred_continue = float(pred_adv) > 0.0
             target_continue = float(target_adv) > 0.0
-            rows.append(
-                {
-                    "source_path": episode["source_path"],
-                    "path": episode["path"],
-                    "budget_bucket_name": episode["budget_bucket_name"],
-                    "starting_budget": int(episode["starting_budget"]),
-                    "oracle_stop_step": int(episode["oracle_stop_step"]),
-                    "predicted_stop_step": int(episode["predicted_stop_step"]),
-                    "episode_regret": float(episode["regret"]),
-                    "step_index": step_index,
-                    "tree_size": int(tree_size),
-                    "time_budget": int(time_budget),
-                    "predicted_advantage": float(pred_adv),
-                    "target_advantage": float(target_adv),
-                    "pred_continue": pred_continue,
-                    "target_continue": target_continue,
-                    "sign_correct": pred_continue == target_continue,
-                    "state_error_type": (
-                        "false_continue"
-                        if pred_continue and not target_continue
-                        else "false_halt"
-                        if (not pred_continue) and target_continue
-                        else "correct_continue"
-                        if pred_continue
-                        else "correct_halt"
-                    ),
-                }
-            )
-    return rows
+            row = {
+                "source_path": episode["source_path"],
+                "path": episode["path"],
+                "budget_bucket_name": episode["budget_bucket_name"],
+                "starting_budget": int(episode["starting_budget"]),
+                "oracle_stop_step": int(episode["oracle_stop_step"]),
+                "predicted_stop_step": int(episode["predicted_stop_step"]),
+                "episode_regret": float(episode["regret"]),
+                "step_index": step_index,
+                "tree_size": int(tree_size),
+                "time_budget": int(time_budget),
+                "predicted_advantage": float(pred_adv),
+                "target_advantage": float(target_adv),
+                "pred_continue": pred_continue,
+                "target_continue": target_continue,
+                "sign_correct": pred_continue == target_continue,
+                "state_error_type": (
+                    "false_continue"
+                    if pred_continue and not target_continue
+                    else "false_halt"
+                    if (not pred_continue) and target_continue
+                    else "correct_continue"
+                    if pred_continue
+                    else "correct_halt"
+                ),
+            }
+            total_rows += 1
+            if max_rows is None or max_rows <= 0 or len(rows) < max_rows:
+                rows.append(row)
+            else:
+                replacement_index = rng.randrange(total_rows)
+                if replacement_index < max_rows:
+                    rows[replacement_index] = row
+    return rows, total_rows
 
 
 def _episode_error_type(episode: dict[str, Any]) -> str:
@@ -719,7 +733,7 @@ def _reconstruct_episode_best_moves(
 ) -> list[str]:
     if torch is None or build_trimmed_decision_episode is None or PretrainExample is None:
         raise RuntimeError("Torch/CTS episode helpers are unavailable; cannot reconstruct best moves.")
-    example = torch.load(source_path, weights_only=False)
+    example = load_pretrain_example(source_path)
     if not isinstance(example, PretrainExample):
         raise ValueError(f"Expected PretrainExample at {source_path}, got {type(example).__name__}.")
     episode = build_trimmed_decision_episode(example, quality_config)
@@ -732,7 +746,7 @@ def _reconstruct_episode_move_trace(
 ) -> dict[str, Any]:
     if torch is None or build_trimmed_decision_episode is None or PretrainExample is None:
         raise RuntimeError("Torch/CTS episode helpers are unavailable; cannot reconstruct move traces.")
-    example = torch.load(source_path, weights_only=False)
+    example = load_pretrain_example(source_path)
     if not isinstance(example, PretrainExample):
         raise ValueError(f"Expected PretrainExample at {source_path}, got {type(example).__name__}.")
     episode = build_trimmed_decision_episode(example, quality_config)
@@ -2292,6 +2306,8 @@ def main() -> None:
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--path-rewrite", action="append", default=[], help="Rewrite source paths as OLD=NEW before reconstruction.")
+    parser.add_argument("--max-state-rows", type=int, default=500000, help="Reservoir-sample at most this many per-state rows for state-level plots.")
+    parser.add_argument("--state-sample-seed", type=int, default=0)
     args = parser.parse_args()
 
     diagnostics_path = Path(args.diagnostics_path)
@@ -2310,7 +2326,11 @@ def main() -> None:
             }
             for episode in diagnostics
         ]
-    state_rows = build_state_rows(diagnostics)
+    state_rows, total_state_rows = build_state_rows(
+        diagnostics,
+        max_rows=args.max_state_rows,
+        seed=args.state_sample_seed,
+    )
     oracle_config = budgeted_oracle_config_from_metadata(metadata)
     if oracle_config is None:
         raise ValueError("Could not recover budgeted oracle metadata from the .out file.")
@@ -2435,7 +2455,8 @@ def main() -> None:
 
     summary = {
         "episodes": len(diagnostics),
-        "states": len(state_rows),
+        "states": total_state_rows,
+        "sampled_states": len(state_rows),
         "bucket_counts": dict(bucket_counts),
         "final_greedy": greedy_rows[-1] if greedy_rows else None,
         "best_epochs": best_epochs,

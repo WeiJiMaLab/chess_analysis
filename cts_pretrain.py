@@ -18,7 +18,8 @@ from torch.utils.data import DataLoader
 
 from GNN import ChildWdlModel, NodeValueModel
 from tensorizer import TensorizedTreeExample, TreeTensorizer, collate_tensorized_examples
-from tree import ExpansionChild, SearchTree
+from tree import ExpansionChild, SearchNode, SearchTree
+from cts_uci_common import append_move_to_position_spec
 
 
 @dataclass(frozen=True)
@@ -184,100 +185,458 @@ class PretrainExample:
             if set(self.oracle_final_root_q_values) != set(self.oracle_root_moves):
                 raise ValueError("oracle_final_root_q_values must align with oracle_root_moves.")
 
-    def __getstate__(self) -> Dict[str, Any]:
-        edge_parent_ids: List[int] = []
-        edge_child_ids: List[int] = []
-        edge_target_wdls: List[Tuple[float, float, float]] = []
-        for (parent_id, child_id), target in sorted(self.edge_wdl_targets.items()):
-            edge_parent_ids.append(int(parent_id))
-            edge_child_ids.append(int(child_id))
-            edge_target_wdls.append(_normalize_wdl_target(target))
+RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v1"
 
-        if self.oracle_root_moves and self.oracle_final_root_q_values:
-            oracle_final_root_q_values_aligned = [
-                float(self.oracle_final_root_q_values[move]) for move in self.oracle_root_moves
-            ]
-            oracle_final_root_q_values_sparse = None
-        else:
-            oracle_final_root_q_values_aligned = None
-            oracle_final_root_q_values_sparse = dict(self.oracle_final_root_q_values)
 
+def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
+    ordered: List[str] = []
+    seen = set()
+    for node in tree.iter_nodes():
+        for name in node.scalar_features:
+            if name not in seen:
+                seen.add(name)
+                ordered.append(str(name))
+    return tuple(ordered)
+
+
+def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -> torch.Tensor:
+    rows: List[List[float]] = []
+    for node in tree.iter_nodes():
+        row = []
+        for feature_name in feature_names:
+            value = node.scalar_features.get(feature_name, float("nan"))
+            row.append(float(value))
+        rows.append(row)
+    if not rows:
+        return torch.empty((0, len(feature_names)), dtype=torch.float32)
+    return torch.tensor(rows, dtype=torch.float32)
+
+
+def _child_ptr_and_children_index(tree: SearchTree) -> Tuple[torch.Tensor, torch.Tensor]:
+    child_ptr = [0]
+    children_index: List[int] = []
+    for node in tree.iter_nodes():
+        child_ids = tree.child_ids(node.node_id)
+        children_index.extend(int(child_id) for child_id in child_ids)
+        child_ptr.append(len(children_index))
+    return (
+        torch.tensor(child_ptr, dtype=torch.int32),
+        torch.tensor(children_index, dtype=torch.int32),
+    )
+
+
+def _edge_wdl_target_tensor_for_tree(
+    tree: SearchTree,
+    edge_wdl_targets: Mapping[Tuple[int, int], Sequence[float]],
+) -> torch.Tensor:
+    rows: List[Tuple[float, float, float]] = []
+    for node in tree.iter_nodes():
+        for child_id in tree.child_ids(node.node_id):
+            edge_key = (node.node_id, child_id)
+            if edge_key not in edge_wdl_targets:
+                raise KeyError(f"Missing edge WDL target for edge {edge_key}.")
+            rows.append(_normalize_wdl_target(edge_wdl_targets[edge_key]))
+    if not rows:
+        return torch.empty((0, 3), dtype=torch.float32)
+    return torch.tensor(rows, dtype=torch.float32)
+
+
+def _compact_position_spec_payload(tree: SearchTree) -> Dict[str, Any]:
+    nodes = list(tree.iter_nodes())
+    if not nodes:
+        return {"root_position_spec": None, "position_specs": None}
+    root_position_spec = nodes[0].fen
+    reconstructable = True
+    for node in nodes:
+        if node.parent_id is None:
+            if node.fen != root_position_spec:
+                reconstructable = False
+                break
+            continue
+        if node.incoming_move_uci is None:
+            reconstructable = False
+            break
+        parent_fen = nodes[node.parent_id].fen
+        if append_move_to_position_spec(parent_fen, node.incoming_move_uci) != node.fen:
+            reconstructable = False
+            break
+    if reconstructable:
+        return {"root_position_spec": root_position_spec, "position_specs": None}
+    return {
+        "root_position_spec": root_position_spec,
+        "position_specs": [node.fen for node in nodes],
+    }
+
+
+@dataclass(frozen=True)
+class RawPretrainExampleRecord:
+    root_position_spec: Optional[str]
+    incoming_moves: List[Optional[str]]
+    feature_names: Tuple[str, ...]
+    node_features: torch.Tensor
+    parent_index: torch.Tensor
+    child_ptr: torch.Tensor
+    children_index: torch.Tensor
+    depth: torch.Tensor
+    is_terminal: torch.Tensor
+    is_expanded: torch.Tensor
+    node_targets: torch.Tensor
+    edge_wdl_targets: torch.Tensor
+    metadata: Dict[str, Any]
+    sparse_node_metadata: List[Tuple[int, Dict[str, Any]]]
+    oracle_trace_expansion_counts: torch.Tensor
+    oracle_root_moves: List[str]
+    oracle_root_q_trace: torch.Tensor
+    oracle_best_move_index: torch.Tensor
+    oracle_final_root_q_values: torch.Tensor
+    position_specs: Optional[List[str]] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "incoming_moves", [None if move is None else str(move) for move in self.incoming_moves])
+        object.__setattr__(self, "feature_names", tuple(str(name) for name in self.feature_names))
+        object.__setattr__(self, "node_features", self.node_features.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(self, "parent_index", self.parent_index.to(dtype=torch.int32, device="cpu"))
+        object.__setattr__(self, "child_ptr", self.child_ptr.to(dtype=torch.int32, device="cpu"))
+        object.__setattr__(self, "children_index", self.children_index.to(dtype=torch.int32, device="cpu"))
+        object.__setattr__(self, "depth", self.depth.to(dtype=torch.int16, device="cpu"))
+        object.__setattr__(self, "is_terminal", self.is_terminal.to(dtype=torch.bool, device="cpu"))
+        object.__setattr__(self, "is_expanded", self.is_expanded.to(dtype=torch.bool, device="cpu"))
+        object.__setattr__(self, "node_targets", self.node_targets.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(self, "edge_wdl_targets", self.edge_wdl_targets.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(
+            self,
+            "sparse_node_metadata",
+            [(int(node_id), dict(node_metadata)) for node_id, node_metadata in self.sparse_node_metadata],
+        )
+        object.__setattr__(
+            self,
+            "oracle_trace_expansion_counts",
+            self.oracle_trace_expansion_counts.to(dtype=torch.int32, device="cpu"),
+        )
+        object.__setattr__(self, "oracle_root_moves", [str(move) for move in self.oracle_root_moves])
+        object.__setattr__(self, "oracle_root_q_trace", self.oracle_root_q_trace.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(
+            self,
+            "oracle_best_move_index",
+            self.oracle_best_move_index.to(dtype=torch.int32, device="cpu"),
+        )
+        object.__setattr__(
+            self,
+            "oracle_final_root_q_values",
+            self.oracle_final_root_q_values.to(dtype=torch.float32, device="cpu"),
+        )
+        if self.position_specs is not None:
+            object.__setattr__(self, "position_specs", [str(spec) for spec in self.position_specs])
+        self._validate()
+
+    def _validate(self) -> None:
+        num_nodes = int(self.parent_index.shape[0])
+        if self.node_features.shape != (num_nodes, len(self.feature_names)):
+            raise ValueError("node_features must align with feature_names and parent_index.")
+        if num_nodes > 0 and int(self.parent_index[0].item()) != -1:
+            raise ValueError("The root node must have parent_index -1.")
+        for node_id, parent_id in enumerate(self.parent_index.tolist()):
+            if node_id == 0:
+                continue
+            if int(parent_id) < 0 or int(parent_id) >= node_id:
+                raise ValueError("parent_index must be topologically ordered with exactly one root.")
+        if self.depth.shape != (num_nodes,):
+            raise ValueError("depth must align with parent_index.")
+        if self.is_terminal.shape != (num_nodes,):
+            raise ValueError("is_terminal must align with parent_index.")
+        if self.is_expanded.shape != (num_nodes,):
+            raise ValueError("is_expanded must align with parent_index.")
+        if self.node_targets.shape != (num_nodes,):
+            raise ValueError("node_targets must align with parent_index.")
+        if self.child_ptr.shape != (num_nodes + 1,):
+            raise ValueError("child_ptr must have length num_nodes + 1.")
+        if int(self.child_ptr[0].item()) != 0:
+            raise ValueError("child_ptr must start at 0.")
+        if bool((self.child_ptr[1:] < self.child_ptr[:-1]).any()):
+            raise ValueError("child_ptr must be nondecreasing.")
+        if int(self.child_ptr[-1].item()) != int(self.children_index.shape[0]):
+            raise ValueError("child_ptr must end at len(children_index).")
+        if num_nodes > 0 and bool(((self.children_index < 0) | (self.children_index >= num_nodes)).any()):
+            raise ValueError("children_index entries must reference valid node ids.")
+        if self.edge_wdl_targets.shape != (int(self.children_index.shape[0]), 3):
+            raise ValueError("edge_wdl_targets must align with children_index.")
+        if self.position_specs is None and self.root_position_spec is None and num_nodes > 0:
+            raise ValueError("Either root_position_spec or position_specs must be provided.")
+        if self.position_specs is not None and len(self.position_specs) != num_nodes:
+            raise ValueError("position_specs must align with parent_index.")
+        if self.oracle_root_q_trace.shape != (int(self.oracle_trace_expansion_counts.shape[0]), len(self.oracle_root_moves)):
+            raise ValueError("oracle_root_q_trace must align with oracle traces and root moves.")
+        if self.oracle_best_move_index.shape != self.oracle_trace_expansion_counts.shape:
+            raise ValueError("oracle_best_move_index must align with oracle traces.")
+        if self.oracle_final_root_q_values.shape != (len(self.oracle_root_moves),):
+            raise ValueError("oracle_final_root_q_values must align with oracle_root_moves.")
+        if len(self.oracle_root_moves) > 0 and self.oracle_best_move_index.numel() > 0:
+            if bool(((self.oracle_best_move_index < 0) | (self.oracle_best_move_index >= len(self.oracle_root_moves))).any()):
+                raise ValueError("oracle_best_move_index entries must reference valid oracle_root_moves.")
+
+    @classmethod
+    def from_example(cls, example: PretrainExample) -> "RawPretrainExampleRecord":
+        tree = example.tree
+        feature_names = _ordered_feature_names_from_tree(tree)
+        child_ptr, children_index = _child_ptr_and_children_index(tree)
+        position_payload = _compact_position_spec_payload(tree)
+        oracle_best_move_index = torch.tensor(
+            [example.oracle_root_moves.index(move) for move in example.oracle_best_move_trace],
+            dtype=torch.int32,
+        ) if example.oracle_best_move_trace else torch.empty((0,), dtype=torch.int32)
+        oracle_final_root_q_values = torch.tensor(
+            [float(example.oracle_final_root_q_values[move]) for move in example.oracle_root_moves],
+            dtype=torch.float32,
+        ) if example.oracle_root_moves else torch.empty((0,), dtype=torch.float32)
+        return cls(
+            root_position_spec=position_payload["root_position_spec"],
+            incoming_moves=[node.incoming_move_uci for node in tree.iter_nodes()],
+            feature_names=feature_names,
+            node_features=_dense_node_feature_tensor(tree, feature_names),
+            parent_index=torch.tensor(
+                [-1 if node.parent_id is None else int(node.parent_id) for node in tree.iter_nodes()],
+                dtype=torch.int32,
+            ),
+            child_ptr=child_ptr,
+            children_index=children_index,
+            depth=torch.tensor([int(node.depth) for node in tree.iter_nodes()], dtype=torch.int16),
+            is_terminal=torch.tensor([bool(node.is_terminal) for node in tree.iter_nodes()], dtype=torch.bool),
+            is_expanded=torch.tensor([bool(node.is_expanded) for node in tree.iter_nodes()], dtype=torch.bool),
+            node_targets=torch.tensor(example.node_target_values, dtype=torch.float32),
+            edge_wdl_targets=_edge_wdl_target_tensor_for_tree(tree, example.edge_wdl_targets),
+            metadata=dict(example.metadata),
+            sparse_node_metadata=[
+                (int(node.node_id), dict(node.metadata))
+                for node in tree.iter_nodes()
+                if node.metadata
+            ],
+            oracle_trace_expansion_counts=torch.tensor(example.oracle_trace_expansion_counts, dtype=torch.int32),
+            oracle_root_moves=list(example.oracle_root_moves),
+            oracle_root_q_trace=(
+                torch.tensor(example.oracle_root_q_trace, dtype=torch.float32)
+                if example.oracle_root_q_trace
+                else torch.empty((0, len(example.oracle_root_moves)), dtype=torch.float32)
+            ),
+            oracle_best_move_index=oracle_best_move_index,
+            oracle_final_root_q_values=oracle_final_root_q_values,
+            position_specs=position_payload["position_specs"],
+        )
+
+    def to_payload(self) -> Dict[str, Any]:
         return {
-            "__format__": "pretrain_example_v2",
-            "tree": self.tree,
-            "node_target_values": list(self.node_target_values),
-            "edge_target_parent_ids": edge_parent_ids,
-            "edge_target_child_ids": edge_child_ids,
-            "edge_target_wdls": edge_target_wdls,
+            "format": RAW_PRETRAIN_FORMAT,
+            "root_position_spec": self.root_position_spec,
+            "incoming_moves": list(self.incoming_moves),
+            "feature_names": list(self.feature_names),
+            "node_features": self.node_features,
+            "parent_index": self.parent_index,
+            "child_ptr": self.child_ptr,
+            "children_index": self.children_index,
+            "depth": self.depth,
+            "is_terminal": self.is_terminal,
+            "is_expanded": self.is_expanded,
+            "node_targets": self.node_targets,
+            "edge_wdl_targets": self.edge_wdl_targets,
             "metadata": dict(self.metadata),
-            "oracle_trace_expansion_counts": list(self.oracle_trace_expansion_counts),
+            "sparse_node_metadata": list(self.sparse_node_metadata),
+            "oracle_trace_expansion_counts": self.oracle_trace_expansion_counts,
             "oracle_root_moves": list(self.oracle_root_moves),
-            "oracle_root_q_trace": [list(row) for row in self.oracle_root_q_trace],
-            "oracle_best_move_trace": list(self.oracle_best_move_trace),
-            "oracle_final_root_q_values_aligned": oracle_final_root_q_values_aligned,
-            "oracle_final_root_q_values_sparse": oracle_final_root_q_values_sparse,
+            "oracle_root_q_trace": self.oracle_root_q_trace,
+            "oracle_best_move_index": self.oracle_best_move_index,
+            "oracle_final_root_q_values": self.oracle_final_root_q_values,
+            "position_specs": list(self.position_specs) if self.position_specs is not None else None,
         }
 
-    def __setstate__(self, state: Mapping[str, Any]) -> None:
-        if state.get("__format__") == "pretrain_example_v2":
-            edge_parent_ids = list(state.get("edge_target_parent_ids", []))
-            edge_child_ids = list(state.get("edge_target_child_ids", []))
-            edge_target_wdls = list(state.get("edge_target_wdls", []))
-            if not (len(edge_parent_ids) == len(edge_child_ids) == len(edge_target_wdls)):
-                raise ValueError("Stored edge target arrays must have the same length.")
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RawPretrainExampleRecord":
+        if payload.get("format") != RAW_PRETRAIN_FORMAT:
+            raise ValueError(f"Expected raw pretrain format {RAW_PRETRAIN_FORMAT}, got {payload.get('format')!r}.")
+        return cls(
+            root_position_spec=payload.get("root_position_spec"),
+            incoming_moves=list(payload["incoming_moves"]),
+            feature_names=tuple(payload["feature_names"]),
+            node_features=payload["node_features"],
+            parent_index=payload["parent_index"],
+            child_ptr=payload["child_ptr"],
+            children_index=payload["children_index"],
+            depth=payload["depth"],
+            is_terminal=payload["is_terminal"],
+            is_expanded=payload["is_expanded"],
+            node_targets=payload["node_targets"],
+            edge_wdl_targets=payload["edge_wdl_targets"],
+            metadata=dict(payload.get("metadata", {})),
+            sparse_node_metadata=list(payload.get("sparse_node_metadata", [])),
+            oracle_trace_expansion_counts=payload["oracle_trace_expansion_counts"],
+            oracle_root_moves=list(payload.get("oracle_root_moves", [])),
+            oracle_root_q_trace=payload["oracle_root_q_trace"],
+            oracle_best_move_index=payload["oracle_best_move_index"],
+            oracle_final_root_q_values=payload["oracle_final_root_q_values"],
+            position_specs=payload.get("position_specs"),
+        )
 
-            oracle_root_moves = list(state.get("oracle_root_moves", []))
-            oracle_final_root_q_values_aligned = state.get("oracle_final_root_q_values_aligned")
-            oracle_final_root_q_values_sparse = state.get("oracle_final_root_q_values_sparse")
-            if oracle_final_root_q_values_aligned is not None:
-                if len(oracle_final_root_q_values_aligned) != len(oracle_root_moves):
-                    raise ValueError("Aligned oracle final root q-values must match oracle_root_moves.")
-                oracle_final_root_q_values = {
-                    str(move): float(value)
-                    for move, value in zip(oracle_root_moves, oracle_final_root_q_values_aligned)
-                }
+    @classmethod
+    def load(cls, path: str | Path) -> "RawPretrainExampleRecord":
+        payload = torch.load(path, weights_only=False)
+        return cls.from_payload(payload)
+
+    def save(self, path: str | Path) -> None:
+        torch.save(self.to_payload(), path)
+
+    def _resolved_position_specs(self) -> List[str]:
+        if self.position_specs is not None:
+            return list(self.position_specs)
+        if self.root_position_spec is None:
+            raise ValueError("root_position_spec is required when position_specs are omitted.")
+        position_specs: List[str] = []
+        for node_id, (parent_id, move) in enumerate(zip(self.parent_index.tolist(), self.incoming_moves)):
+            if parent_id < 0:
+                position_specs.append(str(self.root_position_spec))
             else:
-                oracle_final_root_q_values = dict(oracle_final_root_q_values_sparse or {})
+                if move is None:
+                    raise ValueError("Non-root node is missing incoming move.")
+                position_specs.append(append_move_to_position_spec(position_specs[parent_id], move))
+        return position_specs
 
-            self.__dict__.update(
-                {
-                    "tree": state["tree"],
-                    "node_target_values": list(state["node_target_values"]),
-                    "edge_wdl_targets": {
-                        (int(parent_id), int(child_id)): _normalize_wdl_target(target)
-                        for parent_id, child_id, target in zip(edge_parent_ids, edge_child_ids, edge_target_wdls)
-                    },
-                    "metadata": dict(state.get("metadata", {})),
-                    "oracle_trace_expansion_counts": list(state.get("oracle_trace_expansion_counts", [])),
-                    "oracle_root_moves": oracle_root_moves,
-                    "oracle_root_q_trace": [list(row) for row in state.get("oracle_root_q_trace", [])],
-                    "oracle_best_move_trace": list(state.get("oracle_best_move_trace", [])),
-                    "oracle_final_root_q_values": oracle_final_root_q_values,
-                }
+    def _node_scalar_feature_dicts(self) -> List[Dict[str, float]]:
+        features: List[Dict[str, float]] = []
+        for row in self.node_features.tolist():
+            scalar_features = {}
+            for feature_name, value in zip(self.feature_names, row):
+                if not math.isnan(float(value)):
+                    scalar_features[str(feature_name)] = float(value)
+            features.append(scalar_features)
+        return features
+
+    def to_pretrain_example(self) -> PretrainExample:
+        position_specs = self._resolved_position_specs()
+        node_scalar_features = self._node_scalar_feature_dicts()
+        metadata_by_node = {int(node_id): dict(node_metadata) for node_id, node_metadata in self.sparse_node_metadata}
+        tree = SearchTree()
+        tree.root_id = 0 if len(position_specs) > 0 else None
+        tree._nodes = []
+        tree._children = {node_id: [] for node_id in range(len(position_specs))}
+        for node_id, (parent_id, move, fen, depth, terminal, expanded, scalar_features) in enumerate(
+            zip(
+                self.parent_index.tolist(),
+                self.incoming_moves,
+                position_specs,
+                self.depth.tolist(),
+                self.is_terminal.tolist(),
+                self.is_expanded.tolist(),
+                node_scalar_features,
             )
-        else:
-            self.__dict__.update(state)
-            if "edge_wdl_targets" not in self.__dict__:
-                self.edge_wdl_targets = {}
-            if "oracle_trace_expansion_counts" not in self.__dict__:
-                self.oracle_trace_expansion_counts = []
-            if "oracle_root_moves" not in self.__dict__:
-                self.oracle_root_moves = []
-            if "oracle_root_q_trace" not in self.__dict__:
-                self.oracle_root_q_trace = []
-            if "oracle_best_move_trace" not in self.__dict__:
-                self.oracle_best_move_trace = []
-            if "oracle_final_root_q_values" not in self.__dict__:
-                self.oracle_final_root_q_values = {}
-        self.__post_init__()
+        ):
+            resolved_parent = None if int(parent_id) < 0 else int(parent_id)
+            tree._nodes.append(
+                SearchNode(
+                    node_id=node_id,
+                    parent_id=resolved_parent,
+                    incoming_move_uci=None if move is None else str(move),
+                    fen=str(fen),
+                    depth=int(depth),
+                    is_terminal=bool(terminal),
+                    is_expanded=bool(expanded),
+                    scalar_features=scalar_features,
+                    metadata=dict(metadata_by_node.get(node_id, {})),
+                )
+            )
+        children_index = self.children_index.tolist()
+        child_ptr = self.child_ptr.tolist()
+        for node_id in range(len(position_specs)):
+            tree._children[node_id] = [int(child_id) for child_id in children_index[child_ptr[node_id]:child_ptr[node_id + 1]]]
+        edge_wdl_targets: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+        edge_row = 0
+        for parent_id in range(len(position_specs)):
+            for child_id in tree.child_ids(parent_id):
+                target = tuple(float(value) for value in self.edge_wdl_targets[edge_row].tolist())
+                edge_wdl_targets[(parent_id, child_id)] = _normalize_wdl_target(target)
+                edge_row += 1
+        oracle_best_move_trace = [
+            self.oracle_root_moves[int(index)]
+            for index in self.oracle_best_move_index.tolist()
+        ]
+        oracle_final_root_q_values = {
+            move: float(value)
+            for move, value in zip(self.oracle_root_moves, self.oracle_final_root_q_values.tolist())
+        }
+        return PretrainExample(
+            tree=tree,
+            node_target_values=self.node_targets.tolist(),
+            edge_wdl_targets=edge_wdl_targets,
+            metadata=dict(self.metadata),
+            oracle_trace_expansion_counts=self.oracle_trace_expansion_counts.tolist(),
+            oracle_root_moves=list(self.oracle_root_moves),
+            oracle_root_q_trace=self.oracle_root_q_trace.tolist(),
+            oracle_best_move_trace=oracle_best_move_trace,
+            oracle_final_root_q_values=oracle_final_root_q_values,
+        )
+
+    def to_tensorized_tree_example(self, schema) -> TensorizedTreeExample:
+        feature_index = {name: index for index, name in enumerate(self.feature_names)}
+        num_nodes = int(self.parent_index.shape[0])
+        node_features = torch.empty((num_nodes, len(schema.feature_names)), dtype=schema.dtype)
+        for column_index, feature_name in enumerate(schema.feature_names):
+            default_value = float(schema.defaults.get(feature_name, 0.0))
+            if feature_name not in feature_index:
+                node_features[:, column_index] = default_value
+                continue
+            source_column = self.node_features[:, feature_index[feature_name]].to(dtype=schema.dtype)
+            if torch.isnan(source_column).any():
+                source_column = torch.where(
+                    torch.isnan(source_column),
+                    torch.full_like(source_column, default_value),
+                    source_column,
+                )
+            node_features[:, column_index] = source_column
+        counts = (self.child_ptr[1:] - self.child_ptr[:-1]).to(dtype=torch.long)
+        edge_parent = torch.repeat_interleave(torch.arange(num_nodes, dtype=torch.long), counts)
+        edge_slot_parts = [
+            torch.arange(int(count.item()), dtype=torch.long)
+            for count in counts
+            if int(count.item()) > 0
+        ]
+        edge_slot = torch.cat(edge_slot_parts, dim=0) if edge_slot_parts else torch.empty((0,), dtype=torch.long)
+        return TensorizedTreeExample(
+            node_features=node_features,
+            parent_index=self.parent_index.to(dtype=torch.long),
+            edge_parent=edge_parent,
+            edge_child=self.children_index.to(dtype=torch.long),
+            edge_slot=edge_slot,
+            depth=self.depth.to(dtype=torch.long),
+            node_targets=self.node_targets.to(dtype=torch.float32),
+            feature_names=tuple(schema.feature_names),
+            edge_wdl_targets=self.edge_wdl_targets.to(dtype=torch.float32),
+        )
+
+
+def save_pretrain_example(path: str, example: PretrainExample) -> None:
+    RawPretrainExampleRecord.from_example(example).save(path)
 
 
 def save_pretrain_examples(path: str, examples: Sequence[PretrainExample]) -> None:
-    torch.save(list(examples), path)
+    torch.save(
+        {
+            "format": "cts_raw_pretrain_example_list_v1",
+            "examples": [RawPretrainExampleRecord.from_example(example).to_payload() for example in examples],
+        },
+        path,
+    )
 
 
 def load_pretrain_examples(path: str) -> List[PretrainExample]:
-    return torch.load(path, weights_only=False)
+    payload = torch.load(path, weights_only=False)
+    if payload.get("format") != "cts_raw_pretrain_example_list_v1":
+        raise ValueError(f"Expected cts_raw_pretrain_example_list_v1 at {path}.")
+    return [RawPretrainExampleRecord.from_payload(example_payload).to_pretrain_example() for example_payload in payload["examples"]]
+
+
+def load_raw_pretrain_record(path: str) -> RawPretrainExampleRecord:
+    return RawPretrainExampleRecord.load(path)
+
+
+def load_pretrain_example(path: str) -> PretrainExample:
+    return load_raw_pretrain_record(path).to_pretrain_example()
 
 
 def _pretrain_example_output_path(directory: str, root_position_id: str, index: int) -> str:
@@ -289,7 +648,7 @@ def save_pretrain_example_to_directory(directory: str, example: PretrainExample,
     os.makedirs(directory, exist_ok=True)
     root_position_id = str(example.metadata.get("root_position_id", f"example_{index}"))
     path = _pretrain_example_output_path(directory, root_position_id, index)
-    torch.save(example, path)
+    save_pretrain_example(path, example)
     return path
 
 
@@ -307,7 +666,7 @@ def load_pretrain_examples_from_directory(directory: str) -> List[PretrainExampl
         if not filename.endswith(".pt"):
             continue
         path = os.path.join(directory, filename)
-        examples.append(torch.load(path, weights_only=False))
+        examples.append(load_pretrain_example(path))
     return examples
 
 
@@ -326,7 +685,7 @@ class PretrainExampleDirectoryDataset(Sequence[PretrainExample]):
         return len(self.paths)
 
     def __getitem__(self, index: int) -> PretrainExample:
-        return torch.load(self.paths[index], weights_only=False)
+        return load_pretrain_example(self.paths[index])
 
 
 class PretrainExamplePathDataset(Sequence[PretrainExample]):
@@ -339,56 +698,7 @@ class PretrainExamplePathDataset(Sequence[PretrainExample]):
         return len(self.paths)
 
     def __getitem__(self, index: int) -> PretrainExample:
-        return torch.load(self.paths[index], weights_only=False)
-
-
-class PackedPretrainShardDataset(Sequence[PretrainExample]):
-    def __init__(self, manifest_path: str) -> None:
-        self.manifest_path = manifest_path
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            manifest = json.load(handle)
-
-        entries = manifest.get("entries", [])
-        if not entries:
-            raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
-
-        self.paths: List[str] = []
-        self.cumulative_sizes: List[int] = []
-        total = 0
-        for entry in entries:
-            path = entry["path"]
-            num_examples = int(entry["num_examples"])
-            if num_examples <= 0:
-                raise ValueError(f"Packed shard entry has non-positive num_examples: {entry}")
-            total += num_examples
-            self.paths.append(path)
-            self.cumulative_sizes.append(total)
-
-        self._loaded_shard_index: Optional[int] = None
-        self._loaded_examples: Optional[List[PretrainExample]] = None
-
-    def __len__(self) -> int:
-        return self.cumulative_sizes[-1]
-
-    def __getitem__(self, index: int) -> PretrainExample:
-        if index < 0:
-            index += len(self)
-        if index < 0 or index >= len(self):
-            raise IndexError(index)
-
-        shard_index = bisect_right(self.cumulative_sizes, index)
-        shard_start = 0 if shard_index == 0 else self.cumulative_sizes[shard_index - 1]
-        example_offset = index - shard_start
-
-        if self._loaded_shard_index != shard_index:
-            payload = torch.load(self.paths[shard_index], weights_only=False)
-            if not isinstance(payload, dict) or "examples" not in payload:
-                raise ValueError(f"Packed shard file has unexpected format: {self.paths[shard_index]}")
-            self._loaded_shard_index = shard_index
-            self._loaded_examples = payload["examples"]
-
-        assert self._loaded_examples is not None
-        return self._loaded_examples[example_offset]
+        return load_pretrain_example(self.paths[index])
 
 
 class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
@@ -479,7 +789,7 @@ def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
         manifest_format = manifest.get("format")
         if manifest_format == "cts_tensorized_pretrain_manifest_v1":
             return PackedTensorizedShardDataset(path)
-        return PackedPretrainShardDataset(path)
+        raise ValueError(f"Unsupported pretrain manifest format: {manifest_format!r}")
 
     with open(path, "r", encoding="utf-8") as handle:
         paths = [line.strip() for line in handle if line.strip()]

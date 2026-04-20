@@ -30,6 +30,7 @@ from supervised_branch import (
     TeacherSearchConfig,
     build_trimmed_decision_episode_with_halt_rewards,
     evaluate_controller,
+    load_pretrain_example,
     load_raw_pretrain_example_paths,
 )
 from tensorizer import TreeTensorizer
@@ -197,7 +198,7 @@ def _load_control_episodes(
     episodes: List[ControlEpisode] = []
     skipped = 0
     for example_index, path in enumerate(paths):
-        example = torch.load(path, weights_only=False)
+        example = load_pretrain_example(path)
         try:
             _, halt_rewards = build_trimmed_decision_episode_with_halt_rewards(
                 example,

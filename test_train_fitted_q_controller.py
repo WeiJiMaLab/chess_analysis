@@ -11,7 +11,9 @@ from budgeted_controller_oracle import (
     deterministic_starting_budgets,
     return_for_stop_step,
 )
+from cts_pretrain import PretrainExample
 from schema import NodeFeatureSchema
+from scripts.pack_controller_episodes import _source_top_level_root_churn_category
 from scripts.train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
     MaterializedAdvantageEpisode,
@@ -22,7 +24,7 @@ from scripts.train_fitted_q_controller import (
     _predict_stop_step,
 )
 from tensorizer import TreeTensorizer
-from tree import SearchTree
+from tree import ExpansionChild, SearchTree
 
 
 def _root_tree(value: float) -> SearchTree:
@@ -32,6 +34,18 @@ def _root_tree(value: float) -> SearchTree:
 
 
 class BudgetedControllerOracleTests(unittest.TestCase):
+    def test_root_churn_category_identifies_xaba(self):
+        example = PretrainExample(
+            tree=_root_tree(0.0),
+            node_target_values=[0.0],
+            oracle_best_move_trace=["a", "b", "a"],
+            oracle_root_moves=["a", "b"],
+            oracle_trace_expansion_counts=[1, 2, 3],
+            oracle_root_q_trace=[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            oracle_final_root_q_values={"a": 0.0, "b": 0.0},
+        )
+        self.assertEqual(_source_top_level_root_churn_category(example), "X*AB*A")
+
     def test_large_budget_modest_tree_favors_continue(self):
         policy = compute_budgeted_oracle([0.0, 0.6], [5, 5], 20, BudgetedOracleConfig())
         self.assertEqual(policy.optimal_stop_step, 1)
@@ -185,15 +199,21 @@ class TrainFittedQControllerTests(unittest.TestCase):
         schema = NodeFeatureSchema.from_ordered_features(["value", "prior"], defaults={"prior": 0.0})
         tensorizer = TreeTensorizer(schema, device="cpu")
 
-        tree_a = _root_tree(0.1)
-        tree_b = _root_tree(0.2)
-        tree_c = _root_tree(0.5)
-        batch_a = tensorizer.tensorize_tree(tree_a, validate=False)
-        batch_b = tensorizer.tensorize_tree(tree_b, validate=False)
-        batch_c = tensorizer.tensorize_tree(tree_c, validate=False)
+        tree = SearchTree()
+        root_id = tree.create_root("root", {"value": 0.1, "prior": 1.0})
+        child_id = tree.add_children(
+            root_id,
+            [ExpansionChild("m1", "root ||moves|| m1", {"value": 0.2, "prior": 1.0})],
+        )[0]
+        tree.add_children(
+            child_id,
+            [ExpansionChild("m2", "root ||moves|| m1 m2", {"value": 0.5, "prior": 1.0})],
+        )
+        batch = tensorizer.tensorize_tree(tree, validate=False)
 
         payload = {
-            "format": "cts_budgeted_controller_episode_shard_v2",
+            "format": "cts_budgeted_controller_episode_shard_v4",
+            "num_trajectories": 1,
             "num_episodes": 2,
             "feature_names": list(schema.feature_names),
             "oracle_type": "budgeted_controller_v1",
@@ -214,30 +234,35 @@ class TrainFittedQControllerTests(unittest.TestCase):
                 {"name": "large", "min_time": 26, "max_time": 60},
                 {"name": "very-large", "min_time": 61, "max_time": 120},
             ],
+            "trajectory_node_ptr": torch.tensor([0, 3], dtype=torch.long),
+            "trajectory_edge_ptr": torch.tensor([0, 2], dtype=torch.long),
+            "trajectory_child_ptr_ptr": torch.tensor([0, 4], dtype=torch.long),
+            "trajectory_expansion_parent_ptr": torch.tensor([0, 2], dtype=torch.long),
+            "trajectory_step_ptr": torch.tensor([0, 2], dtype=torch.long),
             "episode_step_ptr": torch.tensor([0, 2, 3], dtype=torch.long),
-            "step_node_ptr": torch.tensor([0, 1, 2, 3], dtype=torch.long),
-            "step_edge_ptr": torch.tensor([0, 0, 0, 0], dtype=torch.long),
-            "node_features": torch.cat([batch_a.node_features, batch_b.node_features, batch_c.node_features], dim=0),
-            "parent_index": torch.cat([batch_a.parent_index, batch_b.parent_index, batch_c.parent_index], dim=0),
-            "edge_parent": torch.empty(0, dtype=torch.long),
-            "edge_child": torch.empty(0, dtype=torch.long),
-            "edge_slot": torch.empty(0, dtype=torch.long),
-            "depth": torch.cat([batch_a.depth, batch_b.depth, batch_c.depth], dim=0),
-            "halt_rewards": torch.tensor([0.0, 0.2, 0.5], dtype=torch.float32),
+            "episode_trajectory_index": torch.tensor([0, 0], dtype=torch.long),
+            "node_features": batch.node_features,
+            "parent_index": batch.parent_index,
+            "edge_child": batch.edge_child,
+            "edge_slot": batch.edge_slot,
+            "depth": batch.depth,
+            "child_ptr": torch.tensor([0, 1, 2, 2], dtype=torch.long),
+            "expansion_parent_ids": torch.tensor([0, 1], dtype=torch.long),
+            "step_node_cutoffs": torch.tensor([2, 3], dtype=torch.long),
+            "trajectory_halt_rewards": torch.tensor([0.0, 0.2], dtype=torch.float32),
+            "first_decision_expansion_counts": torch.tensor([1], dtype=torch.long),
             "target_advantages": torch.tensor([0.1, -0.1, -0.2], dtype=torch.float32),
-            "tree_sizes": torch.tensor([1, 1, 1], dtype=torch.long),
-            "time_budgets": torch.tensor([10, 9, 3], dtype=torch.long),
             "oracle_stop_steps": torch.tensor([1, 0], dtype=torch.long),
             "oracle_values": torch.tensor([0.1, 0.5], dtype=torch.float32),
             "starting_budgets": torch.tensor([10, 3], dtype=torch.long),
             "budget_bucket_indices": torch.tensor([3, 0], dtype=torch.long),
             "budget_bucket_names": ["large", "scramble"],
             "episode_keys": ["ep_0", "ep_1"],
-            "source_paths": ["raw_0.pt", "raw_1.pt"],
+            "trajectory_source_paths": ["raw_0.pt"],
         }
 
         manifest = {
-            "format": "cts_budgeted_controller_episode_manifest_v2",
+            "format": "cts_budgeted_controller_episode_manifest_v4",
             "split": "test",
             "total_episodes": 2,
             "reward_scale": 1.0,
@@ -271,22 +296,25 @@ class TrainFittedQControllerTests(unittest.TestCase):
             self.assertEqual(episode0.source_path, "raw_0.pt")
             self.assertEqual(episode0.starting_budget, 10)
             self.assertEqual(episode0.time_budgets.tolist(), [10, 9])
-            self.assertEqual(episode0.tree_sizes.tolist(), [1, 1])
+            self.assertEqual(episode0.tree_sizes.tolist(), [2, 3])
 
             episode1 = dataset[1]
             self.assertEqual(episode1.path, "ep_1")
             self.assertEqual(episode1.budget_bucket_name, "scramble")
+            self.assertEqual(episode1.source_path, "raw_0.pt")
+            self.assertEqual(len(episode1.step_node_features), 1)
+            self.assertEqual(episode1.tree_sizes.tolist(), [2])
 
             batch = PackedControllerCollator()([episode0, episode1])
             self.assertIsNotNone(batch)
             assert batch is not None
             self.assertEqual(batch.tree_batch.batch_size, 3)
-            self.assertEqual(batch.tree_batch.num_nodes, 3)
+            self.assertEqual(batch.tree_batch.num_nodes, 7)
             self.assertEqual(batch.target_advantages.shape, (3,))
-            self.assertEqual(batch.tree_sizes.tolist(), [1, 1, 1])
+            self.assertEqual(batch.tree_sizes.tolist(), [2, 3, 2])
             self.assertEqual(batch.time_budgets.tolist(), [10, 9, 3])
             self.assertEqual(batch.paths, ["ep_0", "ep_1"])
-            self.assertEqual(batch.source_paths, ["raw_0.pt", "raw_1.pt"])
+            self.assertEqual(batch.source_paths, ["raw_0.pt", "raw_0.pt"])
 
 
 if __name__ == "__main__":

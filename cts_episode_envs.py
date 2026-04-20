@@ -7,7 +7,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
-from cts_pretrain import PretrainExample, TeacherSearchConfig, TeacherSearchResult, compute_teacher_targets
+from cts_pretrain import (
+    PretrainExample,
+    TeacherSearchConfig,
+    TeacherSearchResult,
+    compute_teacher_targets,
+    load_pretrain_example,
+)
 from planning_cost import incremental_planning_cost, planning_cost_config
 from tree import SearchTree
 
@@ -409,7 +415,7 @@ class GeneratedTreeHaltEnv(ControllerOnlyEnv):
         if cached is not None:
             return cached
 
-        example = torch.load(path, weights_only=False)
+        example = load_pretrain_example(path)
         if not isinstance(example, PretrainExample):
             raise ValueError(f"Expected PretrainExample at {path}, got {type(example).__name__}.")
         episode = build_trimmed_decision_episode(example, self.quality_config)

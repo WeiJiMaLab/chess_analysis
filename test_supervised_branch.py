@@ -26,6 +26,7 @@ from supervised_branch import (
     PPOConfig,
     PretrainExample,
     PretrainExampleDirectoryDataset,
+    RawPretrainExampleRecord,
     ReinforceConfig,
     ReinforceControllerTrainer,
     ReinforceEpisodeTransition,
@@ -53,8 +54,10 @@ from supervised_branch import (
     evaluate_controller,
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
+    load_pretrain_example,
     normalize_prior_scores,
     prefix_expansion_count_schedule,
+    save_pretrain_example,
     _backup_target_from_child_q,
 )
 from tensorizer import TreeTensorizer, tensorize_tree_with_targets
@@ -389,7 +392,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
             for index, example in enumerate(examples):
-                torch.save(example, os.path.join(input_dir, f"{index:06d}.pt"))
+                save_pretrain_example(os.path.join(input_dir, f"{index:06d}.pt"), example)
 
             result = subprocess.run(
                 [
@@ -438,7 +441,7 @@ class SupervisedBranchTests(unittest.TestCase):
             raw_paths = []
             for index, example in enumerate(examples):
                 raw_path = os.path.join(raw_dir, f"{index:06d}.pt")
-                torch.save(example, raw_path)
+                save_pretrain_example(raw_path, example)
                 raw_paths.append(raw_path)
 
             train_manifest = Path(split_root) / "train_manifest.txt"
@@ -479,7 +482,7 @@ class SupervisedBranchTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             for index, example in enumerate(examples):
-                torch.save(example, os.path.join(tmpdir, f"{index:06d}.pt"))
+                save_pretrain_example(os.path.join(tmpdir, f"{index:06d}.pt"), example)
 
             with patch("supervised_branch.torch.load", wraps=torch.load) as mocked_load:
                 dataset = PretrainExampleDirectoryDataset(tmpdir)
@@ -509,8 +512,8 @@ class SupervisedBranchTests(unittest.TestCase):
             shard_b = os.path.join(tmpdir, "shard_00001")
             os.makedirs(shard_a, exist_ok=True)
             os.makedirs(shard_b, exist_ok=True)
-            torch.save(examples[0], os.path.join(shard_a, "000000_root.pt"))
-            torch.save(examples[1], os.path.join(shard_b, "000001_root.pt"))
+            save_pretrain_example(os.path.join(shard_a, "000000_root.pt"), examples[0])
+            save_pretrain_example(os.path.join(shard_b, "000001_root.pt"), examples[1])
 
             paths = load_raw_pretrain_example_paths(tmpdir)
 
@@ -527,7 +530,7 @@ class SupervisedBranchTests(unittest.TestCase):
             paths = []
             for index, example in enumerate(examples):
                 path = os.path.join(tmpdir, f"{index:06d}.pt")
-                torch.save(example, path)
+                save_pretrain_example(path, example)
                 paths.append(path)
 
             manifest_path = os.path.join(tmpdir, "train_manifest.txt")
@@ -544,35 +547,14 @@ class SupervisedBranchTests(unittest.TestCase):
                 self.assertEqual(mocked_load.call_count, 1)
                 self.assertEqual(loaded.metadata["root_position_id"], "p0")
 
-    def test_packed_pretrain_manifest_loads_examples_lazily(self):
-        examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
-        ]
+    def test_load_pretrain_example_dataset_rejects_obsolete_packed_raw_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            shard_path = os.path.join(tmpdir, "shard_00000.pt")
-            torch.save(
-                {
-                    "format": "cts_pretrain_packed_shard_v1",
-                    "num_examples": len(examples),
-                    "examples": examples,
-                },
-                shard_path,
-            )
             manifest_path = os.path.join(tmpdir, "train_manifest.json")
             with open(manifest_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    '{"format":"cts_pretrain_packed_manifest_v1","entries":[{"path":"%s","num_examples":2}]}' % shard_path
-                )
+                handle.write('{"format":"cts_pretrain_packed_manifest_v1","entries":[]}')
 
-            with patch("supervised_branch.torch.load", wraps=torch.load) as mocked_load:
-                dataset = load_pretrain_example_dataset(manifest_path)
-                self.assertEqual(len(dataset), 2)
-                self.assertEqual(mocked_load.call_count, 0)
-
-                loaded = dataset[1]
-                self.assertEqual(mocked_load.call_count, 1)
-                self.assertEqual(loaded.metadata["root_position_id"], "p1")
+            with self.assertRaises(ValueError):
+                load_pretrain_example_dataset(manifest_path)
 
     def test_child_wdl_pretrainer_uses_precomputed_edge_targets_from_packed_tensorized_data(self):
         tree = build_slot_test_tree()
@@ -1267,7 +1249,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             example_path = os.path.join(tmpdir, "example.pt")
-            torch.save(example, example_path)
+            save_pretrain_example(example_path, example)
 
             env = GeneratedTreeHaltEnv(
                 example_paths=[example_path],
@@ -1300,7 +1282,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             example_path = os.path.join(tmpdir, "example.pt")
-            torch.save(example, example_path)
+            save_pretrain_example(example_path, example)
 
             shared_cache = SnapshotEpisodeCache(max_size=2)
             env_a = GeneratedTreeHaltEnv(
@@ -1447,10 +1429,13 @@ class SupervisedBranchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "example.pt")
-            torch.save(example, path)
-            loaded = torch.load(path, weights_only=False)
+            save_pretrain_example(path, example)
+            loaded = load_pretrain_example(path)
+            record = RawPretrainExampleRecord.load(path)
 
-        self.assertEqual(loaded.node_target_values, example.node_target_values)
+        self.assertEqual(len(loaded.node_target_values), len(example.node_target_values))
+        for loaded_value, expected_value in zip(loaded.node_target_values, example.node_target_values):
+            self.assertAlmostEqual(loaded_value, expected_value)
         self.assertEqual(set(loaded.edge_wdl_targets), set(example.edge_wdl_targets))
         for edge_key, target in example.edge_wdl_targets.items():
             loaded_target = loaded.edge_wdl_targets[edge_key]
@@ -1459,9 +1444,15 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(loaded.metadata, example.metadata)
         self.assertEqual(loaded.oracle_trace_expansion_counts, example.oracle_trace_expansion_counts)
         self.assertEqual(loaded.oracle_root_moves, example.oracle_root_moves)
-        self.assertEqual(loaded.oracle_root_q_trace, example.oracle_root_q_trace)
+        self.assertEqual(len(loaded.oracle_root_q_trace), len(example.oracle_root_q_trace))
+        for loaded_row, expected_row in zip(loaded.oracle_root_q_trace, example.oracle_root_q_trace):
+            self.assertEqual(len(loaded_row), len(expected_row))
+            for loaded_value, expected_value in zip(loaded_row, expected_row):
+                self.assertAlmostEqual(loaded_value, expected_value)
         self.assertEqual(loaded.oracle_best_move_trace, example.oracle_best_move_trace)
-        self.assertEqual(loaded.oracle_final_root_q_values, example.oracle_final_root_q_values)
+        self.assertEqual(set(loaded.oracle_final_root_q_values), set(example.oracle_final_root_q_values))
+        for move, expected_value in example.oracle_final_root_q_values.items():
+            self.assertAlmostEqual(loaded.oracle_final_root_q_values[move], expected_value)
         self.assertEqual(loaded.tree.root_id, example.tree.root_id)
         self.assertEqual(loaded.tree.num_nodes(), example.tree.num_nodes())
         self.assertEqual(loaded.tree.num_edges(), example.tree.num_edges())
@@ -1472,9 +1463,43 @@ class SupervisedBranchTests(unittest.TestCase):
             self.assertEqual(loaded_node.depth, original_node.depth)
             self.assertEqual(loaded_node.is_terminal, original_node.is_terminal)
             self.assertEqual(loaded_node.is_expanded, original_node.is_expanded)
-            self.assertEqual(loaded_node.scalar_features, original_node.scalar_features)
+            self.assertEqual(set(loaded_node.scalar_features), set(original_node.scalar_features))
+            for feature_name, expected_value in original_node.scalar_features.items():
+                self.assertAlmostEqual(loaded_node.scalar_features[feature_name], expected_value)
             self.assertEqual(loaded_node.metadata, original_node.metadata)
         loaded.tree.validate()
+        reconstructed = record.to_pretrain_example().oracle_final_root_q_values
+        self.assertEqual(set(reconstructed), set(example.oracle_final_root_q_values))
+        for move, expected_value in example.oracle_final_root_q_values.items():
+            self.assertAlmostEqual(reconstructed[move], expected_value)
+
+    def test_raw_pretrain_record_direct_tensorization_matches_tree_tensorization(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=4, max_nodes=4),
+            rng=random.Random(19),
+        )
+
+        record = RawPretrainExampleRecord.from_example(example)
+        direct = record.to_tensorized_tree_example(self.schema)
+        tensorized = tensorize_tree_with_targets(
+            example.tree,
+            example.node_target_values,
+            schema=self.schema,
+            edge_wdl_targets=example.edge_wdl_targets,
+        )
+
+        self.assertEqual(direct.feature_names, tensorized.feature_names)
+        self.assertTrue(torch.equal(direct.node_features, tensorized.node_features))
+        self.assertTrue(torch.equal(direct.parent_index, tensorized.parent_index))
+        self.assertTrue(torch.equal(direct.edge_parent, tensorized.edge_parent))
+        self.assertTrue(torch.equal(direct.edge_child, tensorized.edge_child))
+        self.assertTrue(torch.equal(direct.edge_slot, tensorized.edge_slot))
+        self.assertTrue(torch.equal(direct.depth, tensorized.depth))
+        self.assertTrue(torch.equal(direct.node_targets, tensorized.node_targets))
+        self.assertTrue(torch.equal(direct.edge_wdl_targets, tensorized.edge_wdl_targets))
 
     def test_pretrain_example_compact_serialization_is_smaller_than_legacy_object_graph(self):
         tree = SearchTree()
@@ -1553,7 +1578,7 @@ class SupervisedBranchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             compact_path = os.path.join(tmpdir, "compact.pt")
             legacy_path = os.path.join(tmpdir, "legacy.pt")
-            torch.save(example, compact_path)
+            save_pretrain_example(compact_path, example)
             torch.save(legacy_example_state, legacy_path)
             compact_size = os.path.getsize(compact_path)
             legacy_size = os.path.getsize(legacy_path)

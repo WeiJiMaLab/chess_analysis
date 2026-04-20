@@ -22,7 +22,7 @@ from budgeted_controller_oracle import (
     time_cost,
 )
 from cts_episode_envs import build_trimmed_decision_episode
-from cts_pretrain import PretrainExample, TeacherSearchConfig
+from cts_pretrain import PretrainExample, TeacherSearchConfig, load_pretrain_example
 
 
 GREEDY_RE = re.compile(
@@ -85,7 +85,7 @@ def analysis_quality_config(metadata: dict[str, Any]) -> TeacherSearchConfig:
 
 
 def reconstruct_best_moves(source_path: str, quality_config: TeacherSearchConfig) -> list[str]:
-    example = torch.load(source_path, weights_only=False)
+    example = load_pretrain_example(source_path)
     if not isinstance(example, PretrainExample):
         raise ValueError(f"Expected PretrainExample at {source_path}, got {type(example).__name__}.")
     episode = build_trimmed_decision_episode(example, quality_config)

@@ -1134,3 +1134,89 @@ Result:
 
 Conclusion:
 - Future budgeted-controller experiments should use regenerated raw source trees, then rebuild the split manifests and packed controller data from that new corpus before training.
+
+## 2026-04-19
+
+### Time-only budgeted controller run on oracle-aligned, `X*AB*A`-filtered data
+
+Intent:
+- Evaluate the fitted-Q metacontroller in the cleaner regime where:
+  - controller supervision comes from stored oracle traces on the regenerated oracle-aligned source trees
+  - maintenance cost is removed (`maintenance_scale = 0.0`)
+  - unstable `X*AB*A` source trajectories are excluded at pack time
+
+Meaningful run setup:
+- Packed validation episodes:
+  - `30630`
+- Buckets balanced:
+  - `6126` each for `scramble`, `medium-small`, `medium-large`, `large`, `very-large`
+- Oracle metadata recovered from the run log:
+  - `maintenance_scale = 0.0`
+  - `time_lambda = 18.537`
+  - `time_p = 2.8`
+  - `time_tau = 2.5`
+  - `samples_per_bucket = 2`
+  - async encoder checkpoint with `k = 1`
+
+Main result:
+- Final greedy metrics (epoch `20`):
+  - average oracle value `0.353`
+  - average return `0.304`
+  - average regret `0.049`
+  - exact stop-step accuracy `0.444`
+  - first-action accuracy `0.916`
+  - average expansions `19.347`
+- Best behavioral epoch was earlier than the final checkpoint:
+  - best greedy return epoch `10`
+  - best greedy regret epoch `10`
+  - best validation-MSE epoch `5`
+
+Interpretation:
+- The controller learns the coarse halt/continue direction well (`first_action_accuracy` high), but stop timing remains weak, especially in the larger-budget buckets.
+- The dominant failure mode is **oversearch**, not undersearch:
+  - `medium-large`: oversearch `~0.64`
+  - `large`: oversearch `~0.84`
+  - `very-large`: oversearch `~0.97`
+
+### Regret decomposition under `maintenance_scale = 0.0`
+
+Meaningful analysis result:
+- The report explicitly decomposes regret as:
+  - `oracle_value - predicted_value`
+  - `= (halt_reward@oracle - halt_reward@predicted) + maintenance_term + time_term`
+- With `maintenance_scale = 0.0`, maintenance contributions were exactly zero in the analysis outputs.
+- Oversearch regret is therefore almost entirely **time cost**, not maintenance and only weakly halt-reward deterioration:
+  - overall oversearch mean regret `~0.076`
+  - overall mean time term `~0.073`
+  - overall mean halt-reward term `~0.003`
+
+Conclusion:
+- In the time-only regime, the controller’s remaining error is mainly “continuing too long and paying extra time cost.”
+
+### Near-threshold sign failure identified
+
+Meaningful analysis result:
+- The fitted-Q scalar looks reasonable under MSE/correlation summaries, but sign behavior near the decision boundary is very poor.
+- Margin-calibration summary:
+  - for `|target_advantage| < 0.05`, sign accuracy is only `~0.29`
+  - those low-margin states account for about `70%` of all analyzed states
+- Structure of the low-margin regime:
+  - concentrated in higher-budget states, not scramble / medium-small
+  - within-bucket low-margin rates:
+    - `medium-large`: `~48%`
+    - `large`: `~73%`
+    - `very-large`: `~81%`
+  - by current time budget, low-margin rates are already extreme around `T_t = 11..25`
+- Crucially, those low-margin states are overwhelmingly slightly **negative**:
+  - negative low-margin targets vastly outnumber positive ones
+  - model errors there are overwhelmingly `false_continue`, not `false_halt`
+
+Interpretation:
+- The controller is not merely noisy near zero; it has a strong **positive bias** in the high-budget, near-threshold regime.
+- This explains why MSE can stabilize while metacontrol remains poor in the large-budget buckets:
+  - MSE only weakly penalizes small wrong-sign predictions
+  - control behavior is driven by the sign of the advantage, not just its squared error
+
+Conclusion:
+- The main remaining problem is now clearly a **decision-boundary calibration problem**, not gross regression failure.
+- Next experiments should focus on losses/model-selection criteria that care directly about the halt/continue sign near zero, rather than only scalar MSE.

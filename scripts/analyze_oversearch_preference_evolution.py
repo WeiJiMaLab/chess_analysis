@@ -24,7 +24,7 @@ try:
         oracle_root_q_trace_for_example,
         trim_episode_to_first_root_decision,
     )
-    from cts_pretrain import PretrainExample, TeacherSearchConfig, compute_teacher_targets
+    from cts_pretrain import PretrainExample, TeacherSearchConfig, compute_teacher_targets, load_pretrain_example
 except ModuleNotFoundError:
     torch = None
     _root_q_values_from_teacher_result = None
@@ -35,6 +35,7 @@ except ModuleNotFoundError:
     PretrainExample = None
     TeacherSearchConfig = Any  # type: ignore[assignment]
     compute_teacher_targets = None
+    load_pretrain_example = None
 
 try:
     import matplotlib.pyplot as plt
@@ -162,7 +163,7 @@ def _load_trimmed_snapshot_q_maps(
         or PretrainExample is None
     ):
         raise RuntimeError("Torch/CTS reconstruction stack is unavailable in this environment.")
-    example = torch.load(source_path, weights_only=False)
+    example = load_pretrain_example(source_path)
     if not isinstance(example, PretrainExample):
         raise ValueError(f"Expected PretrainExample at {source_path}, got {type(example).__name__}.")
     decision_episode = build_trimmed_decision_episode(example, quality_config)

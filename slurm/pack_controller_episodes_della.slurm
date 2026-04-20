@@ -33,6 +33,7 @@ TIME_DELTA="${TIME_DELTA:-1}"
 TIMEOUT_VALUE="${TIMEOUT_VALUE:--1.0}"
 SAMPLES_PER_BUCKET="${SAMPLES_PER_BUCKET:-2}"
 SEED="${SEED:-0}"
+EXCLUDE_XABA="${EXCLUDE_XABA:-0}"
 
 mkdir -p "${PROJECT_DIR}/logs"
 mkdir -p "${OUTPUT_ROOT}"
@@ -68,6 +69,7 @@ echo "time_tau=${TIME_TAU}"
 echo "time_delta=${TIME_DELTA}"
 echo "timeout_value=${TIMEOUT_VALUE}"
 echo "samples_per_bucket=${SAMPLES_PER_BUCKET}"
+echo "exclude_xaba=${EXCLUDE_XABA}"
 echo "hostname=$(hostname)"
 date
 
@@ -97,6 +99,10 @@ ARGS=(
 
 if [[ "${CLEAR_FLAG}" == "1" ]]; then
   ARGS+=(--clear)
+fi
+
+if [[ "${EXCLUDE_XABA}" == "1" ]]; then
+  ARGS+=(--exclude-xaba)
 fi
 
 python3 scripts/pack_controller_episodes.py "${ARGS[@]}"

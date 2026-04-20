@@ -25,6 +25,7 @@ from supervised_branch import (
     TeacherSearchConfig,
     build_trimmed_decision_episode,
     load_encoder_checkpoint,
+    load_pretrain_example,
     load_raw_pretrain_example_paths,
 )
 from tensorizer import TreeTensorizer
@@ -99,7 +100,7 @@ def _load_samples_from_paths(
 ) -> List[ProbeSample]:
     samples: List[ProbeSample] = []
     for index, path in enumerate(paths, start=1):
-        example = torch.load(path, weights_only=False)
+        example = load_pretrain_example(path)
         try:
             episode = build_trimmed_decision_episode(example, quality_config)
         except ValueError:
