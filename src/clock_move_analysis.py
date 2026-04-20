@@ -5,23 +5,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
-from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR
+from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR, apply_poster_style, FONT_SIZE_LABEL
 
 # Poster Style Constants
-FONT_SIZE_LABEL = 22
-FONT_SIZE_TICKS = 18
-FIGURE_DIR = "src/figures"
+FIGURE_DIR = "src/figures/clock_move_analysis"
 NEGATIVE_COLOR = "#e74c3c"
 POSITIVE_COLOR = "#2ecc71"
-
-# Apply global aesthetics
-plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
-plt.rcParams['ytick.labelsize'] = FONT_SIZE_TICKS
-plt.rcParams['axes.spines.top'] = False
-plt.rcParams['axes.spines.right'] = False
-plt.rcParams['axes.grid'] = True
-plt.rcParams['grid.alpha'] = 0.3
-plt.rcParams['text.usetex'] = False
 
 def load_and_preprocess():
     """Load data and compute natural-log features."""
@@ -57,6 +46,7 @@ def load_and_preprocess():
 
 def analyze_distribution(df: pd.DataFrame):
     """Visualize the distribution of move times side-by-side."""
+    apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(20, 8))
     sns.histplot(df["move_time"], bins=20, kde=True, color=MAIN_COLOR, alpha=0.6, ax=axes[0])
     axes[0].set_xlabel("Move Time (s)", fontsize=FONT_SIZE_LABEL)
@@ -71,6 +61,7 @@ def analyze_distribution(df: pd.DataFrame):
 def analyze_naive_trend(df: pd.DataFrame):
     """Attempt 1: Naive analysis."""
     print("Running Naive Analysis...")
+    apply_poster_style()
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
     
     # [0, 0] Density
@@ -108,6 +99,7 @@ def analyze_naive_trend(df: pd.DataFrame):
 def analyze_ply_wise_regression(df: pd.DataFrame):
     """Attempt 2 (Ply-Controlled)."""
     print("Running Attempt 2 (Ply-Controlled)...")
+    apply_poster_style()
     df["ply_median"] = df.groupby("move_ply")["ln_move_time"].transform("median")
     df["ln_move_resid_ply"] = df["ln_move_time"] - df["ply_median"]
 
@@ -140,7 +132,7 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
     axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color="firebrick", ecolor='lightgray', elinewidth=3, capsize=0)
     axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
     axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope ($\beta_{ply}$)", fontsize=FONT_SIZE_LABEL)
+    axes[1, 0].set_ylabel(r"Slope ($\beta_{\ln(\text{Clock})})$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 1] Binned by Quantile Rank
     metrics_rank = {k: list(v) for k, v in metrics.items()}
@@ -156,6 +148,7 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
 def analyze_controlled_trend(df: pd.DataFrame):
     """Attempt 3 (Double-Controlled)."""
     print("Running Attempt 3 (Double-Controlled)...")
+    apply_poster_style()
     player_medians = df.groupby("game_player")["ln_move_time"].transform("median")
     ply_medians = df.groupby("move_ply")["ln_move_time"].transform("median")
     
@@ -191,7 +184,7 @@ def analyze_controlled_trend(df: pd.DataFrame):
     axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color=POSITIVE_COLOR, ecolor='lightgray', elinewidth=3, capsize=0)
     axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
     axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope ($\beta$)", fontsize=FONT_SIZE_LABEL)
+    axes[1, 0].set_ylabel(r"Slope ($\beta_{\ln(\text{Clock})})$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 1] Binned by Quantile Rank
     metrics_rank = {k: list(v) for k, v in metrics.items()}

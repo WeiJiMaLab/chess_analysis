@@ -112,3 +112,64 @@ A **DP oracle** labels actions from the **global** peak of $R(k)$: **CONTINUE** 
 | Halt/Continue RL | `cts_rl.py` |
 
 Tutorials under `lmcos/demos/` mirror this curriculum; see **`lmcos/demos/understanding.md`** for glossary (Oracle, thinking cost $C$, TreeBatch, slot encoding) and diagram vocabulary (Indigo vs. Emerald, hollow vs. filled boxes).
+# Coding style in `src/` (chess_analysis)
+
+This note describes how Python (and notebook) code in `src/` is written. It is descriptive, not a strict linter profile.
+
+> [!IMPORTANT]
+> To run code in this repository, you MUST activate the `.venv` first:
+> `source .venv/bin/activate` (or equivalent for your shell).
+
+## Design priorities
+
+Code is optimized for **modularity** and **readability**. Preference is given to clarity of data flow and obviously named operations.
+
+## Plotting Standards (Poster Style)
+
+All visualizations aimed at analysis and presentation must follow the **Poster Design System**:
+
+- **Aesthetics**:
+    - **No Subplot Titles**: Remove repeating or internal titles. Context is provided by axis labels and the surrounding narrative.
+    - **Minimal Borders**: Remove top and right axes spines (`ax.spines['top'].set_visible(False)`).
+    - **XY Grid**: Use subtle background grids where sensible (`ax.grid(True, alpha=0.3)`).
+    - **Color Palette**: Use `MAIN_COLOR` (#2E86C1) for primary signals and distinct green/red for positive/negative controls.
+- **Typography and Scale**:
+    - **Labels**: `22pt` (e.g. `ax.set_xlabel(..., fontsize=22)`).
+    - **Ticks**: `18pt` (e.g. `plt.rcParams['xtick.labelsize'] = 18`).
+- **Mathematical Notation**:
+    - **Natural Log**: Use natural logarithms (`np.log`) universally. Label as $\ln(\cdot)$ or $\ln T$, not $\text{log}_{10}$.
+    - **Explicit Math**: Define residuals explicitly using LaTeX math in the label (e.g. $\ln T - \ln \text{med}_{ply}$).
+    - **Naming**: Spell out labels like "Clock Time" in full. Use $T$ or "Move Time" for the dependent variable $y$.
+
+## Role of the code
+
+`src/` mixes **small runnable scripts**, **importable analysis utilities**, and **Jupyter notebooks**. Domain logic and operational safety stay visible rather than hidden behind abstractions.
+
+## Language and typing
+
+- **Python 3** with modern union syntax (`str | None`).
+- **Type hints** are used for public helpers; omitted for small analysis lambdas.
+
+## Naming
+
+- **Functions and variables:** `snake_case`.
+- **Module-level tuning constants:** `SCREAMING_SNAKE` (e.g. `MAIN_COLOR`, `FONT_SIZE_LABEL`).
+- **Files:** Prefer short, descriptive names (e.g. `clock_move_analysis.py` over `clocktime_movetime_analysis.py`).
+
+## Imports
+
+1. **`from __future__ import annotations`** if needed.
+2. **Standard library** (alphabetical).
+3. **Blank line.**
+4. **Third-party** (alphabetical by package: `chess`, `dask`, `duckdb`, `matplotlib`, `numpy`, `pandas`, `seaborn`, `statsmodels`, `tqdm`).
+5. **Blank line.**
+6. **Local project** (`from features import …`, `from utils import …`).
+
+## Formatting and structure
+
+- **Indentation:** 4 spaces.
+- **Control flow:** Early guard returns; `if __name__ == "__main__":` entry points for scripts.
+
+## Summary
+
+The codebase favors **readable, modular analysis code**—clear separation of utilities, features, and scripts, consistent import layout, and explicit domain naming. **Visual excellence** is a primary requirement for all generated analysis figures.

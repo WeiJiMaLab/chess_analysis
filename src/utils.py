@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import SVG, display
 
-# Stockfish lives under home (not scratch). SF14: copied tree; SF15: built from official-stockfish sf_15.
+# Stockfish paths
 _STOCKFISH_HOME = os.path.expanduser("~/stockfish")
 _STOCKFISH_SF15_HOME = os.path.expanduser("~/stockfish-sf_15")
 
@@ -25,15 +25,24 @@ STOCKFISH_SF15_PATH = os.path.join(_STOCKFISH_SF15_HOME, "src", "stockfish")
 STOCKFISH_SF15_DIR = os.path.join(_STOCKFISH_SF15_HOME, "src")
 NNUE_SF15 = "nn-6877cd24400e.nnue"
 
-# Default binary and working dir: Stockfish 14 (matches get_stockfish_engine() default).
+# Default binary
 STOCKFISH_PATH = STOCKFISH_SF14_PATH
 STOCKFISH_DIR = STOCKFISH_SF14_DIR
 
-# --- Plotting Design System ---
+# --- Plotting Design System (Poster Style) ---
 MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
-FONT_SIZE_TITLE = 20
-FONT_SIZE_LABEL = 16
-FONT_SIZE_TICKS = 14
+FONT_SIZE_LABEL = 22
+FONT_SIZE_TICKS = 18
+
+def apply_poster_style():
+    """Apply global matplotlib settings for Poster Style."""
+    plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
+    plt.rcParams['ytick.labelsize'] = FONT_SIZE_TICKS
+    plt.rcParams['axes.spines.top'] = False
+    plt.rcParams['axes.spines.right'] = False
+    plt.rcParams['axes.grid'] = True
+    plt.rcParams['grid.alpha'] = 0.3
+    plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
 
 def get_stockfish_engine(
     path: str | None = None,
@@ -41,14 +50,8 @@ def get_stockfish_engine(
     cwd: str | None = None,
     threads: int = 1,
     hash_mb: int = 128,
-    version: int = 14,   # default to SF14 for VOC work
+    version: int = 14,
 ):
-    """
-    Spawn a Stockfish UCI engine process. Caller must call engine.quit() when done.
-
-    version=14: bundled NNUE, no EvalFile needed, better VOC variance at shallow depths
-    version=15: external NNUE required, hybrid classical+NNUE eval
-    """
     if path is not None:
         engine_path = path
         work_dir = cwd or os.path.dirname(path)
@@ -56,7 +59,7 @@ def get_stockfish_engine(
     elif version == 14:
         engine_path = STOCKFISH_SF14_PATH
         work_dir = STOCKFISH_SF14_DIR
-        nnue_path = None  # bundled
+        nnue_path = None
     elif version == 15:
         engine_path = STOCKFISH_SF15_PATH
         work_dir = cwd or STOCKFISH_SF15_DIR
@@ -76,26 +79,18 @@ def get_stockfish_engine(
     engine.configure(options)
     return engine
 
-
 def display_fen(fen: str, size: int = 200) -> None:
-    """Render a FEN position as an SVG and display it in the notebook."""
     board = chess.Board(fen)
     display(SVG(chess.svg.board(board=board, size=size)))
 
-
 def get_db_connection(
-    database: str = ":memory:",  # default to in-memory to avoid personal.db/WAL clutter
+    database: str = ":memory:",
     *,
     threads: int = 10,
     memory_limit: str = "20GB",
     temp_directory: str = ".",
     **kwargs,
 ):
-    """Create a DuckDB connection with sensible defaults for analysis.
-    
-    Uses in-memory database by default — no persistent files created.
-    Pass database='personal.db' explicitly if you need persistence.
-    """
     config = {
         "threads": threads,
         "memory_limit": memory_limit,
@@ -104,7 +99,6 @@ def get_db_connection(
     }
     return duckdb.connect(database=database, config=config)
 
-# Compute bootstrapped confidence interval for the mean
 def bootstrapped_ci(data, n_bootstraps=1000):
     if len(data) <= 1:
         return (np.nan, np.nan)
@@ -127,7 +121,7 @@ def compute_metrics_by_bin(data):
             mean = bin_data.iloc[0]
             ci = (mean, mean)
         else:
-            continue  # skip bins with no data
+            continue
         metrics["x"].append(x)
         metrics["y"].append(mean)
         metrics["ci_lower"].append(ci[0])
@@ -136,7 +130,6 @@ def compute_metrics_by_bin(data):
 
 def compute_metrics_by_qbin(data, qbin_edges):
     metrics = defaultdict(list)
-    # Use range of number of bins, not the sorted unique qbin (which might have missing bins)
     n_bins = len(qbin_edges) - 1
     for q in range(n_bins):
         bin_data = data[data["qbins"] == q]["move_time"]
@@ -148,7 +141,7 @@ def compute_metrics_by_qbin(data, qbin_edges):
             mean = bin_data.iloc[0]
             ci = (mean, mean)
         else:
-            continue  # skip bins with no data
+            continue
         left_edge = qbin_edges[q]
         right_edge = qbin_edges[q + 1]
         bin_mid = (left_edge + right_edge) / 2
@@ -158,7 +151,7 @@ def compute_metrics_by_qbin(data, qbin_edges):
         metrics["ci_upper"].append(ci[1])
     return metrics
 
-def plot_metrics(metrics, color="#4682B4", ax=None):
+def plot_metrics(metrics, color=MAIN_COLOR, ax=None):
     if ax is None:
         ax = plt.gca()
     ax.plot(metrics["x"], metrics["y"], label="mean", color=color)

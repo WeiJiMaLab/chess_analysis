@@ -5,64 +5,56 @@ testing for the significance of the middle-game response time arc.
 """
 
 import os
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import statsmodels.formula.api as smf
 from utils import (
-    MAIN_COLOR, FONT_SIZE_LABEL, FONT_SIZE_TICKS, FONT_SIZE_TITLE,
-    compute_metrics_by_bin, compute_metrics_by_qbin, plot_metrics
+    MAIN_COLOR, compute_metrics_by_bin, compute_metrics_by_qbin, plot_metrics,
+    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS
 )
 
-# Constants for this analysis
+# Constants for this analysis (Poster Style)
 MAX_PLY_FOR_PLOT = 120
 
 def analyze_ply_effect(df: pd.DataFrame):
     """
     Perform statistical analysis of move_ply on move_time, including
-    quadratic regressions on both linear and log scales.
+    quadratic regressions on natural log scale.
     """
     df = df.copy()
     df["move_time"] = pd.to_numeric(df["move_time"], errors="coerce")
     df["move_ply"] = pd.to_numeric(df["move_ply"], errors="coerce")
     df = df.dropna(subset=["move_time", "move_ply"])
     
-    # Linear scale quadratic model
+    # Quadratic model on natural log scale
     df["move_ply_sq"] = df["move_ply"] ** 2
-    m2 = smf.ols("move_time ~ move_ply + move_ply_sq", data=df).fit()
-    print("\n--- Quadratic Model: move_time ~ move_ply + move_ply^2 ---")
-    print(m2.summary().tables[1])
+    df["ln_move_time"] = np.log(df["move_time"].astype(float).clip(lower=0.1))
     
-    # Peak calculation: -b / 2a
-    b, a = m2.params["move_ply"], m2.params["move_ply_sq"]
-    print(f"\nPredicted Peak Ply (Linear scale): {-b / (2 * a):.2f}")
-
-    # Log scale quadratic model (more robust for response times)
-    df["log_move_time"] = np.log(df["move_time"] + 1e-3)
-    m3 = smf.ols("log_move_time ~ move_ply + move_ply_sq", data=df).fit()
-    print("\n--- Log-Quadratic Model: log(move_time) ~ move_ply + move_ply^2 ---")
-    print(m3.summary().tables[1])
+    m_log = smf.ols("ln_move_time ~ move_ply + move_ply_sq", data=df).fit()
+    print("\n--- Log-Quadratic Model: ln(T) ~ move_ply + move_ply^2 ---")
+    print(m_log.summary().tables[1])
     
-    b_log, a_log = m3.params["move_ply"], m3.params["move_ply_sq"]
-    print(f"Predicted Peak Ply (Log scale): {-b_log / (2 * a_log):.2f}")
+    b_log, a_log = m_log.params["move_ply"], m_log.params["move_ply_sq"]
+    print(f"Predicted Peak Ply (ln scale): {-b_log / (2 * a_log):.2f}")
     
     return df
 
 def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     """
     Generate unified plots showing the impact of move ply on response times
-    using Raw Mean and Quantile-Binned approaches.
+    using Poster Style.
     """
-    sns.set(style="whitegrid")
+    apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(20, 8))
     
-    # Column rename mapping to use shared metrics helpers from utils.py
-    col_map = {"move_time": "move_time_raw", "log_move_time": "move_time"}
+    # Drop raw move_time to avoid collision after renaming ln_move_time -> move_time
+    df_ln = df.drop(columns=["move_time"])
+    col_map = {"ln_move_time": "move_time"}
 
-    # --- Plot A: Log Mean move time by ply (Raw) ---
-    df_early = df[df["move_ply"] <= MAX_PLY_FOR_PLOT].copy()
+    # --- Plot A: ln(T) by ply (Raw) ---
+    df_early = df_ln[df_ln["move_ply"] <= MAX_PLY_FOR_PLOT].copy()
     df_early["bin"] = df_early["move_ply"]
     
     df_early_utils = df_early.rename(columns=col_map)
@@ -71,16 +63,14 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     plt.sca(axes[0])
     plot_metrics(metrics_raw, color=MAIN_COLOR)
     sns.regplot(x="move_ply", y="move_time", data=df_early_utils, scatter=False, 
-                order=2, color="red", label="Log-Quadratic Fit")
+                order=2, color="red", label=r"$\ln(T)$ Quadratic Fit")
     
     axes[0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[0].set_ylabel("Log Move Time", fontsize=FONT_SIZE_LABEL)
-    axes[0].set_title("A. Log-Transformed Mean Time", fontsize=FONT_SIZE_TITLE, fontweight='bold')
-    axes[0].tick_params(labelsize=FONT_SIZE_TICKS)
+    axes[0].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
     axes[0].legend(fontsize=FONT_SIZE_TICKS)
 
-    # --- Plot B: Q-binned Log ply impact ---
-    df_qbin = df.copy()
+    # --- Plot B: Q-binned ln(T) impact ---
+    df_qbin = df_ln.copy()
     df_qbin["qbins"], qbin_edges = pd.qcut(df_qbin["move_ply"], q=10, 
                                            duplicates="drop", retbins=True, labels=False)
     
@@ -90,12 +80,8 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     plt.sca(axes[1])
     plot_metrics(metrics_qbin, color=MAIN_COLOR)
     axes[1].set_xlabel("Move Ply (Quantile-binned)", fontsize=FONT_SIZE_LABEL)
-    axes[1].set_ylabel("Log Move Time", fontsize=FONT_SIZE_LABEL)
-    axes[1].set_title("B. Binned Log-Impact", fontsize=FONT_SIZE_TITLE, fontweight='bold')
-    axes[1].tick_params(labelsize=FONT_SIZE_TICKS)
+    axes[1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
 
-    plt.suptitle("Significance of the Middle-Game Response Time Peak", 
-                 fontsize=24, fontweight='bold', y=1.05)
     plt.tight_layout()
     
     save_path = os.path.join(figures_dir, "ply_impact_comparison.png")
@@ -103,11 +89,10 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     print(f"Saved comparison plot: {save_path}")
 
 def main():
-    # Setup paths relative to script location
     src_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.dirname(src_dir)
     data_path = os.path.join(base_dir, "data", "moves_200.parquet")
-    figures_dir = os.path.join(base_dir, "figures")
+    figures_dir = os.path.join(base_dir, "src/figures/ply_analysis") # Dedicated subdir
     
     if not os.path.exists(figures_dir):
         os.makedirs(figures_dir)
@@ -121,7 +106,7 @@ def main():
 
     df_cleaned = analyze_ply_effect(df)
     plot_ply_impact(df_cleaned, figures_dir)
-    print("\nAnalysis complete. Figures generated in 'figures/'")
+    print("\n✅ Ply analysis complete. Poster-Style figures generated.")
 
 if __name__ == "__main__":
     main()
