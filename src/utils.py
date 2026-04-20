@@ -29,6 +29,12 @@ NNUE_SF15 = "nn-6877cd24400e.nnue"
 STOCKFISH_PATH = STOCKFISH_SF14_PATH
 STOCKFISH_DIR = STOCKFISH_SF14_DIR
 
+# --- Plotting Design System ---
+MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
+FONT_SIZE_TITLE = 20
+FONT_SIZE_LABEL = 16
+FONT_SIZE_TICKS = 14
+
 def get_stockfish_engine(
     path: str | None = None,
     *,

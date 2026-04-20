@@ -13,7 +13,7 @@ from joblib import Parallel, delayed
 from joblib.externals.loky.process_executor import TerminatedWorkerError
 from tqdm import tqdm
 
-from utils import get_db_connection, get_stockfish_engine
+from utils import get_stockfish_engine, compute_metrics_by_qbin, plot_metrics
 
 SHALLOW_DEPTH = 1   # proxy for "no computation" — what you'd play immediately
 DEEP_DEPTH = 14     # proxy for "full computation" — Russek at depth 15
@@ -102,6 +102,12 @@ def analyze_position(position):
                 pass
 
 def analyze_data(df):
+    # Ensure types are standard float/int for statsmodels compatibility
+    df = df.copy()
+    df["move_time"] = pd.to_numeric(df["move_time"], errors="coerce")
+    df["voc"] = pd.to_numeric(df["voc"], errors="coerce")
+    df = df.dropna(subset=["move_time", "voc"])
+
     print(f"\nComputed VOC for {len(df)} positions")
     print(df[["voc", "move_time", "elo", "n_candidates"]].describe())
 
@@ -125,56 +131,16 @@ def plot_data(df):
     sns.set(style="whitegrid")
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
-    # --- Plot 1: Russek Figure 1b replication — binned mean move time ---
-    def bootstrap_mean_ci(values, n_boot=1000, alpha=0.05, rng=None):
-        arr = np.asarray(values, dtype=float)
-        arr = arr[~np.isnan(arr)]
-        if arr.size == 0:
-            return np.nan, np.nan, np.nan
-        if rng is None:
-            rng = np.random.default_rng(42)
-        boot_means = np.empty(n_boot, dtype=float)
-        n = arr.size
-        for i in range(n_boot):
-            sample = rng.choice(arr, size=n, replace=True)
-            boot_means[i] = sample.mean()
-        mean = arr.mean()
-        lower = np.percentile(boot_means, 100 * (alpha / 2.0))
-        upper = np.percentile(boot_means, 100 * (1.0 - alpha / 2.0))
-        return mean, lower, upper
-
     df_plot = df.copy()
-    df_plot["voc_bin"] = pd.cut(df_plot["voc"], bins=10)
-    grouped = df_plot.groupby("voc_bin", observed=False)["move_time"]
-    binned = grouped.agg(["count"])
-    rng = np.random.default_rng(42)
-    ci_stats = grouped.apply(lambda s: pd.Series(bootstrap_mean_ci(s.values, n_boot=1000, alpha=0.05, rng=rng)))
-    ci_stats.columns = ["mean", "ci_low", "ci_high"]
-    binned = binned.join(ci_stats)
-    x = np.arange(len(binned))
-    y = binned["mean"].values
-    yerr = np.vstack([
-        y - binned["ci_low"].values,
-        binned["ci_high"].values - y
-    ])
-    axes[0].errorbar(
-        x,
-        y,
-        yerr=yerr,
-        fmt="o-",
-        color="black",
-        ecolor="gray",
-        elinewidth=1,
-        capsize=3,
-    )
-    axes[0].set_xlabel("VOC bin (equal-width, low → high)")
+    df_plot["bin"] = df_plot["voc"]
+    # Fine-grained quantile binning for VOC
+    df_plot["qbins"], qbin_edges = pd.qcut(df_plot["bin"], q=30, duplicates="drop", retbins=True, labels=False)
+    metrics = compute_metrics_by_qbin(df_plot, qbin_edges)
+    
+    plot_metrics(metrics, ax=axes[0], color="black")
+    axes[0].set_xlabel("VOC (Quantile-binned, q=30)")
     axes[0].set_ylabel("Mean move time (s)")
-    axes[0].set_title("Russek Fig 1b replication (bootstrap 95% CI, n=1000)")
-    # annotate bin counts so you can see how sparse the tail is
-    for j, (mean, count) in enumerate(zip(binned["mean"], binned["count"])):
-        if not np.isnan(mean):
-            axes[0].annotate(f"n={int(count)}", (j, mean), textcoords="offset points",
-                            xytext=(0, 6), ha="center", fontsize=7)
+    axes[0].set_title("Russek Fig 1b replication (Fine-grained)")
 
 
     # --- Plot 2: All positions scatter ---
@@ -214,68 +180,56 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Warning: could not disable core dumps: {e}")
 
-    POSITIONS_CACHE = "positions_cache.parquet"
-    if os.path.exists(POSITIONS_CACHE):
-        positions = pd.read_parquet(POSITIONS_CACHE)
+    USE_CACHE = True
+    RESULTS_FILE = "voc_results.csv"
+
+    if USE_CACHE and os.path.exists(RESULTS_FILE):
+        print(f"Loading results from {RESULTS_FILE} (skipping analysis)")
+        df = pd.read_csv(RESULTS_FILE)
     else:
-        conn = get_db_connection(threads=64)
-        start_date = "2022-01-01"
-        end_date = "2022-12-31"
-        db_path = '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db'
-        try:
-            conn.execute(f"ATTACH '{db_path}' AS core (READ_ONLY)")
-        except Exception as e:
-            print(f"Warning attaching database: {e}")
+        moves_path = os.path.join(os.path.dirname(__file__), "..", "data", "moves_200.parquet")
+        if not os.path.exists(moves_path):
+            # Try local path if running from root
+            moves_path = "data/moves_200.parquet"
+        
+        print(f"Loading positions from {moves_path}")
+        positions = pd.read_parquet(moves_path)
 
-        positions = conn.sql(f"""
-            SELECT m.gid, m.board_position, m.move_time, m.move_ply, m.player_white,
-                g.white_elo, g.black_elo, g.initial_clock
-            FROM core.moves m
-            JOIN core.games g ON m.gid = g.gid
-            WHERE g.utc_datetime BETWEEN '{start_date}' AND '{end_date}'
-            AND g.initial_clock >= 300
-            AND m.move_ply BETWEEN 15 AND 75
-            AND m.move_time > 0
-            AND g.white_elo >= 2000
-            AND g.black_elo >= 2000
-            LIMIT 10000
-        """).df()
-        positions.to_parquet(POSITIONS_CACHE)
+        # Large process pools can OOM when each worker owns a Stockfish process.
+        # Allow override via VOC_N_JOBS, but default conservatively.
+        cpu_count = multiprocessing.cpu_count()
+        default_jobs = max(1, min(16, cpu_count // 2))
+        n_jobs = int(os.getenv("VOC_N_JOBS", default_jobs))
+        n_jobs = max(1, n_jobs)
+        print(f"Running VOC analysis with n_jobs={n_jobs} (cpu_count={cpu_count})")
 
-    # Large process pools can OOM when each worker owns a Stockfish process.
-    # Allow override via VOC_N_JOBS, but default conservatively.
-    cpu_count = multiprocessing.cpu_count()
-    default_jobs = max(1, min(16, cpu_count // 2))
-    n_jobs = int(os.getenv("VOC_N_JOBS", default_jobs))
-    n_jobs = max(1, n_jobs)
-    print(f"Running VOC analysis with n_jobs={n_jobs} (cpu_count={cpu_count})")
-
-    # If the OS kills workers (SIGKILL), retry with lower parallelism.
-    attempt_jobs = n_jobs
-    while True:
-        try:
-            results = Parallel(
-                n_jobs=attempt_jobs,
-                prefer="processes",
-                pre_dispatch="n_jobs",
-                batch_size=1,
-            )(
-                delayed(analyze_position)(position) for position in tqdm(positions.itertuples(), total=len(positions))
-            )
-            break
-        except TerminatedWorkerError:
-            if attempt_jobs <= 1:
-                raise
-            next_jobs = max(1, attempt_jobs // 2)
-            print(
-                f"Workers terminated unexpectedly at n_jobs={attempt_jobs}. "
-                f"Retrying with n_jobs={next_jobs}."
-            )
-            attempt_jobs = next_jobs
-    data = [r for r in results if r is not None]
-    df = pd.DataFrame(data)
-    df.to_csv("voc_results.csv", index=False)
+        # If the OS kills workers (SIGKILL), retry with lower parallelism.
+        attempt_jobs = n_jobs
+        while True:
+            try:
+                results = Parallel(
+                    n_jobs=attempt_jobs,
+                    prefer="processes",
+                    pre_dispatch="n_jobs",
+                    batch_size=1,
+                )(
+                    delayed(analyze_position)(position) for position in tqdm(positions.itertuples(), total=len(positions))
+                )
+                break
+            except TerminatedWorkerError:
+                if attempt_jobs <= 1:
+                    raise
+                next_jobs = max(1, attempt_jobs // 2)
+                print(
+                    f"Workers terminated unexpectedly at n_jobs={attempt_jobs}. "
+                    f"Retrying with n_jobs={next_jobs}."
+                )
+                attempt_jobs = next_jobs
+        data = [r for r in results if r is not None]
+        df = pd.DataFrame(data)
+        df.to_csv(RESULTS_FILE, index=False)
     
+    # Ensure VOC sqrt for regression/plotting
     df["voc_sqrt"] = np.sqrt(df["voc"])
     df = analyze_data(df)
     plot_data(df)

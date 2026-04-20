@@ -2,6 +2,10 @@
 
 This note describes how Python (and notebook) code in `src/` is written. It is descriptive, not a strict linter profile.
 
+> [!IMPORTANT]
+> To run code in this repository, you MUST activate the `.venv` first:
+> `source .venv/bin/activate` (or equivalent for your shell).
+
 ## Design priorities
 
 Code is meant to be optimized for **modularity** and **readability**: small, named pieces with obvious data flow and domain meaning (chess, VOC, timing). Prefer that clarity over **flexibility**—fewer layers of indirection, fewer generic configuration surfaces, and explicit scripts or functions are fine when they make the analysis easier to follow and reuse.
