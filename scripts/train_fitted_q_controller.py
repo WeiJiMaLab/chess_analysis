@@ -73,7 +73,9 @@ class MaterializedCache:
 
 @dataclass(frozen=True)
 class AdvantageMetrics:
+    total_loss: float
     advantage_mse: float
+    sign_bce: float
     mean_abs_advantage_error: float
     sign_accuracy: float
     examples: int
@@ -662,18 +664,29 @@ def _advantage_loss_components(
     return advantage_mse, mean_abs_advantage_error, sign_accuracy
 
 
+def _sign_auxiliary_loss(
+    predicted_advantages: torch.Tensor,
+    target_advantages: torch.Tensor,
+) -> torch.Tensor:
+    sign_targets = (target_advantages > 0).to(dtype=predicted_advantages.dtype)
+    return F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets)
+
+
 def _train_epoch(
     model: ComputeAdvantageTreeSearchModel,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     *,
     device: torch.device,
+    sign_loss_weight: float,
     max_grad_norm: float,
     epoch: int,
     log_interval: int,
 ) -> AdvantageMetrics:
     model.train()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -685,14 +698,18 @@ def _train_epoch(
         targets = batch.target_advantages.to(device, non_blocking=True)
         predicted = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
         advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, targets)
+        sign_loss = _sign_auxiliary_loss(predicted, targets)
+        total_loss = advantage_mse + sign_loss_weight * sign_loss
 
         optimizer.zero_grad()
-        advantage_mse.backward()
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
         examples = int(targets.shape[0])
+        total_loss_sum += float(total_loss.item()) * examples
         total_advantage_mse += float(advantage_mse.item()) * examples
+        total_sign_bce += float(sign_loss.item()) * examples
         total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
         total_examples += examples
         total_correct += int(((predicted.detach() > 0) == (targets > 0)).sum().item())
@@ -702,7 +719,9 @@ def _train_epoch(
             print(
                 f"epoch={epoch} batch={batch_index}/{len(loader)} "
                 f"snapshots={total_examples} "
+                f"total_loss={total_loss_sum / max(total_examples, 1):.3f} "
                 f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
+                f"sign_bce={total_sign_bce / max(total_examples, 1):.3f} "
                 f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
                 f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
                 f"elapsed_s={elapsed:.1f}",
@@ -712,7 +731,9 @@ def _train_epoch(
     if total_examples == 0:
         raise ValueError("Training loader produced no valid controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -724,9 +745,12 @@ def evaluate_advantage_predictions(
     loader: DataLoader,
     *,
     device: torch.device,
+    sign_loss_weight: float,
 ) -> AdvantageMetrics:
     model.eval()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -737,15 +761,21 @@ def evaluate_advantage_predictions(
             targets = batch.target_advantages.to(device, non_blocking=True)
             predicted = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, targets)
+            sign_loss = _sign_auxiliary_loss(predicted, targets)
+            total_loss = advantage_mse + sign_loss_weight * sign_loss
             examples = int(targets.shape[0])
+            total_loss_sum += float(total_loss.item()) * examples
             total_advantage_mse += float(advantage_mse.item()) * examples
+            total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
             total_correct += int(((predicted > 0) == (targets > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Evaluation loader produced no valid controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -758,12 +788,15 @@ def _train_tensor_epoch(
     optimizer: torch.optim.Optimizer,
     *,
     device: torch.device,
+    sign_loss_weight: float,
     max_grad_norm: float,
     epoch: int,
     log_interval: int,
 ) -> AdvantageMetrics:
     model.train()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -774,14 +807,18 @@ def _train_tensor_epoch(
         target_advantages = target_advantages.to(device, non_blocking=True)
         predicted = model.advantage_head(features).squeeze(-1)
         advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
+        sign_loss = _sign_auxiliary_loss(predicted, target_advantages)
+        total_loss = advantage_mse + sign_loss_weight * sign_loss
 
         optimizer.zero_grad()
-        advantage_mse.backward()
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
         examples = int(target_advantages.shape[0])
+        total_loss_sum += float(total_loss.item()) * examples
         total_advantage_mse += float(advantage_mse.item()) * examples
+        total_sign_bce += float(sign_loss.item()) * examples
         total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
         total_examples += examples
         total_correct += int(((predicted.detach() > 0) == (target_advantages > 0)).sum().item())
@@ -791,7 +828,9 @@ def _train_tensor_epoch(
             print(
                 f"epoch={epoch} batch={batch_index}/{len(loader)} "
                 f"snapshots={total_examples} "
+                f"total_loss={total_loss_sum / max(total_examples, 1):.3f} "
                 f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
+                f"sign_bce={total_sign_bce / max(total_examples, 1):.3f} "
                 f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
                 f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
                 f"elapsed_s={elapsed:.1f}",
@@ -801,7 +840,9 @@ def _train_tensor_epoch(
     if total_examples == 0:
         raise ValueError("Tensor training loader produced no controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -813,9 +854,12 @@ def evaluate_tensor_advantage_predictions(
     loader: DataLoader,
     *,
     device: torch.device,
+    sign_loss_weight: float,
 ) -> AdvantageMetrics:
     model.eval()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -825,15 +869,21 @@ def evaluate_tensor_advantage_predictions(
             target_advantages = target_advantages.to(device, non_blocking=True)
             predicted = model.advantage_head(features).squeeze(-1)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
+            sign_loss = _sign_auxiliary_loss(predicted, target_advantages)
+            total_loss = advantage_mse + sign_loss_weight * sign_loss
             examples = int(target_advantages.shape[0])
+            total_loss_sum += float(total_loss.item()) * examples
             total_advantage_mse += float(advantage_mse.item()) * examples
+            total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
             total_correct += int(((predicted > 0) == (target_advantages > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Tensor evaluation loader produced no controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -847,13 +897,16 @@ def _train_materialized_cache_epoch(
     *,
     device: torch.device,
     batch_size: int,
+    sign_loss_weight: float,
     max_grad_norm: float,
     epoch: int,
     log_interval: int,
     seed: int,
 ) -> AdvantageMetrics:
     model.train()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -874,14 +927,18 @@ def _train_materialized_cache_epoch(
             batch_targets = target_advantages[batch_index].to(device, non_blocking=True)
             predicted = model.advantage_head(batch_features).squeeze(-1)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, batch_targets)
+            sign_loss = _sign_auxiliary_loss(predicted, batch_targets)
+            total_loss = advantage_mse + sign_loss_weight * sign_loss
 
             optimizer.zero_grad()
-            advantage_mse.backward()
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
 
             examples = int(batch_targets.shape[0])
+            total_loss_sum += float(total_loss.item()) * examples
             total_advantage_mse += float(advantage_mse.item()) * examples
+            total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
             total_correct += int(((predicted.detach() > 0) == (batch_targets > 0)).sum().item())
@@ -891,7 +948,9 @@ def _train_materialized_cache_epoch(
                 print(
                     f"epoch={epoch} batch={batch_counter} "
                     f"snapshots={total_examples} "
+                    f"total_loss={total_loss_sum / max(total_examples, 1):.3f} "
                     f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
+                    f"sign_bce={total_sign_bce / max(total_examples, 1):.3f} "
                     f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
                     f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
                     f"elapsed_s={elapsed:.1f}",
@@ -901,7 +960,9 @@ def _train_materialized_cache_epoch(
     if total_examples == 0:
         raise ValueError("Materialized cache training produced no controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -914,9 +975,12 @@ def evaluate_materialized_cache_predictions(
     *,
     device: torch.device,
     batch_size: int,
+    sign_loss_weight: float,
 ) -> AdvantageMetrics:
     model.eval()
+    total_loss_sum = 0.0
     total_advantage_mse = 0.0
+    total_sign_bce = 0.0
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
@@ -930,15 +994,21 @@ def evaluate_materialized_cache_predictions(
                 batch_targets = target_advantages[start : start + batch_size].to(device, non_blocking=True)
                 predicted = model.advantage_head(batch_features).squeeze(-1)
                 advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, batch_targets)
+                sign_loss = _sign_auxiliary_loss(predicted, batch_targets)
+                total_loss = advantage_mse + sign_loss_weight * sign_loss
                 examples = int(batch_targets.shape[0])
+                total_loss_sum += float(total_loss.item()) * examples
                 total_advantage_mse += float(advantage_mse.item()) * examples
+                total_sign_bce += float(sign_loss.item()) * examples
                 total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
                 total_examples += examples
                 total_correct += int(((predicted > 0) == (batch_targets > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Materialized cache evaluation produced no controller states.")
     return AdvantageMetrics(
+        total_loss=total_loss_sum / total_examples,
         advantage_mse=total_advantage_mse / total_examples,
+        sign_bce=total_sign_bce / total_examples,
         mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
         sign_accuracy=total_correct / total_examples,
         examples=total_examples,
@@ -1195,6 +1265,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--sign-loss-weight", type=float, default=1.0)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=25)
@@ -1345,6 +1416,7 @@ def main() -> None:
                 optimizer,
                 device=device,
                 batch_size=args.batch_size,
+                sign_loss_weight=args.sign_loss_weight,
                 max_grad_norm=args.max_grad_norm,
                 epoch=epoch,
                 log_interval=args.log_interval,
@@ -1356,13 +1428,16 @@ def main() -> None:
                 train_loader,
                 optimizer,
                 device=device,
+                sign_loss_weight=args.sign_loss_weight,
                 max_grad_norm=args.max_grad_norm,
                 epoch=epoch,
                 log_interval=args.log_interval,
             )
         print(
             f"epoch={epoch}/{args.epochs} "
+            f"train_total_loss={train_metrics.total_loss:.3f} "
             f"train_advantage_mse={train_metrics.advantage_mse:.3f} "
+            f"train_sign_bce={train_metrics.sign_bce:.3f} "
             f"train_mean_abs_advantage_error={train_metrics.mean_abs_advantage_error:.3f} "
             f"train_sign_accuracy={train_metrics.sign_accuracy:.3f} "
             f"train_snapshots={train_metrics.examples}",
@@ -1376,12 +1451,20 @@ def main() -> None:
                     validation_cache,
                     device=device,
                     batch_size=args.batch_size,
+                    sign_loss_weight=args.sign_loss_weight,
                 )
             else:
-                validation_metrics = evaluate_advantage_predictions(model, validation_loader, device=device)
+                validation_metrics = evaluate_advantage_predictions(
+                    model,
+                    validation_loader,
+                    device=device,
+                    sign_loss_weight=args.sign_loss_weight,
+                )
             print(
                 f"validation_epoch={epoch}/{args.epochs} "
+                f"validation_total_loss={validation_metrics.total_loss:.3f} "
                 f"validation_advantage_mse={validation_metrics.advantage_mse:.3f} "
+                f"validation_sign_bce={validation_metrics.sign_bce:.3f} "
                 f"validation_mean_abs_advantage_error={validation_metrics.mean_abs_advantage_error:.3f} "
                 f"validation_sign_accuracy={validation_metrics.sign_accuracy:.3f} "
                 f"validation_snapshots={validation_metrics.examples}",
@@ -1396,6 +1479,7 @@ def main() -> None:
                     "validation_sign_accuracy": validation_metrics.sign_accuracy,
                     "encoder_checkpoint": args.encoder_checkpoint,
                     "unfreeze_encoder": args.unfreeze_encoder,
+                    "sign_loss_weight": args.sign_loss_weight,
                     "controller_inputs": ["z_t", "N_t", "T_t"],
                     **budgeted_oracle_metadata(oracle_config),
                 }

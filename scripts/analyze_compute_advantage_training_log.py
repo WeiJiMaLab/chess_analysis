@@ -12,7 +12,9 @@ import matplotlib.pyplot as plt
 
 TRAIN_RE = re.compile(
     r"^epoch=(?P<epoch>\d+)/(?P<total_epochs>\d+) "
+    r"(?:(?:train_total_loss=(?P<train_total_loss>-?\d+(?:\.\d+)?) )?)"
     r"train_advantage_mse=(?P<train_advantage_mse>-?\d+(?:\.\d+)?) "
+    r"(?:(?:train_sign_bce=(?P<train_sign_bce>-?\d+(?:\.\d+)?) )?)"
     r"train_mean_abs_advantage_error=(?P<train_mean_abs_advantage_error>-?\d+(?:\.\d+)?) "
     r"train_sign_accuracy=(?P<train_sign_accuracy>-?\d+(?:\.\d+)?) "
     r"train_snapshots=(?P<train_snapshots>\d+)$"
@@ -20,7 +22,9 @@ TRAIN_RE = re.compile(
 
 VALIDATION_RE = re.compile(
     r"^validation_epoch=(?P<epoch>\d+)/(?P<total_epochs>\d+) "
+    r"(?:(?:validation_total_loss=(?P<validation_total_loss>-?\d+(?:\.\d+)?) )?)"
     r"validation_advantage_mse=(?P<validation_advantage_mse>-?\d+(?:\.\d+)?) "
+    r"(?:(?:validation_sign_bce=(?P<validation_sign_bce>-?\d+(?:\.\d+)?) )?)"
     r"validation_mean_abs_advantage_error=(?P<validation_mean_abs_advantage_error>-?\d+(?:\.\d+)?) "
     r"validation_sign_accuracy=(?P<validation_sign_accuracy>-?\d+(?:\.\d+)?) "
     r"validation_snapshots=(?P<validation_snapshots>\d+)$"
@@ -62,7 +66,7 @@ def _parse_value(key: str, value: str) -> Any:
 def _row_from_match(match: re.Match[str]) -> dict[str, Any]:
     row: dict[str, Any] = {}
     for key, value in match.groupdict().items():
-        row[key] = _parse_value(key, value)
+        row[key] = float("nan") if value is None else _parse_value(key, value)
     return row
 
 
@@ -122,23 +126,29 @@ def _best_by(rows: list[dict[str, Any]], key: str, *, maximize: bool) -> dict[st
 
 def _plot_training(train_rows: list[dict[str, Any]], out_path: Path) -> None:
     xs = [row["epoch"] for row in train_rows]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
+    flat_axes = axes.reshape(-1)
 
-    axes[0].plot(xs, [row["train_advantage_mse"] for row in train_rows], marker="o", color="tab:blue")
-    axes[0].set_title("Train Advantage MSE")
-    axes[0].set_xlabel("Epoch")
-    axes[0].set_ylabel("MSE")
+    flat_axes[0].plot(xs, [row["train_total_loss"] for row in train_rows], marker="o", color="tab:red")
+    flat_axes[0].set_title("Train Total Loss")
+    flat_axes[0].set_xlabel("Epoch")
+    flat_axes[0].set_ylabel("Loss")
 
-    axes[1].plot(xs, [row["train_mean_abs_advantage_error"] for row in train_rows], marker="o", color="tab:orange")
-    axes[1].set_title("Train Mean Abs Advantage Error")
-    axes[1].set_xlabel("Epoch")
-    axes[1].set_ylabel("Error")
+    flat_axes[1].plot(xs, [row["train_advantage_mse"] for row in train_rows], marker="o", color="tab:blue")
+    flat_axes[1].set_title("Train Advantage MSE")
+    flat_axes[1].set_xlabel("Epoch")
+    flat_axes[1].set_ylabel("MSE")
 
-    axes[2].plot(xs, [row["train_sign_accuracy"] for row in train_rows], marker="o", color="tab:green")
-    axes[2].set_title("Train Sign Accuracy")
-    axes[2].set_xlabel("Epoch")
-    axes[2].set_ylabel("Accuracy")
-    axes[2].set_ylim(0.0, 1.0)
+    flat_axes[2].plot(xs, [row["train_sign_bce"] for row in train_rows], marker="o", color="tab:purple")
+    flat_axes[2].set_title("Train Sign BCE")
+    flat_axes[2].set_xlabel("Epoch")
+    flat_axes[2].set_ylabel("Loss")
+
+    flat_axes[3].plot(xs, [row["train_sign_accuracy"] for row in train_rows], marker="o", color="tab:green")
+    flat_axes[3].set_title("Train Sign Accuracy")
+    flat_axes[3].set_xlabel("Epoch")
+    flat_axes[3].set_ylabel("Accuracy")
+    flat_axes[3].set_ylim(0.0, 1.0)
 
     fig.suptitle("Compute Advantage Training Metrics", fontsize=14)
     fig.savefig(out_path, dpi=180)
@@ -150,21 +160,25 @@ def _plot_validation_and_greedy(
     greedy_rows: list[dict[str, Any]],
     out_path: Path,
 ) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(16, 8), constrained_layout=True)
 
     vxs = [row["epoch"] for row in validation_rows]
     gxs = [row["epoch"] for row in greedy_rows]
 
-    axes[0, 0].plot(vxs, [row["validation_advantage_mse"] for row in validation_rows], marker="o", color="tab:blue")
-    axes[0, 0].set_title("Validation Advantage MSE")
+    axes[0, 0].plot(vxs, [row["validation_total_loss"] for row in validation_rows], marker="o", color="tab:red")
+    axes[0, 0].set_title("Validation Total Loss")
     axes[0, 0].set_xlabel("Epoch")
-    axes[0, 0].set_ylabel("MSE")
+    axes[0, 0].set_ylabel("Loss")
 
-    axes[0, 1].plot(vxs, [row["validation_sign_accuracy"] for row in validation_rows], marker="o", color="tab:green")
-    axes[0, 1].set_title("Validation Sign Accuracy")
+    axes[0, 1].plot(vxs, [row["validation_advantage_mse"] for row in validation_rows], marker="o", color="tab:blue")
+    axes[0, 1].set_title("Validation Advantage MSE")
     axes[0, 1].set_xlabel("Epoch")
-    axes[0, 1].set_ylabel("Accuracy")
-    axes[0, 1].set_ylim(0.0, 1.0)
+    axes[0, 1].set_ylabel("MSE")
+
+    axes[0, 2].plot(vxs, [row["validation_sign_bce"] for row in validation_rows], marker="o", color="tab:purple")
+    axes[0, 2].set_title("Validation Sign BCE")
+    axes[0, 2].set_xlabel("Epoch")
+    axes[0, 2].set_ylabel("Loss")
 
     axes[1, 0].plot(gxs, [row["average_return"] for row in greedy_rows], marker="o", label="return", color="tab:blue")
     axes[1, 0].plot(
@@ -179,12 +193,18 @@ def _plot_validation_and_greedy(
     axes[1, 0].set_ylabel("Value")
     axes[1, 0].legend()
 
-    axes[1, 1].plot(gxs, [row["exact_stop_step_accuracy"] for row in greedy_rows], marker="o", label="exact", color="tab:purple")
-    axes[1, 1].plot(gxs, [row["first_action_accuracy"] for row in greedy_rows], marker="o", label="first action", color="tab:orange")
-    axes[1, 1].plot(gxs, [row["average_expansions"] for row in greedy_rows], marker="o", label="expansions", color="tab:brown")
-    axes[1, 1].set_title("Greedy Boundary Metrics")
+    axes[1, 1].plot(vxs, [row["validation_sign_accuracy"] for row in validation_rows], marker="o", color="tab:green")
+    axes[1, 1].set_title("Validation Sign Accuracy")
     axes[1, 1].set_xlabel("Epoch")
-    axes[1, 1].legend()
+    axes[1, 1].set_ylabel("Accuracy")
+    axes[1, 1].set_ylim(0.0, 1.0)
+
+    axes[1, 2].plot(gxs, [row["exact_stop_step_accuracy"] for row in greedy_rows], marker="o", label="exact", color="tab:purple")
+    axes[1, 2].plot(gxs, [row["first_action_accuracy"] for row in greedy_rows], marker="o", label="first action", color="tab:orange")
+    axes[1, 2].plot(gxs, [row["average_expansions"] for row in greedy_rows], marker="o", label="expansions", color="tab:brown")
+    axes[1, 2].set_title("Greedy Boundary Metrics")
+    axes[1, 2].set_xlabel("Epoch")
+    axes[1, 2].legend()
 
     fig.suptitle("Compute Advantage Validation and Greedy Metrics", fontsize=14)
     fig.savefig(out_path, dpi=180)
@@ -206,6 +226,13 @@ def build_summary(
         "last_validation": validation_rows[-1] if validation_rows else None,
         "last_greedy": greedy_rows[-1] if greedy_rows else None,
         "best_validation_by_mse": _best_by(validation_rows, "validation_advantage_mse", maximize=False),
+        "best_validation_by_total_loss": _best_by(
+            [row for row in validation_rows if not math.isnan(float(row["validation_total_loss"]))],
+            "validation_total_loss",
+            maximize=False,
+        )
+        if validation_rows
+        else None,
         "best_validation_by_sign_accuracy": _best_by(validation_rows, "validation_sign_accuracy", maximize=True),
         "best_greedy_by_return": _best_by(greedy_rows, "average_return", maximize=True),
     }

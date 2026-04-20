@@ -40,7 +40,9 @@ except ModuleNotFoundError:
 
 TRAIN_RE = re.compile(
     r"^epoch=(?P<epoch>\d+)/(?P<total_epochs>\d+) "
+    r"(?:(?:train_total_loss=(?P<train_total_loss>-?\d+(?:\.\d+)?) )?)"
     r"train_advantage_mse=(?P<train_advantage_mse>-?\d+(?:\.\d+)?) "
+    r"(?:(?:train_sign_bce=(?P<train_sign_bce>-?\d+(?:\.\d+)?) )?)"
     r"train_mean_abs_advantage_error=(?P<train_mean_abs_advantage_error>-?\d+(?:\.\d+)?) "
     r"train_sign_accuracy=(?P<train_sign_accuracy>-?\d+(?:\.\d+)?) "
     r"train_snapshots=(?P<train_snapshots>\d+)$"
@@ -50,7 +52,9 @@ LUCKY_EARLY_HALT_EPS = 0.01
 
 VALIDATION_RE = re.compile(
     r"^validation_epoch=(?P<epoch>\d+)/(?P<total_epochs>\d+) "
+    r"(?:(?:validation_total_loss=(?P<validation_total_loss>-?\d+(?:\.\d+)?) )?)"
     r"validation_advantage_mse=(?P<validation_advantage_mse>-?\d+(?:\.\d+)?) "
+    r"(?:(?:validation_sign_bce=(?P<validation_sign_bce>-?\d+(?:\.\d+)?) )?)"
     r"validation_mean_abs_advantage_error=(?P<validation_mean_abs_advantage_error>-?\d+(?:\.\d+)?) "
     r"validation_sign_accuracy=(?P<validation_sign_accuracy>-?\d+(?:\.\d+)?) "
     r"validation_snapshots=(?P<validation_snapshots>\d+)$"
@@ -70,6 +74,13 @@ GREEDY_RE = re.compile(
 
 def _parse_number(value: str) -> int | float:
     return float(value) if "." in value or "e" in value.lower() else int(value)
+
+
+def _parse_match_row(match: re.Match[str]) -> dict[str, Any]:
+    row: dict[str, Any] = {}
+    for key, value in match.groupdict().items():
+        row[key] = float("nan") if value is None else _parse_number(value)
+    return row
 
 
 def _parse_path_rewrites(values: list[str]) -> list[tuple[str, str]]:
@@ -126,11 +137,11 @@ def parse_log(log_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], lis
 
         match = TRAIN_RE.match(line)
         if match is not None:
-            train_rows.append({key: _parse_number(value) for key, value in match.groupdict().items()})
+            train_rows.append(_parse_match_row(match))
             continue
         match = VALIDATION_RE.match(line)
         if match is not None:
-            validation_rows.append({key: _parse_number(value) for key, value in match.groupdict().items()})
+            validation_rows.append(_parse_match_row(match))
             continue
         match = GREEDY_RE.match(line)
         if match is not None:
@@ -218,26 +229,70 @@ def _episode_error_type(episode: dict[str, Any]) -> str:
 
 
 def _plot_loss_curves(train_rows: list[dict[str, Any]], validation_rows: list[dict[str, Any]], out_path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-    ax.plot(
-        [row["epoch"] for row in train_rows],
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
+    epochs_train = [row["epoch"] for row in train_rows]
+    epochs_val = [row["epoch"] for row in validation_rows]
+
+    axes[0].plot(
+        epochs_train,
+        [row["train_total_loss"] for row in train_rows],
+        marker="o",
+        linewidth=2,
+        label="train",
+    )
+    axes[0].plot(
+        epochs_val,
+        [row["validation_total_loss"] for row in validation_rows],
+        marker="o",
+        linewidth=2,
+        label="validation",
+    )
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss")
+    axes[0].set_title("Total Loss")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(
+        epochs_train,
         [row["train_advantage_mse"] for row in train_rows],
         marker="o",
         linewidth=2,
         label="train",
     )
-    ax.plot(
-        [row["epoch"] for row in validation_rows],
+    axes[1].plot(
+        epochs_val,
         [row["validation_advantage_mse"] for row in validation_rows],
         marker="o",
         linewidth=2,
         label="validation",
     )
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Advantage MSE")
-    ax.set_title("Advantage Loss Over Time")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("MSE")
+    axes[1].set_title("Advantage MSE")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    axes[2].plot(
+        epochs_train,
+        [row["train_sign_bce"] for row in train_rows],
+        marker="o",
+        linewidth=2,
+        label="train",
+    )
+    axes[2].plot(
+        epochs_val,
+        [row["validation_sign_bce"] for row in validation_rows],
+        marker="o",
+        linewidth=2,
+        label="validation",
+    )
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("Loss")
+    axes[2].set_title("Sign BCE")
+    axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
+
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
 

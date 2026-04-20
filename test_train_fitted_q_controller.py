@@ -13,7 +13,10 @@ from budgeted_controller_oracle import (
 )
 from cts_pretrain import PretrainExample
 from schema import NodeFeatureSchema
-from scripts.pack_controller_episodes import _source_top_level_root_churn_category
+from scripts.pack_controller_episodes import (
+    _normalized_stop_step_entropy,
+    _source_top_level_root_churn_category,
+)
 from scripts.train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
     MaterializedAdvantageEpisode,
@@ -86,6 +89,11 @@ class BudgetedControllerOracleTests(unittest.TestCase):
         second = deterministic_starting_budgets("example.pt", config)
         self.assertEqual(first, second)
         self.assertEqual(len(first), len(config.budget_buckets) * config.samples_per_bucket)
+
+    def test_normalized_stop_step_entropy_uses_requested_bins(self):
+        self.assertEqual(_normalized_stop_step_entropy([0, 1, 1]), 0.0)
+        mixed = _normalized_stop_step_entropy([0, 4, 8, 11, 20])
+        self.assertAlmostEqual(mixed, 1.0, places=6)
 
 
 class TrainFittedQControllerTests(unittest.TestCase):

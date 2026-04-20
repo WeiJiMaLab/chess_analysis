@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -115,6 +117,41 @@ def _source_top_level_root_churn_category(record: Any) -> Optional[str]:
     return "X*AB*A"
 
 
+def _oracle_stop_entropy_bin(stop_step: int) -> int:
+    if stop_step <= 1:
+        return 0
+    if stop_step <= 5:
+        return 1
+    if stop_step <= 9:
+        return 2
+    if stop_step <= 12:
+        return 3
+    return 4
+
+
+def _normalized_stop_step_entropy(stop_steps: List[int]) -> float:
+    if not stop_steps:
+        return 0.0
+    counts = [0] * 5
+    for stop_step in stop_steps:
+        counts[_oracle_stop_entropy_bin(int(stop_step))] += 1
+    total = float(sum(counts))
+    if total <= 0.0:
+        return 0.0
+    entropy = 0.0
+    for count in counts:
+        if count <= 0:
+            continue
+        probability = count / total
+        entropy -= probability * math.log(probability)
+    return entropy / math.log(len(counts))
+
+
+def _deterministic_unit_interval(identifier: str, seed: int) -> float:
+    digest = hashlib.blake2b(f"{seed}:{identifier}".encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) / float(1 << 64)
+
+
 def _ordered_expansion_parent_ids(record: RawPretrainExampleRecord) -> List[int]:
     child_ptr = record.child_ptr.tolist()
     children_index = record.children_index.tolist()
@@ -186,10 +223,11 @@ def _pack_split(
     min_halt_reward_range: float,
     min_decision_margin: float,
     exclude_xaba: bool,
+    sample_trees_by_stop_entropy: bool,
     shard_size: int,
     num_workers: int,
     log_interval: int,
-) -> tuple[Path, int, int]:
+) -> tuple[Path, int, int, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
     split_output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +239,7 @@ def _pack_split(
     entries: List[dict] = []
     total_episodes = 0
     total_skipped = 0
+    total_entropy_filtered = 0
     total_shards = (len(example_paths) + shard_size - 1) // shard_size
 
     for shard_index, shard_start in enumerate(range(0, len(example_paths), shard_size)):
@@ -217,6 +256,7 @@ def _pack_split(
                 min_halt_reward_range,
                 min_decision_margin,
                 exclude_xaba,
+                sample_trees_by_stop_entropy,
                 feature_names,
                 oracle_config,
             )
@@ -232,10 +272,14 @@ def _pack_split(
                     elapsed = time.time() - start_time
                     accepted_so_far = total_episodes + sum(_accepted_episode_count(r) for r in results)
                     skipped_so_far = total_skipped + sum(1 for r in results if not r)
+                    entropy_filtered_so_far = total_entropy_filtered + sum(
+                        1 for r in results if r and r.get("status") == "filtered_entropy"
+                    )
                     print(
                         f"split={split_name} shard={shard_index + 1}/{total_shards} "
                         f"shard_progress={completed_in_shard}/{len(tasks)} "
                         f"accepted={accepted_so_far} skipped={skipped_so_far} "
+                        f"entropy_filtered={entropy_filtered_so_far} "
                         f"elapsed_s={elapsed:.1f}",
                         flush=True,
                     )
@@ -249,10 +293,14 @@ def _pack_split(
                         elapsed = time.time() - start_time
                         accepted_so_far = total_episodes + sum(_accepted_episode_count(r) for r in results)
                         skipped_so_far = total_skipped + sum(1 for r in results if not r)
+                        entropy_filtered_so_far = total_entropy_filtered + sum(
+                            1 for r in results if r and r.get("status") == "filtered_entropy"
+                        )
                         print(
                             f"split={split_name} shard={shard_index + 1}/{total_shards} "
                             f"shard_progress={completed_in_shard}/{len(tasks)} "
                             f"accepted={accepted_so_far} skipped={skipped_so_far} "
+                            f"entropy_filtered={entropy_filtered_so_far} "
                             f"elapsed_s={elapsed:.1f}",
                             flush=True,
                         )
@@ -286,6 +334,10 @@ def _pack_split(
 
         for raw_result in results:
             if not raw_result:
+                total_skipped += 1
+                continue
+            if raw_result.get("status") == "filtered_entropy":
+                total_entropy_filtered += 1
                 total_skipped += 1
                 continue
 
@@ -377,9 +429,11 @@ def _pack_split(
                 "split": split_name,
                 "total_episodes": total_episodes,
                 "total_skipped": total_skipped,
+                "total_entropy_filtered": total_entropy_filtered,
                 "reward_scale": reward_scale,
                 "min_halt_reward_range": min_halt_reward_range,
                 "min_decision_margin": min_decision_margin,
+                "sample_trees_by_stop_entropy": sample_trees_by_stop_entropy,
                 **budgeted_oracle_metadata(oracle_config),
                 "entries": entries,
             },
@@ -387,11 +441,11 @@ def _pack_split(
             indent=2,
         )
 
-    return packed_manifest_path, total_episodes, total_skipped
+    return packed_manifest_path, total_episodes, total_skipped, total_entropy_filtered
 
 
 def _process_one_task(
-    task: Tuple[str, int, int, float, str, str, float, float, float, bool, Tuple[str, ...], BudgetedOracleConfig],
+    task: Tuple[str, int, int, float, str, str, float, float, float, bool, bool, Tuple[str, ...], BudgetedOracleConfig],
 ) -> Optional[dict[str, Any]]:
     (
         path_str,
@@ -404,6 +458,7 @@ def _process_one_task(
         min_halt_reward_range,
         min_decision_margin,
         exclude_xaba,
+        sample_trees_by_stop_entropy,
         feature_names,
         oracle_config,
     ) = task
@@ -461,6 +516,16 @@ def _process_one_task(
 
     if not packed_episodes:
         return None
+    if sample_trees_by_stop_entropy:
+        stop_entropy = _normalized_stop_step_entropy(
+            [int(episode["oracle_stop_step"]) for episode in packed_episodes]
+        )
+        if _deterministic_unit_interval(path_str, oracle_config.seed) >= stop_entropy:
+            return {
+                "status": "filtered_entropy",
+                "source_path": path_str,
+                "stop_entropy": stop_entropy,
+            }
     return {"trajectory": trajectory, "episodes": packed_episodes}
 
 
@@ -515,6 +580,11 @@ def main() -> None:
         action="store_true",
         help="Exclude source trees whose top-level final-anchored churn motif is X*AB*A.",
     )
+    parser.add_argument(
+        "--sample-trees-by-stop-entropy",
+        action="store_true",
+        help="Sample whole source trees with keep probability equal to the normalized entropy of their oracle stop-step distribution across sampled budgets.",
+    )
     parser.add_argument("--search-budget", type=int, default=64)
     parser.add_argument("--max-depth", type=int, default=10)
     parser.add_argument("--c-puct", type=float, default=1.0)
@@ -568,9 +638,10 @@ def main() -> None:
     print(f"min_halt_reward_range={args.min_halt_reward_range}", flush=True)
     print(f"min_decision_margin={args.min_decision_margin}", flush=True)
     print(f"exclude_xaba={args.exclude_xaba}", flush=True)
+    print(f"sample_trees_by_stop_entropy={args.sample_trees_by_stop_entropy}", flush=True)
     print(json.dumps(budgeted_oracle_metadata(oracle_config), sort_keys=True), flush=True)
 
-    train_manifest_out, train_count, train_skipped = _pack_split(
+    train_manifest_out, train_count, train_skipped, train_entropy_filtered = _pack_split(
         train_manifest,
         output_root,
         quality_config,
@@ -579,11 +650,12 @@ def main() -> None:
         args.min_halt_reward_range,
         args.min_decision_margin,
         args.exclude_xaba,
+        args.sample_trees_by_stop_entropy,
         args.shard_size,
         args.num_workers,
         args.log_interval,
     )
-    validation_manifest_out, val_count, val_skipped = _pack_split(
+    validation_manifest_out, val_count, val_skipped, val_entropy_filtered = _pack_split(
         validation_manifest,
         output_root,
         quality_config,
@@ -592,6 +664,7 @@ def main() -> None:
         args.min_halt_reward_range,
         args.min_decision_margin,
         args.exclude_xaba,
+        args.sample_trees_by_stop_entropy,
         args.shard_size,
         args.num_workers,
         args.log_interval,
@@ -599,8 +672,14 @@ def main() -> None:
 
     print(f"train_manifest={train_manifest_out}")
     print(f"validation_manifest={validation_manifest_out}")
-    print(f"train_episodes={train_count} train_skipped={train_skipped}")
-    print(f"validation_episodes={val_count} validation_skipped={val_skipped}")
+    print(
+        f"train_episodes={train_count} train_skipped={train_skipped} "
+        f"train_entropy_filtered={train_entropy_filtered}"
+    )
+    print(
+        f"validation_episodes={val_count} validation_skipped={val_skipped} "
+        f"validation_entropy_filtered={val_entropy_filtered}"
+    )
     print(f"output_root={output_root}")
 
 

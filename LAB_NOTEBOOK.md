@@ -1220,3 +1220,53 @@ Interpretation:
 Conclusion:
 - The main remaining problem is now clearly a **decision-boundary calibration problem**, not gross regression failure.
 - Next experiments should focus on losses/model-selection criteria that care directly about the halt/continue sign near zero, rather than only scalar MSE.
+
+## 2026-04-20
+
+### Entropy-sampled controller dataset scheme
+
+Intent:
+- Make the packed controller dataset less dominated by trees whose oracle stop behavior is nearly constant across sampled budgets, without hard-coding a minimum stop step or discarding all easy trees.
+
+Implemented scheme:
+- `scripts/pack_controller_episodes.py` now supports `--sample-trees-by-stop-entropy`.
+- For each source tree:
+  - generate the usual kept budgeted episodes after the existing filters
+  - collect oracle stop steps across those sampled budgets
+  - bin stop steps into:
+    - `0-1`
+    - `2-5`
+    - `6-9`
+    - `10-12`
+    - `13+`
+  - compute normalized entropy `H` of that 5-bin stop-step distribution
+  - keep the whole tree with deterministic probability `p_keep = H`
+- Keep/drop uses a deterministic hash of `(source_path, seed)` so repacks are reproducible.
+
+Why this scheme:
+- preserves full within-tree budget structure for retained trees
+- does not impose any claim that later stop steps are intrinsically better
+- still keeps some trees with only `0/1` mass
+- smoothly favors trees whose stopping behavior actually varies with budget
+
+Operational note:
+- the packer now reports entropy-filtered tree counts explicitly in progress logs and manifests, so retention can be measured after one pass instead of guessed in advance.
+
+### Loss logging now matches the actual optimized objective
+
+Intent:
+- The fitted-Q trainer was optimizing `MSE + sign_loss_weight * BCE`, but logs and plots were still only surfacing the MSE term. That was hiding the actual optimization signal during sign-loss sweeps.
+
+Implemented change:
+- `scripts/train_fitted_q_controller.py` now logs:
+  - `train_total_loss`
+  - `train_advantage_mse`
+  - `train_sign_bce`
+  - and the corresponding validation metrics
+- Both analysis scripts were updated to parse both old and new log formats:
+  - `scripts/analyze_compute_advantage_training_log.py`
+  - `scripts/analyze_budgeted_controller_run.py`
+- Training/validation plots now expose total loss and the two components separately rather than only the MSE curve.
+
+Conclusion:
+- Future sweeps over sign-loss weight, learning rate, and model size can now be analyzed against the true training objective while using a dataset intervention that prefers cross-budget stop diversity without enforcing a hand-designed monotonic interpretation.

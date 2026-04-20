@@ -32,8 +32,9 @@ EPISODE_BATCH_SIZE="${EPISODE_BATCH_SIZE:-8}"
 EPOCHS="${EPOCHS:-20}"
 LEARNING_RATE="${LEARNING_RATE:-1e-3}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
+SIGN_LOSS_WEIGHT="${SIGN_LOSS_WEIGHT:-1.0}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
-NUM_WORKERS="${NUM_WORKERS:-0}"
+NUM_WORKERS="${SLURM_CPUS_PER_TASK:-1}"
 LOG_INTERVAL="${LOG_INTERVAL:-10000}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-1}"
 GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-1}"
@@ -104,6 +105,7 @@ python3 scripts/train_fitted_q_controller.py \
   --epochs "${EPOCHS}" \
   --learning-rate "${LEARNING_RATE}" \
   --weight-decay "${WEIGHT_DECAY}" \
+  --sign-loss-weight "${SIGN_LOSS_WEIGHT}" \
   --max-grad-norm "${MAX_GRAD_NORM}" \
   --num-workers "${NUM_WORKERS}" \
   --log-interval "${LOG_INTERVAL}" \
