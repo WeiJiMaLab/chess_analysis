@@ -12,7 +12,7 @@ def main():
     args = parser.parse_args()
 
     n_games = args.n_games
-    games_cache = f"../data/moves_{n_games}.parquet"
+    games_cache = os.path.join(os.path.dirname(__file__), "..", "data", f"moves_{n_games}.parquet")
 
     need_reload = not os.path.exists(games_cache)
     conn = get_db_connection(threads=16, memory_limit="6GB")
@@ -39,7 +39,8 @@ def main():
         )
 
         SELECT m.gid, m.board_position, m.move_time, m.move_ply, m.player_white,
-            g.white_elo, g.black_elo, g.initial_clock, g.clock_increment
+            g.white_elo, g.black_elo, g.initial_clock, g.clock_increment,
+            g.white_id, g.black_id
         FROM core.moves m
         JOIN picked p ON m.gid = p.gid
         JOIN core.games g ON m.gid = g.gid
