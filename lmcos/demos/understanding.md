@@ -9,13 +9,13 @@ The GNN performs **representation learning** over search trees. Its goal is to c
 ### The Two-Phase Round (Mechanistic Truth)
 A single round of GNN processing consists of two sequential, depth-wise sweeps:
 
-1.  **Phase 1: Upward (Indigo) - "Evidence Funnel"**
+1.  **Phase 1: Upward - "Evidence Funnel"**
     *   Information flows from **Leaves to Parent**.
     *   Uses **Multi-Head Attention (MHA)** to aggregate child vectors.
     *   The Parent's memory is updated via a **GRU**.
     *   *Intuition:* "What have my children discovered that changes my own value?"
 
-2.  **Phase 2: Downward (Emerald) - "Strategy Broadcast"**
+2.  **Phase 2: Downward - "Strategy Broadcast"**
     *   Information flows from **Parent to Children**.
     *   The Parent's summary is projected via a Linear layer and sent back down.
     *   Each Child's memory is updated via the *same* **GRU**.
@@ -123,8 +123,7 @@ When reading the diagrams in this suite, keep these formal distinctions in mind:
 | :--- | :--- | :--- |
 | **Hollow Box** | **Data Container** | Hidden State ($h$), Messages ($m$) |
 | **Filled Box** | **Neural Module** | GRUCell, Linear, MH-Attention |
-| **Indigo Color** | **Primary/Summary** | Upward Pass, Root States |
-| **Emerald Color** | **Context/Broadcast** | Downward Pass, Child Updates |
+| **Solid Lines** | **Active Search** | Search edges ($T_k$) |
 | **Dashed Lines** | **Future Potential** | Oracle Nodes (not yet seen by GNN) |
 
 ---

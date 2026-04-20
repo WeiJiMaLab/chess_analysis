@@ -47,6 +47,27 @@ jupyter notebook test_db.ipynb
 
 Or in Jupyter/Lab, ensure the working directory is `chess_analysis` when running the notebook.
 
+## Slide presentation (project overview)
+
+A [Slidev](https://sli.dev) deck (Vue-based slides) summarizes the **Chess Meta-Control** goals: the `lmcos` meta-controller stack and the behavioral analysis in `src/`. It lives under `presentations/cmc-overview/`.
+
+From the repository root:
+
+```bash
+cd chess_analysis/presentations/cmc-overview
+npm install    # first time only
+npm run dev
+```
+
+Slidev prints a local URL (typically `http://localhost:3030`). Open it in a browser; use **Presenter Mode** from the UI or keyboard shortcuts documented in the Slidev navigation bar.
+
+The deck serves figures via `presentations/cmc-overview/public/figures` (symlink to `src/figures/`). If plots 404, recreate the symlink and run the analysis scripts — see `presentations/cmc-overview/README.md`.
+
+Optional:
+
+- `npm run build` — static export to `dist/`
+- `npm run export` — PDF export (see [Slidev export docs](https://sli.dev/guide/exporting))
+
 ## License
 
 Use and adapt as you like.
