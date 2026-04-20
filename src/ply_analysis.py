@@ -91,7 +91,7 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
 def main():
     src_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.dirname(src_dir)
-    data_path = os.path.join(base_dir, "data", "moves_200.parquet")
+    data_path = os.path.join(base_dir, "data", "moves_500.parquet")
     figures_dir = os.path.join(base_dir, "src/figures/ply_analysis") # Dedicated subdir
     
     if not os.path.exists(figures_dir):

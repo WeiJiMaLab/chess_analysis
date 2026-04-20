@@ -84,7 +84,7 @@ def plot_quad_view(df: pd.DataFrame):
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
     
     # 1. Density [0, 0]
-    axes[0, 0].hexbin(df["voc_sqrt"], df["ln_move_time"], gridsize=30, cmap="Purples", mincnt=1)
+    axes[0, 0].hexbin(df["voc_sqrt"], df["ln_move_time"], gridsize=20, cmap="Purples", mincnt=1)
     sns.regplot(x="voc_sqrt", y="ln_move_time", data=df, scatter=False, color="indigo", ax=axes[0, 0])
     axes[0, 0].set_xlabel(r"$\sqrt{VOC}$", fontsize=FONT_SIZE_LABEL)
     axes[0, 0].set_ylabel(r"$\ln(T)$", fontsize=FONT_SIZE_LABEL)
@@ -137,7 +137,7 @@ if __name__ == "__main__":
         df_results = pd.read_csv(RESULTS_FILE)
         
         # Merge with parquet to get correct plys (if they were 0 or missing)
-        parquet_path = "data/moves_200.parquet"
+        parquet_path = "data/moves_500.parquet"
         if os.path.exists(parquet_path):
             print(f"Merging with {parquet_path} to recover correct move plys...")
             df_parquet = pd.read_parquet(parquet_path)[["board_position", "move_ply"]].drop_duplicates()

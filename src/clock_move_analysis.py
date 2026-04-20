@@ -14,11 +14,11 @@ POSITIVE_COLOR = "#2ecc71"
 
 def load_and_preprocess():
     """Load data and compute natural-log features."""
-    if not os.path.exists("data/moves_200.parquet"):
-        print("Error: data/moves_200.parquet not found. Run load_games.py first.")
+    if not os.path.exists("data/moves_500.parquet"):
+        print("Error: data/moves_500.parquet not found. Run load_games.py first.")
         return None
     
-    df = pd.read_parquet("data/moves_200.parquet")
+    df = pd.read_parquet("data/moves_500.parquet")
     
     # 1. Calculate player_time_left
     df = df.sort_values(["gid", "move_ply"]).copy()
@@ -65,7 +65,7 @@ def analyze_naive_trend(df: pd.DataFrame):
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
     
     # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_time"], gridsize=40, cmap="Blues", mincnt=1)
+    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_time"], gridsize=25, cmap="Blues", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_time", data=df, scatter=False, color=MAIN_COLOR, ax=axes[0, 0])
     axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
     axes[0, 0].set_ylabel(r"$\ln(T)$", fontsize=FONT_SIZE_LABEL)
@@ -106,7 +106,7 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
 
     # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid_ply"], gridsize=40, cmap="Reds", mincnt=1)
+    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid_ply"], gridsize=25, cmap="Reds", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_resid_ply", data=df, scatter=False, color="firebrick", ax=axes[0, 0])
     axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
     axes[0, 0].set_ylabel(r"$\ln T - \ln \text{med}_{ply}$", fontsize=FONT_SIZE_LABEL)
@@ -158,7 +158,7 @@ def analyze_controlled_trend(df: pd.DataFrame):
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
 
     # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid"], gridsize=40, cmap="Greens", mincnt=1)
+    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid"], gridsize=25, cmap="Greens", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_resid", data=df, scatter=False, color=POSITIVE_COLOR, ax=axes[0, 0])
     axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
     axes[0, 0].set_ylabel(r"$\ln T - \ln med_{player} - \ln med_{ply}$", fontsize=FONT_SIZE_LABEL)
