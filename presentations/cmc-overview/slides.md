@@ -220,7 +220,9 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
     <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>
     Accounting for both player identity and game stage resolves the paradox.
     <br><br>
-    <div class="text-success font-bold text-2xl">$\beta \approx 0.54$</div>
+    <div class="text-success font-bold text-2xl">
+      $\beta \approx 0.54$
+    </div>
     A 10% increase in clock time leads to a ~5.4% increase in the thinking budget.
   </div>
 </div>
@@ -236,6 +238,6 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
     <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
     <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
     <br><br>
-    <b>$\ln(T) \propto \sqrt{VOC}$</b>: Humans spend the most "thought-capital" on positions where depth matters most.
+    $\ln(T) \propto \sqrt{\text{VOC}}$: Humans spend the most "thought-capital" on positions where depth matters most.
   </div>
 </div>
