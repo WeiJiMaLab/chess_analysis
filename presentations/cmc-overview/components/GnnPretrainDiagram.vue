@@ -3,13 +3,13 @@
     <svg viewBox="0 0 1000 440" xmlns="http://www.w3.org/2000/svg" class="pretrain-svg">
       <defs>
         <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" class="text-secondary" />
+          <polygon points="0 0, 10 3.5, 0 7" class="fill-secondary" />
         </marker>
         <marker id="arrowhead-success" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" class="text-success" />
+          <polygon points="0 0, 10 3.5, 0 7" class="fill-success" />
         </marker>
         <marker id="arrowhead-accent" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" class="text-accent" />
+          <polygon points="0 0, 10 3.5, 0 7" class="fill-accent" />
         </marker>
       </defs>
 
@@ -96,55 +96,61 @@
       </g>
 
       <!-- STAGE 3: WDL VECTORS -->
-      <g transform="translate(640, 30)">
-        <text x="80" y="-15" text-anchor="middle" class="label-main text-success">ACTUAL WDL (Y)</text>
-        <rect x="0" y="0" width="160" height="130" rx="10" fill="var(--bg-neutral)" stroke="var(--color-success)" stroke-dasharray="4 4" />
-        <g transform="translate(20, 20)">
-          <text x="-15" y="15" class="txt-id">v₁</text>
-          <rect x="0" y="0" width="40" height="20" fill="var(--color-success)" rx="2" />
-          <rect x="42" y="0" width="40" height="20" fill="#f59e0b" rx="2" opacity="0.3" /> <!-- Amber for draw is fine -->
-          <rect x="84" y="0" width="40" height="20" fill="var(--color-danger)" rx="2" opacity="0.1" />
-          <text x="-15" y="50" class="txt-id">v₂</text>
-          <rect x="0" y="35" width="20" height="20" fill="var(--color-success)" rx="2" />
-          <rect x="22" y="35" width="80" height="20" fill="#f59e0b" rx="2" />
-          <rect x="104" y="35" width="20" height="20" fill="var(--color-danger)" rx="2" />
-          <text x="-15" y="85" class="txt-id">v₃</text>
-          <rect x="0" y="70" width="10" height="20" fill="var(--color-success)" rx="2" opacity="0.1" />
-          <rect x="12" y="70" width="20" height="20" fill="#f59e0b" rx="2" opacity="0.3" />
-          <rect x="34" y="70" width="90" height="20" fill="var(--color-danger)" rx="2" />
+      <g transform="translate(640, 20)">
+        <text x="90" y="-15" text-anchor="middle" class="label-main text-success">ACTUAL WDL (Y)</text>
+        <rect x="0" y="0" width="180" height="150" rx="12" fill="var(--bg-neutral)" stroke="var(--color-success)" stroke-dasharray="4 4" />
+        <g transform="translate(25, 25)">
+          <text x="-15" y="18" class="txt-id">v₁</text>
+          <rect x="0" y="0" width="50" height="24" fill="var(--color-success)" rx="4" />
+          <rect x="54" y="0" width="50" height="24" fill="var(--color-accent)" rx="4" opacity="0.2" /> 
+          <rect x="108" y="0" width="22" height="24" fill="var(--color-danger)" rx="4" opacity="0.1" />
+          
+          <text x="-15" y="60" class="txt-id">v₂</text>
+          <rect x="0" y="42" width="25" height="24" fill="var(--color-success)" rx="4" />
+          <rect x="29" y="42" width="80" height="24" fill="var(--color-accent)" rx="4" opacity="0.3" />
+          <rect x="113" y="42" width="25" height="24" fill="var(--color-danger)" rx="4" />
+          
+          <text x="-15" y="102" class="txt-id">v₃</text>
+          <rect x="0" y="84" width="15" height="24" fill="var(--color-success)" rx="4" opacity="0.1" />
+          <rect x="19" y="84" width="25" height="24" fill="var(--color-accent)" rx="4" opacity="0.2" />
+          <rect x="48" y="84" width="82" height="24" fill="var(--color-danger)" rx="4" />
         </g>
       </g>
 
       <g transform="translate(640, 250)">
-        <text x="80" y="-15" text-anchor="middle" class="label-main text-accent">PREDICTED WDL (Ŷ)</text>
-        <rect x="0" y="0" width="160" height="130" rx="10" fill="var(--bg-neutral)" stroke="var(--color-accent)" />
-        <g transform="translate(20, 20)">
-          <text x="-15" y="15" class="txt-id">v₁</text>
-          <rect x="0" y="0" width="30" height="20" fill="var(--color-accent)" rx="2" />
-          <rect x="32" y="0" width="50" height="20" fill="var(--color-accent)" rx="2" opacity="0.6" />
-          <rect x="84" y="0" width="40" height="20" fill="var(--color-accent)" rx="2" opacity="0.2" />
-          <text x="-15" y="50" class="txt-id">v₂</text>
-          <rect x="0" y="35" width="40" height="20" fill="var(--color-accent)" rx="2" />
-          <rect x="42" y="35" width="60" height="20" fill="var(--color-accent)" rx="2" opacity="0.8" />
-          <rect x="104" y="35" width="20" height="20" fill="var(--color-accent)" rx="2" opacity="0.4" />
-          <text x="-15" y="85" class="txt-id">v₃</text>
-          <rect x="0" y="70" width="20" height="20" fill="var(--color-accent)" rx="2" opacity="0.2" />
-          <rect x="22" y="70" width="30" height="20" fill="var(--color-accent)" rx="2" opacity="0.5" />
-          <rect x="54" y="70" width="70" height="20" fill="var(--color-accent)" rx="2" />
+        <text x="90" y="-15" text-anchor="middle" class="label-main text-accent">PREDICTED WDL (Ŷ)</text>
+        <rect x="0" y="0" width="180" height="150" rx="12" fill="var(--bg-neutral)" stroke="var(--color-accent)" />
+        <g transform="translate(25, 25)">
+          <text x="-15" y="18" class="txt-id">v₁</text>
+          <rect x="0" y="0" width="40" height="24" fill="var(--color-accent)" rx="4" />
+          <rect x="44" y="0" width="60" height="24" fill="var(--color-accent)" rx="4" opacity="0.6" />
+          <rect x="108" y="0" width="30" height="24" fill="var(--color-accent)" rx="4" opacity="0.2" />
+          
+          <text x="-15" y="60" class="txt-id">v₂</text>
+          <rect x="0" y="42" width="50" height="24" fill="var(--color-accent)" rx="4" />
+          <rect x="54" y="42" width="60" height="24" fill="var(--color-accent)" rx="4" opacity="0.8" />
+          <rect x="118" y="42" width="20" height="24" fill="var(--color-accent)" rx="4" opacity="0.4" />
+          
+          <text x="-15" y="102" class="txt-id">v₃</text>
+          <rect x="0" y="84" width="30" height="24" fill="var(--color-accent)" rx="4" opacity="0.2" />
+          <rect x="34" y="84" width="40" height="24" fill="var(--color-accent)" rx="4" opacity="0.5" />
+          <rect x="78" y="84" width="60" height="24" fill="var(--color-accent)" rx="4" />
         </g>
       </g>
 
       <!-- LOSS COMPONENT -->
       <g transform="translate(850, 160)">
-        <rect x="0" y="0" width="130" height="100" rx="15" class="box-loss" />
-        <text x="65" y="45" text-anchor="middle" class="label-loss-title text-danger">LOSS L</text>
-        <text x="65" y="80" text-anchor="middle" class="label-sub bold" style="font-weight: 800">∑ CE(Yᵢ, Ŷᵢ)</text>
+        <rect x="0" y="0" width="140" height="110" rx="15" class="box-loss" />
+        <text x="70" y="45" text-anchor="middle" class="label-loss-title text-danger">LOSS L</text>
+        <text x="70" y="85" text-anchor="middle" class="label-sub bold" style="font-weight: 800; font-size: 14px;">∑ CE(Yᵢ, Ŷᵢ)</text>
       </g>
 
       <!-- Connections to Loss -->
-      <g stroke="var(--color-danger)" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.3">
-        <path d="M800,60 C830,60 830,140 850,150" fill="none" />
-        <path d="M800,280 C830,280 830,230 850,210" fill="none" />
+      <g stroke="var(--color-danger)" stroke-width="2" stroke-dasharray="4 4" opacity="0.4">
+        <!-- From Y to Loss -->
+        <path d="M820,95 C835,95 835,190 850,190" fill="none" />
+        <!-- From Ŷ to Loss -->
+        <path d="M820,325 C835,325 835,240 850,240" fill="none" />
       </g>
     </svg>
   </div>
@@ -152,22 +158,19 @@
 
 <style scoped>
 .pretrain-container { width: 100%; padding: 0.5rem 2rem; background: white; border-radius: 1rem; }
-.pretrain-svg { width: 100%; height: auto; font-family: 'Inter', sans-serif; }
+.pretrain-svg { width: 100%; height: auto; font-family: var(--font-body); }
 
 .box-input { fill: var(--bg-neutral); stroke: var(--border-subtle); stroke-width: 2; }
 .box-process-success { fill: var(--bg-success); stroke: var(--color-success); stroke-width: 2; }
 .box-process-accent { fill: var(--bg-accent); stroke: var(--color-accent); stroke-width: 2; }
 .box-loss { fill: var(--bg-danger); stroke: var(--color-danger); stroke-width: 2; }
 
-.label-main { font-size: 14px; font-weight: 800; letter-spacing: 0.05em; }
-.label-box { font-size: 16px; font-weight: 700; }
-.label-sub { font-size: 11px; font-weight: 500; fill: var(--color-secondary); }
-.label-loss-title { font-size: 16px; font-weight: 900; }
+.label-main { font-size: 16px; font-weight: 800; font-family: var(--font-header); letter-spacing: -0.01em; }
+.label-box { font-size: 18px; font-weight: 700; font-family: var(--font-header); }
+.label-sub { font-size: 12px; font-weight: 500; fill: var(--color-secondary); }
+.label-loss-title { font-size: 18px; font-weight: 900; font-family: var(--font-header); }
 
-.txt-id { font-size: 11px; font-weight: 800; fill: var(--color-secondary); }
-.text-accent { fill: var(--color-accent); }
-.text-success { fill: var(--color-success); }
-.text-danger { fill: var(--color-danger); }
+.txt-id { font-size: 12px; font-weight: 800; fill: var(--color-secondary); }
 
 /* Oracle Animation Sequence: Edge then Node, 5s Cycle */
 .grow-branch-seq1 { animation: grow-path1 5s infinite; }

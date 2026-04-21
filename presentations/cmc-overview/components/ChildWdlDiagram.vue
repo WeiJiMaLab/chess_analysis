@@ -60,30 +60,33 @@
 </template>
 
 <style scoped>
-.child-wdl-diag { width: 100%; font-family: 'Inter', sans-serif; }
+.child-wdl-diag { width: 100%; font-family: var(--font-body); }
 
 .panel {
   background: var(--bg-neutral);
-  padding: 2rem;
-  border-radius: 1.25rem;
+  padding: 2.5rem;
+  border-radius: 1.5rem;
   border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   align-items: center;
   position: relative;
+  transition: all 0.3s ease;
 }
 
 .panel.highlight {
-  background: var(--bg-accent);
+  background: white;
   border-color: var(--color-accent);
-  box-shadow: 0 20px 25px -5px rgba(99, 102, 241, 0.05);
+  border-width: 2px;
+  box-shadow: 0 20px 40px -10px rgba(99, 102, 241, 0.08);
 }
 
 .panel-header {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
+  font-family: var(--font-header);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.05em;
   margin-bottom: 1rem;
   text-align: center;
   color: var(--color-secondary);
@@ -94,12 +97,11 @@
 }
 
 .panel-subtitle {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 800;
   text-transform: none;
-  letter-spacing: normal;
-  margin-top: 0.25rem;
-  font-style: italic;
+  letter-spacing: -0.01em;
+  margin-top: 0.5rem;
 }
 
 .text-danger { color: var(--color-danger); fill: var(--color-danger); }

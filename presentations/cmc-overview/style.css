@@ -1,43 +1,51 @@
-:root {
-  /* Core Color Palette (5 Main Colors) */
-  --color-primary: #1e293b;   /* Slate-800: Main Text & Headers */
-  --color-secondary: #64748b; /* Slate-500: Sub-labels & Muted Text */
-  --color-accent: #6366f1;    /* Indigo-500: GNN & Logic Passes */
-  --color-success: #10b981;   /* Emerald-500: Oracle & Targets */
-  --color-danger: #f43f5e;    /* Rose-500: Loss & Halt Decisions */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
-  /* Derived Backgrounds (using same hues for cohesion) */
+:root {
+  /* Sophisticated 5-Color Palette - Less 'Primary', More Tailored */
+  --color-primary: #0f172a;    /* Slate-950: Deep Navy */
+  --color-secondary: #475569;  /* Slate-600: Muted Gray */
+  --color-accent: #6366f1;     /* Indigo-500: Vibrant yet stable */
+  --color-accent-dark: #3730a3; /* Indigo-800 */
+  --color-accent-light: #a5b4fc; /* Indigo-300 */
+  --color-success: #0d9488;    /* Teal-600: Sophisticated Growth */
+  --color-danger: #e11d48;     /* Rose-600: Energetic Warning */
+
+  /* Refined Background Tints */
   --bg-accent: #f5f3ff;
-  --bg-success: #ecfdf5;
+  --bg-success: #f0fdfa;
   --bg-danger: #fff1f2;
   --bg-neutral: #f8fafc;
-  --bg-primary: #f1f5f9; /* Subtle light slate instead of dark */
+  --bg-primary: #f1f5f9;
   
   /* Borders */
   --border-subtle: #e2e8f0;
+
+  /* Typography System */
+  --font-header: 'Outfit', sans-serif;
+  --font-body: 'Inter', sans-serif;
 }
 
-/* Global Slidev Adjustments */
-.slidev-layout.default,
-.slidev-layout.section,
-.slidev-layout.center,
-.slidev-layout.two-columns {
-  padding: 3.5rem 5rem !important;
+/* Global Styles */
+.slidev-layout {
+  font-family: var(--font-body);
+  color: var(--color-primary);
+  -webkit-font-smoothing: antialiased;
 }
 
-h1 {
-  @apply text-3xl font-bold mb-6 tracking-tight;
+h1, h2, h3, h4, .font-header {
+  font-family: var(--font-header);
+  font-weight: 800;
+  letter-spacing: -0.03em;
   color: var(--color-primary);
 }
 
-h2 {
-  @apply text-xl font-semibold mb-4;
-  color: var(--color-secondary);
-}
+h1 { @apply text-4xl mb-8; }
+h2 { @apply text-2xl mb-4 font-semibold text-slate-600; }
 
 p, li {
   @apply text-lg leading-relaxed;
   color: var(--color-primary);
+  font-weight: 400;
 }
 
 .caption {
@@ -46,33 +54,47 @@ p, li {
 }
 
 .takeaway {
-  @apply mt-6 p-4 border-l-4 rounded-r-lg font-medium;
+  @apply mt-8 p-6 border-l-4 rounded-xl font-medium shadow-sm;
   background-color: var(--bg-neutral);
   border-color: var(--color-accent);
   color: var(--color-primary);
 }
 
-/* Helper classes for SVG components */
+/* SVG Component Styles */
+.label { font-size: 13px; font-weight: 600; font-family: var(--font-body); }
+.label-bold { font-size: 14px; font-weight: 700; font-family: var(--font-header); }
+.label-large { font-size: 16px; font-weight: 800; font-family: var(--font-header); }
+.label-xl { font-size: 20px; font-weight: 900; font-family: var(--font-header); }
+.tiny { font-size: 10px; font-weight: 500; font-family: var(--font-body); }
+
+/* SVG Colors */
 .text-primary { fill: var(--color-primary); color: var(--color-primary); }
 .text-secondary { fill: var(--color-secondary); color: var(--color-secondary); }
 .text-accent { fill: var(--color-accent); color: var(--color-accent); }
+.text-accent-dark { fill: var(--color-accent-dark); color: var(--color-accent-dark); }
+.text-accent-light { fill: var(--color-accent-light); color: var(--color-accent-light); }
 .text-success { fill: var(--color-success); color: var(--color-success); }
 .text-danger { fill: var(--color-danger); color: var(--color-danger); }
 
-/* Filled Box Styles (Light background + Crisp Border) */
+/* SVG Boxes */
 .bg-accent { fill: var(--bg-accent); stroke: var(--color-accent); stroke-width: 1.5; }
+.bg-accent-dark { fill: var(--bg-accent); stroke: var(--color-accent-dark); stroke-width: 1.5; }
+.bg-accent-light { fill: var(--bg-accent); stroke: var(--color-accent-light); stroke-width: 1.5; }
 .bg-success { fill: var(--bg-success); stroke: var(--color-success); stroke-width: 1.5; }
 .bg-danger { fill: var(--bg-danger); stroke: var(--color-danger); stroke-width: 1.5; }
 .bg-neutral { fill: var(--bg-neutral); stroke: var(--border-subtle); stroke-width: 1.5; }
 .bg-primary { fill: var(--bg-primary); stroke: var(--color-primary); stroke-width: 1.5; }
 
-/* Direct Fill classes (if needed without borders) */
+.fill-primary { fill: var(--color-primary); }
+.fill-secondary { fill: var(--color-secondary); }
 .fill-accent { fill: var(--color-accent); }
+.fill-accent-dark { fill: var(--color-accent-dark); }
+.fill-accent-light { fill: var(--color-accent-light); }
 .fill-success { fill: var(--color-success); }
 .fill-danger { fill: var(--color-danger); }
-.fill-primary { fill: var(--color-primary); }
+.fill-neutral { fill: var(--bg-neutral); }
 
-/* Utility classes for slides.md */
+/* Slides.md Utilities */
 .text-accent { color: var(--color-accent); }
 .text-success { color: var(--color-success); }
 .text-danger { color: var(--color-danger); }

@@ -114,7 +114,7 @@ $$ R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k $$
 
 # 6. Training Stage 2: Policy (The DP Oracle)
 
-Identifying the **"Economy of Thought"** inflection point. The model learns to halt when the expected **net reward (R)** begins to drop, rather than just maximizing raw value (V).
+Identifying the **"Economy of Thought"** inflection point. The model learns to halt when the expected **net reward $R$** begins to drop, rather than just maximizing raw value $V$.
 
 <div class="mt-8">
   <PolicyPretrainDiagram />
@@ -161,7 +161,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 <div class="grid grid-cols-2 gap-12 mt-12 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/move_time_distribution.png" />
   
-  <div class="takeaway border-slate-300 bg-slate-50/50 text-base py-6">
+  <div class="takeaway border-secondary bg-neutral-soft text-base py-6">
     <b>Key Takeaway:</b><br><br>
     Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
     <br><br>

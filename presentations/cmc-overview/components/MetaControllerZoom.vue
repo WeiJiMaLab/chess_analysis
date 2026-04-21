@@ -1,159 +1,161 @@
 <script setup lang="ts">
 /**
  * Detailed "Under the Hood" View of the Meta-Controller.
- * Refined geometry: moved subplot to left, removed redundant arrows.
+ * High-fidelity schematic for Node Representation and Architecture.
  */
 </script>
 
 <template>
   <div class="zoom-container">
-    <svg viewBox="0 0 1020 340" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 1050 360" xmlns="http://www.w3.org/2000/svg" class="zoom-svg">
       <defs>
         <marker id="arr-m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-          <path d="M0,0 L8,4 L0,8 Z" class="text-secondary" />
+          <path d="M0,0 L8,4 L0,8 Z" class="fill-secondary" />
         </marker>
         <marker id="arr-i" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-          <path d="M0,0 L8,4 L0,8 Z" class="text-accent" />
+          <path d="M0,0 L8,4 L0,8 Z" class="fill-accent" />
         </marker>
-        <marker id="arr-mini-p" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
-          <path d="M0,0 L5,2.5 L0,5 Z" class="text-secondary" />
+        <marker id="arr-mini-p" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" class="fill-secondary" />
         </marker>
       </defs>
 
-      <!-- SUBPLOT: Node Encoding Detail (Upper Left) -->
-      <g transform="translate(10, -15)">
-        <rect x="0" y="0" width="310" height="60" rx="8" class="bg-neutral" stroke-width="1" />
-        <text x="10" y="15" class="title-tiny uppercase bold opacity-60">Node Representation Detail</text>
+      <!-- SUBPLOT: Node Representation Detail (Upper Left - Major Focal Point) -->
+      <g transform="translate(10, 10)">
+        <rect x="0" y="0" width="560" height="110" rx="16" class="bg-neutral" stroke-width="2" />
+        <text x="15" y="24" class="subplot-title uppercase text-accent">Feature Encoding Detail (Serialized State)</text>
         
         <!-- Board -->
-        <rect x="10" y="25" width="70" height="25" rx="4" class="box hollow" />
-        <text x="45" y="41" text-anchor="middle" class="label-tiny bold">Board (s)</text>
-
-        <line x1="80" y1="37.5" x2="110" y2="37.5" class="edge" stroke-width="1" marker-end="url(#arr-mini-p)" />
-        <text x="95" y="32" text-anchor="middle" class="tiny-label-mini salient">Leela</text>
+        <g transform="translate(20, 50)">
+          <rect x="0" y="0" width="130" height="45" rx="8" class="box hollow" />
+          <text x="65" y="28" text-anchor="middle" class="subplot-label">Board State (s)</text>
+          
+          <line x1="130" y1="22.5" x2="185" y2="22.5" class="edge" stroke-width="2" marker-end="url(#arr-mini-p)" />
+          <text x="157" y="14" text-anchor="middle" class="subplot-tiny bold salient">Leela-MCTS</text>
+        </g>
 
         <!-- MLP -->
-        <rect x="110" y="25" width="80" height="25" rx="4" class="box bg-primary" />
-        <text x="150" y="41" text-anchor="middle" class="label-tiny bold">MLP Encoder</text>
+        <g transform="translate(205, 50)">
+          <rect x="0" y="0" width="160" height="45" rx="8" class="bg-primary" />
+          <text x="80" y="28" text-anchor="middle" class="subplot-label">MLP State-Encoder</text>
 
-        <line x1="190" y1="37.5" x2="220" y2="37.5" class="edge" stroke-width="1" marker-end="url(#arr-mini-p)" stroke="var(--color-accent)" />
+          <line x1="160" y1="22.5" x2="215" y2="22.5" class="edge" stroke-width="2" marker-end="url(#arr-mini-p)" stroke="var(--color-accent)" />
+          <text x="187" y="14" text-anchor="middle" class="subplot-tiny text-accent bold uppercase">Embedding</text>
+        </g>
         
         <!-- Result x -->
-        <rect x="220" y="25" width="80" height="25" rx="4" class="box hollow" stroke="var(--color-accent)" />
-        <text x="260" y="41" text-anchor="middle" class="label-tiny text-accent bold">Vector (x)</text>
+        <g transform="translate(420, 50)">
+          <rect x="0" y="0" width="120" height="45" rx="8" class="box hollow" stroke="var(--color-accent)" stroke-width="2.5" />
+          <text x="60" y="28" text-anchor="middle" class="subplot-label text-accent bold">Input Vector (x)</text>
+        </g>
       </g>
 
       <!-- MAIN ARCHITECTURE -->
-      <g transform="translate(0, 70)">
+      <g transform="translate(0, 140)">
         <!-- 1. External Board State -->
-        <g transform="translate(10, 80)">
-          <rect x="0" y="0" width="80" height="40" rx="6" class="box hollow" />
-          <text x="40" y="25" text-anchor="middle" class="label-bold">Board (s)</text>
-          <line x1="80" y1="20" x2="120" y2="20" class="edge" marker-end="url(#arr-m)" />
+        <g transform="translate(10, 75)">
+          <rect x="0" y="0" width="100" height="50" rx="10" class="box hollow" />
+          <text x="50" y="32" text-anchor="middle" class="label-bold">Board (s)</text>
+          <line x1="100" y1="25" x2="150" y2="25" class="edge" marker-end="url(#arr-m)" />
         </g>
 
         <!-- 2. Leela (Planner) creating the Tree -->
-        <g transform="translate(110, 60)">
-          <rect x="0" y="0" width="100" height="80" rx="8" class="box bg-primary" />
-          <text x="50" y="30" text-anchor="middle" class="label bold">Leela</text>
-          <text x="50" y="50" text-anchor="middle" class="tiny text-secondary opacity-70">(MCTS)</text>
+        <g transform="translate(150, 55)">
+          <rect x="0" y="0" width="130" height="90" rx="12" class="bg-primary" />
+          <text x="65" y="40" text-anchor="middle" class="label-large">Leela</text>
+          <text x="65" y="65" text-anchor="middle" class="tiny text-secondary">(MCTS Planner)</text>
           
-          <path d="M100 40 L170 40" class="edge" marker-end="url(#arr-m)" />
-          <text x="135" y="32" text-anchor="middle" class="tiny italic salient">Tree (T)</text>
+          <path d="M130 45 L190 45" class="edge" marker-end="url(#arr-m)" />
+          <text x="160" y="35" text-anchor="middle" class="label italic text-secondary salient">Tree (T)</text>
         </g>
 
         <!-- 3. Meta-Controller Wrapper -->
-        <g transform="translate(260, 25)">
-          <rect x="0" y="0" width="535" height="150" rx="12" fill="none" stroke="var(--color-accent)" stroke-width="1.5" stroke-dasharray="6" />
-          <text x="525" y="15" text-anchor="end" class="title-tiny-alt uppercase salient">Meta-Controller Submodules</text>
+        <g transform="translate(320, 10)">
+          <rect x="0" y="0" width="620" height="180" rx="20" fill="none" stroke="var(--color-accent)" stroke-width="2.5" stroke-dasharray="8" />
+          <text x="605" y="22" text-anchor="end" class="subplot-title uppercase salient">Meta-Controller Submodules</text>
 
           <!-- Input Node Feed -->
-          <g transform="translate(20, 35)">
-            <rect x="0" y="0" width="100" height="80" rx="8" class="box hollow-accent" />
-            <text x="50" y="35" text-anchor="middle" class="label text-accent bold">Serialized</text>
-            <text x="50" y="50" text-anchor="middle" class="label text-accent bold">Input (x)</text>
-            <text x="50" y="65" text-anchor="middle" class="tiny text-accent salient">Nodes of T</text>
+          <g transform="translate(30, 45)">
+            <rect x="0" y="0" width="130" height="90" rx="12" class="box hollow-accent" />
+            <text x="65" y="35" text-anchor="middle" class="label-bold text-accent">Serialized</text>
+            <text x="65" y="55" text-anchor="middle" class="label-bold text-accent">Input (x)</text>
+            <text x="65" y="75" text-anchor="middle" class="tiny text-accent salient">Nodes of T</text>
 
-            <line x1="100" y1="40" x2="140" y2="40" class="edge" marker-end="url(#arr-i)" />
+            <line x1="130" y1="45" x2="180" y2="45" class="edge" marker-end="url(#arr-i)" />
           </g>
 
           <!-- GNN Backbone -->
-          <g transform="translate(160, 30)">
-            <rect x="0" y="0" width="120" height="90" rx="10" class="box bg-accent" />
-            <text x="60" y="40" text-anchor="middle" class="label text-accent bold">GNN</text>
-            <text x="60" y="60" text-anchor="middle" class="label text-accent bold">Backbone</text>
-            <text x="60" y="75" text-anchor="middle" class="tiny text-accent salient">(Bi-Sweep)</text>
+          <g transform="translate(210, 40)">
+            <rect x="0" y="0" width="150" height="100" rx="14" class="bg-accent" />
+            <text x="75" y="40" text-anchor="middle" class="label-large text-accent">GNN</text>
+            <text x="75" y="65" text-anchor="middle" class="label-large text-accent">Backbone</text>
+            <text x="75" y="85" text-anchor="middle" class="tiny text-accent salient">(Bi-Sweep)</text>
 
-            <line x1="120" y1="45" x2="200" y2="45" class="edge" marker-end="url(#arr-i)" />
-            <text x="215" y="38" text-anchor="middle" class="tiny-i bold text-secondary">h_root</text>
+            <line x1="150" y1="50" x2="230" y2="50" class="edge" marker-end="url(#arr-i)" />
+            <text x="250" y="42" text-anchor="middle" class="label-bold text-secondary">h_root</text>
           </g>
 
           <!-- Readout Head -->
-          <g transform="translate(360, 20)">
-            <rect x="0" y="0" width="160" height="110" rx="10" class="box bg-success" />
-            <text x="80" y="45" text-anchor="middle" class="label text-success bold">Readout Head</text>
-            <text x="80" y="65" text-anchor="middle" class="label text-success bold">(Halt Controller)</text>
-            <text x="80" y="85" text-anchor="middle" class="tiny text-success salient">Logistic/Policy Hub</text>
+          <g transform="translate(420, 30)">
+            <rect x="0" y="0" width="180" height="120" rx="14" class="bg-success" />
+            <text x="90" y="45" text-anchor="middle" class="label-large text-success">Readout Head</text>
+            <text x="90" y="75" text-anchor="middle" class="label-bold text-success">(Halt Controller)</text>
+            <text x="90" y="100" text-anchor="middle" class="tiny text-success salient">Logistic/Policy Hub</text>
           </g>
 
           <!-- Readout OUT connection -->
-          <line x1="520" y1="70" x2="550" y2="70" class="edge" stroke="var(--color-success)" marker-end="url(#arr-m)" />
+          <line x1="600" y1="90" x2="640" y2="90" class="edge" stroke="var(--color-success)" marker-end="url(#arr-m)" stroke-width="2" />
 
           <!-- Branch Point Junction -->
-          <g transform="translate(555, 55)">
-            <rect x="0" y="0" width="30" height="30" rx="15" class="box junction" />
-            <text x="15" y="20" text-anchor="middle" class="label bold">0/1</text>
+          <g transform="translate(645, 70)">
+            <circle cx="20" cy="20" r="20" class="box junction" />
+            <text x="20" y="26" text-anchor="middle" class="label-bold">0/1</text>
             
             <!-- Arrow to ACT -->
-            <line x1="30" y1="15" x2="80" y2="15" class="edge" marker-end="url(#arr-m)" />
-            <text x="85" y="19" class="label bold-large">ACT</text>
+            <line x1="40" y1="20" x2="90" y2="20" class="edge" marker-end="url(#arr-m)" stroke-width="2" />
+            <text x="65" y="12" text-anchor="middle" class="tiny bold text-primary">1</text>
+            <text x="95" y="26" class="label-large uppercase">ACT</text>
           </g> 
         </g>
 
         <!-- RECURSION Path -->
-        <path d="M830 110 L830 240 L160 240 L160 142" fill="none" class="edge loop-path" marker-end="url(#arr-m)" />
-        <text x="492" y="234" text-anchor="middle" class="label bold text-secondary salient">CONTINUE: Expand More Nodes</text>
+        <path d="M1000 100 L1000 260 L215 260 L215 147" fill="none" class="edge loop-path" marker-end="url(#arr-m)" stroke-width="2.5" />
+        <text x="607" y="254" text-anchor="middle" class="label-large text-secondary salient uppercase letter-spacing">0: Continue Search (Expand More Nodes)</text>
       </g>
     </svg>
   </div>
 </template>
 
 <style scoped>
-.zoom-container {
-  width: 100%;
-  padding: 1rem 0;
-  background: white;
-}
-svg {
-  width: 100%;
-  height: auto;
-  font-family: 'Inter', sans-serif;
-  overflow: visible;
-}
+.zoom-container { width: 100%; padding: 1.5rem 0; background: white; }
+.zoom-svg { width: 100%; height: auto; font-family: var(--font-body); overflow: visible; }
 .box { stroke-width: 1.5; }
-.junction { fill: #fff; stroke: var(--color-primary); stroke-width: 1.5; }
+.junction { fill: #fff; stroke: var(--color-primary); stroke-width: 2; }
 .hollow { fill: #fff; stroke: var(--border-subtle); }
 .hollow-accent { fill: var(--bg-accent); stroke: var(--color-accent); stroke-width: 2; }
-.filled-primary { fill: var(--color-primary); stroke: none; }
-.fill-accent { fill: var(--color-accent); stroke: var(--color-accent); }
-.fill-success { fill: var(--color-success); stroke: var(--color-success); }
-.white { fill: #fff; }
-.bold { font-weight: 700; }
-.bold-large { font-weight: 800; }
-.label { font-size: 11px; fill: var(--color-primary); }
-.label-bold { font-size: 11px; font-weight: 700; fill: var(--color-primary); }
-.label-tiny { font-size: 8px; fill: var(--color-primary); }
-.text-secondary { fill: var(--color-secondary); }
-.tiny { font-size: 9px; }
-.tiny-label-mini { font-size: 6px; font-weight: 800; fill: var(--color-secondary); text-transform: uppercase; }
-.title-tiny { font-size: 7px; fill: var(--color-accent); }
-.title-tiny-alt { font-size: 9px; font-weight: 800; fill: var(--color-accent); }
-.text-accent { fill: var(--color-accent); }
-.tiny-i { font-size: 9px; font-style: italic; }
-.edge { stroke: var(--color-secondary); stroke-width: 1.5; fill: none; }
-.loop-path { stroke: var(--color-secondary); stroke-width: 1.5; }
-.salient { opacity: 0.8 !important; }
-.opacity-60 { opacity: 0.6; }
+
+/* Readability Scaling */
+.label { font-size: 14px; fill: var(--color-primary); }
+.label-bold { font-size: 15px; font-weight: 700; fill: var(--color-primary); }
+.label-large { font-size: 18px; font-weight: 800; fill: var(--color-primary); font-family: var(--font-header); }
+
+.subplot-title { font-size: 16px; font-weight: 800; fill: var(--color-accent); letter-spacing: 0.05em; font-family: var(--font-header); }
+.subplot-label { font-size: 14px; font-weight: 700; fill: var(--color-primary); }
+.subplot-tiny { font-size: 11px; font-weight: 800; fill: var(--color-secondary); text-transform: uppercase; }
+
+.tiny { font-size: 11px; }
+.salient { opacity: 0.9 !important; }
 .uppercase { text-transform: uppercase; }
+.letter-spacing { letter-spacing: 0.05em; }
 .italic { font-style: italic; }
+
+.edge { stroke: var(--color-secondary); stroke-width: 1.5; fill: none; }
+.loop-path { stroke: var(--color-secondary); stroke-dasharray: 6; }
+
+.fill-secondary { fill: var(--color-secondary); }
+.fill-accent { fill: var(--color-accent); }
+.bg-neutral { fill: var(--bg-neutral); stroke: var(--border-subtle); }
+.bg-primary { fill: var(--bg-primary); stroke: var(--color-primary); }
+.bg-accent { fill: var(--bg-accent); stroke: var(--color-accent); }
+.bg-success { fill: var(--bg-success); stroke: var(--color-success); }
 </style>
