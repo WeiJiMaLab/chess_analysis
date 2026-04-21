@@ -169,7 +169,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 1. Move times are heavy-tailed
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/move_time_distribution.png" />
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/move_time_distribution.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
@@ -184,7 +184,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2a. Elasticity: The Naive Aggregate
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_standard_analysis.png" />
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_0_baseline.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">Attempt 1: Opening Theory</b><br><br>
@@ -199,7 +199,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2b. Elasticity: The Ply Paradox
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_ply_controlled.png" />
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_1_ply_fe.png" />
   
   <div class="takeaway border-danger bg-danger-soft text-sm py-4">
     <b class="text-danger uppercase tracking-wider text-xs">Attempt 2: Selection Bias</b><br><br>
@@ -214,7 +214,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2c. Elasticity: The Resolution
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_double_controlled.png" />
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_3_2way_fe.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>

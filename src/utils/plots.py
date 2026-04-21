@@ -57,10 +57,6 @@ def plot_standard_analysis_quad(
     """
     apply_poster_style()
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-    plt.suptitle(
-        f"Analysis: {_label_one_line(x_label)} vs {_label_one_line(y_label)}",
-        fontsize=FONT_SIZE_LABEL + 10,
-    )
     
     # Pre-sort and identify valid data
     df_clean = df.dropna(subset=[x_var, y_var, ply_var]).copy()

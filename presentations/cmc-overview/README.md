@@ -73,7 +73,7 @@ Figures are served from the core `chess_analysis/src/figures` directory via a sy
 
 To update the figures, run the analysis scripts from the root repository:
 ```bash
-python src/clocktime_movetime.py
+python src/fe_clocktime_movetime.py
 python src/ply_movetime.py
 python src/voc_movetime.py
 ```
