@@ -14,7 +14,7 @@ from utils import (
 
 # Poster Style Constants
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIGURE_DIR = os.path.join(base_dir, "src", "figures", "voc_analysis")
+FIGURE_DIR = os.path.join(base_dir, "src", "figures", "voc_movetime")
 
 def plot_quad_view(df: pd.DataFrame, n_games: int):
     """Generate 2x2 Quad-View for VOC analysis."""
@@ -25,7 +25,7 @@ def plot_quad_view(df: pd.DataFrame, n_games: int):
     axes[0, 0].hexbin(df["voc_sqrt"], df["ln_move_time"], gridsize=20, cmap="Purples", mincnt=1)
     sns.regplot(x="voc_sqrt", y="ln_move_time", data=df, scatter=False, color="indigo", ax=axes[0, 0])
     axes[0, 0].set_xlabel(r"$\sqrt{VOC}$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_ylabel(r"$\log(T)$", fontsize=FONT_SIZE_LABEL)
     
     # 2. Binned Trend [0, 1]
     df_sorted = df.sort_values("voc_sqrt")
@@ -35,7 +35,7 @@ def plot_quad_view(df: pd.DataFrame, n_games: int):
     metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
     plot_metrics(metrics, color="indigo", ax=axes[0, 1])
     axes[0, 1].set_xlabel(r"$\sqrt{VOC}$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
     
     # 3. Ply Stability [1, 0]
     results = []
@@ -58,7 +58,7 @@ def plot_quad_view(df: pd.DataFrame, n_games: int):
     metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
     plot_metrics(metrics_rank, color="indigo", ax=axes[1, 1])
     axes[1, 1].set_xlabel("Quantile Rank (VOC)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
     
     plt.tight_layout()
     os.makedirs(FIGURE_DIR, exist_ok=True)

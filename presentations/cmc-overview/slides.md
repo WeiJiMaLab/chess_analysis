@@ -169,13 +169,13 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 1. Move times are heavy-tailed
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clock_move_analysis/move_time_distribution.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/move_time_distribution.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
     Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
     <br><br>
-    Log-transforming to $\ln(T)$ is required to stabilize variance and isolate the behavioral signal.
+    Log-transforming to $\log(T)$ is required to stabilize variance and isolate the behavioral signal.
   </div>
 </div>
 
@@ -184,7 +184,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2a. Elasticity: The Naive Aggregate
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt1_naive_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt1_naive_trend.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">Attempt 1: Opening Theory</b><br><br>
@@ -199,7 +199,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2b. Elasticity: The Ply Paradox
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt2_ply_wise_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt2_ply_wise_trend.png" />
   
   <div class="takeaway border-danger bg-danger-soft text-sm py-4">
     <b class="text-danger uppercase tracking-wider text-xs">Attempt 2: Selection Bias</b><br><br>
@@ -214,7 +214,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2c. Elasticity: The Resolution
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt3_controlled_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt3_controlled_trend.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>
@@ -232,12 +232,12 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 3. Value of Computation (The Demand)
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/voc_analysis/voc_quad_view.png" />
+  <img class="w-full object-contain" src="/figures/voc_movetime/voc_quad_view.png" />
   
   <div class="takeaway bg-neutral-soft text-sm py-4">
     <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
     <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
     <br><br>
-    $\ln(T) \propto \sqrt{\text{VOC}}$: Humans spend the most "thought-capital" on positions where depth matters most.
+    $\log(T) \propto \sqrt{\text{VOC}}$: Humans spend the most "thought-capital" on positions where depth matters most.
   </div>
 </div>

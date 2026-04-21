@@ -33,7 +33,7 @@ def analyze_ply_effect(df: pd.DataFrame):
     df["ln_move_time"] = np.log(df["move_time"].astype(float).clip(lower=0.1))
     
     m_log = smf.ols("ln_move_time ~ move_ply + move_ply_sq", data=df).fit()
-    print("\n--- Log-Quadratic Model: ln(T) ~ move_ply + move_ply^2 ---")
+    print("\n--- Log-Quadratic Model: log(T) ~ move_ply + move_ply^2 ---")
     print(m_log.summary().tables[1])
     
     b_log, a_log = m_log.params["move_ply"], m_log.params["move_ply_sq"]
@@ -63,10 +63,10 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     plt.sca(axes[0])
     plot_metrics(metrics_raw, color=MAIN_COLOR)
     sns.regplot(x="move_ply", y="move_time", data=df_early_utils, scatter=False, 
-                order=2, color="red", label=r"$\ln(T)$ Quadratic Fit")
+                order=2, color="red", label=r"$\log(T)$ Quadratic Fit")
     
     axes[0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[0].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[0].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
     axes[0].legend(fontsize=FONT_SIZE_TICKS)
 
     # --- Plot B: Q-binned ln(T) impact ---
@@ -80,7 +80,7 @@ def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
     plt.sca(axes[1])
     plot_metrics(metrics_qbin, color=MAIN_COLOR)
     axes[1].set_xlabel("Move Ply (Quantile-binned)", fontsize=FONT_SIZE_LABEL)
-    axes[1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
 
     plt.tight_layout()
     
@@ -92,7 +92,7 @@ def main():
     src_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.dirname(src_dir)
     data_path = os.path.join(base_dir, "data", "moves_500.parquet")
-    figures_dir = os.path.join(base_dir, "src/figures/ply_analysis") # Dedicated subdir
+    figures_dir = os.path.join(base_dir, "src", "figures", "ply_movetime") # Dedicated subdir
     
     if not os.path.exists(figures_dir):
         os.makedirs(figures_dir)

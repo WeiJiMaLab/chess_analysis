@@ -136,8 +136,8 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
     - **Labels**: `22pt` (e.g. `ax.set_xlabel(..., fontsize=22)`).
     - **Ticks**: `18pt` (e.g. `plt.rcParams['xtick.labelsize'] = 18`).
 - **Mathematical Notation**:
-    - **Natural Log**: Use natural logarithms (`np.log`) universally. Label as $\ln(\cdot)$ or $\ln T$, not $\text{log}_{10}$.
-    - **Explicit Math**: Define residuals explicitly using LaTeX math in the label (e.g. $\ln T - \ln \text{med}_{ply}$).
+    - **Natural Log**: Use natural logarithms (`np.log`) universally. Label as $\log(\cdot)$ or $\log T$.
+    - **Explicit Math**: Define residuals explicitly using LaTeX math in the label (e.g. $\log T - \log \text{med}_{ply}$).
     - **Naming**: Spell out labels like "Clock Time" in full. Use $T$ or "Move Time" for the dependent variable $y$.
 
 ## Role of the code

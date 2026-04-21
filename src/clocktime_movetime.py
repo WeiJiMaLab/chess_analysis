@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
-from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR, apply_poster_style, FONT_SIZE_LABEL
+from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR, apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS
 
 # Poster Style Constants
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIGURE_DIR = os.path.join(base_dir, "src", "figures", "clock_move_analysis")
+FIGURE_DIR = os.path.join(base_dir, "src", "figures", "clocktime_movetime")
 NEGATIVE_COLOR = "#e74c3c"
 POSITIVE_COLOR = "#2ecc71"
 
@@ -47,17 +47,30 @@ def load_and_preprocess():
     return df
 
 def analyze_distribution(df: pd.DataFrame):
-    """Visualize the distribution of move times side-by-side."""
+    """Visualize the distribution of move times side-by-side with high aesthetics."""
     apply_poster_style()
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
-    sns.histplot(df["move_time"], bins=20, kde=True, color=MAIN_COLOR, alpha=0.6, ax=axes[0])
-    axes[0].set_xlabel("Move Time (s)", fontsize=FONT_SIZE_LABEL)
+    fig, axes = plt.subplots(1, 2, figsize=(24, 10))
     
-    sns.histplot(df["ln_move_time"], bins=20, kde=True, color=MAIN_COLOR, alpha=0.6, ax=axes[1])
-    axes[1].set_xlabel(r"$\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    # 1. Raw Distribution
+    sns.histplot(df["move_time"], bins=50, kde=True, color=MAIN_COLOR, alpha=0.4, ax=axes[0], element="step")
+    median_raw = df["move_time"].median()
+    axes[0].axvline(median_raw, color='red', linestyle='--', linewidth=3, label=f"Median: {median_raw:.1f}s")
+    axes[0].set_xlabel("Move Time (seconds)", fontsize=FONT_SIZE_LABEL)
+    axes[0].set_ylabel("Density", fontsize=FONT_SIZE_LABEL)
+    axes[0].legend(fontsize=FONT_SIZE_TICKS)
+    
+    # 2. Log Distribution
+    sns.histplot(df["ln_move_time"], bins=50, kde=True, color=MAIN_COLOR, alpha=0.4, ax=axes[1], element="step")
+    median_log = df["ln_move_time"].median()
+    axes[1].axvline(median_log, color='red', linestyle='--', linewidth=3, label=f"Median: {median_log:.2f}")
+    axes[1].set_xlabel(r"Normalized Move Time: $\log(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[1].set_ylabel("Density", fontsize=FONT_SIZE_LABEL)
+    axes[1].legend(fontsize=FONT_SIZE_TICKS)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(FIGURE_DIR, "move_time_distribution.png"), dpi=300, bbox_inches="tight")
+    save_path = os.path.join(FIGURE_DIR, "move_time_distribution.png")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Poster-style distribution saved: {save_path}")
     plt.close()
 
 def analyze_naive_trend(df: pd.DataFrame):
@@ -69,8 +82,8 @@ def analyze_naive_trend(df: pd.DataFrame):
     # [0, 0] Density
     axes[0, 0].hexbin(df["ln_clock"], df["ln_move_time"], gridsize=25, cmap="Blues", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_time", data=df, scatter=False, color=MAIN_COLOR, ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_ylabel(r"$\log(T)$", fontsize=FONT_SIZE_LABEL)
     
     # [0, 1] Trend by Value
     df_sorted = df.sort_values("ln_clock")
@@ -79,15 +92,15 @@ def analyze_naive_trend(df: pd.DataFrame):
     df_tmp["move_time"] = df_tmp["ln_move_time"]
     metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
     plot_metrics(metrics, color=MAIN_COLOR, ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 1] Trend by Quantile Rank
     metrics_rank = {k: list(v) for k, v in metrics.items()}
     metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
     plot_metrics(metrics_rank, color=MAIN_COLOR, ax=axes[1, 1])
     axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $\ln(T)$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 0] Information Pane
     axes[1, 0].text(0.5, 0.5, r"$\mathbf{Attempt\ 1\ (Naive)}$" + "\nNo Controls\n(Confounded)", 
@@ -110,8 +123,8 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
     # [0, 0] Density
     axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid_ply"], gridsize=25, cmap="Reds", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_resid_ply", data=df, scatter=False, color="firebrick", ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\ln T - \ln \text{med}_{ply}$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_ylabel(r"$\log T - \log \text{med}_{ply}$", fontsize=FONT_SIZE_LABEL)
 
     # [0, 1] Binned by Value
     df_sorted = df.sort_values("ln_clock")
@@ -120,8 +133,8 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
     df_tmp["move_time"] = df_tmp["ln_move_resid_ply"]
     metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
     plot_metrics(metrics, color="firebrick", ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $[\ln T - \ln \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_ylabel(r"Mean" + "\n" + r"$[\log T - \log \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 0] Ply Control (Stability)
     results = []
@@ -134,14 +147,14 @@ def analyze_ply_wise_regression(df: pd.DataFrame):
     axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color="firebrick", ecolor='lightgray', elinewidth=3, capsize=0)
     axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
     axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope ($\beta_{\ln(\text{Clock})})$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 0].set_ylabel(r"Slope" + "\n" + r"$(\beta_{\log(Clock)})$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 1] Binned by Quantile Rank
     metrics_rank = {k: list(v) for k, v in metrics.items()}
     metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
     plot_metrics(metrics_rank, color="firebrick", ax=axes[1, 1])
     axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $[\ln T - \ln \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 1].set_ylabel(r"Mean" + "\n" + r"$[\log T - \log \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
     
     plt.tight_layout()
     plt.savefig(os.path.join(FIGURE_DIR, "attempt2_ply_wise_trend.png"), dpi=300, bbox_inches="tight")
@@ -162,8 +175,8 @@ def analyze_controlled_trend(df: pd.DataFrame):
     # [0, 0] Density
     axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid"], gridsize=25, cmap="Greens", mincnt=1)
     sns.regplot(x="ln_clock", y="ln_move_resid", data=df, scatter=False, color=POSITIVE_COLOR, ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\ln T - \ln med_{player} - \ln med_{ply}$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 0].set_ylabel(r"$\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}$", fontsize=FONT_SIZE_LABEL)
 
     # [0, 1] Binned by Value
     df_sorted = df.sort_values("ln_clock")
@@ -172,8 +185,8 @@ def analyze_controlled_trend(df: pd.DataFrame):
     df_tmp["move_time"] = df_tmp["ln_move_resid"]
     metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
     plot_metrics(metrics, color=POSITIVE_COLOR, ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\ln(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $[\ln T - \ln med_{player} - \ln med_{ply}]$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
+    axes[0, 1].set_ylabel(r"Mean $[\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}]$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 0] Ply Control (Stability)
     results = []
@@ -186,14 +199,14 @@ def analyze_controlled_trend(df: pd.DataFrame):
     axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color=POSITIVE_COLOR, ecolor='lightgray', elinewidth=3, capsize=0)
     axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
     axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope ($\beta_{\ln(\text{Clock})})$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 0].set_ylabel(r"Slope" + "\n" + r"$(\beta_{\log(Clock)})$", fontsize=FONT_SIZE_LABEL)
 
     # [1, 1] Binned by Quantile Rank
     metrics_rank = {k: list(v) for k, v in metrics.items()}
     metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
     plot_metrics(metrics_rank, color=POSITIVE_COLOR, ax=axes[1, 1])
     axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $[\ln T - \ln med_{player} - \ln med_{ply}]$", fontsize=FONT_SIZE_LABEL)
+    axes[1, 1].set_ylabel(r"Mean $[\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}]$", fontsize=FONT_SIZE_LABEL)
     
     plt.tight_layout()
     plt.savefig(os.path.join(FIGURE_DIR, "attempt3_controlled_trend.png"), dpi=300, bbox_inches="tight")
