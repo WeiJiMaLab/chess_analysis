@@ -13,11 +13,11 @@ from utils import (
 
 # Poster Style Constants
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIGURE_DIR = os.path.join(base_dir, "src", "figures", "clocktime_movetime")
-POSITIVE_COLOR = "#2ecc71"
+FIGURE_DIR = os.path.join(base_dir, "src", "figures", "oppclocktime_movetime")
+OPP_COLOR = "#9b59b6" # Amethyst purple for distinction
 
 def load_and_preprocess():
-    """Load data and compute natural-log features."""
+    """Load data and compute natural-log features for opponent clock."""
     data_path = os.path.join(base_dir, "data", "moves_500.parquet")
     if not os.path.exists(data_path):
         print(f"Error: {data_path} not found.")
@@ -25,18 +25,23 @@ def load_and_preprocess():
     
     df = pd.read_parquet(data_path)
     df = df.sort_values(["gid", "move_ply"]).copy()
-    df["move_time"] = df["move_time"].fillna(0).clip(lower=0)
     
+    # Calculate player_time_left logic
+    df["move_time"] = df["move_time"].fillna(0).clip(lower=0)
     grouped = df.groupby(["gid", "player_white"])
     df["spent_prior"] = grouped["move_time"].cumsum() - df["move_time"]
     df["n_prior"] = grouped.cumcount()
     df["player_time_left"] = df["initial_clock"] - df["spent_prior"] + df["n_prior"] * df["clock_increment"]
     
+    # Calculate opponent_time_left by shifting player_time_left by -1
+    df["opponent_time_left"] = df.groupby("gid")["player_time_left"].shift(-1)
+    
+    # Filter for valid rows
     df = df[df["move_time"] > 0].copy()
-    df = df[df["player_time_left"] > 0].copy()
+    df = df[df["opponent_time_left"] > 0].copy()
     
     df["log_move_time"] = np.log(df["move_time"])
-    df["log_clock"] = np.log(df["player_time_left"])
+    df["log_opp_clock"] = np.log(df["opponent_time_left"])
     df["player_id"] = np.where(df["player_white"], df["white_id"], df["black_id"])
     
     # 3. Controls
@@ -44,7 +49,6 @@ def load_and_preprocess():
     df["log_move_resid_ply"] = df["log_move_time"] - df["ply_median"]
     
     # 4. Double Control (Player + Ply)
-    # Identifiers needed for player control
     df["side"] = np.where(df["player_white"], "white", "black")
     df["game_player"] = df["gid"].astype(str) + "_" + df["side"]
     player_medians = df.groupby("game_player")["log_move_time"].transform("median")
@@ -54,9 +58,9 @@ def load_and_preprocess():
 
 def run_mixed_effects(df: pd.DataFrame):
     """Formal Mixed Linear Effects model validation."""
-    print("\nEstimating Mixed Effects Model...")
+    print("\nEstimating Mixed Effects Model (Opponent Clock)...")
     try:
-        model = smf.mixedlm("log_move_time ~ log_clock + move_ply", df, groups=df["player_id"])
+        model = smf.mixedlm("log_move_time ~ log_opp_clock + move_ply", df, groups=df["player_id"])
         result = model.fit()
         print(result.summary())
     except Exception as e:
@@ -68,45 +72,37 @@ if __name__ == "__main__":
         
     data = load_and_preprocess()
     if data is not None:
-        # 1. Distribution
-        plot_distribution_side_by_side(
-            data,
-            log_col="log_move_time",
-            color=POSITIVE_COLOR,
-            save_path=os.path.join(FIGURE_DIR, "move_time_distribution.png"),
-        )
-        
-        # 2. Standard Analysis
-        print("Generating standard clock analysis...")
+        # 1. Standard Analysis
+        print("Generating standard opponent-clock analysis...")
         plot_standard_analysis_quad(
             data, 
-            x_var="log_clock", 
+            x_var="log_opp_clock", 
             y_var="log_move_time",
-            x_label=r"$\log(\text{Clock Time})$",
+            x_label=r"$\log(\text{Opponent Clock Time})$",
             y_label=r"$\log(T)$",
-            color=POSITIVE_COLOR,
-            save_path=os.path.join(FIGURE_DIR, "clock_standard_analysis.png")
+            color=OPP_COLOR,
+            save_path=os.path.join(FIGURE_DIR, "oppclock_standard_analysis.png")
         )
         
-        # 3. Ply-Controlled Analysis
-        print("Generating ply-controlled clock analysis...")
+        # 2. Ply-Controlled Analysis
+        print("Generating ply-controlled opponent-clock analysis...")
         plot_standard_analysis_quad(
             data, 
-            x_var="log_clock", 
+            x_var="log_opp_clock", 
             y_var="log_move_resid_ply",
-            x_label=r"$\log(\text{Clock Time})$",
+            x_label=r"$\log(\text{Opponent Clock Time})$",
             y_label=r"$\log T$" + "\n" + r"$-\,\log\,\mathrm{med}_{ply}$",
-            color="#e74c3c", # Red for ply-control phase
-            save_path=os.path.join(FIGURE_DIR, "clock_ply_controlled.png")
+            color="#e67e22", # Carrot orange 
+            save_path=os.path.join(FIGURE_DIR, "oppclock_ply_controlled.png")
         )
         
-        # 4. Double-Controlled Analysis (Ply + Player)
-        print("Generating double-controlled clock analysis...")
+        # 3. Double-Controlled Analysis (Ply + Player)
+        print("Generating double-controlled opponent-clock analysis...")
         plot_standard_analysis_quad(
             data, 
-            x_var="log_clock", 
+            x_var="log_opp_clock", 
             y_var="log_move_resid_double",
-            x_label=r"$\log(\text{Clock Time})$",
+            x_label=r"$\log(\text{Opponent Clock Time})$",
             y_label=(
                 r"$\log T$"
                 + "\n"
@@ -115,10 +111,10 @@ if __name__ == "__main__":
                 + r"$-\,\log\,\mathrm{med}_{player}$"
             ),
             color=MAIN_COLOR,
-            save_path=os.path.join(FIGURE_DIR, "clock_double_controlled.png"),
+            save_path=os.path.join(FIGURE_DIR, "oppclock_double_controlled.png"),
         )
         
-        # 5. Mixed Effects
+        # 4. Mixed Effects
         run_mixed_effects(data)
         
-        print("\n✅ All clock-time analysis posters generated successfully.")
+        print("\n\u2705 All opponent clock-time analysis posters generated successfully.")
