@@ -78,4 +78,4 @@ python src/ply_movetime.py
 python src/voc_movetime.py
 ```
 
-The slides automatically reference these at paths like `/figures/voc_movetime/voc_quad_view.png`.
+The slides automatically reference these at paths like `/figures/voc_movetime/standard_voc_single_sample.png`.

@@ -184,7 +184,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2a. Elasticity: The Naive Aggregate
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt1_naive_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_standard_analysis.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">Attempt 1: Opening Theory</b><br><br>
@@ -199,7 +199,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2b. Elasticity: The Ply Paradox
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt2_ply_wise_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_ply_controlled.png" />
   
   <div class="takeaway border-danger bg-danger-soft text-sm py-4">
     <b class="text-danger uppercase tracking-wider text-xs">Attempt 2: Selection Bias</b><br><br>
@@ -214,7 +214,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 # 2c. Elasticity: The Resolution
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/clocktime_movetime/attempt3_controlled_trend.png" />
+  <img class="w-full object-contain" src="/figures/clocktime_movetime/clock_double_controlled.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>
@@ -229,10 +229,25 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 ---
 
+# 2d. Elasticity: The Ply Impact
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/ply_movetime/ply_impact_comparison.png" />
+  
+  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">Stage of Game</b><br><br>
+    Move times exhibit a characteristic "mid-game bulge". 
+    <br><br>
+    Thinking time peaks around move 40 and then decays as the board simplifies into the endgame, independent of clock budget.
+  </div>
+</div>
+
+---
+
 # 3. Value of Computation (The Demand)
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/voc_movetime/voc_quad_view.png" />
+  <img class="w-full object-contain" src="/figures/voc_movetime/standard_voc_single_sample.png" />
   
   <div class="takeaway bg-neutral-soft text-sm py-4">
     <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
