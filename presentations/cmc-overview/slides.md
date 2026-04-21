@@ -100,14 +100,6 @@ The GNN performs representation learning over the tree using two sequential pass
   <GnnTwoSweeps />
 </div>
 
-<v-clicks>
-
-- **Initialization:** Every node begins with its state set to its feature vector: $h^{(0)} = x$.
-- **Upward (Evidence Funnel):** Children aggregate discovery into the parent via Attention + GRU.
-- **Downward (Global Broadcast):** The root's summary is broadcast back down to give branches global context.
-
-</v-clicks>
-
 ---
 
 # 4. Decision: The Halt Controller
@@ -125,21 +117,65 @@ $$ R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k $$
 
 ---
 
-# 5. Training: The Supervised Split
+# 5. Training Stage 1: Representation
 
-We use a two-stage pipeline to build an "Intuitive Engine."
+<div>
+  <GnnPretrainDiagram />
+</div>
 
-<v-clicks>
+---
 
-1. **Pre-training (GNN Backbone):** 
-   - **Task:** Predict the future (Oracle WDL) from partial trees.
-   - **Signal:** Every edge in the tree provides a training signal (**ChildWDL**).
+# ChildWDL: Calibrating the Thinking Curve
 
-2. **Policy Tuning (Halt Head):**
-   - **Task:** Solve the "Economy of Thought."
-   - **Signal:** Trained via **PPO** on live traces using the **DP Oracle** (Thinking Curve peak).
+<div class="flex flex-col items-center justify-start mt-4">
+  <div class="w-4/5">
+    <ChildWdlDiagram />
+  </div>
+</div>
 
-</v-clicks>
+---
+
+# 6. Training Stage 2: Policy (The DP Oracle)
+
+Identifying the **"Economy of Thought"** inflection point. The model learns to halt when the expected **net reward (R)** begins to drop, rather than just maximizing raw value (V).
+
+<div class="mt-8">
+  <PolicyPretrainDiagram />
+</div>
+
+---
+
+# Intuition: The DP Oracle
+
+<div class="h-full flex flex-col items-center justify-start mt-4">
+  <div class="w-full max-w-4xl">
+    <DpOracleDiagram />
+  </div>
+</div>
+
+<div class="grid grid-cols-3 gap-6 mt-8 text-sm px-8">
+  <div>
+    <b class="text-indigo-600 block mb-2">Why DP?</b>
+    Optimal search is recursive. To know if a move is right, we must reason <b>backwards</b> from terminal leaf outcomes.
+  </div>
+  <div>
+    <b class="text-indigo-600 block mb-2">Why does it work?</b>
+    We solve for $V^*(s) = \max(V, \mathbb{E}[V^*_{child}] - C)$. This defines the <b>mathematical optimum</b> for halting.
+  </div>
+  <div>
+    <b class="text-indigo-600 block mb-2">How do we train?</b>
+    We use the DP result as <b>Ground Truth</b>. The GNN's $h_i$ is mapped to this "perfect" binary decision.
+  </div>
+</div>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section III</div>
+    <h1 class="text-4xl text-slate-800">Part 3 — Empirical Results</h1>
+  </div>
+</div>
 
 ---
 
