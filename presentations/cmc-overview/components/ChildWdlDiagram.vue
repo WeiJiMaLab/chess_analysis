@@ -3,49 +3,54 @@
     <div class="grid grid-cols-2 gap-12">
       <!-- PANEL A: SELF PREDICTION -->
       <div class="panel">
-        <div class="panel-header text-slate-400">
+        <div class="panel-header">
           Naive: Self-Targeting
-          <div class="panel-subtitle text-rose-400">"What is MY value?"</div>
+          <div class="panel-subtitle text-danger">"What is MY value?"</div>
         </div>
         <svg viewBox="0 0 400 300" class="w-full h-auto">
           <g transform="translate(200, 60)">
-            <path d="M0,0 L-60,100 M0,0 L60,100" stroke="#e2e8f0" stroke-width="3" />
-            <circle cx="0" cy="0" r="22" fill="white" stroke="#94a3b8" stroke-width="4" />
-            <circle cx="-60" cy="100" r="14" fill="white" stroke="#cbd5e1" stroke-width="2.5" />
-            <circle cx="60" cy="100" r="14" fill="white" stroke="#cbd5e1" stroke-width="2.5" />
+            <path d="M0,0 L-60,100 M0,0 L60,100" stroke="var(--border-subtle)" stroke-width="3" />
+            <circle cx="0" cy="0" r="22" fill="white" stroke="var(--color-secondary)" stroke-width="4" />
+            <circle cx="-60" cy="100" r="14" fill="white" stroke="var(--border-subtle)" stroke-width="2.5" />
+            <circle cx="60" cy="100" r="14" fill="white" stroke="var(--border-subtle)" stroke-width="2.5" />
 
             <!-- Pointing to self -->
-            <path d="M0,-25 L0,-10" stroke="#f43f5e" stroke-width="4" marker-end="url(#arrow-rose)" class="signal-bounce" transform="translate(0, -30)" />
+            <path d="M0,-25 L0,-10" stroke="var(--color-danger)" stroke-width="4" marker-end="url(#arrow-danger)" class="signal-bounce" transform="translate(0, -30)" />
             
             <g class="cross">
-              <line x1="-18" y1="-18" x2="18" y2="18" stroke="#f43f5e" stroke-width="5" stroke-linecap="round" />
-              <line x1="18" y1="-18" x2="-18" y2="18" stroke="#f43f5e" stroke-width="5" stroke-linecap="round" />
+              <line x1="-18" y1="-18" x2="18" y2="18" stroke="var(--color-danger)" stroke-width="5" stroke-linecap="round" />
+              <line x1="18" y1="-18" x2="-18" y2="18" stroke="var(--color-danger)" stroke-width="5" stroke-linecap="round" />
             </g>
           </g>
+          <defs>
+            <marker id="arrow-danger" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill="var(--color-danger)" />
+            </marker>
+          </defs>
         </svg>
       </div>
 
       <!-- PANEL B: CHILD WDL -->
       <div class="panel highlight">
-        <div class="panel-header text-indigo-600">
+        <div class="panel-header">
           Alternative: Child-Query
-          <div class="panel-subtitle text-indigo-400">"What are THEIR values?"</div>
+          <div class="panel-subtitle text-accent">"What are THEIR values?"</div>
         </div>
         <svg viewBox="0 0 400 300" class="w-full h-auto">
           <g transform="translate(200, 60)">
-            <path d="M0,0 L-60,100 M0,0 L60,100" stroke="#818cf8" stroke-width="3" opacity="0.3" />
+            <path d="M0,0 L-60,100 M0,0 L60,100" stroke="var(--color-accent)" stroke-width="3" opacity="0.3" />
             
-            <circle cx="0" cy="0" r="22" fill="white" stroke="#6366f1" stroke-width="4" />
-            <circle cx="-60" cy="100" r="18" fill="white" stroke="#6366f1" stroke-width="3" />
-            <circle cx="60" cy="100" r="18" fill="white" stroke="#6366f1" stroke-width="3" />
+            <circle cx="0" cy="0" r="22" fill="white" stroke="var(--color-accent)" stroke-width="4" />
+            <circle cx="-60" cy="100" r="18" fill="white" stroke="var(--color-accent)" stroke-width="3" />
+            <circle cx="60" cy="100" r="18" fill="white" stroke="var(--color-accent)" stroke-width="3" />
 
             <!-- Calibration Signals (Pointing to children) -->
-            <path d="M-15,22 L-45,80" stroke="#f43f5e" stroke-width="3" marker-end="url(#arrow-rose)" class="signal-flow" />
-            <path d="M15,22 L45,80" stroke="#f43f5e" stroke-width="3" marker-end="url(#arrow-rose)" class="signal-flow" />
+            <path d="M-15,22 L-45,80" stroke="var(--color-success)" stroke-width="3" marker-end="url(#arrow-success)" class="signal-flow" />
+            <path d="M15,22 L45,80" stroke="var(--color-success)" stroke-width="3" marker-end="url(#arrow-success)" class="signal-flow" />
           </g>
           <defs>
-            <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill="#f43f5e" />
+            <marker id="arrow-success" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill="var(--color-success)" />
             </marker>
           </defs>
         </svg>
@@ -58,10 +63,10 @@
 .child-wdl-diag { width: 100%; font-family: 'Inter', sans-serif; }
 
 .panel {
-  background: #fdfdfd;
+  background: var(--bg-neutral);
   padding: 2rem;
   border-radius: 1.25rem;
-  border: 1px solid #f1f5f9;
+  border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -69,8 +74,8 @@
 }
 
 .panel.highlight {
-  background: #f5f3ff;
-  border-color: #e0e7ff;
+  background: var(--bg-accent);
+  border-color: var(--color-accent);
   box-shadow: 0 20px 25px -5px rgba(99, 102, 241, 0.05);
 }
 
@@ -81,6 +86,11 @@
   letter-spacing: 0.1em;
   margin-bottom: 1rem;
   text-align: center;
+  color: var(--color-secondary);
+}
+
+.panel.highlight .panel-header {
+  color: var(--color-accent);
 }
 
 .panel-subtitle {
@@ -92,10 +102,9 @@
   font-style: italic;
 }
 
-.footer-note { font-size: 11px; margin-top: 1rem; }
-
-.label-loss { font-size: 10px; font-weight: 900; text-transform: uppercase; }
-.indigo-text { fill: #4f46e5; }
+.text-danger { color: var(--color-danger); fill: var(--color-danger); }
+.text-accent { color: var(--color-accent); fill: var(--color-accent); }
+.text-success { color: var(--color-success); fill: var(--color-success); }
 
 .signal-bounce { animation: bounce 1.5s infinite; }
 .signal-flow { animation: flow-line 2s infinite; }
@@ -112,5 +121,5 @@
   100% { stroke-dasharray: 100, 0; opacity: 0; }
 }
 
-.cross { opacity: 0.6; }
+.cross { opacity: 0.6; stroke: var(--color-danger); }
 </style>

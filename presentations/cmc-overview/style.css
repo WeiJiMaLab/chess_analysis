@@ -1,0 +1,87 @@
+:root {
+  /* Core Color Palette (5 Main Colors) */
+  --color-primary: #1e293b;   /* Slate-800: Main Text & Headers */
+  --color-secondary: #64748b; /* Slate-500: Sub-labels & Muted Text */
+  --color-accent: #6366f1;    /* Indigo-500: GNN & Logic Passes */
+  --color-success: #10b981;   /* Emerald-500: Oracle & Targets */
+  --color-danger: #f43f5e;    /* Rose-500: Loss & Halt Decisions */
+
+  /* Derived Backgrounds (using same hues for cohesion) */
+  --bg-accent: #f5f3ff;
+  --bg-success: #ecfdf5;
+  --bg-danger: #fff1f2;
+  --bg-neutral: #f8fafc;
+  --bg-primary: #f1f5f9; /* Subtle light slate instead of dark */
+  
+  /* Borders */
+  --border-subtle: #e2e8f0;
+}
+
+/* Global Slidev Adjustments */
+.slidev-layout.default,
+.slidev-layout.section,
+.slidev-layout.center,
+.slidev-layout.two-columns {
+  padding: 3.5rem 5rem !important;
+}
+
+h1 {
+  @apply text-3xl font-bold mb-6 tracking-tight;
+  color: var(--color-primary);
+}
+
+h2 {
+  @apply text-xl font-semibold mb-4;
+  color: var(--color-secondary);
+}
+
+p, li {
+  @apply text-lg leading-relaxed;
+  color: var(--color-primary);
+}
+
+.caption {
+  @apply text-sm italic mt-4;
+  color: var(--color-secondary);
+}
+
+.takeaway {
+  @apply mt-6 p-4 border-l-4 rounded-r-lg font-medium;
+  background-color: var(--bg-neutral);
+  border-color: var(--color-accent);
+  color: var(--color-primary);
+}
+
+/* Helper classes for SVG components */
+.text-primary { fill: var(--color-primary); color: var(--color-primary); }
+.text-secondary { fill: var(--color-secondary); color: var(--color-secondary); }
+.text-accent { fill: var(--color-accent); color: var(--color-accent); }
+.text-success { fill: var(--color-success); color: var(--color-success); }
+.text-danger { fill: var(--color-danger); color: var(--color-danger); }
+
+/* Filled Box Styles (Light background + Crisp Border) */
+.bg-accent { fill: var(--bg-accent); stroke: var(--color-accent); stroke-width: 1.5; }
+.bg-success { fill: var(--bg-success); stroke: var(--color-success); stroke-width: 1.5; }
+.bg-danger { fill: var(--bg-danger); stroke: var(--color-danger); stroke-width: 1.5; }
+.bg-neutral { fill: var(--bg-neutral); stroke: var(--border-subtle); stroke-width: 1.5; }
+.bg-primary { fill: var(--bg-primary); stroke: var(--color-primary); stroke-width: 1.5; }
+
+/* Direct Fill classes (if needed without borders) */
+.fill-accent { fill: var(--color-accent); }
+.fill-success { fill: var(--color-success); }
+.fill-danger { fill: var(--color-danger); }
+.fill-primary { fill: var(--color-primary); }
+
+/* Utility classes for slides.md */
+.text-accent { color: var(--color-accent); }
+.text-success { color: var(--color-success); }
+.text-danger { color: var(--color-danger); }
+
+.border-accent { border-color: var(--color-accent); }
+.border-success { border-color: var(--color-success); }
+.border-danger { border-color: var(--color-danger); }
+
+.bg-accent-soft { background-color: var(--bg-accent); }
+.bg-success-soft { background-color: var(--bg-success); }
+.bg-danger-soft { background-color: var(--bg-danger); }
+.bg-neutral-soft { background-color: var(--bg-neutral); }

@@ -3,36 +3,13 @@ theme: default
 title: Chess Meta-Control (CMC)
 info: |
   A didactic breakdown of the CMC architecture: Control Flow · Representation · GNN Mechanics · Decision · Training.
+css: ./style.css
 class: text-left
 mdc: true
 font:
   sans: 'Inter'
   mono: 'Fira Code'
 ---
-
-<style>
-.slidev-layout.default,
-.slidev-layout.section,
-.slidev-layout.center,
-.slidev-layout.two-columns {
-  padding: 3.5rem 5rem !important;
-}
-h1 {
-  @apply text-3xl font-bold mb-6 text-slate-800 tracking-tight;
-}
-h2 {
-  @apply text-xl font-semibold mb-4 text-slate-600;
-}
-p, li {
-  @apply text-lg text-slate-700 leading-relaxed;
-}
-.caption {
-  @apply text-sm text-slate-500 italic mt-4;
-}
-.takeaway {
-  @apply mt-6 p-4 bg-slate-50 border-l-4 border-indigo-500 text-slate-700 font-medium rounded-r-lg;
-}
-</style>
 
 # Chess Meta-Control (CMC)
 
@@ -46,8 +23,8 @@ p, li {
 
 <div class="h-full flex items-center justify-center text-center">
   <div>
-    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
-    <h1 class="text-4xl text-slate-800">Part 1 — The Problem</h1>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
+    <h1 class="text-4xl">Part 1 — The Problem</h1>
   </div>
 </div>
 
@@ -67,8 +44,8 @@ p, li {
 
 <div class="h-full flex items-center justify-center text-center">
   <div>
-    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section II</div>
-    <h1 class="text-4xl text-slate-800">Part 2 — The Methods</h1>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section II</div>
+    <h1 class="text-4xl">Part 2 — The Methods</h1>
   </div>
 </div>
 
@@ -155,15 +132,15 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 <div class="grid grid-cols-3 gap-6 mt-8 text-sm px-8">
   <div>
-    <b class="text-indigo-600 block mb-2">Why DP?</b>
+    <b class="text-accent block mb-2">Why DP?</b>
     Optimal search is recursive. To know if a move is right, we must reason <b>backwards</b> from terminal leaf outcomes.
   </div>
   <div>
-    <b class="text-indigo-600 block mb-2">Why does it work?</b>
+    <b class="text-accent block mb-2">Why does it work?</b>
     We solve for $V^*(s) = \max(V, \mathbb{E}[V^*_{child}] - C)$. This defines the <b>mathematical optimum</b> for halting.
   </div>
   <div>
-    <b class="text-indigo-600 block mb-2">How do we train?</b>
+    <b class="text-accent block mb-2">How do we train?</b>
     We use the DP result as <b>Ground Truth</b>. The GNN's $h_i$ is mapped to this "perfect" binary decision.
   </div>
 </div>
@@ -172,8 +149,8 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 <div class="h-full flex items-center justify-center text-center">
   <div>
-    <div class="text-indigo-600 font-bold uppercase tracking-widest text-xs mb-2">Section III</div>
-    <h1 class="text-4xl text-slate-800">Part 3 — Empirical Results</h1>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section III</div>
+    <h1 class="text-4xl">Part 3 — Empirical Results</h1>
   </div>
 </div>
 
@@ -199,7 +176,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 <div class="grid grid-cols-2 gap-12 mt-12 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt1_naive_trend.png" />
   
-  <div class="takeaway border-blue-500 bg-blue-50/50 text-base py-6">
+  <div class="takeaway border-accent bg-accent-soft text-base py-6">
     <b>Attempt 1 (Primary Confound): Opening Theory</b><br><br>
     The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
     <br><br>
@@ -214,7 +191,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 <div class="grid grid-cols-2 gap-12 mt-12 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt2_ply_wise_trend.png" />
   
-  <div class="takeaway border-red-500 bg-red-50/50 text-base py-6">
+  <div class="takeaway border-danger bg-danger-soft text-base py-6">
     <b>Attempt 2 (Secondary Confound): Selection Bias</b><br><br>
     Controlling for ply reveals a paradox: while aggregate bins look positive, <b>within-ply slopes are negative</b>. 
     <br><br>
@@ -229,11 +206,11 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 <div class="grid grid-cols-2 gap-12 mt-12 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt3_controlled_trend.png" />
   
-  <div class="takeaway border-emerald-500 bg-emerald-50/50 text-base py-6">
+  <div class="takeaway border-success bg-success-soft text-base py-6">
     <b>Attempt 3 (The Thinking Hypothesis): Fixed-Effect Control</b><br><br>
     Accounting for <b>both</b> player identity and game stage resolves the paradox.
     <br><br>
-    <span class="text-emerald-700 font-bold text-xl">$\beta \approx 0.54$</span><br>
+    <span class="text-success font-bold text-xl">$\beta \approx 0.54$</span><br>
     A 10% increase in clock time leads to a ~5.4% increase in the thinking budget.
   </div>
 </div>
