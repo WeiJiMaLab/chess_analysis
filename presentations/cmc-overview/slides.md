@@ -1,22 +1,29 @@
 ---
 theme: default
-title: Chess Meta-Control (CMC)
+title: Resource Rational Learned Meta-Control of Tree Search
 info: |
   A didactic breakdown of the CMC architecture: Control Flow · Representation · GNN Mechanics · Decision · Training.
 css: ./style.css
 class: text-left
 mdc: true
-font:
-  sans: 'Inter'
-  mono: 'Fira Code'
+math: katex
 ---
 
-# Chess Meta-Control (CMC)
+<ChessBackground />
 
-**Optimizing the Economy of Thought in Complex Search**
+<div class="relative z-10 h-full flex flex-col justify-end pb-10">
+  <h1 class="text-4xl leading-tight">
+    Resource Rational <br>
+    Learned Meta-Control of Tree Search
+  </h1>
+  
+  <div class="mt-4 text-xl opacity-80">
+    Yotam Sagiv & Jordan Lei
+  </div>
 
-<div class="mt-40 text-sm opacity-60">
-`lmcos/demos/understanding.md` · `project.md`
+  <div class="mt-8 text-xs font-bold uppercase tracking-widest opacity-40">
+    Mechanistic Interpretability · Resource Rationality · Chess Search
+  </div>
 </div>
 
 ---
@@ -85,11 +92,14 @@ We frame search depth as a learnable policy $\pi_\theta$. The **Halt Controller*
 
 **The Economy of Thought**
 The agent seeks an optimal depth $k^*$ that maximizes the expected reward:
-$$ R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k $$
+
+$$
+R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k
+$$
 
 **Mechanistic Readout**
-- **Input:** The current root hidden state $\mathbf{h}_{root}$.
-- **Output:** A halting probability $P(\text{halt} | \mathbf{h}_{root})$ predicted by an MLP.
+- **Input:** The current root hidden state $h_{root}$.
+- **Output:** A halting probability $P(\text{halt} | h_{root})$ predicted by an MLP.
 - **Optimization:** Trained via Policy Gradients ($\nabla_\theta J$) against a DP Oracle to learn the inflection point of the "Thinking Curve."
 
 ---
@@ -165,7 +175,7 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
     <b>Key Takeaway:</b><br><br>
     Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
     <br><br>
-    Log-transforming to <b>$\ln(T)$</b> is required to stabilize variance and isolate the behavioral signal.
+    Log-transforming to $\ln(T)$ is required to stabilize variance and isolate the behavioral signal.
   </div>
 </div>
 
@@ -208,9 +218,9 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
   
   <div class="takeaway border-success bg-success-soft text-base py-6">
     <b>Attempt 3 (The Thinking Hypothesis): Fixed-Effect Control</b><br><br>
-    Accounting for <b>both</b> player identity and game stage resolves the paradox.
+    Accounting for both player identity and game stage resolves the paradox.
     <br><br>
-    <span class="text-success font-bold text-xl">$\beta \approx 0.54$</span><br>
+    <div class="text-success font-bold text-2xl">$\beta \approx 0.54$</div>
     A 10% increase in clock time leads to a ~5.4% increase in the thinking budget.
   </div>
 </div>

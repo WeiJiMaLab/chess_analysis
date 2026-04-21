@@ -66,12 +66,17 @@
 
 <style scoped>
 .loop-container { width: 100%; max-width: 800px; margin: 0 auto; padding: 1rem; background: white; border-radius: 1rem; }
-.loop-svg { width: 100%; height: auto; font-family: var(--font-body); overflow: visible; }
+.loop-svg {
+  width: 100%;
+  height: auto;
+  font-family: var(--font-diagram);
+  overflow: visible;
+}
 
 .label-bold { font-size: 14px; font-weight: 700; }
-.label-large { font-size: 16px; font-weight: 800; font-family: var(--font-header); }
+.label-large { font-size: 16px; font-weight: 800; font-family: var(--font-diagram); }
 .tiny { font-size: 11px; }
-.ph-label { font-size: 12px; font-weight: 800; font-family: var(--font-header); letter-spacing: 0.05em; }
+.ph-label { font-size: 12px; font-weight: 800; font-family: var(--font-diagram); letter-spacing: 0.05em; }
 
 .edge { stroke: var(--color-primary); stroke-width: 2; fill: none; }
 .edge-accent { stroke: var(--color-accent); stroke-width: 2; fill: none; }
