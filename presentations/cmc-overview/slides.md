@@ -28,6 +28,41 @@ math: katex
 
 ---
 
+# Paper Sketch
+
+<div class="grid grid-cols-3 gap-8 mt-12">
+  <div class="border-l-4 border-accent pl-4">
+    <h2 class="text-accent text-xl mb-0">Part 1: Motivation</h2>
+    <div class="text-accent text-[10px] font-bold mb-4 uppercase tracking-tighter italic opacity-80">(feedback: does this make sense?)</div>
+    <ul class="text-xs space-y-2 opacity-90">
+      <li>Meta-control is hard but crucial.</li>
+      <li>Fixed budgets waste tokens, money, and <b>time</b>.</li>
+      <li>Humans are the existence proof for "thinking about thinking."</li>
+    </ul>
+  </div>
+
+  <div class="border-l-4 border-accent pl-4">
+    <h2 class="text-accent text-xl mb-4">Part 2: Methods</h2>
+    <ul class="text-xs space-y-2 opacity-90">
+      <li>Architecture: GNN + Halt Controller.</li>
+      <li>Training via DP Oracle.</li>
+      <li>Performance benchmarks vs. Baselines.</li>
+    </ul>
+  </div>
+
+  <div class="border-l-4 border-accent pl-4 relative">
+    <h2 class="text-accent text-xl mb-0">Part 3: Validation</h2>
+    <div class="text-accent text-[10px] font-bold mb-4 uppercase tracking-tighter italic opacity-80">(feedback: what else should we show?)</div>
+    <ul class="text-xs space-y-2 opacity-90">
+      <li>Is it working as intended?</li>
+      <li>Human Alignment: Does the "Thinking Curve" match human data?</li>
+    </ul>
+    <div class="absolute -top-3 -right-4 bg-accent text-white text-[8px] px-2 py-1 rotate-12 font-bold rounded">FEEDBACK WANTED</div>
+  </div>
+</div>
+
+---
+
 <div class="h-full flex items-center justify-center text-center">
   <div>
     <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
@@ -42,17 +77,124 @@ math: katex
 <v-clicks>
 
 - **Fixed Budgets are Wasteful:** Standard engines spend the same time on a "forced" move as a complex tactical blunder.
-- **Human Intuition:** Skilled players know *when* to stop thinking—a stopping problem we can formalize.
 - **The Trade-off:** Is the move-quality I’m about to discover worth the computational "electricity" (time/tokens) I’m about to spend?
+- **Real-World Constraints:** Tokens cost money, but more importantly, **real-time decisions have a physical cost**. Most LLM tasks are sufficiently time-intensive that every token of "thought" must justify itself.
+- **Human Intuition:** Skilled players know *when* to stop thinking—a stopping problem we can formalize.
 
 </v-clicks>
+
+---
+
+# Part 2: High-Level Architecture
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <div class="scale-160 transform origin-center">
+    <LeelaSearchLoop />
+  </div>
+  
+  <div class="mt-28 p-3 bg-neutral-soft border-l-2 border-accent italic text-[11px] opacity-80">
+    Implementation details (GNN sweeps, DP Oracle, Halt Controller) are in the Appendix.
+  </div>
+</div>
 
 ---
 
 <div class="h-full flex items-center justify-center text-center">
   <div>
     <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section II</div>
-    <h1 class="text-4xl">Part 2 — The Methods</h1>
+    <h1 class="text-4xl">Part 2 — Validation & Alignment</h1>
+    <div class="mt-4 text-sm opacity-60 max-w-xl mx-auto">
+      How do we know the meta-controller works as intended? Humans serve as an <b>existence proof</b> and a <b>target distribution</b> for efficient search.
+    </div>
+  </div>
+</div>
+
+---
+
+# 1. Move times are heavy-tailed
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/move_time_distribution.png" />
+  
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
+    Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
+    <br><br>
+    Humans demonstrate that <b>non-trivial meta-control</b> is the default in skilled behavior.
+  </div>
+</div>
+
+---
+
+# 2. Stage of Game: The "Mid-game Bulge"
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/ply_movetime/ply_impact_comparison.png" />
+  
+  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">The Ply Paradox</b><br><br>
+    Move times peak around move 40 and decay as the board simplifies. 
+    <br><br>
+    <b>Alignment Goal:</b> A rational mover should play *less optimally* early (where errors can be corrected) and focus resources on the critical mid-game transitions.
+  </div>
+</div>
+
+---
+
+# 3a. Elasticity: The Naive Aggregate
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_0_baseline.png" />
+  
+  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
+    <b class="text-accent uppercase tracking-wider text-xs">Clock Awareness</b><br><br>
+    The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
+    <br><br>
+    People save/budget time for the endgame "just in case," even when current clock reserves are high.
+  </div>
+</div>
+
+---
+
+# 3b. Elasticity: The Resolution
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_3_2way_fe.png" />
+  
+  <div class="takeaway border-success bg-success-soft text-sm py-4">
+    <b class="text-success uppercase tracking-wider text-xs">Budgeting Logic</b><br><br>
+    Accounting for player identity reveals the true budget logic:
+    <br><br>
+    <div class="text-success font-bold text-2xl">
+      $\beta \approx 0.54$
+    </div>
+    Humans consider both their own and their <b>opponent's</b> clock time to calibrate the "worth" of further thought.
+  </div>
+</div>
+
+---
+
+# 4. Value of Computation (The Demand)
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
+  <img class="w-full object-contain" src="/figures/voc_movetime/standard_voc_single_sample.png" />
+  
+  <div class="takeaway bg-neutral-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
+    <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
+    <br><br>
+    $\log(T) \propto \sqrt{\text{VOC}}$: Humans spend the most "thought-capital" where depth matters most. 
+    <br><br>
+    <b>This is the target alignment for our Meta-Controller.</b>
+  </div>
+</div>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Appendix</div>
+    <h1 class="text-4xl">Technical Implementation Details</h1>
   </div>
 </div>
 
@@ -152,107 +294,5 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
   <div>
     <b class="text-accent block mb-2">How do we train?</b>
     We use the DP result as <b>Ground Truth</b>. The GNN's $h_i$ is mapped to this "perfect" binary decision.
-  </div>
-</div>
-
----
-
-<div class="h-full flex items-center justify-center text-center">
-  <div>
-    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section III</div>
-    <h1 class="text-4xl">Part 3 — Empirical Results</h1>
-  </div>
-</div>
-
----
-
-# 1. Move times are heavy-tailed
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/move_time_distribution.png" />
-  
-  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
-    <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
-    Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
-    <br><br>
-    Log-transforming to $\log(T)$ is required to stabilize variance and isolate the behavioral signal.
-  </div>
-</div>
-
----
-
-# 2a. Elasticity: The Naive Aggregate
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_0_baseline.png" />
-  
-  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
-    <b class="text-accent uppercase tracking-wider text-xs">Attempt 1: Opening Theory</b><br><br>
-    The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
-    <br><br>
-    However, this is corrupted by opening moves where players have maximum clocks but move instantly due to preparation.
-  </div>
-</div>
-
----
-
-# 2b. Elasticity: The Ply Paradox
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_1_ply_fe.png" />
-  
-  <div class="takeaway border-danger bg-danger-soft text-sm py-4">
-    <b class="text-danger uppercase tracking-wider text-xs">Attempt 2: Selection Bias</b><br><br>
-    Controlling for ply reveals a paradox: while aggregate bins look positive, <b>within-ply slopes are negative</b>. 
-    <br><br>
-    Faster players dominate the high-clock buckets, masking the true relation.
-  </div>
-</div>
-
----
-
-# 2c. Elasticity: The Resolution
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_3_2way_fe.png" />
-  
-  <div class="takeaway border-success bg-success-soft text-sm py-4">
-    <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>
-    Accounting for both player identity and game stage resolves the paradox.
-    <br><br>
-    <div class="text-success font-bold text-2xl">
-      $\beta \approx 0.54$
-    </div>
-    A 10% increase in clock time leads to a ~5.4% increase in the thinking budget.
-  </div>
-</div>
-
----
-
-# 2d. Elasticity: The Ply Impact
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/ply_movetime/ply_impact_comparison.png" />
-  
-  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">Stage of Game</b><br><br>
-    Move times exhibit a characteristic "mid-game bulge". 
-    <br><br>
-    Thinking time peaks around move 40 and then decays as the board simplifies into the endgame, independent of clock budget.
-  </div>
-</div>
-
----
-
-# 3. Value of Computation (The Demand)
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/voc_movetime/standard_voc_single_sample.png" />
-  
-  <div class="takeaway bg-neutral-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
-    <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
-    <br><br>
-    $\log(T) \propto \sqrt{\text{VOC}}$: Humans spend the most "thought-capital" on positions where depth matters most.
   </div>
 </div>
