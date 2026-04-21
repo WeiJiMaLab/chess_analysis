@@ -1,6 +1,9 @@
-import argparse
+import sys
 import os
+# Add parent directory to path to allow importing helpers
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import argparse
 import pandas as pd
 
 from utils import get_db_connection
@@ -12,7 +15,8 @@ def main():
     args = parser.parse_args()
 
     n_games = args.n_games
-    games_cache = os.path.join(os.path.dirname(__file__), "..", "data", f"moves_{n_games}.parquet")
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    games_cache = os.path.join(base_dir, "data", f"moves_{n_games}.parquet")
 
     need_reload = not os.path.exists(games_cache)
     conn = get_db_connection(threads=16, memory_limit="6GB")

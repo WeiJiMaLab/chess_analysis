@@ -1,4 +1,7 @@
 # Project: Chess Meta-control (CMC)
+> [!IMPORTANT]
+> To run code in this repository, you MUST activate the `.venv` first:
+> `source .venv/bin/activate` (or equivalent for your shell).
 
 ## 1. Objective
 
@@ -116,10 +119,6 @@ Tutorials under `lmcos/demos/` mirror this curriculum; see **`lmcos/demos/unders
 
 This note describes how Python (and notebook) code in `src/` is written. It is descriptive, not a strict linter profile.
 
-> [!IMPORTANT]
-> To run code in this repository, you MUST activate the `.venv` first:
-> `source .venv/bin/activate` (or equivalent for your shell).
-
 ## Design priorities
 
 Code is optimized for **modularity** and **readability**. Preference is given to clarity of data flow and obviously named operations.
@@ -154,7 +153,7 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
 
 - **Functions and variables:** `snake_case`.
 - **Module-level tuning constants:** `SCREAMING_SNAKE` (e.g. `MAIN_COLOR`, `FONT_SIZE_LABEL`).
-- **Files:** Prefer short, descriptive names (e.g. `clock_move_analysis.py` over `clocktime_movetime_analysis.py`).
+- **Files:** Prefer short, descriptive names (e.g. `clocktime_movetime.py` over `clock_move_analysis.py`).
 
 ## Imports
 

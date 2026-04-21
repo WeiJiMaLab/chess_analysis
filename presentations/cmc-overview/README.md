@@ -73,9 +73,9 @@ Figures are served from the core `chess_analysis/src/figures` directory via a sy
 
 To update the figures, run the analysis scripts from the root repository:
 ```bash
-python src/clock_move_analysis.py
-python src/ply_analysis.py
-python src/voc_analysis.py
+python src/clocktime_movetime.py
+python src/ply_movetime.py
+python src/voc_movetime.py
 ```
 
 The slides automatically reference these at paths like `/figures/voc_analysis/voc_quad_view.png`.

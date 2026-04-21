@@ -8,17 +8,19 @@ import statsmodels.formula.api as smf
 from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR, apply_poster_style, FONT_SIZE_LABEL
 
 # Poster Style Constants
-FIGURE_DIR = "src/figures/clock_move_analysis"
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIGURE_DIR = os.path.join(base_dir, "src", "figures", "clock_move_analysis")
 NEGATIVE_COLOR = "#e74c3c"
 POSITIVE_COLOR = "#2ecc71"
 
 def load_and_preprocess():
     """Load data and compute natural-log features."""
-    if not os.path.exists("data/moves_500.parquet"):
-        print("Error: data/moves_500.parquet not found. Run load_games.py first.")
+    data_path = os.path.join(base_dir, "data", "moves_500.parquet")
+    if not os.path.exists(data_path):
+        print(f"Error: {data_path} not found. Run utils/load_games.py first.")
         return None
     
-    df = pd.read_parquet("data/moves_500.parquet")
+    df = pd.read_parquet(data_path)
     
     # 1. Calculate player_time_left
     df = df.sort_values(["gid", "move_ply"]).copy()
