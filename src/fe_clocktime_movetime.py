@@ -174,10 +174,13 @@ if __name__ == "__main__":
         rdf = run_fe_analyses(df)
         print("\nFixed Effects Analysis Results:")
         print(rdf)
+        plot_coefficients(rdf)
         
         # Also generate distribution plot for slides
         dist_path = os.path.join(FIGURE_DIR, "move_time_distribution.png")
-        plot_distribution_side_by_side(df, save_path=dist_path)
+        plot_distribution_side_by_side(df, 
+        log_col="log_T",
+        save_path=dist_path)
         print(f"✅ Distribution plot saved to: {dist_path}")
         
-        plot_coefficients(rdf)
+        
