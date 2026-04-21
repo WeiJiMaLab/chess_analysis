@@ -157,7 +157,16 @@ def compute_metrics_by_qbin(data, qbin_edges):
 def plot_metrics(metrics, color=MAIN_COLOR, ax=None):
     if ax is None:
         ax = plt.gca()
-    ax.plot(metrics["x"], metrics["y"], label="mean", color=color)
+    # Markers so low-variance x (few qcut bins) still shows visible means, not a degenerate line.
+    ax.plot(
+        metrics["x"],
+        metrics["y"],
+        label="mean",
+        color=color,
+        marker="o",
+        markersize=9,
+        linestyle="-",
+    )
     ax.fill_between(
         metrics["x"],
         metrics["ci_lower"],
@@ -166,29 +175,3 @@ def plot_metrics(metrics, color=MAIN_COLOR, ax=None):
         alpha=0.2,
         label="95% CI",
     )
-
-# Preprocess sample games to add time_left and time_left_after columns
-def preprocess_data(df: dd.DataFrame) -> dd.DataFrame:
-    df = df.sort_values(["gid", "move_ply"], kind="mergesort").reset_index(drop=True)
-    df = df.set_index("gid") #most of our work is done on gids
-
-    # clean up move time
-    df["move_time"] = df["move_time"].fillna(0).clip(lower=0) 
-
-    # group by gid and player number to get player-wise move time left
-    grouped = df.groupby(["gid", "player_white"], sort=False)
-    df["spent_prior"] = grouped["move_time"].cumsum() - df["move_time"]
-    df["n_prior"] = grouped.cumcount()
-    inc = df["clock_increment"]
-    df["player_time_left"] = (df["initial_clock"] - df["spent_prior"] + df["n_prior"] * inc).clip(lower=0) 
-
-    # append active player to fen
-    df["fen"] = df.apply(row_to_fen, axis=1, meta=("object", "object"))
-    df["move_number"] = (df["move_ply"] + 1) // 2
-    df["total_time_left"] = df.groupby(["gid", "move_number"])["player_time_left"].transform("sum", meta=("total_time_left", "float64"))
-
-    # Shifts within groups
-    df["move_time(t-1)"] = df.groupby("gid")["move_time"].shift(1, meta=("move_time", "float64"))
-    df["move_time(t-2)"] = df.groupby("gid")["move_time"].shift(2, meta=("move_time", "float64"))
-    df["fen(t-1)"] = df.groupby("gid")["fen"].shift(1, meta=("fen", "object"))
-    return df

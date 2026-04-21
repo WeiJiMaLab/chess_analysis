@@ -18,7 +18,6 @@ from utils import get_stockfish_engine
 # Constants for analysis (mirroring voc_movetime.py)
 SHALLOW_DEPTH = 1
 DEEP_DEPTH = 14
-TIME_LIMIT = 5.0
 
 def score_to_wp(score, board_after):
     try:
@@ -38,7 +37,7 @@ def compute_voc(board, engine, candidate_moves, deep_depth, time_limit, game_ply
             continue
         engine.configure({"Clear Hash": True})
         try: 
-            info = engine.analyse(board_after, chess.engine.Limit(depth=deep_depth, time=time_limit))
+            info = engine.analyse(board_after, chess.engine.Limit(depth=deep_depth))
         except Exception as e: 
             print(f"  [Warning] Engine analysis failed for move {move}: {e}")
             continue

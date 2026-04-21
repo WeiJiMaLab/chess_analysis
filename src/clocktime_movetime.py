@@ -5,218 +5,58 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
-from utils import compute_metrics_by_qbin, plot_metrics, MAIN_COLOR, apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS
+from utils import (
+    load_games, preprocess_data, 
+    plot_standard_analysis_quad, plot_distribution_side_by_side,
+    MAIN_COLOR
+)
 
 # Poster Style Constants
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIGURE_DIR = os.path.join(base_dir, "src", "figures", "clocktime_movetime")
-NEGATIVE_COLOR = "#e74c3c"
 POSITIVE_COLOR = "#2ecc71"
 
 def load_and_preprocess():
     """Load data and compute natural-log features."""
     data_path = os.path.join(base_dir, "data", "moves_500.parquet")
     if not os.path.exists(data_path):
-        print(f"Error: {data_path} not found. Run utils/load_games.py first.")
+        print(f"Error: {data_path} not found.")
         return None
     
     df = pd.read_parquet(data_path)
-    
-    # 1. Calculate player_time_left
     df = df.sort_values(["gid", "move_ply"]).copy()
     df["move_time"] = df["move_time"].fillna(0).clip(lower=0)
     
     grouped = df.groupby(["gid", "player_white"])
     df["spent_prior"] = grouped["move_time"].cumsum() - df["move_time"]
     df["n_prior"] = grouped.cumcount()
-    
     df["player_time_left"] = df["initial_clock"] - df["spent_prior"] + df["n_prior"] * df["clock_increment"]
     
-    # 2. Filter and log-transform (Natural Log)
     df = df[df["move_time"] > 0].copy()
     df = df[df["player_time_left"] > 0].copy()
     
-    df["ln_move_time"] = np.log(df["move_time"])
-    df["ln_clock"] = np.log(df["player_time_left"])
-    
-    # 3. Identifiers
-    df["side"] = np.where(df["player_white"], "white", "black")
-    df["game_player"] = df["gid"].astype(str) + "_" + df["side"]
+    df["log_move_time"] = np.log(df["move_time"])
+    df["log_clock"] = np.log(df["player_time_left"])
     df["player_id"] = np.where(df["player_white"], df["white_id"], df["black_id"])
     
+    # 3. Controls
+    df["ply_median"] = df.groupby("move_ply")["log_move_time"].transform("median")
+    df["log_move_resid_ply"] = df["log_move_time"] - df["ply_median"]
+    
+    # 4. Double Control (Player + Ply)
+    # Identifiers needed for player control
+    df["side"] = np.where(df["player_white"], "white", "black")
+    df["game_player"] = df["gid"].astype(str) + "_" + df["side"]
+    player_medians = df.groupby("game_player")["log_move_time"].transform("median")
+    df["log_move_resid_double"] = df["log_move_time"] - player_medians - df["ply_median"]
+    
     return df
-
-def analyze_distribution(df: pd.DataFrame):
-    """Visualize the distribution of move times side-by-side with high aesthetics."""
-    apply_poster_style()
-    fig, axes = plt.subplots(1, 2, figsize=(24, 10))
-    
-    # 1. Raw Distribution
-    sns.histplot(df["move_time"], bins=50, kde=True, color=MAIN_COLOR, alpha=0.4, ax=axes[0], element="step")
-    median_raw = df["move_time"].median()
-    axes[0].axvline(median_raw, color='red', linestyle='--', linewidth=3, label=f"Median: {median_raw:.1f}s")
-    axes[0].set_xlabel("Move Time (seconds)", fontsize=FONT_SIZE_LABEL)
-    axes[0].set_ylabel("Density", fontsize=FONT_SIZE_LABEL)
-    axes[0].legend(fontsize=FONT_SIZE_TICKS)
-    
-    # 2. Log Distribution
-    sns.histplot(df["ln_move_time"], bins=50, kde=True, color=MAIN_COLOR, alpha=0.4, ax=axes[1], element="step")
-    median_log = df["ln_move_time"].median()
-    axes[1].axvline(median_log, color='red', linestyle='--', linewidth=3, label=f"Median: {median_log:.2f}")
-    axes[1].set_xlabel(r"Normalized Move Time: $\log(T)$", fontsize=FONT_SIZE_LABEL)
-    axes[1].set_ylabel("Density", fontsize=FONT_SIZE_LABEL)
-    axes[1].legend(fontsize=FONT_SIZE_TICKS)
-    
-    plt.tight_layout()
-    save_path = os.path.join(FIGURE_DIR, "move_time_distribution.png")
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Poster-style distribution saved: {save_path}")
-    plt.close()
-
-def analyze_naive_trend(df: pd.DataFrame):
-    """Attempt 1: Naive analysis."""
-    print("Running Naive Analysis...")
-    apply_poster_style()
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-    
-    # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_time"], gridsize=25, cmap="Blues", mincnt=1)
-    sns.regplot(x="ln_clock", y="ln_move_time", data=df, scatter=False, color=MAIN_COLOR, ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\log(T)$", fontsize=FONT_SIZE_LABEL)
-    
-    # [0, 1] Trend by Value
-    df_sorted = df.sort_values("ln_clock")
-    df_sorted["qbins"], qbin_edges = pd.qcut(df_sorted["ln_clock"], q=25, labels=False, retbins=True, duplicates="drop")
-    df_tmp = df_sorted.copy()
-    df_tmp["move_time"] = df_tmp["ln_move_time"]
-    metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
-    plot_metrics(metrics, color=MAIN_COLOR, ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 1] Trend by Quantile Rank
-    metrics_rank = {k: list(v) for k, v in metrics.items()}
-    metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
-    plot_metrics(metrics_rank, color=MAIN_COLOR, ax=axes[1, 1])
-    axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 0] Information Pane
-    axes[1, 0].text(0.5, 0.5, r"$\mathbf{Attempt\ 1\ (Naive)}$" + "\nNo Controls\n(Confounded)", 
-                    ha='center', va='center', fontsize=26, alpha=0.8)
-    axes[1, 0].axis('off')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIGURE_DIR, "attempt1_naive_trend.png"), dpi=300, bbox_inches="tight")
-    plt.close()
-
-def analyze_ply_wise_regression(df: pd.DataFrame):
-    """Attempt 2 (Ply-Controlled)."""
-    print("Running Attempt 2 (Ply-Controlled)...")
-    apply_poster_style()
-    df["ply_median"] = df.groupby("move_ply")["ln_move_time"].transform("median")
-    df["ln_move_resid_ply"] = df["ln_move_time"] - df["ply_median"]
-
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-
-    # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid_ply"], gridsize=25, cmap="Reds", mincnt=1)
-    sns.regplot(x="ln_clock", y="ln_move_resid_ply", data=df, scatter=False, color="firebrick", ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\log T - \log \text{med}_{ply}$", fontsize=FONT_SIZE_LABEL)
-
-    # [0, 1] Binned by Value
-    df_sorted = df.sort_values("ln_clock")
-    df_sorted["qbins"], qbin_edges = pd.qcut(df_sorted["ln_clock"], q=25, labels=False, retbins=True, duplicates="drop")
-    df_tmp = df_sorted.copy()
-    df_tmp["move_time"] = df_tmp["ln_move_resid_ply"]
-    metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
-    plot_metrics(metrics, color="firebrick", ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean" + "\n" + r"$[\log T - \log \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 0] Ply Control (Stability)
-    results = []
-    for ply in range(10, 81, 2):
-        df_ply = df[df["move_ply"] == ply]
-        if len(df_ply) > 30:
-            model = smf.ols("ln_move_time ~ ln_clock", data=df_ply).fit()
-            results.append({"ply": ply, "coeff": model.params["ln_clock"], "bse": model.bse["ln_clock"]})
-    df_res = pd.DataFrame(results)
-    axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color="firebrick", ecolor='lightgray', elinewidth=3, capsize=0)
-    axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
-    axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope" + "\n" + r"$(\beta_{\log(Clock)})$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 1] Binned by Quantile Rank
-    metrics_rank = {k: list(v) for k, v in metrics.items()}
-    metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
-    plot_metrics(metrics_rank, color="firebrick", ax=axes[1, 1])
-    axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean" + "\n" + r"$[\log T - \log \text{med}_{ply}]$", fontsize=FONT_SIZE_LABEL)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIGURE_DIR, "attempt2_ply_wise_trend.png"), dpi=300, bbox_inches="tight")
-    plt.close()
-
-def analyze_controlled_trend(df: pd.DataFrame):
-    """Attempt 3 (Double-Controlled)."""
-    print("Running Attempt 3 (Double-Controlled)...")
-    apply_poster_style()
-    player_medians = df.groupby("game_player")["ln_move_time"].transform("median")
-    ply_medians = df.groupby("move_ply")["ln_move_time"].transform("median")
-    
-    df["ln_move_resid"] = df["ln_move_time"] - player_medians - ply_medians
-    df["ln_move_norm_player"] = df["ln_move_time"] - player_medians
-
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-
-    # [0, 0] Density
-    axes[0, 0].hexbin(df["ln_clock"], df["ln_move_resid"], gridsize=25, cmap="Greens", mincnt=1)
-    sns.regplot(x="ln_clock", y="ln_move_resid", data=df, scatter=False, color=POSITIVE_COLOR, ax=axes[0, 0])
-    axes[0, 0].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 0].set_ylabel(r"$\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}$", fontsize=FONT_SIZE_LABEL)
-
-    # [0, 1] Binned by Value
-    df_sorted = df.sort_values("ln_clock")
-    df_sorted["qbins"], qbin_edges = pd.qcut(df_sorted["ln_clock"], q=25, labels=False, retbins=True, duplicates="drop")
-    df_tmp = df_sorted.copy()
-    df_tmp["move_time"] = df_tmp["ln_move_resid"]
-    metrics = compute_metrics_by_qbin(df_tmp, qbin_edges)
-    plot_metrics(metrics, color=POSITIVE_COLOR, ax=axes[0, 1])
-    axes[0, 1].set_xlabel(r"$\log(\text{Clock Time})$", fontsize=FONT_SIZE_LABEL)
-    axes[0, 1].set_ylabel(r"Mean $[\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}]$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 0] Ply Control (Stability)
-    results = []
-    for ply in range(10, 81, 2):
-        df_ply = df[df["move_ply"] == ply]
-        if len(df_ply) > 30:
-            model = smf.ols("ln_move_norm_player ~ ln_clock", data=df_ply).fit()
-            results.append({"ply": ply, "coeff": model.params["ln_clock"], "bse": model.bse["ln_clock"]})
-    df_res = pd.DataFrame(results)
-    axes[1, 0].errorbar(df_res["ply"], df_res["coeff"], yerr=1.96 * df_res["bse"], fmt='o', color=POSITIVE_COLOR, ecolor='lightgray', elinewidth=3, capsize=0)
-    axes[1, 0].axhline(0, color='black', linestyle='--', alpha=0.5)
-    axes[1, 0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[1, 0].set_ylabel(r"Slope" + "\n" + r"$(\beta_{\log(Clock)})$", fontsize=FONT_SIZE_LABEL)
-
-    # [1, 1] Binned by Quantile Rank
-    metrics_rank = {k: list(v) for k, v in metrics.items()}
-    metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
-    plot_metrics(metrics_rank, color=POSITIVE_COLOR, ax=axes[1, 1])
-    axes[1, 1].set_xlabel("Quantile Rank (Clock)", fontsize=FONT_SIZE_LABEL)
-    axes[1, 1].set_ylabel(r"Mean $[\log T$" + "\n" + r"$- \log med_{player}$" + "\n" + r"$- \log med_{ply}]$", fontsize=FONT_SIZE_LABEL)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIGURE_DIR, "attempt3_controlled_trend.png"), dpi=300, bbox_inches="tight")
-    plt.close()
 
 def run_mixed_effects(df: pd.DataFrame):
     """Formal Mixed Linear Effects model validation."""
     print("\nEstimating Mixed Effects Model...")
     try:
-        model = smf.mixedlm("ln_move_time ~ ln_clock + move_ply", df, groups=df["player_id"])
+        model = smf.mixedlm("log_move_time ~ log_clock + move_ply", df, groups=df["player_id"])
         result = model.fit()
         print(result.summary())
     except Exception as e:
@@ -224,12 +64,61 @@ def run_mixed_effects(df: pd.DataFrame):
 
 if __name__ == "__main__":
     if not os.path.exists(FIGURE_DIR):
-        os.makedirs(FIGURE_DIR)
+        os.makedirs(FIGURE_DIR, exist_ok=True)
+        
     data = load_and_preprocess()
     if data is not None:
-        analyze_distribution(data)
-        analyze_naive_trend(data)
-        analyze_ply_wise_regression(data)
-        analyze_controlled_trend(data)
+        # 1. Distribution
+        plot_distribution_side_by_side(
+            data,
+            log_col="log_move_time",
+            color=POSITIVE_COLOR,
+            save_path=os.path.join(FIGURE_DIR, "move_time_distribution.png"),
+        )
+        
+        # 2. Standard Analysis
+        print("Generating standard clock analysis...")
+        plot_standard_analysis_quad(
+            data, 
+            x_var="log_clock", 
+            y_var="log_move_time",
+            x_label=r"$\log(\text{Clock Time})$",
+            y_label=r"$\log(T)$",
+            color=POSITIVE_COLOR,
+            save_path=os.path.join(FIGURE_DIR, "clock_standard_analysis.png")
+        )
+        
+        # 3. Ply-Controlled Analysis
+        print("Generating ply-controlled clock analysis...")
+        plot_standard_analysis_quad(
+            data, 
+            x_var="log_clock", 
+            y_var="log_move_resid_ply",
+            x_label=r"$\log(\text{Clock Time})$",
+            y_label=r"$\log T$" + "\n" + r"$-\,\log\,\mathrm{med}_{ply}$",
+            color="#e74c3c", # Red for ply-control phase
+            save_path=os.path.join(FIGURE_DIR, "clock_ply_controlled.png")
+        )
+        
+        # 4. Double-Controlled Analysis (Ply + Player)
+        print("Generating double-controlled clock analysis...")
+        plot_standard_analysis_quad(
+            data, 
+            x_var="log_clock", 
+            y_var="log_move_resid_double",
+            x_label=r"$\log(\text{Clock Time})$",
+            y_label=(
+                r"$\log T$"
+                + "\n"
+                + r"$-\,\log\,\mathrm{med}_{ply}$"
+                + "\n"
+                + r"$-\,\log\,\mathrm{med}_{player}$"
+            ),
+            color=MAIN_COLOR,
+            save_path=os.path.join(FIGURE_DIR, "clock_double_controlled.png"),
+        )
+        
+        # 5. Mixed Effects
         run_mixed_effects(data)
-        print("\n✅ Analysis complete. Posters generated with natural log and XY grids.")
+        
+        print("\n✅ All clock-time analysis posters generated successfully.")

@@ -20,6 +20,8 @@ def ev_after_move(engine, board, move, depth = 14):
     score = engine.analyse(board_after, chess.engine.Limit(depth=depth))["score"]
     return score_to_ev(score, board.turn)
 
+
+#####
 def best_two_diff(engine, board, depth = 14): 
     candidates = engine.analyse(board, chess.engine.Limit(depth=depth), multipv = 2)
     if len(candidates) < 2: return 0
@@ -31,7 +33,7 @@ def voc_consideration_set(engine, board, n_candidates = 5):
     shallow_candidates = engine.analyse(board, chess.engine.Limit(depth=1), multipv = n_candidates)
     shallow_moves = [c["pv"][0] for c in shallow_candidates]
     best_shallow_move = shallow_moves[0]
-    scores = {move: ev_after_move(engine, board, move, board.turn) for move in set(shallow_moves)}
+    scores = {move: ev_after_move(engine, board, move) for move in set(shallow_moves)}
 
     # voc = difference between value of best (deep) move and value of shallow move
     voc = max(scores.values()) - scores[best_shallow_move]
@@ -45,7 +47,7 @@ def voc_single_sample(engine, board):
     if best_shallow_move == best_deep_move: 
         return 0
     else: 
-        return ev_after_move(engine, board, best_deep_move, board.turn) - ev_after_move(engine, board, best_shallow_move, board.turn)
+        return ev_after_move(engine, board, best_deep_move) - ev_after_move(engine, board, best_shallow_move)
 
 def row_to_fen(row): 
     fen = f"{row['board_position']} {'w' if row['player_white'] else 'b'}"
