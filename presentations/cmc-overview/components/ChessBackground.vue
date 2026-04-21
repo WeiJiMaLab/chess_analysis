@@ -7,7 +7,7 @@ const container = ref<HTMLElement | null>(null);
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
-let pieces: THREE.Object3D[] = [];
+let pieces: { obj: THREE.Object3D, rotSpeed: THREE.Vector3, fallSpeed: number }[] = [];
 let frameId: number;
 
 const MODELS = [
@@ -24,37 +24,55 @@ onMounted(() => {
 
   // 1. Scene Setup
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xffffff);
+  scene.background = new THREE.Color(0x020617);
   
   camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
-  camera.position.set(0, 40, 180); // Lowered camera slightly for better angle
+  camera.position.set(0, 40, 180);
   camera.lookAt(0, 20, 0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
   container.value.appendChild(renderer.domElement);
 
-  // 2. Matte Lighting System
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  // 2. EXTREMELY BRIGHT LIGHT SYSTEM
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.1); 
   scene.add(ambientLight);
   
-  const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  sunLight.position.set(100, 200, 100);
-  scene.add(sunLight);
+  // Ultra Key (Indigo)
+  const keyLight = new THREE.DirectionalLight(0x6366f1, 6.0);
+  keyLight.position.set(100, 150, 50);
+  scene.add(keyLight);
 
-  // 3. Subtle Grid
-  const grid = new THREE.GridHelper(1000, 50, 0xf1f5f9, 0xf8fafc);
+  // Ultra Fill (Red)
+  const fillLight = new THREE.DirectionalLight(0xef4444, 5.0);
+  fillLight.position.set(-150, -100, 50);
+  scene.add(fillLight);
+
+  // SUPER BACKLIGHT (Drives the SSS effect)
+  const backLight = new THREE.PointLight(0xffffff, 10.0, 1000);
+  backLight.position.set(0, 50, -250);
+  scene.add(backLight);
+
+  // 3. Subtle Dark Grid
+  const grid = new THREE.GridHelper(1000, 50, 0x1e293b, 0x0f172a);
   grid.position.y = -60;
   scene.add(grid);
 
   // 4. Load Models
   const loader = new OBJLoader();
-  const material = new THREE.MeshStandardMaterial({ 
-    color: 0xa5b4fc, // Indigo-300 (Light Purple Accent)
-    roughness: 0.9,
-    metalness: 0.05,
+  
+  const material = new THREE.MeshPhysicalMaterial({ 
+    color: 0xffffff,
+    metalness: 0.1,
+    roughness: 0.25,
+    transmission: 0.65,
+    thickness: 8.0, // Increased thickness for more scattering volume
+    ior: 1.5,
+    attenuationColor: 0xa5b4fc,
+    attenuationDistance: 0.8,
+    transparent: true,
+    opacity: 0.98
   });
 
   MODELS.forEach((url) => {
@@ -73,11 +91,17 @@ onMounted(() => {
       const scale = 22 / maxDim;
       obj.scale.set(scale, scale, scale);
       
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 5; i++) {
         const piece = obj.clone();
-        resetPiece(piece, true); // initial randomize
+        const rotSpeed = new THREE.Vector3(
+          (Math.random() - 0.5) * 0.01,
+          (Math.random() - 0.5) * 0.015,
+          (Math.random() - 0.5) * 0.01
+        );
+        const fallSpeed = 0.12 + Math.random() * 0.1;
+        resetPiece(piece, true);
         scene.add(piece);
-        pieces.push(piece);
+        pieces.push({ obj: piece, rotSpeed, fallSpeed });
       }
     });
   });
@@ -85,13 +109,13 @@ onMounted(() => {
   // 5. Animation Loop
   const animate = () => {
     pieces.forEach((p) => {
-      p.position.y -= 0.15; // Slow, calm fall
-      
-      // Fixed tilt with a steady Y-spin
-      p.rotation.y += 0.006;
+      p.obj.position.y -= p.fallSpeed;
+      p.obj.rotation.x += p.rotSpeed.x;
+      p.obj.rotation.y += p.rotSpeed.y;
+      p.obj.rotation.z += p.rotSpeed.z;
 
-      if (p.position.y < -180) {
-        resetPiece(p);
+      if (p.obj.position.y < -180) {
+        resetPiece(p.obj);
       }
     });
 
@@ -101,12 +125,11 @@ onMounted(() => {
 
   const resetPiece = (p: THREE.Object3D, initial = false) => {
     p.position.set(
-      (Math.random() - 0.5) * 280,
-      initial ? (Math.random() * 400 - 100) : 250,
+      (Math.random() - 0.5) * 350,
+      initial ? (Math.random() * 500 - 100) : 300,
       (Math.random() - 0.5) * 150
     );
-    // Orient them mostly right-side up (0 in X, subtle tilt in Z)
-    p.rotation.set(0, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.4);
+    p.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
   };
 
   animate();
@@ -151,7 +174,11 @@ function onResize() {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.4) 40%, rgba(255,255,255,1) 90%);
+  /* Brighter atmosphere to match intense lights */
+  background: 
+    radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.25) 0%, transparent 60%),
+    radial-gradient(circle at -10% 110%, rgba(239, 68, 68, 0.3) 0%, transparent 70%),
+    linear-gradient(to bottom, transparent 0%, rgba(2, 6, 23, 0.6) 50%, rgba(2, 6, 23, 1) 95%);
   z-index: 1;
 }
 </style>

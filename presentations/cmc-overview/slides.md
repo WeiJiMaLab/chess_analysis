@@ -11,17 +11,17 @@ math: katex
 
 <ChessBackground />
 
-<div class="relative z-10 h-full flex flex-col justify-end pb-10">
-  <h1 class="text-4xl leading-tight">
+<div class="absolute bottom-12 left-14 z-10 text-white">
+  <h1 class="m-0" style="line-height: 1.0; font-size: 3rem; color: white !important;">
     Resource Rational <br>
-    Learned Meta-Control of Tree Search
+    Meta-Control for Tree Search
   </h1>
   
-  <div class="mt-4 text-xl opacity-80">
+  <div class="mt-2 text-lg opacity-80">
     Yotam Sagiv & Jordan Lei
   </div>
 
-  <div class="mt-8 text-xs font-bold uppercase tracking-widest opacity-40">
+  <div class="mt-6 text-[10px] font-bold uppercase tracking-widest opacity-40">
     Mechanistic Interpretability · Resource Rationality · Chess Search
   </div>
 </div>
@@ -168,11 +168,11 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 # 1. Move times are heavy-tailed
 
-<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/move_time_distribution.png" />
   
-  <div class="takeaway border-secondary bg-neutral-soft text-base py-6">
-    <b>Key Takeaway:</b><br><br>
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
     Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
     <br><br>
     Log-transforming to $\ln(T)$ is required to stabilize variance and isolate the behavioral signal.
@@ -183,11 +183,11 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 # 2a. Elasticity: The Naive Aggregate
 
-<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt1_naive_trend.png" />
   
-  <div class="takeaway border-accent bg-accent-soft text-base py-6">
-    <b>Attempt 1 (Primary Confound): Opening Theory</b><br><br>
+  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
+    <b class="text-accent uppercase tracking-wider text-xs">Attempt 1: Opening Theory</b><br><br>
     The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
     <br><br>
     However, this is corrupted by opening moves where players have maximum clocks but move instantly due to preparation.
@@ -198,14 +198,14 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 # 2b. Elasticity: The Ply Paradox
 
-<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt2_ply_wise_trend.png" />
   
-  <div class="takeaway border-danger bg-danger-soft text-base py-6">
-    <b>Attempt 2 (Secondary Confound): Selection Bias</b><br><br>
+  <div class="takeaway border-danger bg-danger-soft text-sm py-4">
+    <b class="text-danger uppercase tracking-wider text-xs">Attempt 2: Selection Bias</b><br><br>
     Controlling for ply reveals a paradox: while aggregate bins look positive, <b>within-ply slopes are negative</b>. 
     <br><br>
-    Faster players (who maintain higher clocks) dominate the high-clock buckets, masking the true relation.
+    Faster players dominate the high-clock buckets, masking the true relation.
   </div>
 </div>
 
@@ -213,11 +213,11 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 # 2c. Elasticity: The Resolution
 
-<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/clock_move_analysis/attempt3_controlled_trend.png" />
   
-  <div class="takeaway border-success bg-success-soft text-base py-6">
-    <b>Attempt 3 (The Thinking Hypothesis): Fixed-Effect Control</b><br><br>
+  <div class="takeaway border-success bg-success-soft text-sm py-4">
+    <b class="text-success uppercase tracking-wider text-xs">The Thinking Hypothesis</b><br><br>
     Accounting for both player identity and game stage resolves the paradox.
     <br><br>
     <div class="text-success font-bold text-2xl">$\beta \approx 0.54$</div>
@@ -229,11 +229,11 @@ Identifying the **"Economy of Thought"** inflection point. The model learns to h
 
 # 3. Value of Computation (The Demand)
 
-<div class="grid grid-cols-2 gap-12 mt-12 items-start">
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/voc_analysis/voc_quad_view.png" />
   
-  <div class="takeaway text-base py-6">
-    <b>Key Takeaway:</b><br><br>
+  <div class="takeaway bg-neutral-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
     <b>VOC</b> measures the potential gain from deep engine search over a shallow read.
     <br><br>
     <b>$\ln(T) \propto \sqrt{VOC}$</b>: Humans spend the most "thought-capital" on positions where depth matters most.
