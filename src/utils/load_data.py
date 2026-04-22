@@ -24,18 +24,18 @@ def process_shard(_JOBID, total_shards=TOTAL_SHARDS):
 
     sorted_shard_keys = sorted(gids["partition_tuple"].unique().tolist())
     partition_tuples = sorted_shard_keys[_JOBID::total_shards]
-    print("Shard partition_tuples:", partition_tuples)
+    print(f"🧩 Shard keys (job {_JOBID}):", partition_tuples)
 
     if len(partition_tuples) == 0:
-        print("No more partitions to process")
+        print("⏭️  No shard keys for this job id — nothing to do.")
         exit()
 
     os.makedirs(STAGING_DIR, exist_ok=True)
 
-    for partition_tuple in tqdm(partition_tuples, desc=f"shards job={_JOBID}"):
+    for partition_tuple in tqdm(partition_tuples, desc=f"♟️ shards job={_JOBID}"):
         partition, segment = partition_tuple
         gids_in_partition = gids[gids["partition_tuple"] == partition_tuple]
-        print("Processing partition:", _JOBID, partition_tuple, "with", len(gids_in_partition), "games")
+        print("♟️  Processing:", _JOBID, partition_tuple, "| games:", len(gids_in_partition))
 
         time_start = time.time()
         gid_list = gids_in_partition["gid"].tolist()
@@ -54,16 +54,18 @@ def process_shard(_JOBID, total_shards=TOTAL_SHARDS):
         )
 
         n_moves = conn.execute("SELECT count(*) FROM read_parquet(?)", [out_path]).fetchone()[0]
-        print("\tNumber of moves:", n_moves)
-        print("\tSaved:", out_path)
-        print("\tTime taken:", time.time() - time_start)
+        print(f"\t📊 Moves written: {n_moves}")
+        print(f"\t💾 Saved: {out_path}")
+        print(f"\t⏱️  Elapsed: {time.time() - time_start:.2f}s")
 
+    print(f"✅ Process shard job {_JOBID} finished.")
     conn.close()
 
 
 def merge_shards():
     """Load staging parquet shards into personal.db (single writer)."""
     pattern = os.path.join(STAGING_DIR, "*.parquet")
+    print(f"🔀 Merge: reading {pattern!r} into {PERSONAL_DB}")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_CONN_KW)
     conn.execute(
         """
@@ -73,6 +75,7 @@ def merge_shards():
         [pattern],
     )
     conn.close()
+    print("✅ Merge finished — table selected_moves replaced.")
 
 
 def main():
@@ -83,8 +86,10 @@ def main():
     args = p.parse_args()
     if args.command == "process":
         jid = args.job_id if args.job_id is not None else int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
+        print(f"🚀 process | job-id={jid} | total-shards={args.total_shards}")
         process_shard(jid, args.total_shards)
     else:
+        print("🚀 merge")
         merge_shards()
 
 
