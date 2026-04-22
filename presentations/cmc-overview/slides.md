@@ -30,35 +30,8 @@ math: katex
 
 # Paper Sketch
 
-<div class="grid grid-cols-3 gap-8 mt-12">
-  <div class="border-l-4 border-accent pl-4">
-    <h2 class="text-accent text-xl mb-0">Part 1: Motivation</h2>
-    <div class="text-accent text-[10px] font-bold mb-4 uppercase tracking-tighter italic opacity-80">(feedback: does this make sense?)</div>
-    <ul class="text-xs space-y-2 opacity-90">
-      <li>Meta-control is hard but crucial.</li>
-      <li>Fixed budgets waste tokens, money, and <b>time</b>.</li>
-      <li>Humans are the existence proof for "thinking about thinking."</li>
-    </ul>
-  </div>
-
-  <div class="border-l-4 border-accent pl-4">
-    <h2 class="text-accent text-xl mb-4">Part 2: Methods</h2>
-    <ul class="text-xs space-y-2 opacity-90">
-      <li>Architecture: GNN + Halt Controller.</li>
-      <li>Training via DP Oracle.</li>
-      <li>Performance benchmarks vs. Baselines.</li>
-    </ul>
-  </div>
-
-  <div class="border-l-4 border-accent pl-4 relative">
-    <h2 class="text-accent text-xl mb-0">Part 3: Validation</h2>
-    <div class="text-accent text-[10px] font-bold mb-4 uppercase tracking-tighter italic opacity-80">(feedback: what else should we show?)</div>
-    <ul class="text-xs space-y-2 opacity-90">
-      <li>Is it working as intended?</li>
-      <li>Human Alignment: Does the "Thinking Curve" match human data?</li>
-    </ul>
-    <div class="absolute -top-3 -right-4 bg-accent text-white text-[8px] px-2 py-1 rotate-12 font-bold rounded">FEEDBACK WANTED</div>
-  </div>
+<div class="h-full flex flex-col justify-start mt-2">
+  <PaperSketch />
 </div>
 
 ---
@@ -88,11 +61,9 @@ math: katex
 # Part 2: High-Level Architecture
 
 <div class="h-full flex flex-col items-center justify-center bg-transparent">
-  <div class="scale-110 transform origin-center">
-    <LeelaSearchLoop />
-  </div>
+  <LeelaSearchLoop />
   
-  <div class="mt-28 p-3 bg-neutral-soft border-l-2 border-accent italic text-[11px] opacity-80">
+  <div class="mt-8 p-3 bg-neutral-soft border-l-2 border-accent italic text-[11px] opacity-80">
     Implementation details (GNN sweeps, DP Oracle, Halt Controller) are in the Appendix.
   </div>
 </div>
