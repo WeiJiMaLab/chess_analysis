@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=16G
 #SBATCH --time=00:10:00
-#SBATCH --array=0-99
+#SBATCH --array=0
 
 # One array task per stride index; must match TOTAL_SHARDS / --total-shards in src/utils/load_data.py.
 # Raise --time if any task is killed mid-shard (see .out for last parquet).
@@ -28,6 +28,11 @@ fi
 
 echo "Job ${SLURM_JOB_ID:-?} task ${SLURM_ARRAY_TASK_ID:-?} on $(hostname) at $(date)"
 
-python3 src/utils/load_data.py process --total-shards 100
+if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
+  echo "ERROR: set LOAD_MOVES_TMPDIR (script_load_moves.sh does this)." >&2
+  exit 1
+fi
+
+python3 src/utils/load_data.py process --total-shards 1 --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Finished at $(date)"

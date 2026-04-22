@@ -1,70 +1,100 @@
-# Chess Clock vs. Move Time: A Statistical Analysis (Poster Edition)
+# Chess Thinking Dynamics: Analysis Overview
 
-## 1. Distribution of Thinking Time
-The first step in any behavioral analysis is understanding the underlying distribution. Chess move times are highly heavy-tailed. Natural log-transformation ($\log$) is essential to normalize the variance; without it, the "heavy tail" of long thinks would dominate any statistical estimate.
+Welcome! This directory contains the analysis pipeline and results for our study on **Chess Thinking Dynamics**. 
 
-![Move Time Distribution](file:///home/hl4291/chess_analysis/src/figures/clocktime_movetime/move_time_distribution.png)
+> [!NOTE]
+> **Environment**: A native Python virtual environment is available in the project root (`.venv`). Always ensure it is activated before running scripts: `source .venv/bin/activate`.
 
----
-
-## 2. The Statistical Framework: Resource Allocation
-To isolate the relationship between clock availability and thinking time, we utilize a residual-based approach. By operating in log-space, our residuals represent **percentage deviations** from a baseline.
-
-### The Baseline Model
-For a move by player $i$ at ply $p$, the observed move time $T$ is modeled as:
-$$\log(T) = \alpha + \beta \log(\text{Clock Time}) + \gamma_{p} + \delta_{i} + \epsilon$$
-where:
-- $\text{Clock Time}$ is the time remaining on the clock.
-- $\gamma_{p}$ is the **Ply Control** (stage-of-game baseline).
-- $\delta_{i}$ is the **Player Control** (intrinsic speed baseline).
-- $\epsilon$ is the remaining variance.
-
-### Residual Calculation
-We isolate the "Thinking Resource" signal by subtracting the expected medians:
-$$\text{Residual} = \log(T) - \log(\text{med}_{ply}) - \log(\text{med}_{player})$$
-In this space, a value of $+0.7$ means the player spent $e^{0.7} \approx 2\times$ their typical time for that ply and speed profile.
+Our goal is to understand how human players allocate their most precious resource—**time**—based on external pressure (the clock) and internal demand (the complexity of the position).
 
 ---
 
-## 3. The Progression of Controls
-We present the analysis in a standardized **Quad-View Poster** format, with top/right borders removed and subgrids enabled for clarity.
+## 1. The Behavioral Findings
 
-### Attempt 1: The Naive Aggregate (Blue)
-The raw data shows a shallow positive trend ($\beta \approx 0.09$), but is corrupted by opening theory, where players have a full clock but move instantly.
+We treat chess as a "natural laboratory" for studying resource allocation. Here is what we've discovered so far:
 
-![Naive Trend](file:///home/hl4291/chess_analysis/src/figures/clocktime_movetime/attempt1_naive_trend.png)
+### The Thinking Distribution
+Thinking time is extremely heavy-tailed. Most moves are fast, but "long thinks" can span minutes. We use **natural log-transformations ($\log T$)** to normalize this variance, allowing us to interpret residuals as percentage deviations from the baseline.
 
-### Attempt 2: The Ply-Controlled Paradox (Red)
-Removing the game stage effect ($\gamma_p$) reveals a paradox: while the binned trends look flat or positive, the individual **Within-Ply Slopes** are negative. This is because faster players (who always have more clock) dominate the high-clock buckets.
+### Clock Pressure: The "Budget" Effect
+How does your remaining clock time affect how long you think? 
+- **The Finding**: We find a robust "Elasticity of Thinking" $\approx 0.54$. 
+- **What it means**: If you have 10% more time on your clock, you tend to spend about 5.4% more time on the current move.
+- **The Paradox**: This relationship is only visible once we control for both the game stage (Ply) and the individual player's speed profile. Without these controls, the signal is masked by opening theory and player-level speed differences.
 
-![Ply-wise Quad-View](file:///home/hl4291/chess_analysis/src/figures/clocktime_movetime/attempt2_ply_wise_trend.png)
+### Value of Computation (VOC): The "Demand" Effect
+Beyond the clock, the primary driver of thinking time is **complexity**. We quantify this as the "Value of Computation"—the gain in win probability discovered by a deep engine search (Depth 14) vs. a shallow heuristic (Depth 1).
+- **The Finding**: Move time scales with the square root of prospective gain.
+- **Stability**: Unlike the clock effect, the VOC effect is remarkably stable across all stages of the game.
 
-### Attempt 3: The Resolved "Thinking Hypothesis" (Green)
-By controlling for **both** player identity ($\delta_i$) and game stage ($\gamma_p$), the paradox is resolved. The positive relationship emerges clearly in all dimensions.
-
-**Result**: The isolated causal effect of the clock is:
-$$\frac{\partial \log(T)}{\partial \log(\text{Clock Time})} \approx 0.54$$
-A 10% increase in clock leads to a ~5.4% increase in thinking time.
-
-![Double-Controlled Quad-View](file:///home/hl4291/chess_analysis/src/figures/clocktime_movetime/attempt3_controlled_trend.png)
-
-## 4. The Value of Computation (VOC)
-Beyond clock pressure, the move-by-move complexity—the benefit of "thinking"—is the primary internal driver of time allocation. Following **Russek et al. (2024)**, we quantify this as **Value of Computation (VOC)**: the difference in win probability between a shallow (depth-1) heuristic and a deep (depth-14) engine evaluation.
-
-Our analysis confirms the standard cognitive literature: move time scales with the square root of prospective gain.
-
-$$\log(T) \approx \beta_0 + \beta_1 \sqrt{VOC}$$
-
-### VOC Performance and Stability
-To ensure this effect is not a confounder of game stage (ply), we perform a **Within-Ply Stability Analysis**. As shown below, the VOC coefficient remains positive and remarkably stable throughout the game, contrasting with the naive clock-time relationship.
-
-![VOC Quad-View](file:///home/hl4291/chess_analysis/src/figures/voc_movetime/voc_quad_view.png)
+### The Mid-game "Arc"
+Thinking time isn't constant. It follows a characteristic quadratic arc, peaking around ply 40-50 (the height of the mid-game) before tapering off as the board simplifies in the endgame.
 
 ---
 
-## 5. Conclusion: A Dual-Control Model
-The "Thinking Hypothesis" is substantiated by two independent, causally rigorous controllers:
-1. **Clock Pressure (Elasticity $\approx$ 0.54)**: A 10% increase in clock time leads to a ~5.4% increase in thinking time.
-2. **Computational Complexity (VOC)**: Players spend significantly more time on positions where deep search reveals meaningful improvements over intuition.
+## 2. Our Visual Framework: The "Poster-Style"
 
-This model treats the chess clock as a literal **budget** and the VOC as the **demand**, providing a quantitative framework for understanding the elasticity of human thinking.
+To maintain consistency across metrics, we analyze every variable using a standardized **2x2 Quad-View** (defined in `src/utils/plots.py`). This layout is designed for publication-quality "Poster" presentation:
+
+| Quadrant | Name | Purpose |
+| :--- | :--- | :--- |
+| **Top-Left** | Hexbin Density | Shows the raw correlation and where the data is "clumped." |
+| **Top-Right** | Binned Trend (Raw) | Shows how $\log T$ changes across quantiles of the metric. |
+| **Bottom-Left** | Ply-Stability Plot | Shows the regression slope ($\beta$) at different stages of the game. |
+| **Bottom-Right** | Binned Trend (Rank) | Standardizes the x-axis to a 0-1 rank for easier comparison between different metrics. |
+
+---
+
+## 3. Data Infrastructure & Pipeline
+
+Handling millions of moves requires more than just a simple script. We use a high-performance parallelized pipeline:
+
+### The Database Stack
+- **Primary Database (`core`)**: A multi-terabyte DuckDB instance (`lichess.db`) containing the full history of the Lichess Open Database.
+- **Personal Database (`personal.db`)**: A localized DuckDB instance used for "write-back" operations, storing specific game subsets and intermediate analysis results.
+
+### Sharded Extraction (Slurm)
+To handle "larger-than-memory" move extraction, we use a Slurm-based sharding process:
+1. **Sharding**: `load_moves_shards.sbatch` partitions the extraction across multiple nodes.
+2. **Merging**: `load_moves_merge.sbatch` unifies the shards into the personal database.
+3. **Quality Control**: We automatically **exclude entire games** that contain any negative move times (artifacts of lag compensation or manual clock additions) to ensure the integrity of our behavioral models.
+
+### VOC Generation
+Computational complexity metrics are generated by distributing Stockfish 14 evaluations across a compute cluster (`voc_compute.sbatch`), computing the delta between shallow and deep searches for each position.
+
+---
+
+## 4. How to Run the Analysis
+
+1. **Extraction**: `bash src/slurm/script_load_moves.sh` (Pulls moves for selected games).
+2. **Processing**: `python src/script_process_data.py` (Calculates basic features).
+3. **Analysis**: 
+   - `python src/fe_clocktime_movetime.py` (Fixed-effects clock analysis).
+   - `python src/voc_movetime.py` (Complexity analysis).
+   - `python src/ply_movetime.py` (Game stage analysis).
+
+Results and figures are saved to `src/figures/`.
+
+---
+
+## 5. Guide for Contributors & AI Agents
+
+This repository follows a strict "Readability First" philosophy. If you are adding new analysis scripts or modifying the pipeline, you are expected to adhere to these design principles:
+
+### Design Philosophy
+- **Readability over Flexibility**: We prefer simple, explicit code over complex abstractions. Do not use overly generic "Swiss-army knife" functions; it is better to have two clear, slightly redundant functions than one "clever" function with ten optional flags.
+- **Informative Naming**: Model names, variables, and columns must be descriptive. For example, use `log_clock_ply_controlled` instead of `x_adj`.
+- **Minimalist Interfaces**: Avoid adding dozens of CLI arguments. A script should do one thing well with a stable, predictable interface.
+
+### Structural Requirements
+- **Strict Modularity**: Every script must separate **Data Loading**, **Modeling/Analysis**, and **Plotting** into distinct, well-scoped functions. 
+- **Path Portability (Non-Negotiable)**: All paths must be constructed using `os.path.join()` and anchored to the script's location via `os.path.abspath(__file__)`. This ensures that scripts remain functional whether run locally or in a Slurm batch environment.
+- **Main Block Execution**: All execution logic must reside within `if __name__ == "__main__":` blocks.
+
+### Statistical & Visual Standards
+- **Standardized Aesthetics**: All plots **must** call `apply_poster_style()` from `utils.helpers`. We use a specific visual language (no top/right borders, specific font sizes) to ensure figures are "poster-ready."
+- **Fixed-Effect Pipeline**: When controlling for game stage or player speed, use the "de-meaning" pattern (subtracting the group mean) demonstrated in `fe_clocktime_movetime.py`.
+- **Log-Space Normalization**: Always operate in $\log$ space for move times and clock times unless there is a specific theoretical reason to do otherwise.
+
+### Summary for AI Agents
+When generating new code for this directory, do not suggest "highly flexible" or "generalized" frameworks. Instead, provide linear, readable, and modular scripts that follow the existing patterns in `src/utils/`. Prioritize code that can be understood at a glance.

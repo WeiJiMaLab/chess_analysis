@@ -44,3 +44,9 @@ dist/
 # Shared engine + nets
 engines/
 weights/
+
+# Slurm
+src/slurm/logs/
+*.out
+*.err
+slurm-*.out

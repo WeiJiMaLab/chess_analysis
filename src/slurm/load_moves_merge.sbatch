@@ -27,6 +27,11 @@ fi
 
 echo "Merge job ${SLURM_JOB_ID:-?} on $(hostname) at $(date)"
 
-python3 src/utils/load_data.py merge
+if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
+  echo "ERROR: set LOAD_MOVES_TMPDIR (script_load_moves.sh does this)." >&2
+  exit 1
+fi
+
+python3 src/utils/load_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Finished at $(date)"
