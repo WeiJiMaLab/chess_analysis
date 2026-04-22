@@ -83,7 +83,7 @@
 
           <line x1="90" y1="55" x2="90" y2="85" class="edge-down" marker-end="url(#arr-down)" />
           <rect x="30" y="85" width="120" height="40" rx="8" class="bg-info-dark" />
-          <text x="90" y="110" text-anchor="middle" class="label-bold text-info-dark">Downward MLP</text>
+          <text x="90" y="110" text-anchor="middle" class="label-bold text-info-dark">Linear</text>
           <line x1="90" y1="125" x2="90" y2="145" class="edge-down" marker-end="url(#arr-down)" />
 
           <g transform="translate(90, 255)">
