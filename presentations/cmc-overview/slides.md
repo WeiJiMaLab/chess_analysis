@@ -1,6 +1,6 @@
 ---
 theme: default
-title: Resource Rational Learned Meta-Control of Tree Search
+title: Learned Meta-control of Tree Search
 info: |
   A didactic breakdown of the CMC architecture: Control Flow · Representation · GNN Mechanics · Decision · Training.
 css: ./style.css
@@ -13,8 +13,8 @@ math: katex
 
 <div class="absolute bottom-12 left-14 z-10 text-white">
   <h1 class="m-0" style="line-height: 1.0; font-size: 3rem; color: white !important;">
-    Resource Rational <br>
-    Meta-Control for Tree Search
+    Learned Meta-control<br>
+    of Tree Search
   </h1>
   
   <div class="mt-2 text-lg opacity-80">
@@ -88,7 +88,7 @@ math: katex
 # Part 2: High-Level Architecture
 
 <div class="h-full flex flex-col items-center justify-center bg-transparent">
-  <div class="scale-160 transform origin-center">
+  <div class="scale-110 transform origin-center">
     <LeelaSearchLoop />
   </div>
   
@@ -251,6 +251,7 @@ $$
 <div>
   <GnnPretrainDiagram />
 </div>
+
 
 ---
 

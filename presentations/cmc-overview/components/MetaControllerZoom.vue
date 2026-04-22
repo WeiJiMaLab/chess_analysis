@@ -36,7 +36,10 @@
           <text x="90" y="32" text-anchor="middle" class="subplot-label">Board State (s)</text>
           
           <line x1="180" y1="25" x2="255" y2="25" class="edge" stroke-width="2.5" marker-end="url(#arr-mini-p)" />
-          <text x="217" y="16" text-anchor="middle" class="subplot-tiny bold salient">Leela-MCTS</text>
+          <text x="217" y="8" text-anchor="middle" class="subplot-tiny bold salient">
+            <tspan x="217" dy="0">Leela</tspan>
+            <tspan x="217" dy="11">Features</tspan>
+          </text>
         </g>
 
         <!-- MLP -->
@@ -79,8 +82,8 @@
             <text x="80" y="85" text-anchor="middle" class="tiny text-accent salient">(Bi-Sweep)</text>
 
             <!-- Recurrent state loops (stylized) -->
-            <path d="M 30 -10 Q 80 -30, 130 -10" fill="none" stroke="var(--color-info)" stroke-width="2" marker-end="url(#arr-accent)" stroke-dasharray="3" />
-            <text x="80" y="-35" text-anchor="middle" class="label-tiny bold text-info">h(t) → h(t+1)</text>
+
+
 
             <line x1="160" y1="50" x2="210" y2="50" class="edge" marker-end="url(#arr-i)" />
           </g>
