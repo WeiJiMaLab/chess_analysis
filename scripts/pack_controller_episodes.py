@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -25,9 +24,15 @@ from budgeted_controller_oracle import (
     compute_budgeted_oracle,
     deterministic_starting_budgets,
     has_strong_budgeted_margins,
+    return_for_stop_step,
 )
 from cts_pretrain import RawPretrainExampleRecord, TeacherSearchConfig, load_raw_pretrain_record
 from schema import NodeFeatureSchema, tree_encoder_feature_schema
+
+_BUDGET_SCORE_KEEP_FLOOR = 0.25
+_TREE_STRATIFICATION_NUM_BINS = 3
+_TREE_STRATIFICATION_MIXTURE_WEIGHT = 0.5
+_TREE_STRATIFICATION_J_MULTIPLIERS = (1.0, 1.25, 1.5)
 
 
 def _feature_schema() -> NodeFeatureSchema:
@@ -117,34 +122,287 @@ def _source_top_level_root_churn_category(record: Any) -> Optional[str]:
     return "X*AB*A"
 
 
-def _oracle_stop_entropy_bin(stop_step: int) -> int:
-    if stop_step <= 1:
-        return 0
-    if stop_step <= 5:
-        return 1
-    if stop_step <= 9:
-        return 2
-    if stop_step <= 12:
-        return 3
-    return 4
+def _tree_stop_depth_excess(episodes: List[dict[str, Any]]) -> float:
+    if not episodes:
+        return 0.0
+    return float(
+        np.mean(
+            np.asarray([max(int(episode["oracle_stop_step"]) - 1, 0) for episode in episodes], dtype=np.float32)
+        )
+    )
 
 
-def _normalized_stop_step_entropy(stop_steps: List[int]) -> float:
-    if not stop_steps:
+def _tree_budget_action_variance(episodes: List[dict[str, Any]]) -> float:
+    if not episodes:
         return 0.0
-    counts = [0] * 5
-    for stop_step in stop_steps:
-        counts[_oracle_stop_entropy_bin(int(stop_step))] += 1
-    total = float(sum(counts))
-    if total <= 0.0:
-        return 0.0
-    entropy = 0.0
-    for count in counts:
-        if count <= 0:
+    max_steps = max(len(episode["target_advantages"]) for episode in episodes)
+    variances: List[float] = []
+    for step_index in range(max_steps):
+        continue_actions = [
+            1.0 if float(episode["target_advantages"][step_index]) > 0.0 else 0.0
+            for episode in episodes
+            if step_index < len(episode["target_advantages"])
+        ]
+        if len(continue_actions) < 2:
             continue
-        probability = count / total
-        entropy -= probability * math.log(probability)
-    return entropy / math.log(len(counts))
+        continue_probability = float(np.mean(np.asarray(continue_actions, dtype=np.float32)))
+        variances.append(continue_probability * (1.0 - continue_probability))
+    if not variances:
+        return 0.0
+    return float(np.mean(np.asarray(variances, dtype=np.float32)))
+
+
+def _tree_stratification_stats(episodes: List[dict[str, Any]]) -> tuple[float, float]:
+    return _tree_stop_depth_excess(episodes), _tree_budget_action_variance(episodes)
+
+
+def _tree_budget_sensitivity_score(
+    episodes: List[dict[str, Any]],
+    tree_sizes: List[int],
+    oracle_config: BudgetedOracleConfig,
+) -> float:
+    if not episodes or not tree_sizes:
+        return 0.0
+    budget_aware_values: List[float] = []
+    max_shared_stop = -1
+    for episode in episodes:
+        halt_rewards = [float(value) for value in episode["halt_rewards"]]
+        if not halt_rewards:
+            continue
+        budget_aware_values.append(float(episode["oracle_value"]))
+        max_shared_stop = max(max_shared_stop, len(halt_rewards) - 1)
+    if not budget_aware_values or max_shared_stop < 0:
+        return 0.0
+    budget_aware_value = float(np.mean(np.asarray(budget_aware_values, dtype=np.float32)))
+    budget_blind_value = max(
+        float(
+            np.mean(
+                np.asarray(
+                    [
+                        return_for_stop_step(
+                            halt_rewards,
+                            tree_sizes[: len(halt_rewards)],
+                            [int(episode["starting_budget"]) - idx for idx in range(len(halt_rewards))],
+                            min(stop_step, len(halt_rewards) - 1),
+                            oracle_config,
+                        )
+                        for episode in episodes
+                        for halt_rewards in [[float(value) for value in episode["halt_rewards"]]]
+                        if halt_rewards
+                    ],
+                    dtype=np.float32,
+                )
+            )
+        )
+        for stop_step in range(max_shared_stop + 1)
+    )
+    return budget_aware_value - budget_blind_value
+
+
+def _tree_budget_sensitivity_keep_probability(score: float, max_score: float) -> float:
+    if max_score <= 0.0:
+        return 1.0
+    clamped_score = min(max(float(score), 0.0), float(max_score))
+    normalized = clamped_score / float(max_score)
+    return _BUDGET_SCORE_KEEP_FLOOR + (1.0 - _BUDGET_SCORE_KEEP_FLOOR) * normalized
+
+
+def _quantile_thresholds(values: List[float], num_bins: int) -> List[float]:
+    if not values or num_bins <= 1:
+        return []
+    quantiles = [bin_index / num_bins for bin_index in range(1, num_bins)]
+    return [float(value) for value in np.quantile(np.asarray(values, dtype=np.float32), quantiles)]
+
+
+def _quantile_bin(value: float, thresholds: List[float]) -> int:
+    bin_index = 0
+    for threshold in thresholds:
+        if value > threshold:
+            bin_index += 1
+    return bin_index
+
+
+def _tree_stratum_key(
+    stop_depth_excess: float,
+    budget_action_variance: float,
+    stop_depth_thresholds: List[float],
+    budget_action_thresholds: List[float],
+    stratification_mode: str,
+) -> str:
+    d_bin = _quantile_bin(stop_depth_excess, stop_depth_thresholds)
+    j_bin = _quantile_bin(budget_action_variance, budget_action_thresholds)
+    if stratification_mode == "d":
+        return f"d{d_bin}"
+    if stratification_mode == "j":
+        return f"j{j_bin}"
+    return f"d{d_bin}_j{j_bin}"
+
+
+def _tree_stratified_keep_probability(
+    stratum_count: int,
+    total_trees: int,
+    num_nonempty_strata: int,
+    max_relative_mass: float,
+) -> float:
+    if stratum_count <= 0 or total_trees <= 0 or num_nonempty_strata <= 0 or max_relative_mass <= 0.0:
+        return 1.0
+    relative_mass = (1.0 - _TREE_STRATIFICATION_MIXTURE_WEIGHT) + (
+        _TREE_STRATIFICATION_MIXTURE_WEIGHT * float(total_trees) / (float(num_nonempty_strata) * float(stratum_count))
+    )
+    return min(relative_mass / max_relative_mass, 1.0)
+
+
+def _compute_tree_stratified_keep_probabilities_from_rows(
+    rows: List[dict[str, Any]],
+    stratification_mode: str,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    if not rows:
+        return {}, {
+            "tree_stratification_mode": stratification_mode,
+            "tree_stop_depth_thresholds": [],
+            "tree_budget_action_variance_thresholds": [],
+            "tree_strata_counts": {},
+            "tree_stratification_num_bins": _TREE_STRATIFICATION_NUM_BINS,
+            "tree_stratification_mixture_weight": _TREE_STRATIFICATION_MIXTURE_WEIGHT,
+            "tree_stratification_j_multipliers": list(_TREE_STRATIFICATION_J_MULTIPLIERS),
+        }
+
+    stop_depth_thresholds = _quantile_thresholds(
+        [float(row["stop_depth_excess"]) for row in rows],
+        _TREE_STRATIFICATION_NUM_BINS,
+    )
+    budget_action_thresholds = _quantile_thresholds(
+        [float(row["budget_action_variance"]) for row in rows],
+        _TREE_STRATIFICATION_NUM_BINS,
+    )
+
+    total_trees = len(rows)
+    d_bin_by_path: dict[str, int] = {}
+    d_counts: dict[int, int] = {}
+    rows_by_d_bin: dict[int, List[dict[str, Any]]] = {}
+    for row in rows:
+        path_str = str(row["source_path"])
+        d_bin = _quantile_bin(float(row["stop_depth_excess"]), stop_depth_thresholds)
+        d_bin_by_path[path_str] = d_bin
+        d_counts[d_bin] = d_counts.get(d_bin, 0) + 1
+        rows_by_d_bin.setdefault(d_bin, []).append(row)
+
+    num_nonempty_d_bins = len(d_counts)
+    d_relative_masses = {
+        d_bin: (1.0 - _TREE_STRATIFICATION_MIXTURE_WEIGHT)
+        + (_TREE_STRATIFICATION_MIXTURE_WEIGHT * float(total_trees) / (float(num_nonempty_d_bins) * float(count)))
+        for d_bin, count in d_counts.items()
+    }
+    max_d_relative_mass = max(d_relative_masses.values()) if d_relative_masses else 1.0
+    d_keep_probabilities = {
+        d_bin: _tree_stratified_keep_probability(
+            count,
+            total_trees,
+            num_nonempty_d_bins,
+            max_d_relative_mass,
+        )
+        for d_bin, count in d_counts.items()
+    }
+
+    if stratification_mode == "d":
+        keep_probabilities = {
+            str(row["source_path"]): d_keep_probabilities[d_bin_by_path[str(row["source_path"])]]
+            for row in rows
+        }
+        return keep_probabilities, {
+            "tree_stratification_mode": stratification_mode,
+            "tree_stop_depth_thresholds": stop_depth_thresholds,
+            "tree_budget_action_variance_thresholds": budget_action_thresholds,
+            "tree_strata_counts": {f"d{d_bin}": count for d_bin, count in sorted(d_counts.items())},
+            "tree_stratification_num_bins": _TREE_STRATIFICATION_NUM_BINS,
+            "tree_stratification_mixture_weight": _TREE_STRATIFICATION_MIXTURE_WEIGHT,
+            "tree_stratification_j_multipliers": list(_TREE_STRATIFICATION_J_MULTIPLIERS),
+        }
+
+    if stratification_mode == "j":
+        j_bin_by_path: dict[str, int] = {}
+        j_counts: dict[int, int] = {}
+        for row in rows:
+            path_str = str(row["source_path"])
+            j_bin = _quantile_bin(float(row["budget_action_variance"]), budget_action_thresholds)
+            j_bin_by_path[path_str] = j_bin
+            j_counts[j_bin] = j_counts.get(j_bin, 0) + 1
+        num_nonempty_j_bins = len(j_counts)
+        j_relative_masses = {
+            j_bin: (1.0 - _TREE_STRATIFICATION_MIXTURE_WEIGHT)
+            + (_TREE_STRATIFICATION_MIXTURE_WEIGHT * float(total_trees) / (float(num_nonempty_j_bins) * float(count)))
+            for j_bin, count in j_counts.items()
+        }
+        max_j_relative_mass = max(j_relative_masses.values()) if j_relative_masses else 1.0
+        keep_probabilities = {
+            path_str: _tree_stratified_keep_probability(
+                j_counts[j_bin_by_path[path_str]],
+                total_trees,
+                num_nonempty_j_bins,
+                max_j_relative_mass,
+            )
+            for path_str in j_bin_by_path
+        }
+        return keep_probabilities, {
+            "tree_stratification_mode": stratification_mode,
+            "tree_stop_depth_thresholds": stop_depth_thresholds,
+            "tree_budget_action_variance_thresholds": budget_action_thresholds,
+            "tree_strata_counts": {f"j{j_bin}": count for j_bin, count in sorted(j_counts.items())},
+            "tree_stratification_num_bins": _TREE_STRATIFICATION_NUM_BINS,
+            "tree_stratification_mixture_weight": _TREE_STRATIFICATION_MIXTURE_WEIGHT,
+            "tree_stratification_j_multipliers": list(_TREE_STRATIFICATION_J_MULTIPLIERS),
+        }
+
+    keep_probabilities: dict[str, float] = {}
+    stratum_counts: dict[str, int] = {}
+    j_thresholds_by_d_bin: dict[str, List[float]] = {}
+    for d_bin, d_rows in rows_by_d_bin.items():
+        base_keep_probability = d_keep_probabilities[d_bin]
+        if base_keep_probability >= 1.0:
+            for row in d_rows:
+                path_str = str(row["source_path"])
+                keep_probabilities[path_str] = 1.0
+                stratum_key = f"d{d_bin}_j0"
+                stratum_counts[stratum_key] = stratum_counts.get(stratum_key, 0) + 1
+            j_thresholds_by_d_bin[f"d{d_bin}"] = []
+            continue
+
+        d_budget_action_thresholds = _quantile_thresholds(
+            [float(row["budget_action_variance"]) for row in d_rows],
+            _TREE_STRATIFICATION_NUM_BINS,
+        )
+        j_thresholds_by_d_bin[f"d{d_bin}"] = d_budget_action_thresholds
+        j_counts: dict[int, int] = {}
+        j_bin_by_path: dict[str, int] = {}
+        for row in d_rows:
+            path_str = str(row["source_path"])
+            j_bin = _quantile_bin(float(row["budget_action_variance"]), d_budget_action_thresholds)
+            j_bin_by_path[path_str] = j_bin
+            j_counts[j_bin] = j_counts.get(j_bin, 0) + 1
+        mean_multiplier = sum(
+            float(j_counts[j_bin]) * _TREE_STRATIFICATION_J_MULTIPLIERS[j_bin]
+            for j_bin in j_counts
+        ) / float(len(d_rows))
+        for row in d_rows:
+            path_str = str(row["source_path"])
+            j_bin = j_bin_by_path[path_str]
+            keep_probabilities[path_str] = min(
+                base_keep_probability * (_TREE_STRATIFICATION_J_MULTIPLIERS[j_bin] / mean_multiplier),
+                1.0,
+            )
+            stratum_key = f"d{d_bin}_j{j_bin}"
+            stratum_counts[stratum_key] = stratum_counts.get(stratum_key, 0) + 1
+
+    return keep_probabilities, {
+        "tree_stratification_mode": stratification_mode,
+        "tree_stop_depth_thresholds": stop_depth_thresholds,
+        "tree_budget_action_variance_thresholds": budget_action_thresholds,
+        "tree_strata_counts": dict(sorted(stratum_counts.items())),
+        "tree_stratification_num_bins": _TREE_STRATIFICATION_NUM_BINS,
+        "tree_stratification_mixture_weight": _TREE_STRATIFICATION_MIXTURE_WEIGHT,
+        "tree_stratification_j_multipliers": list(_TREE_STRATIFICATION_J_MULTIPLIERS),
+        "tree_budget_action_variance_thresholds_by_d_bin": j_thresholds_by_d_bin,
+    }
 
 
 def _deterministic_unit_interval(identifier: str, seed: int) -> float:
@@ -214,6 +472,155 @@ def _build_compact_trajectory(
     }
 
 
+def _build_packed_tree_result(
+    path_str: str,
+    reward_scale: float,
+    min_halt_reward_range: float,
+    min_decision_margin: float,
+    exclude_xaba: bool,
+    feature_names: Tuple[str, ...],
+    oracle_config: BudgetedOracleConfig,
+) -> Optional[dict[str, Any]]:
+    record = load_raw_pretrain_record(path_str)
+    if not isinstance(record, RawPretrainExampleRecord):
+        return None
+    if exclude_xaba and _source_top_level_root_churn_category(record) == "X*AB*A":
+        return None
+    trajectory = _build_compact_trajectory(path_str, record, NodeFeatureSchema(feature_names))
+    if trajectory is None or trajectory["num_steps"] <= 0:
+        return None
+
+    scaled_rewards = [float(reward_scale * reward) for reward in trajectory["halt_rewards"].tolist()]
+    tree_sizes = [int(value) for value in trajectory["tree_sizes"].tolist()]
+    if _halt_reward_range(scaled_rewards) < min_halt_reward_range:
+        return None
+
+    packed_episodes: List[dict[str, Any]] = []
+    for sampled_budget in deterministic_starting_budgets(path_str, oracle_config):
+        if not has_strong_budgeted_margins(
+            scaled_rewards,
+            tree_sizes,
+            sampled_budget.starting_budget,
+            oracle_config,
+            min_decision_margin,
+        ):
+            continue
+
+        policy = compute_budgeted_oracle(
+            scaled_rewards,
+            tree_sizes,
+            sampled_budget.starting_budget,
+            oracle_config,
+        )
+        max_steps = len(policy.halt_rewards)
+        episode_key = f"{path_str}#bucket={sampled_budget.bucket_name}#budget={sampled_budget.starting_budget}"
+        packed_episodes.append(
+            {
+                "num_steps": max_steps,
+                "target_advantages": np.asarray(policy.target_advantages, dtype=np.float32),
+                "oracle_stop_step": policy.optimal_stop_step,
+                "oracle_value": policy.oracle_value,
+                "starting_budget": policy.starting_budget,
+                "bucket_index": sampled_budget.bucket_index,
+                "bucket_name": sampled_budget.bucket_name,
+                "episode_key": episode_key,
+                "source_path": path_str,
+                "halt_rewards": list(policy.halt_rewards),
+            }
+        )
+    if not packed_episodes:
+        return None
+    stop_depth_excess, budget_action_variance = _tree_stratification_stats(packed_episodes)
+    return {
+        "trajectory": trajectory,
+        "episodes": packed_episodes,
+        "stop_depth_excess": stop_depth_excess,
+        "budget_action_variance": budget_action_variance,
+        "budget_score": _tree_budget_sensitivity_score(
+            packed_episodes,
+            tree_sizes,
+            oracle_config,
+        ),
+    }
+
+
+def _compute_max_budget_score(
+    example_paths: List[Path],
+    reward_scale: float,
+    min_halt_reward_range: float,
+    min_decision_margin: float,
+    exclude_xaba: bool,
+    feature_names: Tuple[str, ...],
+    oracle_config: BudgetedOracleConfig,
+    num_workers: int,
+) -> float:
+    tasks = [
+        (
+            str(path),
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+        )
+        for path in example_paths
+    ]
+    max_budget_score = 0.0
+    if num_workers <= 0:
+        for task in tasks:
+            result = _score_one_task(task)
+            max_budget_score = max(max_budget_score, float(result.get("budget_score", 0.0)))
+        return max_budget_score
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = [executor.submit(_score_one_task, task) for task in tasks]
+        for future in as_completed(futures):
+            result = future.result()
+            max_budget_score = max(max_budget_score, float(result.get("budget_score", 0.0)))
+    return max_budget_score
+
+
+def _compute_tree_stratified_keep_probabilities(
+    example_paths: List[Path],
+    reward_scale: float,
+    min_halt_reward_range: float,
+    min_decision_margin: float,
+    exclude_xaba: bool,
+    feature_names: Tuple[str, ...],
+    oracle_config: BudgetedOracleConfig,
+    num_workers: int,
+    stratification_mode: str,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    tasks = [
+        (
+            str(path),
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+        )
+        for path in example_paths
+    ]
+    rows: List[dict[str, Any]] = []
+    if num_workers <= 0:
+        for task in tasks:
+            result = _tree_stats_one_task(task)
+            if result is not None:
+                rows.append(result)
+    else:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(_tree_stats_one_task, task) for task in tasks]
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    rows.append(result)
+
+    return _compute_tree_stratified_keep_probabilities_from_rows(rows, stratification_mode)
+
+
 def _pack_split(
     manifest_path: Path,
     output_root: Path,
@@ -223,7 +630,9 @@ def _pack_split(
     min_halt_reward_range: float,
     min_decision_margin: float,
     exclude_xaba: bool,
-    sample_trees_by_stop_entropy: bool,
+    sample_trees_by_tree_strata: bool,
+    tree_stratification_mode: str,
+    sample_trees_by_budget_score: bool,
     shard_size: int,
     num_workers: int,
     log_interval: int,
@@ -239,24 +648,58 @@ def _pack_split(
     entries: List[dict] = []
     total_episodes = 0
     total_skipped = 0
-    total_entropy_filtered = 0
+    total_tree_strata_filtered = 0
+    total_budget_score_filtered = 0
     total_shards = (len(example_paths) + shard_size - 1) // shard_size
+    tree_keep_probabilities, tree_stratification_metadata = (
+        _compute_tree_stratified_keep_probabilities(
+            example_paths,
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+            num_workers,
+            tree_stratification_mode,
+        )
+        if sample_trees_by_tree_strata
+        else ({}, {
+            "tree_stratification_mode": tree_stratification_mode,
+            "tree_stop_depth_thresholds": [],
+            "tree_budget_action_variance_thresholds": [],
+            "tree_strata_counts": {},
+            "tree_stratification_num_bins": _TREE_STRATIFICATION_NUM_BINS,
+            "tree_stratification_mixture_weight": _TREE_STRATIFICATION_MIXTURE_WEIGHT,
+        })
+    )
+    max_budget_score = (
+        _compute_max_budget_score(
+            example_paths,
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+            num_workers,
+        )
+        if sample_trees_by_budget_score
+        else 0.0
+    )
 
     for shard_index, shard_start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[shard_start: shard_start + shard_size]
         tasks = [
             (
                 str(path),
-                quality_config.max_depth,
-                quality_config.search_budget,
-                quality_config.c_puct,
-                quality_config.target_normalization_version,
-                quality_config.search_config_id,
                 reward_scale,
                 min_halt_reward_range,
                 min_decision_margin,
                 exclude_xaba,
-                sample_trees_by_stop_entropy,
+                tree_keep_probabilities.get(str(path), 1.0),
+                sample_trees_by_budget_score,
+                max_budget_score,
                 feature_names,
                 oracle_config,
             )
@@ -272,14 +715,18 @@ def _pack_split(
                     elapsed = time.time() - start_time
                     accepted_so_far = total_episodes + sum(_accepted_episode_count(r) for r in results)
                     skipped_so_far = total_skipped + sum(1 for r in results if not r)
-                    entropy_filtered_so_far = total_entropy_filtered + sum(
-                        1 for r in results if r and r.get("status") == "filtered_entropy"
+                    tree_strata_filtered_so_far = total_tree_strata_filtered + sum(
+                        1 for r in results if r and r.get("status") == "filtered_tree_strata"
+                    )
+                    budget_score_filtered_so_far = total_budget_score_filtered + sum(
+                        1 for r in results if r and r.get("status") == "filtered_budget_score"
                     )
                     print(
                         f"split={split_name} shard={shard_index + 1}/{total_shards} "
                         f"shard_progress={completed_in_shard}/{len(tasks)} "
                         f"accepted={accepted_so_far} skipped={skipped_so_far} "
-                        f"entropy_filtered={entropy_filtered_so_far} "
+                        f"tree_strata_filtered={tree_strata_filtered_so_far} "
+                        f"budget_score_filtered={budget_score_filtered_so_far} "
                         f"elapsed_s={elapsed:.1f}",
                         flush=True,
                     )
@@ -293,14 +740,18 @@ def _pack_split(
                         elapsed = time.time() - start_time
                         accepted_so_far = total_episodes + sum(_accepted_episode_count(r) for r in results)
                         skipped_so_far = total_skipped + sum(1 for r in results if not r)
-                        entropy_filtered_so_far = total_entropy_filtered + sum(
-                            1 for r in results if r and r.get("status") == "filtered_entropy"
+                        tree_strata_filtered_so_far = total_tree_strata_filtered + sum(
+                            1 for r in results if r and r.get("status") == "filtered_tree_strata"
+                        )
+                        budget_score_filtered_so_far = total_budget_score_filtered + sum(
+                            1 for r in results if r and r.get("status") == "filtered_budget_score"
                         )
                         print(
                             f"split={split_name} shard={shard_index + 1}/{total_shards} "
                             f"shard_progress={completed_in_shard}/{len(tasks)} "
                             f"accepted={accepted_so_far} skipped={skipped_so_far} "
-                            f"entropy_filtered={entropy_filtered_so_far} "
+                            f"tree_strata_filtered={tree_strata_filtered_so_far} "
+                            f"budget_score_filtered={budget_score_filtered_so_far} "
                             f"elapsed_s={elapsed:.1f}",
                             flush=True,
                         )
@@ -336,8 +787,12 @@ def _pack_split(
             if not raw_result:
                 total_skipped += 1
                 continue
-            if raw_result.get("status") == "filtered_entropy":
-                total_entropy_filtered += 1
+            if raw_result.get("status") == "filtered_tree_strata":
+                total_tree_strata_filtered += 1
+                total_skipped += 1
+                continue
+            if raw_result.get("status") == "filtered_budget_score":
+                total_budget_score_filtered += 1
                 total_skipped += 1
                 continue
 
@@ -429,11 +884,16 @@ def _pack_split(
                 "split": split_name,
                 "total_episodes": total_episodes,
                 "total_skipped": total_skipped,
-                "total_entropy_filtered": total_entropy_filtered,
+                "total_tree_strata_filtered": total_tree_strata_filtered,
+                "total_budget_score_filtered": total_budget_score_filtered,
+                "sample_trees_by_tree_strata": sample_trees_by_tree_strata,
+                **tree_stratification_metadata,
+                "max_budget_score": max_budget_score,
+                "budget_score_keep_floor": _BUDGET_SCORE_KEEP_FLOOR,
                 "reward_scale": reward_scale,
                 "min_halt_reward_range": min_halt_reward_range,
                 "min_decision_margin": min_decision_margin,
-                "sample_trees_by_stop_entropy": sample_trees_by_stop_entropy,
+                "sample_trees_by_budget_score": sample_trees_by_budget_score,
                 **budgeted_oracle_metadata(oracle_config),
                 "entries": entries,
             },
@@ -441,92 +901,108 @@ def _pack_split(
             indent=2,
         )
 
-    return packed_manifest_path, total_episodes, total_skipped, total_entropy_filtered
+    return packed_manifest_path, total_episodes, total_skipped, total_tree_strata_filtered, total_budget_score_filtered
 
 
 def _process_one_task(
-    task: Tuple[str, int, int, float, str, str, float, float, float, bool, bool, Tuple[str, ...], BudgetedOracleConfig],
+    task: Tuple[str, float, float, float, bool, float, bool, float, Tuple[str, ...], BudgetedOracleConfig],
 ) -> Optional[dict[str, Any]]:
     (
         path_str,
-        max_depth,
-        search_budget,
-        c_puct,
-        target_normalization_version,
-        search_config_id,
         reward_scale,
         min_halt_reward_range,
         min_decision_margin,
         exclude_xaba,
-        sample_trees_by_stop_entropy,
+        tree_keep_probability,
+        sample_trees_by_budget_score,
+        max_budget_score,
         feature_names,
         oracle_config,
     ) = task
 
     try:
-        record = load_raw_pretrain_record(path_str)
-        if not isinstance(record, RawPretrainExampleRecord):
-            return None
-        if exclude_xaba and _source_top_level_root_churn_category(record) == "X*AB*A":
-            return None
-        trajectory = _build_compact_trajectory(path_str, record, NodeFeatureSchema(feature_names))
+        packed_tree_result = _build_packed_tree_result(
+            path_str,
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+        )
     except (ValueError, Exception):
         return None
 
-    if trajectory is None or trajectory["num_steps"] <= 0:
+    if packed_tree_result is None:
         return None
-
-    scaled_rewards = [float(reward_scale * reward) for reward in trajectory["halt_rewards"].tolist()]
-    tree_sizes = [int(value) for value in trajectory["tree_sizes"].tolist()]
-    if _halt_reward_range(scaled_rewards) < min_halt_reward_range:
-        return None
-
-    packed_episodes: List[dict] = []
-    for sampled_budget in deterministic_starting_budgets(path_str, oracle_config):
-        if not has_strong_budgeted_margins(
-            scaled_rewards,
-            tree_sizes,
-            sampled_budget.starting_budget,
-            oracle_config,
-            min_decision_margin,
-        ):
-            continue
-
-        policy = compute_budgeted_oracle(
-            scaled_rewards,
-            tree_sizes,
-            sampled_budget.starting_budget,
-            oracle_config,
-        )
-        max_steps = len(policy.halt_rewards)
-        episode_key = f"{path_str}#bucket={sampled_budget.bucket_name}#budget={sampled_budget.starting_budget}"
-        packed_episodes.append(
-            {
-                "num_steps": max_steps,
-                "target_advantages": np.asarray(policy.target_advantages, dtype=np.float32),
-                "oracle_stop_step": policy.optimal_stop_step,
-                "oracle_value": policy.oracle_value,
-                "starting_budget": policy.starting_budget,
-                "bucket_index": sampled_budget.bucket_index,
-                "bucket_name": sampled_budget.bucket_name,
-                "episode_key": episode_key,
-                "source_path": path_str,
-            }
-        )
-
-    if not packed_episodes:
-        return None
-    if sample_trees_by_stop_entropy:
-        stop_entropy = _normalized_stop_step_entropy(
-            [int(episode["oracle_stop_step"]) for episode in packed_episodes]
-        )
-        if _deterministic_unit_interval(path_str, oracle_config.seed) >= stop_entropy:
+    if _deterministic_unit_interval(path_str, oracle_config.seed) >= tree_keep_probability:
+        return {
+            "status": "filtered_tree_strata",
+            "source_path": path_str,
+            "tree_keep_probability": tree_keep_probability,
+        }
+    if sample_trees_by_budget_score:
+        budget_score = float(packed_tree_result["budget_score"])
+        budget_score_keep_probability = _tree_budget_sensitivity_keep_probability(budget_score, max_budget_score)
+        if _deterministic_unit_interval(path_str, oracle_config.seed) >= budget_score_keep_probability:
             return {
-                "status": "filtered_entropy",
+                "status": "filtered_budget_score",
                 "source_path": path_str,
-                "stop_entropy": stop_entropy,
+                "budget_score": budget_score,
+                "budget_score_keep_probability": budget_score_keep_probability,
             }
-    return {"trajectory": trajectory, "episodes": packed_episodes}
+    for episode in packed_tree_result["episodes"]:
+        episode.pop("halt_rewards", None)
+    return {
+        "trajectory": packed_tree_result["trajectory"],
+        "episodes": packed_tree_result["episodes"],
+    }
+
+
+def _score_one_task(
+    task: Tuple[str, float, float, float, bool, Tuple[str, ...], BudgetedOracleConfig],
+) -> dict[str, Any]:
+    path_str, reward_scale, min_halt_reward_range, min_decision_margin, exclude_xaba, feature_names, oracle_config = task
+    try:
+        packed_tree_result = _build_packed_tree_result(
+            path_str,
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+        )
+    except (ValueError, Exception):
+        return {"budget_score": 0.0}
+    if packed_tree_result is None:
+        return {"budget_score": 0.0}
+    return {"budget_score": float(packed_tree_result["budget_score"])}
+
+
+def _tree_stats_one_task(
+    task: Tuple[str, float, float, float, bool, Tuple[str, ...], BudgetedOracleConfig],
+) -> Optional[dict[str, Any]]:
+    path_str, reward_scale, min_halt_reward_range, min_decision_margin, exclude_xaba, feature_names, oracle_config = task
+    try:
+        packed_tree_result = _build_packed_tree_result(
+            path_str,
+            reward_scale,
+            min_halt_reward_range,
+            min_decision_margin,
+            exclude_xaba,
+            feature_names,
+            oracle_config,
+        )
+    except (ValueError, Exception):
+        return None
+    if packed_tree_result is None:
+        return None
+    return {
+        "source_path": path_str,
+        "stop_depth_excess": float(packed_tree_result["stop_depth_excess"]),
+        "budget_action_variance": float(packed_tree_result["budget_action_variance"]),
+    }
 
 
 def _numpy_to_torch(result: dict) -> dict:
@@ -581,9 +1057,20 @@ def main() -> None:
         help="Exclude source trees whose top-level final-anchored churn motif is X*AB*A.",
     )
     parser.add_argument(
-        "--sample-trees-by-stop-entropy",
+        "--sample-trees-by-budget-score",
         action="store_true",
-        help="Sample whole source trees with keep probability equal to the normalized entropy of their oracle stop-step distribution across sampled budgets.",
+        help="Sample whole source trees with keep probability increasing in a budget-sensitivity score based on halt-value margins and variation in oracle stop step across sampled budgets.",
+    )
+    parser.add_argument(
+        "--sample-trees-by-tree-strata",
+        action="store_true",
+        help="Sample whole source trees with a fixed mixture of the natural distribution and a stratified distribution over tree-level stop-depth and budget-sensitivity summaries.",
+    )
+    parser.add_argument(
+        "--tree-stratification-mode",
+        choices=("d", "j", "dj"),
+        default="dj",
+        help="Which tree-level summaries to stratify on when --sample-trees-by-tree-strata is enabled.",
     )
     parser.add_argument("--search-budget", type=int, default=64)
     parser.add_argument("--max-depth", type=int, default=10)
@@ -638,10 +1125,12 @@ def main() -> None:
     print(f"min_halt_reward_range={args.min_halt_reward_range}", flush=True)
     print(f"min_decision_margin={args.min_decision_margin}", flush=True)
     print(f"exclude_xaba={args.exclude_xaba}", flush=True)
-    print(f"sample_trees_by_stop_entropy={args.sample_trees_by_stop_entropy}", flush=True)
+    print(f"sample_trees_by_tree_strata={args.sample_trees_by_tree_strata}", flush=True)
+    print(f"tree_stratification_mode={args.tree_stratification_mode}", flush=True)
+    print(f"sample_trees_by_budget_score={args.sample_trees_by_budget_score}", flush=True)
     print(json.dumps(budgeted_oracle_metadata(oracle_config), sort_keys=True), flush=True)
 
-    train_manifest_out, train_count, train_skipped, train_entropy_filtered = _pack_split(
+    train_manifest_out, train_count, train_skipped, train_tree_strata_filtered, train_budget_score_filtered = _pack_split(
         train_manifest,
         output_root,
         quality_config,
@@ -650,12 +1139,14 @@ def main() -> None:
         args.min_halt_reward_range,
         args.min_decision_margin,
         args.exclude_xaba,
-        args.sample_trees_by_stop_entropy,
+        args.sample_trees_by_tree_strata,
+        args.tree_stratification_mode,
+        args.sample_trees_by_budget_score,
         args.shard_size,
         args.num_workers,
         args.log_interval,
     )
-    validation_manifest_out, val_count, val_skipped, val_entropy_filtered = _pack_split(
+    validation_manifest_out, val_count, val_skipped, val_tree_strata_filtered, val_budget_score_filtered = _pack_split(
         validation_manifest,
         output_root,
         quality_config,
@@ -664,7 +1155,9 @@ def main() -> None:
         args.min_halt_reward_range,
         args.min_decision_margin,
         args.exclude_xaba,
-        args.sample_trees_by_stop_entropy,
+        args.sample_trees_by_tree_strata,
+        args.tree_stratification_mode,
+        args.sample_trees_by_budget_score,
         args.shard_size,
         args.num_workers,
         args.log_interval,
@@ -674,11 +1167,13 @@ def main() -> None:
     print(f"validation_manifest={validation_manifest_out}")
     print(
         f"train_episodes={train_count} train_skipped={train_skipped} "
-        f"train_entropy_filtered={train_entropy_filtered}"
+        f"train_tree_strata_filtered={train_tree_strata_filtered} "
+        f"train_budget_score_filtered={train_budget_score_filtered}"
     )
     print(
         f"validation_episodes={val_count} validation_skipped={val_skipped} "
-        f"validation_entropy_filtered={val_entropy_filtered}"
+        f"validation_tree_strata_filtered={val_tree_strata_filtered} "
+        f"validation_budget_score_filtered={val_budget_score_filtered}"
     )
     print(f"output_root={output_root}")
 

@@ -1270,3 +1270,144 @@ Implemented change:
 
 Conclusion:
 - Future sweeps over sign-loss weight, learning rate, and model size can now be analyzed against the true training objective while using a dataset intervention that prefers cross-budget stop diversity without enforcing a hand-designed monotonic interpretation.
+
+### Entropy-sampled dataset sweep result: not useful
+
+Intent:
+- Test whether a tree-level entropy-biased packed dataset improves the controller problem by favoring source trees whose oracle stop step varies across sampled budgets.
+
+Sweep setup:
+- Dataset:
+  - entropy-sampled packed controller corpus with:
+    - stop-step bins `0-1`, `2-5`, `6-9`, `10-12`, `13+`
+    - normalized entropy `H`
+    - keep probability `0.1 + 0.9 * H`
+    - `X*AB*A` exclusion still enabled
+- Hyperparameters:
+  - sign loss weight: `0.1`, `0.25`, `0.5`
+  - learning rate: `1e-4`, `3e-4`, `1e-3`
+  - controller head width: `256`, `512`
+
+Main result:
+- The entropy-sampled dataset underperformed the earlier sign-loss run on the standard filtered dataset.
+- Most important difference:
+  - entropy-sampled sweep runs had `average_oracle_value ≈ 0.063`
+  - previous successful sign-loss run had `average_oracle_value ≈ 0.353`
+- So this intervention did not produce a “harder but informative” dataset. It produced a much flatter one.
+
+Observed behavior:
+- The balanced-dataset sweep still had a strongly near-threshold state distribution:
+  - about `63%` of states had `|target_advantage| < 0.05`
+  - about `96%` of those low-margin states were negative
+- Best-regret config in the sweep:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 3e-4`
+  - `q_hidden = 512`
+  - best greedy regret `≈ 0.044`
+- Best overall tradeoff:
+  - `sign_loss_weight = 0.25`
+  - `learning_rate = 1e-3`
+  - `q_hidden = 256`
+  - best greedy regret `≈ 0.046`
+  - best exact stop `≈ 0.523`
+  - same-tree budget monotonicity `≈ 0.93`
+- Higher sign-loss weight (`0.5`) improved exact stop accuracy but did not improve regret.
+
+Interpretation:
+- Stop-step entropy by itself is the wrong dataset criterion.
+- It prefers trees whose stopping behavior moves across budgets, but does not guarantee that those episodes have meaningful oracle value scale or margin structure.
+- In practice it selected many flat, low-value episodes and did not resolve the near-threshold negative-dominance problem.
+
+Conclusion:
+- Do not use the entropy-sampled dataset as the main training distribution.
+- Keep the original `no_xaba` packed dataset as the default.
+- If future dataset filtering is revisited, it should target informativeness/value scale directly, not stop-step entropy alone.
+
+## 2026-04-22
+
+### Hierarchical `dj` tree stratification for controller packing
+
+Intent:
+- Replace the failed entropy-only tree filter with a dataset intervention that directly attacks the overrepresentation of trivial early-stop trees while preserving whole-tree budget structure.
+
+Implemented scheme:
+- `scripts/pack_controller_episodes.py` now supports tree-stratified sampling via:
+  - `--sample-trees-by-tree-strata`
+  - `--tree-stratification-mode {d,j,dj}`
+- Per source tree, after the usual filters, compute:
+  - `D = stop_depth_excess`
+    - mean oracle stop depth beyond step `1` across sampled budgets
+    - trees that always stop at `0` or `1` have `D = 0`
+  - `J = budget_action_variance`
+    - mean variance across budgets of the oracle continue/halt sign over valid planning steps
+- The final `dj` mode is hierarchical rather than full-grid equalization:
+  - first rebalance across `D` bins with a `50/50` mixture of natural mass and equalized-bin mass
+  - then, within each `D` bin, mildly tilt toward larger `J` with multipliers `1.0`, `1.25`, `1.5`
+  - renormalize within each `D` bin so the top-level `D` retained mass is unchanged
+
+Dry-run result on the oracle96 trace corpus:
+- Accepted source trees after the standard filters:
+  - `57,683`
+- `d`-only and hierarchical `dj` both retained about:
+  - `17.6k` trees
+  - `175.6k` budgeted episodes
+- `j`-only was essentially useless and kept almost the whole dataset.
+- Full joint `D x J` equalization was discarded because sparse cells collapsed the dataset to almost nothing.
+- The final hierarchical `dj` scheme behaved sensibly:
+  - within `d0`, keep probability increased from about `0.188` to `0.282` as `J` rose
+  - within `d2`, keep probability increased from about `0.247` to `0.370`
+  - the middle `d1` bin remained fully kept
+
+Interpretation:
+- The main imbalance lives on the stop-depth axis, not on budget sensitivity alone.
+- A hierarchical `D -> J` scheme is stable and gives the intended bias:
+  - fewer trivial early-stop trees
+  - mild preference for trees where budget actually changes the oracle action
+- This intervention is appropriate as a training-data bias, but not as a replacement for natural validation.
+
+### `dj`-balanced controller run and sweep
+
+Intent:
+- Test whether training on the hierarchical `dj`-balanced packed dataset improves learned metacontrol relative to the plain `no_xaba` dataset.
+
+Single-run result:
+- The first `dj` run (`sign_loss_weight = 0.25`, `learning_rate = 3e-4`, `q_hidden = 256`) did not beat the earlier `sign_loss_run0` baseline.
+- Final greedy metrics on the `dj` validation set:
+  - oracle value `0.275`
+  - return `0.233`
+  - regret `0.042`
+  - exact stop accuracy `0.511`
+  - expansions `4.996`
+- Compared with the earlier sign-loss run on the standard dataset:
+  - lower oracle-normalized performance (`0.233 / 0.275 ≈ 0.847` vs `0.319 / 0.353 ≈ 0.904`)
+  - higher normalized regret (`0.042 / 0.275 ≈ 0.153` vs `0.035 / 0.353 ≈ 0.099`)
+- One quantity did improve:
+  - same-tree predicted stop monotonicity rose from about `0.81` to about `0.87`
+- But the overall control policy was still worse, especially through large-budget oversearch.
+
+Sweep result on the `dj` dataset:
+- Hyperparameters:
+  - sign loss weight: `0.1`, `0.25`, `0.5`
+  - learning rate: `1e-4`, `3e-4`, `1e-3`
+  - head width: `256`, `512`
+- Best config by regret:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 1e-4`
+  - `q_hidden = 512`
+  - best greedy regret `0.040`
+  - best return `0.235`
+- Main trend:
+  - weaker sign loss helped on this harder dataset
+  - larger sign loss increased exact stop-step accuracy but hurt regret and return
+- Effect sizes were modest rather than dramatic.
+
+Conclusion:
+- The `dj` dataset is harder in the intended sense, but the current controller does not yet exploit it well enough to outperform the plain `no_xaba` recipe.
+- For this corpus, the best current setting is roughly:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 1e-4`
+  - `q_hidden = 512`
+- Going forward:
+  - training-data filtering should apply only to the training split
+  - natural validation should remain representative of the unfiltered corpus
+  - a separate bespoke metacontrol challenge set is likely needed for paper-quality evaluation

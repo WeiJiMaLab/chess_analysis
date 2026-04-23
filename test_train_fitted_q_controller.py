@@ -13,9 +13,14 @@ from budgeted_controller_oracle import (
 )
 from cts_pretrain import PretrainExample
 from schema import NodeFeatureSchema
+from scripts.analyze_tree_stratification import _summarize_mode
 from scripts.pack_controller_episodes import (
-    _normalized_stop_step_entropy,
+    _compute_tree_stratified_keep_probabilities_from_rows,
+    _tree_budget_sensitivity_keep_probability,
+    _tree_budget_sensitivity_score,
+    _tree_budget_action_variance,
     _source_top_level_root_churn_category,
+    _tree_stop_depth_excess,
 )
 from scripts.train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
@@ -90,10 +95,58 @@ class BudgetedControllerOracleTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), len(config.budget_buckets) * config.samples_per_bucket)
 
-    def test_normalized_stop_step_entropy_uses_requested_bins(self):
-        self.assertEqual(_normalized_stop_step_entropy([0, 1, 1]), 0.0)
-        mixed = _normalized_stop_step_entropy([0, 4, 8, 11, 20])
-        self.assertAlmostEqual(mixed, 1.0, places=6)
+    def test_tree_budget_sensitivity_score_and_probability(self):
+        config = BudgetedOracleConfig(maintenance_scale=0.0, time_lambda=0.0)
+        tree_sizes = [1, 1]
+        flat = [
+            {"oracle_value": 0.1, "oracle_stop_step": 0, "starting_budget": 2, "halt_rewards": [0.1, 0.1]},
+            {"oracle_value": 0.1, "oracle_stop_step": 0, "starting_budget": 2, "halt_rewards": [0.1, 0.1]},
+        ]
+        varied = [
+            {"oracle_value": 0.5, "oracle_stop_step": 0, "starting_budget": 2, "halt_rewards": [0.5, 0.1]},
+            {"oracle_value": 0.5, "oracle_stop_step": 1, "starting_budget": 2, "halt_rewards": [0.1, 0.5]},
+        ]
+        flat_score = _tree_budget_sensitivity_score(flat, tree_sizes, config)
+        varied_score = _tree_budget_sensitivity_score(varied, tree_sizes, config)
+        self.assertEqual(flat_score, 0.0)
+        self.assertAlmostEqual(varied_score, 0.2, places=6)
+        self.assertGreater(varied_score, flat_score)
+        self.assertEqual(_tree_budget_sensitivity_keep_probability(0.0, varied_score), 0.25)
+        self.assertEqual(_tree_budget_sensitivity_keep_probability(varied_score, varied_score), 1.0)
+
+    def test_tree_stratification_summaries_and_probability(self):
+        trivial = [
+            {"oracle_stop_step": 0, "target_advantages": [0.0]},
+            {"oracle_stop_step": 1, "target_advantages": [-0.1, -0.1]},
+        ]
+        budget_sensitive = [
+            {"oracle_stop_step": 0, "target_advantages": [-0.2, -0.2, -0.2]},
+            {"oracle_stop_step": 3, "target_advantages": [0.2, 0.2, -0.2]},
+        ]
+        self.assertEqual(_tree_stop_depth_excess(trivial), 0.0)
+        self.assertEqual(_tree_budget_action_variance(trivial), 0.0)
+        self.assertAlmostEqual(_tree_stop_depth_excess(budget_sensitive), 1.0, places=6)
+        self.assertAlmostEqual(_tree_budget_action_variance(budget_sensitive), 1.0 / 6.0, places=6)
+        rows = (
+            [{"source_path": f"d0_{idx}", "stop_depth_excess": 0.0, "budget_action_variance": float(idx), "num_episodes": 10} for idx in range(9)]
+            + [{"source_path": f"d1_{idx}", "stop_depth_excess": 2.0, "budget_action_variance": float(idx), "num_episodes": 10} for idx in range(3)]
+        )
+        keep_probabilities, metadata = _compute_tree_stratified_keep_probabilities_from_rows(rows, "dj")
+        self.assertEqual(metadata["tree_stratification_mode"], "dj")
+        self.assertGreater(keep_probabilities["d0_8"], keep_probabilities["d0_0"])
+        self.assertEqual(keep_probabilities["d1_0"], 1.0)
+
+    def test_tree_stratification_analyzer_summary_smoke(self):
+        rows = (
+            [{"source_path": f"d0_{idx}", "stop_depth_excess": 0.0, "budget_action_variance": float(idx), "num_episodes": 10} for idx in range(9)]
+            + [{"source_path": f"d1_{idx}", "stop_depth_excess": 2.0, "budget_action_variance": float(idx), "num_episodes": 10} for idx in range(3)]
+        )
+        for mode in ("d", "j", "dj"):
+            summary = _summarize_mode(rows, mode, seed=0)
+            self.assertEqual(summary["mode"], mode)
+            self.assertEqual(summary["num_accepted_trees"], len(rows))
+            self.assertIn("strata", summary)
+            self.assertGreater(len(summary["strata"]), 0)
 
 
 class TrainFittedQControllerTests(unittest.TestCase):
