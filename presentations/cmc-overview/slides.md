@@ -99,7 +99,7 @@ math: katex
       <b>Launch script (<code>src/slurm/script_load_moves.sh</code>):</b> Reserves a clean temp directory, submits the load-shards array job, and submits a <b>merge</b> job that runs only after the array succeeds, repopulating <code>selected_moves</code> from the combined parquet.
     </li>
     <li>
-      <b>Downstream analysis:</b> The plotting code calls <code>preprocess()</code> to add <code>ln_move_time</code>, clock features, <b><code>n_possible_moves</code></b> (legal-move count at the position) and quantile bins, on top of <code>selected_moves</code>.
+      <b>Downstream analysis:</b> Preprocessing is now centralized in <code>load_data.py</code>, which precalculates <code>ln_move_time</code>, clock features, <b><code>n_possible_moves</code></b>, and quantile bins. Analysis scripts assume these tables (<code>_selected_moves</code> or <code>_selected_moves_nonzero_T</code>) already exist.
     </li>
   </ul>
 </div>
@@ -108,7 +108,7 @@ math: katex
 
 # 1a. Move times: raw and log (default)
 
-<div class="text-xs opacity-60 mb-2 -mt-2">With premoves / <code>move_time = 0</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Excludes premoves / <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/move_time_summary/combined.png" />
@@ -121,12 +121,12 @@ math: katex
 
 ---
 
-# 1b. Move times: raw and log (nonzero)
+# 1b. Move times: raw and log (with premoves)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code> — no zero-time moves.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code> — including zero-time moves.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/move_time_summary/combined_nonzero_T.png" />
+  <img class="w-full object-contain" src="/figures/move_time_summary/combined_include_zeroT.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">vs 1a</b><br><br>
@@ -138,7 +138,7 @@ math: katex
 
 # 2a. Game stage: ply vs. mean log think time (default)
 
-<div class="text-xs opacity-60 mb-2 -mt-2">All moves, including <code>move_time = 0</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Excludes <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/ply_movetime/combined.png" />
@@ -151,12 +151,12 @@ math: katex
 
 ---
 
-# 2b. Game stage: ply vs. mean log think time (nonzero)
+# 2b. Game stage: ply vs. mean log think time (with premoves)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/ply_movetime/combined_nonzero_T.png" />
+  <img class="w-full object-contain" src="/figures/ply_movetime/combined_include_zeroT.png" />
   
   <div class="takeaway border-primary bg-primary-soft text-sm py-4">
     <b class="text-primary uppercase tracking-wider text-xs">vs 2a</b><br><br>
@@ -168,7 +168,7 @@ math: katex
 
 # 3a. Remaining clock vs. think time (default)
 
-<div class="text-xs opacity-60 mb-2 -mt-2">Player clock; includes <code>move_time = 0</code> in fits.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Player clock; excludes <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/clock_movetime/combined.png" />
@@ -181,12 +181,12 @@ math: katex
 
 ---
 
-# 3b. Remaining clock vs. think time (nonzero)
+# 3b. Remaining clock vs. think time (with premoves)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/clock_movetime/combined_nonzero_T.png" />
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined_include_zeroT.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">vs 3a</b><br><br>
@@ -198,7 +198,7 @@ math: katex
 
 # 4a. Opponent clock vs. your think time (default)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--opp</code>: x = their remaining clock.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--opp</code>: x = their remaining clock; excludes 0s.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/clock_movetime/combined_opp.png" />
@@ -211,12 +211,12 @@ math: katex
 
 ---
 
-# 4b. Opponent clock vs. your think time (nonzero)
+# 4b. Opponent clock vs. your think time (with premoves)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T --opp</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT --opp</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/clock_movetime/combined_nonzero_T_opp.png" />
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined_include_zeroT_opp.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">vs 4a</b><br><br>
@@ -228,7 +228,7 @@ math: katex
 
 # 5a. Branching: legal moves vs. raw think time (default)
 
-<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. <code>npossiblemoves_movetime.py</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes 0s.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined.png" />
@@ -241,12 +241,12 @@ math: katex
 
 ---
 
-# 5b. Branching: legal moves vs. raw think time (nonzero)
+# 5b. Branching: legal moves vs. raw think time (with premoves)
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined_nonzero_T.png" />
+  <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined_include_zeroT.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">vs 5a</b><br><br>
