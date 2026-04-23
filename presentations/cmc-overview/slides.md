@@ -82,70 +82,201 @@ math: katex
 
 ---
 
-# 1. Move times are heavy-tailed
+# Behavioral data: how we chose these games
 
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/move_time_distribution.png" />
+<div class="grid grid-cols-1 gap-4 mt-4 text-sm leading-relaxed max-w-5xl">
+  <p>
+    All timing plots use the same DuckDB sample: <b>move-level rows in <code>selected_moves</code></b> inside the project personal database, joined to analysis tables built by the Python scripts.
+  </p>
+  <ul class="list-disc pl-6 space-y-2">
+    <li>
+      <b>Game list:</b> We restrict to game IDs listed in the <code>selected_games</code> table (in that same database). The exact inclusion rule (Elo, time control, etc.) is whatever that table encodes.
+    </li>
+    <li>
+      <b>Extracting moves (<code>src/utils/load_data.py</code>):</b> A Slurm array walks Lichess parquet shards under the archive root, keeps only those <code>gid</code>s, and by default <b>drops an entire game</b> if any row has a negative <code>move_time</code> (bad timestamps). Staging <code>.parquet</code> files are merged into <code>selected_moves</code>.
+    </li>
+    <li>
+      <b>Launch script (<code>src/slurm/script_load_moves.sh</code>):</b> Reserves a clean temp directory, submits the load-shards array job, and submits a <b>merge</b> job that runs only after the array succeeds, repopulating <code>selected_moves</code> from the combined parquet.
+    </li>
+    <li>
+      <b>Downstream analysis:</b> The plotting code calls <code>preprocess()</code> to add <code>ln_move_time</code>, clock features, <b><code>n_possible_moves</code></b> (legal-move count at the position) and quantile bins, on top of <code>selected_moves</code>.
+    </li>
+  </ul>
+</div>
+
+---
+
+# 1a. Move times: raw and log (default)
+
+<div class="text-xs opacity-60 mb-2 -mt-2">All preprocessed rows after <code>preprocess</code> — includes <code>move_time = 0</code> (premoves / instant plays).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/move_time_summary/combined.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
-    <b class="text-secondary uppercase tracking-wider text-xs">Key Takeaway</b><br><br>
-    Most moves are near-instant, but the "long tail" of deep thinks dominates variance. 
+    <b class="text-secondary uppercase tracking-wider text-xs">From <code>move_time_summary.py</code></b><br><br>
+    <b>Equal-width SQL bins</b> of <code>move_time</code> and <code>ln_move_time</code>, side by side, with the same <code>preprocess</code> table as the other analyses. 
     <br><br>
-    Humans demonstrate that <b>non-trivial meta-control</b> is the default in skilled behavior.
+    Most moves are very fast; the <b>long right tail</b> of slow moves dominates variance in the raw scale, which is one reason we work in log time for the regressions.
   </div>
 </div>
 
 ---
 
-# 2. Stage of Game: The "Mid-game Bulge"
+# 1b. Move times: raw and log (nonzero_T)
 
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/ply_movetime/ply_impact_comparison.png" />
+<div class="text-xs opacity-60 mb-2 -mt-2">Same script with <code>--nonzero_T</code> → <code>_selected_moves_nonzero_T</code> (drops rows with <code>move_time = 0</code>).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/move_time_summary/combined_nonzero_T.png" />
+  
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">Why compare</b><br><br>
+    The spike at the origin in the raw histogram is largely <b>premoves and instant replies</b>. Filtering them reweights the sample toward “deliberate” plies; regression panels below use the same <code>--nonzero_T</code> option when you want that definition of think time.
+  </div>
+</div>
+
+---
+
+# 2a. Game stage: ply vs. mean log think time (default)
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Default <code>preprocess</code> table — all move times including zeros.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/ply_movetime/combined.png" />
   
   <div class="takeaway border-primary bg-primary-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">The Ply Paradox</b><br><br>
-    Move times peak around move 40 and decay as the board simplifies. 
+    <b class="text-primary uppercase tracking-wider text-xs">From <code>ply_movetime.py</code></b><br><br>
+    <b>Left:</b> For each integer ply, mean and dispersion of <code>ln_move_time</code> in raw ply space. 
     <br><br>
-    <b>Alignment Goal:</b> A rational mover should play *less optimally* early (where errors can be corrected) and focus resources on the critical mid-game transitions.
+    <b>Right:</b> The same response summarized by <b>decile bins of move ply</b> (cross-sectional rank), to smooth irregular early/late plies. 
+    <br><br>
+    Together they show how average thinking time evolves across the game, without conflating that with clock budget.
   </div>
 </div>
 
 ---
 
-# 3a. Elasticity: The Naive Aggregate
+# 2b. Game stage: ply vs. mean log think time (nonzero_T)
 
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_0_baseline.png" />
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>: only rows with <code>move_time &gt; 0</code>.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/ply_movetime/combined_nonzero_T.png" />
+  
+  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">Impact of the filter</b><br><br>
+    Per-ply means shift toward the <b>active-thinking</b> distribution; the mass at very low <code>ln_move_time</code> from true zeros is removed. Use this slide next to 2a to show how much of the “fast” end is zero-time moves.
+  </div>
+</div>
+
+---
+
+# 3a. Remaining clock vs. think time (default)
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Default sample — includes <code>move_time = 0</code> rows in aggregates and OLS.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
-    <b class="text-accent uppercase tracking-wider text-xs">Clock Awareness</b><br><br>
-    The raw data shows a shallow positive trend ($\beta \approx 0.09$). 
+    <b class="text-accent uppercase tracking-wider text-xs">From <code>clock_movetime.py</code> (2×2)</b><br><br>
+    <b>Top-left & top-right:</b> Average <code>ln_move_time</code> vs log remaining clock and vs <b>decile bins of player clock</b> (mean clock in each bin on the x-axis). 
     <br><br>
-    People save/budget time for the endgame "just in case," even when current clock reserves are high.
+    <b>Bottom-left:</b> Subsampled scatter of log clock vs log move time with a single <b>global OLS</b> line in log–log space. 
+    <br><br>
+    <b>Bottom-right:</b> <b>Per-ply</b> OLS slope of <code>ln_move_time</code> on <code>ln_player_clock_time</code>—how “elasticity” of think time to the clock varies by stage.
   </div>
 </div>
 
 ---
 
-# 3b. Elasticity: The Resolution
+# 3b. Remaining clock vs. think time (nonzero_T)
 
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/fe_clocktime_movetime/quad_3_2way_fe.png" />
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>: OLS and bins exclude premoves / 0s.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined_nonzero_T.png" />
+  
+  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
+    <b class="text-accent uppercase tracking-wider text-xs">Impact of the filter</b><br><br>
+    Slopes and binned means focus on <b>positive</b> think times; the global OLS and per-ply <code>β</code> can move materially versus 3a. Pair these slides to show how sensitive clock–time relationships are to including instant moves.
+  </div>
+</div>
+
+---
+
+# 4a. Opponent clock vs. your think time (default)
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Same 2×2 as §3, but <code>clock_movetime.py --opp</code>: <b>x-axis is the other player’s</b> remaining clock before your move (from <code>opponent_clock_time</code> in <code>preprocess</code>).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined_opp.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
-    <b class="text-success uppercase tracking-wider text-xs">Budgeting Logic</b><br><br>
-    Accounting for player identity reveals the true budget logic:
+    <b class="text-success uppercase tracking-wider text-xs">From <code>clock_movetime.py --opp</code></b><br><br>
+    <b>Top-left & top-right:</b> Mean <code>ln_move_time</code> (your time on the clock to move) vs log <b>opponent</b> clock and vs opponent clock deciles. 
     <br><br>
-    <div class="text-success font-bold text-2xl">
-      $\beta \approx 0.54$
-    </div>
-    Humans consider both their own and their <b>opponent's</b> clock time to calibrate the "worth" of further thought.
+    <b>Bottom-left:</b> Scatter + global OLS of your log think time on log <b>opponent</b> remaining time. 
+    <br><br>
+    <b>Bottom-right:</b> Per-ply OLS slopes for that relationship—do you spend longer when <i>they</i> are low on time? Compare directly to §3a (player clock on the x-axis).
   </div>
 </div>
 
 ---
 
-# 4. Value of Computation (The Demand)
+# 4b. Opponent clock vs. your think time (nonzero_T)
+
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T --opp</code>: same opponent-clock analysis, premoves / <code>move_time = 0</code> removed.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/clock_movetime/combined_nonzero_T_opp.png" />
+  
+  <div class="takeaway border-success bg-success-soft text-sm py-4">
+    <b class="text-success uppercase tracking-wider text-xs">Pair with 4a</b><br><br>
+    As in §3a vs §3b, removing instant moves can shift slopes and binned means. This is the opponent-clock analogue for the <b>active-thinking</b> subsample; compare to <code>combined_nonzero_T.png</code> (player clock) to separate own-budget and rival-budget effects.
+  </div>
+</div>
+
+---
+
+# 5a. Branching: legal moves vs. raw think time (default)
+
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>npossiblemoves_movetime.py</code> — y-axis is <b>raw</b> <code>move_time</code> (seconds), not log; x is the number of legal moves at the position (from <code>preprocess</code>).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined.png" />
+  
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">From <code>npossiblemoves_movetime.py</code> (2×2)</b><br><br>
+    Same layout idea as the clock deck, but measures <b>position complexity via branching</b> instead of time pressure. 
+    <br><br>
+    <b>Top-left & top-right:</b> Mean <code>move_time</code> by integer <code>n_possible_moves</code> and by <b>decile bins of legal-move count</b> (<code>n_possible_moves_qbin</code>). 
+    <br><br>
+    <b>Bottom-left:</b> Subsampled scatter of legal moves vs raw think time with a <b>global OLS</b> in the original scale. 
+    <br><br>
+    <b>Bottom-right:</b> Per-ply OLS slope of <code>move_time</code> on <code>n_possible_moves</code>—how the branching–time relationship changes by game stage. (No separate “opponent” branch; this is player-side only.)
+  </div>
+</div>
+
+---
+
+# 5b. Branching: legal moves vs. raw think time (nonzero_T)
+
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>--nonzero_T</code>: only rows with <code>move_time &gt; 0</code>; otherwise identical pipeline.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined_nonzero_T.png" />
+  
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">Pair with 5a</b><br><br>
+    Dropping premoves and instant replies reweights the sample toward plies with positive deliberation, which can change slopes and the per-ply <code>β</code> panel. Compare to §1–§2 (log time) to separate <b>heavy tails</b> and <b>stage</b> effects from <b>branching</b> in raw seconds.
+  </div>
+</div>
+
+---
+
+# 6. Value of Computation (The Demand)
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
   <img class="w-full object-contain" src="/figures/voc_movetime/standard_voc_single_sample.png" />

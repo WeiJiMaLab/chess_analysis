@@ -71,11 +71,21 @@ layout: two-cols
 
 Figures are served from the core `chess_analysis/src/figures` directory via a symlink in `public/figures`. 
 
-To update the figures, run the analysis scripts from the root repository:
+To update the figures, run the analysis scripts from the repository root (after `selected_moves` is loaded, e.g. via `src/slurm/script_load_moves.sh` and `load_data.py`).
+
+**Default** (`combined.png`) and **nonzero_T** (`combined_nonzero_T.png`, premoves / `move_time = 0` removed) for the main timing / branching scripts:
 ```bash
-python src/fe_clocktime_movetime.py
+python src/move_time_summary.py
+python src/move_time_summary.py --nonzero_T
 python src/ply_movetime.py
+python src/ply_movetime.py --nonzero_T
+python src/clock_movetime.py
+python src/clock_movetime.py --nonzero_T
+python src/clock_movetime.py --opp
+python src/clock_movetime.py --nonzero_T --opp
+python src/npossiblemoves_movetime.py
+python src/npossiblemoves_movetime.py --nonzero_T
 python src/voc_movetime.py
 ```
 
-The slides automatically reference these at paths like `/figures/voc_movetime/standard_voc_single_sample.png`.
+The deck reads PNGs from the symlinked `public/figures` → `src/figures` (e.g. `combined.png` and `combined_nonzero_T.png` under `move_time_summary/`, `ply_movetime/`, and `npossiblemoves_movetime/`; under `clock_movetime/` add `combined_opp.png` and `combined_nonzero_T_opp.png` for the opponent-clock slides; plus `/figures/voc_movetime/standard_voc_single_sample.png`).

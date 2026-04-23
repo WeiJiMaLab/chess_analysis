@@ -221,14 +221,21 @@ def preprocess(conn, target_table="_selected_moves", limit_clause=""):
         SELECT 
             gid,
             move_ply,
+            board_position,
+            player_white,
             player_clock_time,
+            opponent_clock_time,
+            n_possible_moves,
             move_time,
             ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
+            ln(opponent_clock_time + {EPSILON}) as ln_opponent_clock_time,
             ln(move_time + {EPSILON}) as ln_move_time,
             ntile(10) over (order by player_clock_time) as player_clock_qbin,
+            ntile(10) over (order by opponent_clock_time) as opponent_clock_qbin,
+            ntile(10) over (order by n_possible_moves) as n_possible_moves_qbin,
             ntile(10) over (order by move_ply) as move_ply_qbin
         FROM (
-            SELECT gid, move_ply, player_clock_time, move_time
+            SELECT gid, move_ply, board_position, player_white, player_clock_time, opponent_clock_time, n_possible_moves, move_time
             FROM selected_moves
             {limit_clause}
         );

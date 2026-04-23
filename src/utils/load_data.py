@@ -10,6 +10,8 @@ TOTAL_SHARDS = 1
 DEFAULT_TMPDIR = "/scratch/gpfs/GRIFFITHS/hl4291/tmp/"
 PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
+DEFAULT_START_DATE = "2023-11-01"
+DEFAULT_END_DATE = "2023-12-31"  # Exclusive upper bound
 
 
 def _conn_kw(tmpdir: str) -> dict:
@@ -19,6 +21,72 @@ def _conn_kw(tmpdir: str) -> dict:
 def _sql_str(s: str) -> str:
     """Single-quoted SQL literal fragment."""
     return s.replace("'", "''")
+
+
+def preprocess_selected_games(
+    start_date=DEFAULT_START_DATE,
+    end_date=DEFAULT_END_DATE,
+    initial_clock=600,
+    clock_increment=0,
+    min_elo=2000,
+    tmpdir=DEFAULT_TMPDIR,
+):
+    """
+    Build selected_games from core.games using fixed selection filters.
+    """
+    tmpdir = os.path.abspath(tmpdir)
+    os.makedirs(tmpdir, exist_ok=True)
+
+    conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
+    conn.sql("""ATTACH '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db' AS core (READ_ONLY);""")
+
+    s_start = _sql_str(start_date)
+    s_end = _sql_str(end_date)
+
+    candidate_count = conn.execute(
+        f"""
+        SELECT count(*)
+        FROM core.games
+        WHERE utc_datetime >= TIMESTAMP '{s_start}'
+          AND utc_datetime < TIMESTAMP '{s_end}'
+          AND initial_clock = {int(initial_clock)}
+          AND clock_increment = {int(clock_increment)}
+          AND white_elo >= {int(min_elo)}
+          AND black_elo >= {int(min_elo)}
+        """
+    ).fetchone()[0]
+
+    existing_count = None
+    if conn.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'selected_games'").fetchone()[0]:
+        existing_count = conn.execute("SELECT count(*) FROM selected_games").fetchone()[0]
+
+    conn.execute(
+        f"""
+        CREATE OR REPLACE TABLE selected_games AS
+        SELECT gid, utc_datetime
+        FROM core.games
+        WHERE utc_datetime >= TIMESTAMP '{s_start}'
+          AND utc_datetime < TIMESTAMP '{s_end}'
+          AND initial_clock = {int(initial_clock)}
+          AND clock_increment = {int(clock_increment)}
+          AND white_elo >= {int(min_elo)}
+          AND black_elo >= {int(min_elo)}
+        """
+    )
+
+    new_count = conn.execute("SELECT count(*) FROM selected_games").fetchone()[0]
+    min_utc, max_utc = conn.execute("SELECT min(utc_datetime), max(utc_datetime) FROM selected_games").fetchone()
+    conn.close()
+
+    print(
+        "✅ selected_games rebuilt | "
+        f"window=[{start_date}, {end_date}) | tc={initial_clock}+{clock_increment} | "
+        f"min_elo={min_elo} | n={new_count:,}"
+    )
+    print(f"   core.games candidate count: {candidate_count:,}")
+    if existing_count is not None:
+        print(f"   previous selected_games count: {existing_count:,}")
+    print(f"   selected_games min/max utc_datetime: {min_utc} / {max_utc}")
 
 
 def process_shard(_JOBID, total_shards=TOTAL_SHARDS, tmpdir=DEFAULT_TMPDIR, exclude_negative=True):
@@ -98,8 +166,8 @@ def merge_shards(tmpdir=DEFAULT_TMPDIR):
 
 
 def main():
-    p = argparse.ArgumentParser(description="process: staging parquet per Slurm shard; merge: load into personal.db")
-    p.add_argument("command", choices=("process", "merge"))
+    p = argparse.ArgumentParser(description="select_games: build selected_games; process: stage parquet by shard; merge: load into personal.db")
+    p.add_argument("command", choices=("select_games", "process", "merge"))
     p.add_argument("--total-shards", type=int, default=TOTAL_SHARDS, metavar="N", help="Slurm array width (default %(default)s)")
     p.add_argument("--job-id", type=int, default=None, metavar="I", help="Stride index (default: SLURM_ARRAY_TASK_ID or 0)")
     p.add_argument(
@@ -115,9 +183,27 @@ def main():
         help="Exclude entire games if they contain any negative move_time (default: %(default)s)",
     )
     p.add_argument("--no-exclude-negative", action="store_false", dest="exclude_negative", help="Disable negative move_time exclusion")
+    p.add_argument("--start-date", default=DEFAULT_START_DATE, help="Inclusive lower datetime/date for selected_games")
+    p.add_argument("--end-date", default=DEFAULT_END_DATE, help="Exclusive upper datetime/date for selected_games")
+    p.add_argument("--initial-clock", type=int, default=600, help="Initial clock in seconds (default %(default)s)")
+    p.add_argument("--clock-increment", type=int, default=0, help="Clock increment in seconds (default %(default)s)")
+    p.add_argument("--min-elo", type=int, default=2000, help="Minimum white/black elo (default %(default)s)")
     args = p.parse_args()
     tmpdir = os.path.abspath(args.tmpdir)
-    if args.command == "process":
+    if args.command == "select_games":
+        print(
+            f"🚀 select_games | window=[{args.start_date}, {args.end_date}) | "
+            f"tc={args.initial_clock}+{args.clock_increment} | min_elo={args.min_elo} | tmpdir={tmpdir}"
+        )
+        preprocess_selected_games(
+            start_date=args.start_date,
+            end_date=args.end_date,
+            initial_clock=args.initial_clock,
+            clock_increment=args.clock_increment,
+            min_elo=args.min_elo,
+            tmpdir=tmpdir,
+        )
+    elif args.command == "process":
         jid = args.job_id if args.job_id is not None else int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
         print(f"🚀 process | job-id={jid} | total-shards={args.total_shards} | tmpdir={tmpdir} | exclude-negative={args.exclude_negative}")
         process_shard(jid, args.total_shards, tmpdir, exclude_negative=args.exclude_negative)
