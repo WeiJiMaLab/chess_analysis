@@ -2278,9 +2278,9 @@ def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
         )
     else:
         future_worse_line = "- `future_already_worse` split: skipped (source trees unavailable locally)"
-    clean_oracle = summary["oracle_stop_clean_factors"]
-    clean_large = summary["oracle_stop_clean_driver_by_bucket"].get("large", {})
-    oversearch_oracle_stop = summary["error_episode_oracle_stop_factors"].get("large", {})
+    clean_oracle = summary.get("oracle_stop_clean_factors")
+    clean_large = summary.get("oracle_stop_clean_driver_by_bucket", {}).get("large", {})
+    oversearch_oracle_stop = summary.get("error_episode_oracle_stop_factors", {}).get("large", {})
     churn_summary = summary.get("root_action_churn")
     if churn_summary is not None:
         churn_line = (
@@ -2295,6 +2295,55 @@ def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
     else:
         churn_line = "- Root-churn motifs: skipped (source trees unavailable locally)"
         lucky_line = "- Lucky early halts: skipped (source trees unavailable locally)"
+    if clean_oracle is not None:
+        clean_oracle_lines = [
+            "## Clean Oracle Decision Factors",
+            "- At each step, oracle advantage is decomposed as:",
+            "  `target_advantage = cost_free_future_reward_gain - downstream_future_cost - current_step_cost`",
+            "  where `cost_free_future_reward_gain` is the best later halt-reward improvement ignoring all future costs,",
+            "  `downstream_future_cost` is the cumulative cost from the next step until that best future stop,",
+            "  and `current_step_cost` is the immediate cost of taking one more step now.",
+            f"- Oracle-stop residual check: {clean_oracle['max_abs_target_residual']:.6g}",
+            f"- Oracle-stop overall means: reward_gain={clean_oracle['overall']['mean_cost_free_future_reward_gain']:.4f}, "
+            f"downstream_cost={clean_oracle['overall']['mean_downstream_future_cost']:.4f}, "
+            f"current_cost={clean_oracle['overall']['mean_current_step_cost']:.4f}, "
+            f"target_adv={clean_oracle['overall']['mean_target_advantage']:.4f}",
+            f"- Large-bucket clean driver mix: no_gain={clean_large.get('no_cost_free_gain', 0.0):.3f}, "
+            f"downstream_cost={clean_large.get('downstream_cost_dominated', 0.0):.3f}, "
+            f"current_step_cost={clean_large.get('current_step_cost_dominated', 0.0):.3f}",
+            future_worse_line,
+            churn_line,
+            lucky_line,
+            "",
+        ]
+    else:
+        clean_oracle_lines = [
+            "## Clean Oracle Decision Factors",
+            "- Skipped in core report mode.",
+            future_worse_line,
+            churn_line,
+            lucky_line,
+            "",
+        ]
+
+    if oversearch_oracle_stop:
+        error_oracle_lines = [
+            "## Error-Episode Oracle Boundary",
+            "- For each erroneous episode, the report now records the oracle-stop decomposition and the model's predicted advantage at that same step.",
+            f"- Large-bucket oversearch at oracle stop: reward_gain={oversearch_oracle_stop.get('mean_cost_free_future_reward_gain', 0.0):.4f}, "
+            f"downstream_cost={oversearch_oracle_stop.get('mean_downstream_future_cost', 0.0):.4f}, "
+            f"maint={oversearch_oracle_stop.get('mean_current_step_maintenance_cost', 0.0):.4f}, "
+            f"time={oversearch_oracle_stop.get('mean_current_step_time_cost', 0.0):.4f}, "
+            f"pred_adv={oversearch_oracle_stop.get('mean_predicted_advantage_at_oracle_stop', 0.0):.4f}",
+            "",
+        ]
+    else:
+        error_oracle_lines = [
+            "## Error-Episode Oracle Boundary",
+            "- Skipped in core report mode.",
+            "",
+        ]
+
     lines = [
         "# Budgeted Controller Analysis",
         "",
@@ -2315,32 +2364,8 @@ def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
         f"- Baseline regret: {summary['baselines']['best_by_regret']['average_regret']:.4f}",
         f"- Baseline return: {summary['baselines']['best_by_regret']['average_return']:.4f}",
         "",
-        "## Clean Oracle Decision Factors",
-        "- At each step, oracle advantage is decomposed as:",
-        "  `target_advantage = cost_free_future_reward_gain - downstream_future_cost - current_step_cost`",
-        "  where `cost_free_future_reward_gain` is the best later halt-reward improvement ignoring all future costs,",
-        "  `downstream_future_cost` is the cumulative cost from the next step until that best future stop,",
-        "  and `current_step_cost` is the immediate cost of taking one more step now.",
-        f"- Oracle-stop residual check: {clean_oracle['max_abs_target_residual']:.6g}",
-        f"- Oracle-stop overall means: reward_gain={clean_oracle['overall']['mean_cost_free_future_reward_gain']:.4f}, "
-        f"downstream_cost={clean_oracle['overall']['mean_downstream_future_cost']:.4f}, "
-        f"current_cost={clean_oracle['overall']['mean_current_step_cost']:.4f}, "
-        f"target_adv={clean_oracle['overall']['mean_target_advantage']:.4f}",
-        f"- Large-bucket clean driver mix: no_gain={clean_large.get('no_cost_free_gain', 0.0):.3f}, "
-        f"downstream_cost={clean_large.get('downstream_cost_dominated', 0.0):.3f}, "
-        f"current_step_cost={clean_large.get('current_step_cost_dominated', 0.0):.3f}",
-        future_worse_line,
-        churn_line,
-        lucky_line,
-        "",
-        "## Error-Episode Oracle Boundary",
-        "- For each erroneous episode, the report now records the oracle-stop decomposition and the model's predicted advantage at that same step.",
-        f"- Large-bucket oversearch at oracle stop: reward_gain={oversearch_oracle_stop.get('mean_cost_free_future_reward_gain', 0.0):.4f}, "
-        f"downstream_cost={oversearch_oracle_stop.get('mean_downstream_future_cost', 0.0):.4f}, "
-        f"maint={oversearch_oracle_stop.get('mean_current_step_maintenance_cost', 0.0):.4f}, "
-        f"time={oversearch_oracle_stop.get('mean_current_step_time_cost', 0.0):.4f}, "
-        f"pred_adv={oversearch_oracle_stop.get('mean_predicted_advantage_at_oracle_stop', 0.0):.4f}",
-        "",
+        *clean_oracle_lines,
+        *error_oracle_lines,
         "## Regret Decomposition",
         "- Regret is decomposed as:",
         "  `oracle_value - predicted_value = (halt_reward@oracle - halt_reward@predicted) + (predicted maintenance paid - oracle maintenance paid) + (predicted time cost paid - oracle time cost paid)`",
@@ -2360,6 +2385,7 @@ def main() -> None:
     parser.add_argument("--diagnostics-path", required=True)
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--report-mode", choices=("core", "full"), default="full")
     parser.add_argument("--path-rewrite", action="append", default=[], help="Rewrite source paths as OLD=NEW before reconstruction.")
     parser.add_argument("--max-state-rows", type=int, default=500000, help="Reservoir-sample at most this many per-state rows for state-level plots.")
     parser.add_argument("--state-sample-seed", type=int, default=0)
@@ -2389,8 +2415,7 @@ def main() -> None:
     oracle_config = budgeted_oracle_config_from_metadata(metadata)
     if oracle_config is None:
         raise ValueError("Could not recover budgeted oracle metadata from the .out file.")
-    oracle_step_rows = _oracle_step_factor_rows(diagnostics, oracle_config)
-    oracle_step_rows_clean = _oracle_stop_clean_factor_rows(diagnostics, oracle_config)
+    include_extended = args.report_mode == "full"
     _plot_loss_curves(train_rows, validation_rows, output_dir / "advantage_loss.png")
     _plot_greedy_metrics(greedy_rows, output_dir / "greedy_metrics.png")
     regret_by_bucket = _plot_episode_regret_by_bucket(diagnostics, output_dir / "regret_by_budget_bucket.png")
@@ -2400,86 +2425,105 @@ def main() -> None:
     _plot_regret_by_stop_step_delta(diagnostics, output_dir / "regret_by_stop_step_delta.png")
     regret_decomposition = _regret_decomposition_summary(diagnostics, oracle_config)
     _plot_regret_decomposition_by_delta(diagnostics, oracle_config, output_dir / "regret_decomposition_by_stop_step_delta.png")
-    oracle_stop_factors = _oracle_stop_factor_summary(oracle_step_rows)
-    oracle_stop_driver_by_bucket = _plot_oracle_stop_driver_by_bucket(
-        oracle_step_rows,
-        output_dir / "oracle_stop_driver_by_bucket.png",
-    )
-    oracle_stop_factor_magnitudes = _plot_oracle_stop_factor_magnitudes(
-        oracle_step_rows,
-        output_dir / "oracle_stop_factor_magnitudes.png",
-    )
-    false_continue_by_oracle_driver = _plot_false_continue_by_oracle_driver(
-        oracle_step_rows,
-        output_dir / "false_continue_by_oracle_driver.png",
-    )
-    oracle_stop_clean_factors = _oracle_stop_clean_factor_summary(oracle_step_rows_clean)
-    oracle_stop_clean_driver_by_bucket = _plot_oracle_stop_clean_driver_by_bucket(
-        oracle_step_rows_clean,
-        output_dir / "oracle_stop_clean_driver_by_bucket.png",
-    )
-    oracle_stop_clean_factor_magnitudes = _plot_oracle_stop_clean_factor_magnitudes(
-        oracle_step_rows_clean,
-        output_dir / "oracle_stop_clean_factor_magnitudes.png",
-    )
-    false_continue_by_clean_oracle_driver = _plot_false_continue_by_clean_oracle_driver(
-        oracle_step_rows_clean,
-        output_dir / "false_continue_by_clean_oracle_driver.png",
-    )
-    oversearch_regret_components = _plot_oversearch_regret_components_by_bucket(
-        diagnostics,
-        oracle_config,
-        output_dir / "oversearch_regret_components_by_bucket.png",
-    )
+    oracle_stop_factors: dict[str, Any] | None = None
+    oracle_stop_driver_by_bucket: dict[str, Any] = {}
+    oracle_stop_factor_magnitudes: dict[str, Any] = {}
+    false_continue_by_oracle_driver: dict[str, Any] = {}
+    oracle_stop_clean_factors: dict[str, Any] | None = None
+    oracle_stop_clean_driver_by_bucket: dict[str, Any] = {}
+    oracle_stop_clean_factor_magnitudes: dict[str, Any] = {}
+    false_continue_by_clean_oracle_driver: dict[str, Any] = {}
+    oversearch_regret_components: dict[str, Any] | None = None
     future_worse_move_switch: dict[str, Any] | None = None
-    if _source_paths_available(diagnostics) and TeacherSearchConfig is not None and torch is not None:
-        quality_config = _analysis_quality_config(metadata)
-        best_move_cache = _best_move_sequences(diagnostics, quality_config)
-        future_worse_move_switch = _future_worse_move_switch_summary(
-            diagnostics,
+    error_episode_summary: dict[str, Any] | None = None
+    oversearch_tail_summary: dict[str, Any] | None = None
+    error_episode_oracle_stop_factors: dict[str, Any] = {}
+    oversearch_tail_plot_summary: dict[str, Any] | None = None
+    halt_reward_trajectories: dict[str, Any] | None = None
+    halt_reward_delta_trajectories: dict[str, Any] | None = None
+    root_action_churn: dict[str, Any] | None = None
+    if include_extended:
+        oracle_step_rows = _oracle_step_factor_rows(diagnostics, oracle_config)
+        oracle_step_rows_clean = _oracle_stop_clean_factor_rows(diagnostics, oracle_config)
+        oracle_stop_factors = _oracle_stop_factor_summary(oracle_step_rows)
+        oracle_stop_driver_by_bucket = _plot_oracle_stop_driver_by_bucket(
             oracle_step_rows,
-            best_move_cache,
+            output_dir / "oracle_stop_driver_by_bucket.png",
+        )
+        oracle_stop_factor_magnitudes = _plot_oracle_stop_factor_magnitudes(
+            oracle_step_rows,
+            output_dir / "oracle_stop_factor_magnitudes.png",
+        )
+        false_continue_by_oracle_driver = _plot_false_continue_by_oracle_driver(
+            oracle_step_rows,
+            output_dir / "false_continue_by_oracle_driver.png",
+        )
+        oracle_stop_clean_factors = _oracle_stop_clean_factor_summary(oracle_step_rows_clean)
+        oracle_stop_clean_driver_by_bucket = _plot_oracle_stop_clean_driver_by_bucket(
+            oracle_step_rows_clean,
+            output_dir / "oracle_stop_clean_driver_by_bucket.png",
+        )
+        oracle_stop_clean_factor_magnitudes = _plot_oracle_stop_clean_factor_magnitudes(
+            oracle_step_rows_clean,
+            output_dir / "oracle_stop_clean_factor_magnitudes.png",
+        )
+        false_continue_by_clean_oracle_driver = _plot_false_continue_by_clean_oracle_driver(
+            oracle_step_rows_clean,
+            output_dir / "false_continue_by_clean_oracle_driver.png",
+        )
+        oversearch_regret_components = _plot_oversearch_regret_components_by_bucket(
+            diagnostics,
             oracle_config,
+            output_dir / "oversearch_regret_components_by_bucket.png",
         )
-        _plot_future_worse_move_switch(
-            future_worse_move_switch,
-            output_dir / "future_worse_move_switch.png",
+        if _source_paths_available(diagnostics) and TeacherSearchConfig is not None and torch is not None:
+            quality_config = _analysis_quality_config(metadata)
+            best_move_cache = _best_move_sequences(diagnostics, quality_config)
+            future_worse_move_switch = _future_worse_move_switch_summary(
+                diagnostics,
+                oracle_step_rows,
+                best_move_cache,
+                oracle_config,
+            )
+            _plot_future_worse_move_switch(
+                future_worse_move_switch,
+                output_dir / "future_worse_move_switch.png",
+            )
+        error_episode_records = _error_episode_decomposition_records(diagnostics, oracle_config)
+        oversearch_tail_records = _oversearch_tail_step_records(diagnostics, oracle_config)
+        _write_jsonl(output_dir / "error_episode_decomposition.jsonl", error_episode_records)
+        _write_jsonl(output_dir / "oversearch_tail_decomposition.jsonl", oversearch_tail_records)
+        error_episode_summary = _summarize_error_episode_decomposition(error_episode_records)
+        oversearch_tail_summary = _summarize_oversearch_tail(oversearch_tail_records)
+        error_episode_oracle_stop_factors = _plot_error_episode_oracle_stop_factors(
+            error_episode_records,
+            output_dir / "error_episode_oracle_stop_factors.png",
         )
-    error_episode_records = _error_episode_decomposition_records(diagnostics, oracle_config)
-    oversearch_tail_records = _oversearch_tail_step_records(diagnostics, oracle_config)
-    _write_jsonl(output_dir / "error_episode_decomposition.jsonl", error_episode_records)
-    _write_jsonl(output_dir / "oversearch_tail_decomposition.jsonl", oversearch_tail_records)
-    error_episode_summary = _summarize_error_episode_decomposition(error_episode_records)
-    oversearch_tail_summary = _summarize_oversearch_tail(oversearch_tail_records)
-    error_episode_oracle_stop_factors = _plot_error_episode_oracle_stop_factors(
-        error_episode_records,
-        output_dir / "error_episode_oracle_stop_factors.png",
-    )
-    oversearch_tail_plot_summary = _plot_oversearch_tail_components_by_extra_step(
-        oversearch_tail_records,
-        output_dir / "oversearch_tail_components_by_extra_step.png",
-    )
+        oversearch_tail_plot_summary = _plot_oversearch_tail_components_by_extra_step(
+            oversearch_tail_records,
+            output_dir / "oversearch_tail_components_by_extra_step.png",
+        )
     sign_by_time = _plot_sign_accuracy_by_time(state_rows, output_dir / "sign_accuracy_by_time_budget.png")
     target_by_time = _plot_target_distribution_by_time(state_rows, output_dir / "target_advantage_by_time_budget.png")
     pred_vs_target = _plot_predicted_vs_target(state_rows, output_dir / "predicted_vs_target_advantage.png")
     false_action_by_time = _plot_false_action_rates_by_time(state_rows, output_dir / "false_action_rates_by_time_budget.png")
     regret_by_tree_size = _plot_regret_by_tree_size(diagnostics, output_dir / "regret_by_initial_tree_size.png")
     partial_dependence = _plot_partial_dependence_heatmaps(state_rows, output_dir / "partial_dependence_heatmaps.png")
-    halt_reward_trajectories = _plot_halt_reward_trajectory_distribution(
-        diagnostics,
-        output_dir / "halt_reward_trajectory_distribution.png",
-    )
-    halt_reward_delta_trajectories = _plot_halt_reward_delta_trajectory_distribution(
-        diagnostics,
-        output_dir / "halt_reward_delta_trajectory_distribution.png",
-    )
+    if include_extended:
+        halt_reward_trajectories = _plot_halt_reward_trajectory_distribution(
+            diagnostics,
+            output_dir / "halt_reward_trajectory_distribution.png",
+        )
+        halt_reward_delta_trajectories = _plot_halt_reward_delta_trajectory_distribution(
+            diagnostics,
+            output_dir / "halt_reward_delta_trajectory_distribution.png",
+        )
     consistency = _same_tree_budget_consistency(diagnostics)
     oracle_stop_dist = _oracle_stop_distribution(diagnostics)
     calibration = _calibration_by_margin(state_rows, output_dir / "calibration_by_margin.png")
     best_epochs = _best_epoch_summary(validation_rows, greedy_rows)
     baselines = _baseline_sweep(diagnostics, oracle_config)
-    root_action_churn: dict[str, Any] | None = None
-    if _source_paths_available(diagnostics) and TeacherSearchConfig is not None and torch is not None:
+    if include_extended and _source_paths_available(diagnostics) and TeacherSearchConfig is not None and torch is not None:
         quality_config = _analysis_quality_config(metadata)
         move_trace_cache = _move_trace_cache(diagnostics, quality_config)
         root_action_churn_source_records, root_action_churn_episode_records = _root_action_churn_records(
@@ -2512,6 +2556,7 @@ def main() -> None:
         "episodes": len(diagnostics),
         "states": total_state_rows,
         "sampled_states": len(state_rows),
+        "report_mode": args.report_mode,
         "bucket_counts": dict(bucket_counts),
         "final_greedy": greedy_rows[-1] if greedy_rows else None,
         "best_epochs": best_epochs,
