@@ -12,6 +12,7 @@ PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
 DEFAULT_START_DATE = "2023-11-01"
 DEFAULT_END_DATE = "2023-12-31"  # Exclusive upper bound
+EPSILON = 1e-6
 
 
 def _conn_kw(tmpdir: str) -> dict:
@@ -165,9 +166,88 @@ def merge_shards(tmpdir=DEFAULT_TMPDIR):
     print("✅ Merge finished — table selected_moves replaced.")
 
 
+def identify_berserk(tmpdir=DEFAULT_TMPDIR):
+    """
+    Identify games where at least one player berserked.
+    Berserking is detected if player_clock_time = initial_clock / 2 at ply 3 or 4.
+    """
+    tmpdir = os.path.abspath(tmpdir)
+    conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
+    conn.sql("""ATTACH '/scratch/gpfs/GRIFFITHS/chess-db/lichess.db' AS core (READ_ONLY);""")
+
+    print(f"🔍 Identifying berserk games in {PERSONAL_DB}...")
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE berserk_games AS
+        SELECT DISTINCT m.gid
+        FROM selected_moves m
+        JOIN core.games g ON m.gid = g.gid
+        WHERE m.move_ply IN (3, 4)
+          AND m.player_clock_time = CAST(g.initial_clock AS DOUBLE) / 2
+        """
+    )
+
+    count = conn.execute("SELECT count(*) FROM berserk_games").fetchone()[0]
+    conn.close()
+    print(f"✅ Identified {count:,} berserk games. Stored in 'berserk_games' table.")
+
+
+def preprocess(conn=None, tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clause=""):
+    """
+    Standard SQL-native preprocessing for chess timing analysis.
+    Creates a table with log-transformed variables and quantile bins.
+    Excludes games identified as berserk.
+    """
+    if conn is None:
+        tmpdir = os.path.abspath(tmpdir)
+        conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
+        should_close = True
+    else:
+        should_close = False
+
+    print(f"🛠️  Preprocessing moves into {target_table} (excluding berserk games)...")
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE {target_table} AS
+        SELECT 
+            gid,
+            move_ply,
+            board_position,
+            player_white,
+            player_clock_time,
+            opponent_clock_time,
+            n_possible_moves,
+            move_time,
+            ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
+            ln(opponent_clock_time + {EPSILON}) as ln_opponent_clock_time,
+            ln(move_time + {EPSILON}) as ln_move_time,
+            ntile(10) over (order by player_clock_time) as player_clock_qbin,
+            ntile(10) over (order by opponent_clock_time) as opponent_clock_qbin,
+            ntile(10) over (order by n_possible_moves) as n_possible_moves_qbin,
+            ntile(10) over (order by move_ply) as move_ply_qbin
+        FROM (
+            SELECT gid, move_ply, board_position, player_white, player_clock_time, opponent_clock_time, n_possible_moves, move_time
+            FROM selected_moves
+            WHERE gid NOT IN (SELECT gid FROM berserk_games)
+            {limit_clause}
+        );
+    """)
+
+    # Create companion table with zero-time moves (premoves) filtered out
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE {target_table}_nonzero_T AS 
+        SELECT * FROM {target_table} 
+        WHERE move_time > 0;
+    """)
+
+    count = conn.execute(f"SELECT count(*) FROM {target_table}").fetchone()[0]
+    if should_close:
+        conn.close()
+    print(f"✅ Preprocessing finished. {count:,} moves processed into {target_table}.")
+
+
 def main():
-    p = argparse.ArgumentParser(description="select_games: build selected_games; process: stage parquet by shard; merge: load into personal.db")
-    p.add_argument("command", choices=("select_games", "process", "merge"))
+    p = argparse.ArgumentParser(description="select_games: build selected_games; process: stage parquet by shard; merge: load into personal.db; berserk: identify berserk games; preprocess: compute log-transforms/bins")
+    p.add_argument("command", choices=("select_games", "process", "merge", "berserk", "preprocess"))
     p.add_argument("--total-shards", type=int, default=TOTAL_SHARDS, metavar="N", help="Slurm array width (default %(default)s)")
     p.add_argument("--job-id", type=int, default=None, metavar="I", help="Stride index (default: SLURM_ARRAY_TASK_ID or 0)")
     p.add_argument(
@@ -207,6 +287,12 @@ def main():
         jid = args.job_id if args.job_id is not None else int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
         print(f"🚀 process | job-id={jid} | total-shards={args.total_shards} | tmpdir={tmpdir} | exclude-negative={args.exclude_negative}")
         process_shard(jid, args.total_shards, tmpdir, exclude_negative=args.exclude_negative)
+    elif args.command == "berserk":
+        print(f"🚀 identify_berserk | tmpdir={tmpdir}")
+        identify_berserk(tmpdir)
+    elif args.command == "preprocess":
+        print(f"🚀 preprocess | tmpdir={tmpdir}")
+        preprocess(tmpdir)
     else:
         print(f"🚀 merge | tmpdir={tmpdir}")
         merge_shards(tmpdir)

@@ -16,7 +16,6 @@ from utils import (
     FONT_SIZE_TICKS,
     calculate_ols,
     calculate_plywise_betas,
-    preprocess,
 )
 from utils.plots import plot_qbin_stats, plot_beta_vs_ply, plot_raw_trend, plot_subset_scatterplot
 
@@ -27,38 +26,15 @@ RAW_TREND_MIN_N = 5
 
 
 def main():
-    base_table = "_selected_moves"
     src_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Connecting to {PERSONAL_DB}...")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--skip_preprocess", action="store_true", help="Skip preprocessing step")
-    parser.add_argument("--nonzero_T", action="store_true", help="Use nonzero move time variant")
+    parser.add_argument("--include_zeroT", action="store_true", help="Include zero move time moves (premoves)")
     args = parser.parse_args()
 
-    if args.nonzero_T:
-        base_table = f"{base_table}_nonzero_T"
-
-    if not args.skip_preprocess:
-        limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
-        print(f"Preprocessing moves (limit={LIMIT_N or 'FULL'})...")
-        preprocess(conn, target_table="_selected_moves", limit_clause=limit_clause)
-    else:
-        print("Skipping preprocessing as requested.")
-        cols = {
-            row[0]
-            for row in conn.execute("DESCRIBE _selected_moves").fetchall()
-        }
-        required_cols = {"n_possible_moves", "n_possible_moves_qbin"}
-        missing_cols = required_cols - cols
-        if missing_cols:
-            conn.close()
-            missing_list = ", ".join(sorted(missing_cols))
-            raise RuntimeError(
-                f"_selected_moves is missing required columns: {missing_list}. "
-                "Run once without --skip_preprocess to rebuild the preprocessed table."
-            )
+    base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
 
     print("Calculating aggregate statistics...")
     conn.execute(
@@ -159,9 +135,8 @@ def main():
     os.makedirs(figures_dir, exist_ok=True)
 
     name = "combined"
-    if args.nonzero_T:
-        name += "_nonzero_T"
-    output_plot = os.path.join(figures_dir, f"{name}.png")
+    filename = "combined_include_zeroT.png" if args.include_zeroT else "combined.png"
+    output_plot = os.path.join(figures_dir, filename)
     plt.savefig(output_plot, dpi=300, bbox_inches="tight")
     print(f"\n✅ Combined n-possible-moves trend plot saved to {output_plot}")
 

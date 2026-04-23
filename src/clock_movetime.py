@@ -16,7 +16,7 @@ from utils import (
     get_db_connection, apply_poster_style, MAIN_COLOR,
     FONT_SIZE_LABEL, FONT_SIZE_TICKS,
     calculate_ols, calculate_plywise_betas,
-    preprocess, EPSILON
+    EPSILON
 )
 from utils.plots import plot_qbin_stats, plot_beta_vs_ply, plot_raw_trend, plot_subset_scatterplot
 
@@ -28,34 +28,23 @@ RAW_TREND_MIN_N = 100
 
 def main():
     # 1. Setup
-    base_table = "_selected_moves"
     src_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Connecting to {PERSONAL_DB}...")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
     
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--skip_preprocess', action='store_true', help='Skip preprocessing step')
-    parser.add_argument('--nonzero_T', action='store_true', help='Use nonzero move time variant')
+    parser.add_argument('--include_zeroT', action='store_true', help='Include zero move time moves (premoves)')
     parser.add_argument('--opp', action='store_true', help='Use opponent clock instead of player clock')
     args = parser.parse_args()
 
+    base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
     player = "player" if not args.opp else "opponent"
     ln_clock_col = f"ln_{player}_clock_time"
     clock_col = f"{player}_clock_time"
     clock_qbin_col = f"{player}_clock_qbin"
     clock_label = f"{player.capitalize()} Clock"
     
-    if args.nonzero_T:
-        base_table = f"{base_table}_nonzero_T"
-    
-    # 2. SQL Preprocessing
-    if not args.skip_preprocess:
-        limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
-        print(f"Preprocessing moves (limit={LIMIT_N or 'FULL'})...")
-        preprocess(conn, target_table=base_table, limit_clause=limit_clause)
-    else:
-        print("Skipping preprocessing as requested.")
 
     # 3. Aggregate Statistics
     print("Calculating aggregate statistics...")
@@ -159,9 +148,7 @@ def main():
     figures_dir = os.path.join(src_dir, "figures", "clock_movetime")
     os.makedirs(figures_dir, exist_ok=True)
     
-    name = "combined"
-    if args.nonzero_T:
-        name += "_nonzero_T"
+    name = "combined_include_zeroT" if args.include_zeroT else "combined"
     if args.opp:
         name += "_opp"
     filename = f"{name}.png"

@@ -211,39 +211,4 @@ def calculate_plywise_betas(conn, table, x, y, ply_col='move_ply', min_n=30):
         HAVING n > {min_n}
     """).df()
 
-def preprocess(conn, target_table="_selected_moves", limit_clause=""):
-    """
-    Standard SQL-native preprocessing for chess timing analysis.
-    Creates a table with log-transformed variables and quantile bins.
-    """
-    conn.execute(f"""
-        CREATE OR REPLACE TABLE {target_table} AS
-        SELECT 
-            gid,
-            move_ply,
-            board_position,
-            player_white,
-            player_clock_time,
-            opponent_clock_time,
-            n_possible_moves,
-            move_time,
-            ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
-            ln(opponent_clock_time + {EPSILON}) as ln_opponent_clock_time,
-            ln(move_time + {EPSILON}) as ln_move_time,
-            ntile(10) over (order by player_clock_time) as player_clock_qbin,
-            ntile(10) over (order by opponent_clock_time) as opponent_clock_qbin,
-            ntile(10) over (order by n_possible_moves) as n_possible_moves_qbin,
-            ntile(10) over (order by move_ply) as move_ply_qbin
-        FROM (
-            SELECT gid, move_ply, board_position, player_white, player_clock_time, opponent_clock_time, n_possible_moves, move_time
-            FROM selected_moves
-            {limit_clause}
-        );
-    """)
 
-    # Create companion table with zero-time moves (premoves) filtered out
-    conn.execute(f"""
-        CREATE OR REPLACE TABLE {target_table}_nonzero_T AS 
-        SELECT * FROM {target_table} 
-        WHERE move_time > 0;
-    """)

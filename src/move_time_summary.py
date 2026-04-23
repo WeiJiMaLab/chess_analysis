@@ -8,7 +8,7 @@ import duckdb
 import argparse
 import matplotlib.pyplot as plt
 
-from utils import apply_poster_style, FONT_SIZE_LABEL, preprocess
+from utils import apply_poster_style, FONT_SIZE_LABEL
 from utils.plots import plot_histogram_from_bins
 
 # Constants
@@ -58,27 +58,16 @@ def create_histogram_bins(conn, table_name, value_col, out_table, n_bins=N_BINS)
 
 def main():
     # 1. Setup
-    base_table = "_selected_moves"
     src_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Connecting to {PERSONAL_DB}...")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
 
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--skip_preprocess', action='store_true', help='Skip preprocessing step')
-    parser.add_argument('--nonzero_T', action='store_true', help='Use nonzero move time variant')
+    parser.add_argument('--include_zeroT', action='store_true', help='Include zero move time moves (premoves)')
     args = parser.parse_args()
 
-    if args.nonzero_T:
-        base_table = f"{base_table}_nonzero_T"
-
-    # 2. SQL Preprocessing
-    if not args.skip_preprocess:
-        limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
-        print(f"Preprocessing moves (limit={LIMIT_N or 'FULL'})...")
-        preprocess(conn, target_table=base_table, limit_clause=limit_clause)
-    else:
-        print("Skipping preprocessing as requested.")
+    base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
 
     # 3. Get Counts from processed table
     print("Getting processed dataset counts...")
@@ -121,7 +110,7 @@ def main():
     figures_dir = os.path.join(src_dir, "figures", "move_time_summary")
     os.makedirs(figures_dir, exist_ok=True)
 
-    filename = "combined_nonzero_T.png" if args.nonzero_T else "combined.png"
+    filename = "combined_include_zeroT.png" if args.include_zeroT else "combined.png"
     output_plot = os.path.join(figures_dir, filename)
     plt.savefig(output_plot, dpi=300, bbox_inches='tight')
     print(f"\n✅ Move-time summary plot saved to {output_plot}")
