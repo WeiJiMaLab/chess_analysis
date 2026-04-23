@@ -51,8 +51,8 @@ def plot_qbin_ply_trend(stats, ax):
     """
     plt.sca(ax)
     
-    # stats has ['qbin', 'mean_move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
-    stats = stats.sort_values('qbin')
+    # stats has ['move_ply_qbin', 'mean_move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
+    stats = stats.sort_values('move_ply_qbin')
     stats['sem'] = stats['std_ln_move_time'] / np.sqrt(stats['n'])
     stats['ci_y'] = 1.96 * stats['sem']
     
@@ -73,28 +73,29 @@ def main():
     print(f"Connecting to {PERSONAL_DB}...")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
     
-    # 2. Get Counts
-    print("Getting dataset counts...")
-    n_games = conn.execute("SELECT count(distinct gid) FROM selected_moves").fetchone()[0]
-    n_moves = conn.execute("SELECT count(*) FROM selected_moves").fetchone()[0]
-    print(f"Total Games: {n_games:,} | Total Moves: {n_moves:,}")
-    
-    # 3. SQL Pre-calculation
+    # 2. SQL Pre-calculation
     limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
     print(f"Creating SQL tables _selected_moves and stats (limit={LIMIT_N or 'FULL'})...")
     
     conn.execute(f"""
         CREATE OR REPLACE TABLE _selected_moves AS
         SELECT 
+            gid,
             move_ply,
-            log(move_time + {EPSILON}) as ln_move_time,
-            ntile(10) over (order by move_ply) as qbin
+            ln(move_time + {EPSILON}) as ln_move_time,
+            ntile(10) over (order by move_ply) as move_ply_qbin
         FROM (
             SELECT move_ply, move_time, gid
             FROM selected_moves
             {limit_clause}
         );
     """)
+    
+    # 3. Get Counts from processed table
+    print("Getting processed dataset counts...")
+    n_games = conn.execute("SELECT count(distinct gid) FROM _selected_moves").fetchone()[0]
+    n_moves = conn.execute("SELECT count(*) FROM _selected_moves").fetchone()[0]
+    print(f"Total Games: {n_games:,} | Total Moves: {n_moves:,}")
     
     conn.execute("""
         CREATE OR REPLACE TABLE _ply_stats AS
@@ -110,19 +111,19 @@ def main():
     conn.execute("""
         CREATE OR REPLACE TABLE _qbin_stats AS
         SELECT 
-            qbin,
+            move_ply_qbin,
             avg(move_ply) as mean_move_ply,
             avg(ln_move_time) as mean_ln_move_time,
             stddev(ln_move_time) as std_ln_move_time,
             count(*) as n
         FROM _selected_moves
-        GROUP BY qbin;
+        GROUP BY move_ply_qbin;
     """)
     
     # 4. Load Stats for Plotting
     print("Loading data from SQL tables...")
     df_ply_stats = conn.execute("SELECT * FROM _ply_stats").df()
-    df_qbin_stats = conn.execute("SELECT * FROM _qbin_stats ORDER BY qbin").df()
+    df_qbin_stats = conn.execute("SELECT * FROM _qbin_stats ORDER BY move_ply_qbin").df()
     conn.close()
     
     # 5. Plotting
