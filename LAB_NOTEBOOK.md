@@ -10,6 +10,69 @@ The main representation pipeline is neural encoding of search trees. A TreeNN-st
 
 Later, the same tree representation is meant to support a full planning head whose action space includes concrete planning operations (which node to expand, which to evaluate, etc.), still inside the same overall loop sketched above. The lab notebook records experiments along that path—encoders, packing, fitted-Q controller training, diagnostics, and evaluation—not incidental refactors.
 
+### Pipeline stages
+
+The full data-to-model pipeline has six stages. Each stage's output feeds directly into the next.
+
+#### 1. FEN sampling
+
+Starting positions are sampled from a Lichess game database via SQL (DuckDB). The query selects ~200k games from 2023 with both players rated 1800–2600 and at least 20 half-moves. From each sampled game, one board position is drawn uniformly at random (subject to ply 8–120, 2–60 legal moves, 8–32 pieces). A final reservoir sample reduces the set to ~100k FENs. The output is a flat text file of FEN strings and an accompanying Parquet table with game metadata (ELO, time control, opening, piece counts). See `sql/download_FENs.py`.
+
+#### 2. FEN filtering
+
+Not all positions produce informative search trees. A PUCT-based stability filter runs a short tree search (default 16 nodes, same PUCT logic used for full tree generation) on each FEN and records the best root move at 1 expansion, at a midpoint (~5 expansions), and at the full budget. A FEN is kept only if the best move at 1 expansion differs from the best move at the full budget **and** the best move at the midpoint also differs from the full-budget best move. This selects positions where search materially changes the chosen action, so the resulting trees will have nontrivial stopping structure for the controller. This step is embarrassingly parallel and is submitted as sharded Slurm jobs. See `scripts/filter_fens_by_puct_stability.py` and `scripts/submit_puct_filter_shards.py`.
+
+#### 3. Tree generation
+
+Each filtered FEN becomes a PUCT search tree. The expansion loop starts from the root position and repeatedly selects a leaf via the PUCT formula (`Q(s,a) + c_puct * P(a|s) * sqrt(N(s)) / (1 + N(s,a))`), expands it by querying an lc0 engine for child priors, values, and WDL vectors, then backpropagates the leaf's value up the selection path (negating at each ply for alternating perspective). WDL vectors are backpropagated alongside scalar values. Expansion continues until a node budget is reached (currently fixed at 96 nodes).
+
+During expansion, an oracle trace is recorded: after every expansion step, the current best root move and Q-values for all root children are saved. This trace allows later stages to reconstruct any prefix of the search trajectory without re-running the engine.
+
+After expansion completes, teacher targets are extracted. Node value targets are visit-weighted averages of child Q-values. Edge WDL targets are visit-weighted averages of the WDL vectors accumulated during backpropagation, perspective-flipped to the parent's viewpoint. These targets, together with the tree structure, per-node scalar features (value, WDL, prior), and the oracle trace, are saved as a serialized `PretrainExample`.
+
+Variable-size trees can also be derived from a full 96-node tree by sampling a prefix node count from a log-uniform distribution and recomputing targets on the truncated tree, avoiding additional engine calls. See `cts_pretrain.py` (core logic) and `supervised_branch_cli.py` (CLI entry points).
+
+#### 4. Encoder pretraining
+
+The tree encoder is a GNN (class `TreeNN` in `GNN.py`) that operates on variable-size trees packed into a single flat batch. Each node starts with a 5-dimensional feature vector (value, WDL win/draw/loss, WDL variance) embedded through a two-layer MLP into a `d_embed`-dimensional state. The encoder then runs `k` rounds of alternating upward (children→parent) and downward (parent→children) message passing. In the upward pass, each parent aggregates its children's states via a multi-head attention layer (`TreeAttMsgLayer`) conditioned on sinusoidal slot embeddings that encode each child's position among its siblings (sorted by UCI move string). In the downward pass, each child receives a linear projection of its parent's state. Both directions update node states through a shared GRU cell.
+
+Two propagation modes exist. In **synchronous** mode, all nodes update simultaneously from the previous round's states, giving a receptive field of `k` hops. In **asynchronous** (sequential) mode, the upward pass processes nodes from leaves to root in depth order and the downward pass from root to leaves, so each node sees already-updated neighbors. With `k = 1` in asynchronous mode, every node's receptive field covers the entire tree regardless of depth. The current encoder uses asynchronous mode with `k = 1`.
+
+The encoder output is the set of all node states plus the root state for each tree in the batch. Trees are batched by flattening all nodes into a single tensor with a CSR (compressed sparse row) child-pointer structure and a tree-index vector that maps each node back to its source tree.
+
+Pretraining uses the **child-WDL objective**: a slot-conditioned decoder MLP takes the concatenation of a parent node's state and a sinusoidal slot embedding and predicts a 3-way softmax over win/draw/loss for each parent→child edge. The loss is cross-entropy against the search-consolidated edge WDL targets from tree generation. The pretraining loop iterates over packed tensorized shards with Adam, tracking loss gap (cross-entropy minus target entropy) as the primary validation metric. The best encoder checkpoint (by validation loss) is saved and used as the frozen backbone for controller training. See `GNN.py`, `cts_pretrain.py` (class `ChildWdlPretrainer`), and `supervised_branch_cli.py` (`pretrain-child-wdl-encoder` subcommand).
+
+#### 5. Controller episode packing
+
+Raw `PretrainExample` trees are converted into budget-augmented controller episodes for offline training. This is a multi-step process.
+
+First, each source tree's oracle trace is used to reconstruct a trimmed **snapshot episode**: a sequence of tree snapshots at each expansion step, together with the best root move and its Q-value at each snapshot. The episode is trimmed to start at the first expansion where the root has at least one child (i.e., the first real decision point). The **halt reward** at each snapshot is the full-tree Q-value of the root move that is best at that snapshot—measuring what you would get if you stopped searching there and committed to that move, evaluated under the complete search.
+
+Second, each source tree is replicated across synthetic **starting budgets**. Five budget buckets span the range from scramble (1–3 time steps) to very-large (61–120 time steps), with 2 deterministic samples per bucket (seeded by a hash of the source path). For each sampled starting budget, the budgeted oracle computes the optimal stopping policy via backward induction:
+
+- At each planning step `t`, **halt value** = halt reward at step `t`.
+- **Continue value** = −`c_continue(N_t, T_t)` + `V*(t+1)`, where `c_continue` is the sum of a maintenance cost (proportional to `(N_t / 30)^1.1`, currently scaled to 0) and a time cost (a decreasing-marginal function of remaining budget `T_t`, parameterized by `λ`, `p`, `τ`).
+- The oracle halts at step `t` iff halt value ≥ continue value; otherwise it continues.
+- The **target advantage** at each step is `continue_value − halt_value`. Positive means "continue is better"; negative means "halt is better."
+
+If the starting budget expires before the episode ends, a large negative timeout value (−1) is used as the continuation value.
+
+Before packing, source trees are filtered: trees whose halt-reward range across the episode falls below a threshold (default 0.10) are discarded, and trees exhibiting `X*AB*A` root-move churn patterns (where the best move oscillates back to a previously abandoned move) can be excluded. An optional hierarchical `dj` stratification rebalances the training set across stop-depth-excess bins (how deep the oracle searches on average) and budget-action-variance bins (how much the oracle's halt/continue decisions vary across budgets), to reduce overrepresentation of trivially easy trees.
+
+The output is packed tensorized shards: each shard stores per-step node features, parent/child indices, depth, edge slots, halt rewards, target advantages, tree sizes, time budgets, oracle stop steps, and starting budgets for a batch of episodes. See `scripts/pack_controller_episodes.py`, `budgeted_controller_oracle.py`, and `cts_episode_envs.py`.
+
+#### 6. Controller training
+
+The controller predicts the **compute advantage** `A(s) = Q_continue(s) − Q_halt(s)` at each planning step and halts when `A(s) ≤ 0`. The model (class `ComputeAdvantageTreeSearchModel` in `scripts/train_fitted_q_controller.py`) consists of the pretrained TreeNN encoder (typically frozen) plus an MLP advantage head. The encoder processes each step's tree snapshot and produces a root embedding; this is concatenated with two scalar state features (current tree size `N_t` and remaining time budget `T_t`) to form the advantage head's input. The MLP head (configurable width and depth; default 3 layers of 256 units) outputs a scalar predicted advantage. An optional separate sign head shares the MLP backbone but has its own final projection for a binary continue/halt logit.
+
+Training minimizes a weighted combination of advantage MSE and sign BCE (binary cross-entropy on the sign of the advantage). The sign loss directly targets the decision boundary rather than relying on squared-error alone, which can be insensitive to small wrong-sign predictions near zero.
+
+To avoid repeated frozen-encoder forward passes, the training script supports **materialization**: on the first run for a given packed dataset and encoder checkpoint, all per-step root embeddings are computed once and cached to disk alongside the scalar features and targets. Subsequent runs load these cached tensors directly and train only the advantage head on a flat `TensorDataset`.
+
+**Greedy evaluation** runs the trained model's stopping rule on validation episodes: starting from the first planning step, it predicts advantages and halts at the first step where `A(s) ≤ 0` (or at the episode's last step). The resulting stop step determines the achieved return (halt reward minus accumulated continue costs), which is compared to the oracle's optimal return. Reported metrics include exact stop-step accuracy, first-action accuracy, average return, average oracle value, average regret, and average number of expansions used. Per-episode diagnostics (predicted advantages, oracle/predicted stop steps, difficulty scalars, regret decomposition) can be written to JSONL for offline analysis.
+
+See `scripts/train_fitted_q_controller.py` for the full training loop, and `scripts/analyze_budgeted_controller_run.py` for post-hoc analysis of trained controllers.
+
 This file is the running experimental record for the project.
 
 What belongs here:
