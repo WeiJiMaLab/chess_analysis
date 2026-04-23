@@ -172,3 +172,48 @@ def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_tim
         plt.close()
     else:
         plt.show()
+
+def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_col='n', x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", normalized=False):
+    """
+    Generalized quantile-binned trend plot with shaded 95% CI.
+    
+    Args:
+        ax: Matplotlib axis to plot on.
+        df: DataFrame containing the pre-aggregated statistics.
+        x_col: Column for the x-axis (e.g., mean value of the bin).
+        y_col: Column for the y-axis (e.g., mean outcome).
+        std_col: Column containing standard deviation of the outcome.
+        n_col: Column containing sample size of the bin.
+        x_label: Label for x-axis.
+        y_label: Label for y-axis.
+        color: Primary color for the plot.
+        label: Label for the mean line.
+        normalized: If True, plots x as quantile rank (0-1) based on bin order.
+    """
+    apply_poster_style()
+    df = df.sort_values(x_col).copy()
+    
+    # Calculate 95% CI: 1.96 * SEM
+    sem = df[std_col] / np.sqrt(df[n_col])
+    ci_y = 1.96 * sem
+    
+    y_mean = df[y_col]
+    y_lower = y_mean - ci_y
+    y_upper = y_mean + ci_y
+    
+    # Determine x-values
+    if normalized:
+        x_vals = np.arange(1, len(df) + 1) / len(df)
+        if x_label is None:
+            x_label = "Quantile Rank"
+    else:
+        x_vals = df[x_col]
+    
+    ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=12, label=label)
+    ax.fill_between(x_vals, y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
+    
+    if x_label:
+        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
+    if y_label:
+        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
+    ax.legend(fontsize=FONT_SIZE_TICKS)

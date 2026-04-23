@@ -15,6 +15,7 @@ from utils import (
     get_db_connection, apply_poster_style, MAIN_COLOR,
     FONT_SIZE_LABEL, FONT_SIZE_TICKS
 )
+from utils.plots import plot_qbin_stats
 
 # Constants
 PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
@@ -45,27 +46,6 @@ def plot_raw_ply_trend(stats, ax, min_samples=30):
     ax.set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
     ax.legend(fontsize=FONT_SIZE_TICKS)
 
-def plot_qbin_ply_trend(stats, ax):
-    """
-    Plot the quantile-binned trend using precalculated stats with shaded 95% CI.
-    """
-    plt.sca(ax)
-    
-    # stats has ['move_ply_qbin', 'mean_move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
-    stats = stats.sort_values('move_ply_qbin')
-    stats['sem'] = stats['std_ln_move_time'] / np.sqrt(stats['n'])
-    stats['ci_y'] = 1.96 * stats['sem']
-    
-    y_mean = stats['mean_ln_move_time']
-    y_lower = y_mean - stats['ci_y']
-    y_upper = y_mean + stats['ci_y']
-    
-    ax.plot(stats['mean_move_ply'], y_mean, marker='o', color=MAIN_COLOR, lw=3, markersize=12, label="Mean")
-    ax.fill_between(stats['mean_move_ply'], y_lower, y_upper, color=MAIN_COLOR, alpha=0.2, label="95% CI")
-    
-    ax.set_xlabel("Mean Move Ply in Quantile Bin", fontsize=FONT_SIZE_LABEL)
-    ax.set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def main():
     # 1. Connect
@@ -131,7 +111,14 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(24, 11))
     
     plot_raw_ply_trend(df_ply_stats, axes[0], min_samples=30)
-    plot_qbin_ply_trend(df_qbin_stats, axes[1])
+    plot_qbin_stats(
+        axes[1], df_qbin_stats,
+        x_col='mean_move_ply',
+        y_col='mean_ln_move_time',
+        std_col='std_ln_move_time',
+        x_label="Mean Move Ply in Quantile Bin",
+        y_label=r"Mean $\log(T)$"
+    )
     
     # Single-line minimalist title
     title_text = f"{n_games:,} games | {n_moves:,} moves"
