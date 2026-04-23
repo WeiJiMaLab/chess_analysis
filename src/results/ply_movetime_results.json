@@ -1,0 +1,14 @@
+{
+    "params": {
+        "Intercept": -3.017761969944604,
+        "ln_move_ply": 5.0758914126622,
+        "ln_move_ply_sq": -1.7432441598728974
+    },
+    "pvalues": {
+        "Intercept": 0.0,
+        "ln_move_ply": 0.0,
+        "ln_move_ply_sq": 0.0
+    },
+    "rsquared": 0.05038227007780827,
+    "nobs": 95963772
+}

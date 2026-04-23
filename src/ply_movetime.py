@@ -1,112 +1,147 @@
 """
-Analysis of the impact of move ply on response times.
-This script replicates the peak-finding logic used in timing models,
-testing for the significance of the middle-game response time arc.
+Analysis of the relationship between move ply and move time.
+This script calculates and visualizes thinking time trends across
+game stages using SQL-precalculated statistics and shaded 95% CIs.
 """
 
 import os
-import matplotlib.pyplot as plt
+import json
+import duckdb
 import numpy as np
 import pandas as pd
-import seaborn as sns
-import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+
 from utils import (
-    MAIN_COLOR, compute_metrics_by_bin, compute_metrics_by_qbin, plot_metrics,
-    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS
+    get_db_connection, apply_poster_style, MAIN_COLOR,
+    FONT_SIZE_LABEL, FONT_SIZE_TICKS
 )
 
-# Constants for this analysis (Poster Style)
-MAX_PLY_FOR_PLOT = 120
+# Constants
+PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+EPSILON = 1e-6
+LIMIT_N = None  # Use None for full dataset
 
-def analyze_ply_effect(df: pd.DataFrame):
+def plot_raw_ply_trend(stats, ax, min_samples=30):
     """
-    Perform statistical analysis of move_ply on move_time, including
-    quadratic regressions on natural log scale.
+    Plot the raw ply trend using precalculated stats with shaded 95% CI.
     """
-    df = df.copy()
-    df["move_time"] = pd.to_numeric(df["move_time"], errors="coerce")
-    df["move_ply"] = pd.to_numeric(df["move_ply"], errors="coerce")
-    df = df.dropna(subset=["move_time", "move_ply"])
+    plt.sca(ax)
     
-    # Quadratic model on natural log scale
-    df["move_ply_sq"] = df["move_ply"] ** 2
-    df["ln_move_time"] = np.log(df["move_time"].astype(float).clip(lower=0.1))
+    # stats has ['move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
+    stats = stats[stats['n'] >= min_samples].copy()
+    stats = stats.sort_values('move_ply')
     
-    m_log = smf.ols("ln_move_time ~ move_ply + move_ply_sq", data=df).fit()
-    print("\n--- Log-Quadratic Model: log(T) ~ move_ply + move_ply^2 ---")
-    print(m_log.summary().tables[1])
+    stats['sem'] = stats['std_ln_move_time'] / np.sqrt(stats['n'])
+    stats['ci_y'] = 1.96 * stats['sem']
     
-    b_log, a_log = m_log.params["move_ply"], m_log.params["move_ply_sq"]
-    print(f"Predicted Peak Ply (ln scale): {-b_log / (2 * a_log):.2f}")
+    y_mean = stats['mean_ln_move_time']
+    y_lower = y_mean - stats['ci_y']
+    y_upper = y_mean + stats['ci_y']
     
-    return df
+    ax.plot(stats['move_ply'], y_mean, color=MAIN_COLOR, lw=3, label="Mean")
+    ax.fill_between(stats['move_ply'], y_lower, y_upper, color=MAIN_COLOR, alpha=0.2, label="95% CI")
+    
+    ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
+    ax.set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
+    ax.legend(fontsize=FONT_SIZE_TICKS)
 
-def plot_ply_impact(df: pd.DataFrame, figures_dir: str):
+def plot_qbin_ply_trend(stats, ax):
     """
-    Generate unified plots showing the impact of move ply on response times
-    using Poster Style.
+    Plot the quantile-binned trend using precalculated stats with shaded 95% CI.
     """
-    apply_poster_style()
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+    plt.sca(ax)
     
-    # Drop raw move_time to avoid collision after renaming ln_move_time -> move_time
-    df_ln = df.drop(columns=["move_time"])
-    col_map = {"ln_move_time": "move_time"}
-
-    # --- Plot A: ln(T) by ply (Raw) ---
-    df_early = df_ln[df_ln["move_ply"] <= MAX_PLY_FOR_PLOT].copy()
-    df_early["bin"] = df_early["move_ply"]
+    # stats has ['qbin', 'mean_move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
+    stats = stats.sort_values('qbin')
+    stats['sem'] = stats['std_ln_move_time'] / np.sqrt(stats['n'])
+    stats['ci_y'] = 1.96 * stats['sem']
     
-    df_early_utils = df_early.rename(columns=col_map)
-    metrics_raw = compute_metrics_by_bin(df_early_utils)
+    y_mean = stats['mean_ln_move_time']
+    y_lower = y_mean - stats['ci_y']
+    y_upper = y_mean + stats['ci_y']
     
-    plt.sca(axes[0])
-    plot_metrics(metrics_raw, color=MAIN_COLOR)
-    sns.regplot(x="move_ply", y="move_time", data=df_early_utils, scatter=False, 
-                order=2, color="red", label=r"$\log(T)$ Quadratic Fit")
+    ax.plot(stats['mean_move_ply'], y_mean, marker='o', color=MAIN_COLOR, lw=3, markersize=12, label="Mean")
+    ax.fill_between(stats['mean_move_ply'], y_lower, y_upper, color=MAIN_COLOR, alpha=0.2, label="95% CI")
     
-    axes[0].set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    axes[0].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-    axes[0].legend(fontsize=FONT_SIZE_TICKS)
-
-    # --- Plot B: Q-binned ln(T) impact ---
-    df_qbin = df_ln.copy()
-    df_qbin["qbins"], qbin_edges = pd.qcut(df_qbin["move_ply"], q=10, 
-                                           duplicates="drop", retbins=True, labels=False)
-    
-    df_qbin_utils = df_qbin.rename(columns=col_map)
-    metrics_qbin = compute_metrics_by_qbin(df_qbin_utils, qbin_edges)
-    
-    plt.sca(axes[1])
-    plot_metrics(metrics_qbin, color=MAIN_COLOR)
-    axes[1].set_xlabel("Move Ply (Quantile-binned)", fontsize=FONT_SIZE_LABEL)
-    axes[1].set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-
-    plt.tight_layout()
-    
-    save_path = os.path.join(figures_dir, "ply_impact_comparison.png")
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Saved comparison plot: {save_path}")
+    ax.set_xlabel("Mean Move Ply in Quantile Bin", fontsize=FONT_SIZE_LABEL)
+    ax.set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
+    ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def main():
+    # 1. Connect
     src_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.dirname(src_dir)
-    data_path = os.path.join(base_dir, "data", "moves_500.parquet")
-    figures_dir = os.path.join(base_dir, "src", "figures", "ply_movetime") # Dedicated subdir
+    print(f"Connecting to {PERSONAL_DB}...")
+    conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
     
-    if not os.path.exists(figures_dir):
-        os.makedirs(figures_dir)
-        
-    print(f"Loading data from {data_path}...")
-    try:
-        df = pd.read_parquet(data_path)
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
-
-    df_cleaned = analyze_ply_effect(df)
-    plot_ply_impact(df_cleaned, figures_dir)
-    print("\n✅ Ply analysis complete. Poster-Style figures generated.")
+    # 2. Get Counts
+    print("Getting dataset counts...")
+    n_games = conn.execute("SELECT count(distinct gid) FROM selected_moves").fetchone()[0]
+    n_moves = conn.execute("SELECT count(*) FROM selected_moves").fetchone()[0]
+    print(f"Total Games: {n_games:,} | Total Moves: {n_moves:,}")
+    
+    # 3. SQL Pre-calculation
+    limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
+    print(f"Creating SQL tables _selected_moves and stats (limit={LIMIT_N or 'FULL'})...")
+    
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE _selected_moves AS
+        SELECT 
+            move_ply,
+            log(move_time + {EPSILON}) as ln_move_time,
+            ntile(10) over (order by move_ply) as qbin
+        FROM (
+            SELECT move_ply, move_time, gid
+            FROM selected_moves
+            {limit_clause}
+        );
+    """)
+    
+    conn.execute("""
+        CREATE OR REPLACE TABLE _ply_stats AS
+        SELECT 
+            move_ply,
+            avg(ln_move_time) as mean_ln_move_time,
+            stddev(ln_move_time) as std_ln_move_time,
+            count(*) as n
+        FROM _selected_moves
+        GROUP BY move_ply;
+    """)
+    
+    conn.execute("""
+        CREATE OR REPLACE TABLE _qbin_stats AS
+        SELECT 
+            qbin,
+            avg(move_ply) as mean_move_ply,
+            avg(ln_move_time) as mean_ln_move_time,
+            stddev(ln_move_time) as std_ln_move_time,
+            count(*) as n
+        FROM _selected_moves
+        GROUP BY qbin;
+    """)
+    
+    # 4. Load Stats for Plotting
+    print("Loading data from SQL tables...")
+    df_ply_stats = conn.execute("SELECT * FROM _ply_stats").df()
+    df_qbin_stats = conn.execute("SELECT * FROM _qbin_stats ORDER BY qbin").df()
+    conn.close()
+    
+    # 5. Plotting
+    apply_poster_style()
+    fig, axes = plt.subplots(1, 2, figsize=(24, 11))
+    
+    plot_raw_ply_trend(df_ply_stats, axes[0], min_samples=30)
+    plot_qbin_ply_trend(df_qbin_stats, axes[1])
+    
+    # Single-line minimalist title
+    title_text = f"{n_games:,} games | {n_moves:,} moves"
+    fig.suptitle(title_text, fontsize=FONT_SIZE_LABEL + 10, y=1.02)
+    
+    plt.tight_layout()
+    figures_dir = os.path.join(src_dir, "figures", "ply_movetime")
+    os.makedirs(figures_dir, exist_ok=True)
+    output_plot = os.path.join(figures_dir, "combined.png")
+    plt.savefig(output_plot, dpi=300, bbox_inches='tight')
+    print(f"\n✅ Combined plot saved to {output_plot}")
 
 if __name__ == "__main__":
     main()

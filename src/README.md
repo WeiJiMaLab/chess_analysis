@@ -77,7 +77,7 @@ Results and figures are saved to `src/figures/`.
 
 ---
 
-## 5. Guide for Contributors & AI Agents
+## 5. Guide for Contributors
 
 This repository follows a strict "Readability First" philosophy. If you are adding new analysis scripts or modifying the pipeline, you are expected to adhere to these design principles:
 
@@ -96,5 +96,4 @@ This repository follows a strict "Readability First" philosophy. If you are addi
 - **Fixed-Effect Pipeline**: When controlling for game stage or player speed, use the "de-meaning" pattern (subtracting the group mean) demonstrated in `fe_clocktime_movetime.py`.
 - **Log-Space Normalization**: Always operate in $\log$ space for move times and clock times unless there is a specific theoretical reason to do otherwise.
 
-### Summary for AI Agents
 When generating new code for this directory, do not suggest "highly flexible" or "generalized" frameworks. Instead, provide linear, readable, and modular scripts that follow the existing patterns in `src/utils/`. Prioritize code that can be understood at a glance.
