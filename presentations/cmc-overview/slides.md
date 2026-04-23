@@ -136,7 +136,7 @@ math: katex
 
 ---
 
-# 2a. Game stage: ply vs. mean log think time (default)
+# 2a. Game stage: ply vs. think time (default)
 
 <div class="text-xs opacity-60 mb-2 -mt-2">Excludes <code>move_time = 0</code>.</div>
 
@@ -181,7 +181,55 @@ math: katex
 
 ---
 
-# 3b. Remaining clock vs. think time (with premoves)
+# 3a (intuition). Per-ply β in the opening
+
+<div class="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 mt-2 items-start">
+  <div class="text-sm leading-relaxed max-w-md space-y-3">
+    <p>
+      <b>Opening (~ply &lt; 50):</b> per-ply β is often <b>negative</b> — more time left, <i>shorter</i> thinks.
+    </p>
+    <p class="text-slate-600">
+      <b>Pace</b> confounds the axes: long thinkers are low on clock; fast movers bank time. Sketch: <i>x</i> = your remaining clock, <i>y</i> = this move (e.g. ln <i>T</i>).
+    </p>
+    <p class="text-xs opacity-75">First few plies: sign can flip (premoves / edge noise).</p>
+  </div>
+  <div class="shrink-0 w-full max-w-[300px] mx-auto lg:mx-0 p-3 rounded-lg border border-slate-200 bg-slate-50/80 text-[11px] leading-snug">
+    <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Schematic: early plies</div>
+    <svg viewBox="0 0 220 200" class="w-full h-auto" aria-label="Scatter sketch: slow pace in upper left, fast pace in lower right">
+      <!-- Axes -->
+      <line x1="36" y1="20" x2="36" y2="168" stroke="#334155" stroke-width="1.2"/>
+      <line x1="36" y1="168" x2="200" y2="168" stroke="#334155" stroke-width="1.2"/>
+      <!-- Y: ln T -->
+      <text x="8" y="100" class="text-[8px] fill-slate-600" transform="rotate(-90 8 100)" style="font-size: 8px;">longer think →</text>
+      <text x="20" y="24" class="text-[7px] fill-slate-500" style="font-size: 7px;">high</text>
+      <text x="20" y="162" class="text-[7px] fill-slate-500" style="font-size: 7px;">low</text>
+      <!-- X: clock -->
+      <text x="108" y="192" class="text-[8px] fill-slate-600" text-anchor="middle" style="font-size: 8px;">← less time left &nbsp;·&nbsp; more time left →</text>
+      <text x="48" y="180" class="text-[7px] fill-slate-500" style="font-size: 7px;">low</text>
+      <text x="188" y="180" class="text-[7px] fill-slate-500" text-anchor="end" style="font-size: 7px;">high</text>
+      <!-- Diagonal / cloud -->
+      <line x1="56" y1="48" x2="188" y2="148" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <!-- Cloud dots sparse -->
+      <circle cx="62" cy="58" r="3" fill="#6366f1" opacity="0.35"/>
+      <circle cx="72" cy="52" r="3" fill="#6366f1" opacity="0.35"/>
+      <circle cx="180" cy="140" r="3" fill="#0d9488" opacity="0.45"/>
+      <circle cx="170" cy="150" r="3" fill="#0d9488" opacity="0.45"/>
+      <circle cx="175" cy="135" r="2.5" fill="#0d9488" opacity="0.35"/>
+      <circle cx="68" cy="64" r="2.5" fill="#6366f1" opacity="0.3"/>
+      <!-- Labels -->
+      <text x="50" y="44" class="text-[9px] font-semibold fill-slate-800" style="font-size: 9px;">“slow” pace</text>
+      <text x="50" y="55" class="text-[7px] fill-slate-600" style="font-size: 7px;">long T, little clock</text>
+      <text x="50" y="64" class="text-[7px] fill-slate-500" style="font-size: 7px;">(upper left)</text>
+      <text x="128" y="132" class="text-[9px] font-semibold fill-slate-800" style="font-size: 9px;">“fast” pace</text>
+      <text x="128" y="143" class="text-[7px] fill-slate-600" style="font-size: 7px;">short T, lots of clock</text>
+      <text x="128" y="152" class="text-[7px] fill-slate-500" style="font-size: 7px;">(lower right)</text>
+    </svg>
+  </div>
+</div>
+
+---
+
+# 3b. Remaining clock vs. think time (nonzero)
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
 
@@ -196,7 +244,7 @@ math: katex
 
 ---
 
-# 4a. Opponent clock vs. your think time (default)
+# 4a. Opponent clock vs. think time (default)
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>--opp</code>: x = their remaining clock; excludes 0s.</div>
 
@@ -211,7 +259,7 @@ math: katex
 
 ---
 
-# 4b. Opponent clock vs. your think time (with premoves)
+# 4b. Opponent clock vs. think time (nonzero)
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT --opp</code>.</div>
 
@@ -226,7 +274,7 @@ math: katex
 
 ---
 
-# 5a. Branching: legal moves vs. raw think time (default)
+# 5a. Branching: legal moves vs. think time (default)
 
 <div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes 0s.</div>
 
@@ -241,7 +289,7 @@ math: katex
 
 ---
 
-# 5b. Branching: legal moves vs. raw think time (with premoves)
+# 5b. Branching: legal moves vs. think time (nonzero)
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
 
