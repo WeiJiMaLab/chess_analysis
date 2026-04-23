@@ -9,115 +9,103 @@ import json
 import duckdb
 import numpy as np
 import pandas as pd
+import argparse
 import matplotlib.pyplot as plt
 
 from utils import (
     get_db_connection, apply_poster_style, MAIN_COLOR,
-    FONT_SIZE_LABEL, FONT_SIZE_TICKS
+    FONT_SIZE_LABEL, FONT_SIZE_TICKS,
+    preprocess, EPSILON
 )
-from utils.plots import plot_qbin_stats
+from utils.plots import plot_qbin_stats, plot_raw_trend
 
 # Constants
 PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
-EPSILON = 1e-6
 LIMIT_N = None  # Use None for full dataset
-
-def plot_raw_ply_trend(stats, ax, min_samples=30):
-    """
-    Plot the raw ply trend using precalculated stats with shaded 95% CI.
-    """
-    plt.sca(ax)
-    
-    # stats has ['move_ply', 'mean_ln_move_time', 'std_ln_move_time', 'n']
-    stats = stats[stats['n'] >= min_samples].copy()
-    stats = stats.sort_values('move_ply')
-    
-    stats['sem'] = stats['std_ln_move_time'] / np.sqrt(stats['n'])
-    stats['ci_y'] = 1.96 * stats['sem']
-    
-    y_mean = stats['mean_ln_move_time']
-    y_lower = y_mean - stats['ci_y']
-    y_upper = y_mean + stats['ci_y']
-    
-    ax.plot(stats['move_ply'], y_mean, color=MAIN_COLOR, lw=3, label="Mean")
-    ax.fill_between(stats['move_ply'], y_lower, y_upper, color=MAIN_COLOR, alpha=0.2, label="95% CI")
-    
-    ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    ax.set_ylabel(r"Mean $\log(T)$", fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
 
 
 def main():
-    # 1. Connect
+    # 1. Setup
+    base_table = "_selected_moves"
     src_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Connecting to {PERSONAL_DB}...")
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
     
-    # 2. SQL Pre-calculation
-    limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
-    print(f"Creating SQL tables _selected_moves and stats (limit={LIMIT_N or 'FULL'})...")
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--skip_preprocess', action='store_true', help='Skip preprocessing step')
+    parser.add_argument('--nonzero_T', action='store_true', help='Use nonzero move time variant')
+    args = parser.parse_args()
     
-    conn.execute(f"""
-        CREATE OR REPLACE TABLE _selected_moves AS
-        SELECT 
-            gid,
-            move_ply,
-            ln(move_time + {EPSILON}) as ln_move_time,
-            ntile(10) over (order by move_ply) as move_ply_qbin
-        FROM (
-            SELECT move_ply, move_time, gid
-            FROM selected_moves
-            {limit_clause}
-        );
-    """)
+    if args.nonzero_T:
+        base_table = f"{base_table}_nonzero_T"
+    
+    # 2. SQL Preprocessing
+    if not args.skip_preprocess:
+        limit_clause = f"LIMIT {LIMIT_N}" if LIMIT_N is not None else ""
+        print(f"Preprocessing moves (limit={LIMIT_N or 'FULL'})...")
+        preprocess(conn, target_table=base_table, limit_clause=limit_clause)
+    else:
+        print("Skipping preprocessing as requested.")
     
     # 3. Get Counts from processed table
     print("Getting processed dataset counts...")
-    n_games = conn.execute("SELECT count(distinct gid) FROM _selected_moves").fetchone()[0]
-    n_moves = conn.execute("SELECT count(*) FROM _selected_moves").fetchone()[0]
+    n_games = conn.execute(f"SELECT count(distinct gid) FROM {base_table}").fetchone()[0]
+    n_moves = conn.execute(f"SELECT count(*) FROM {base_table}").fetchone()[0]
     print(f"Total Games: {n_games:,} | Total Moves: {n_moves:,}")
     
-    conn.execute("""
+    conn.execute(f"""
         CREATE OR REPLACE TABLE _ply_stats AS
         SELECT 
             move_ply,
             avg(ln_move_time) as mean_ln_move_time,
             stddev(ln_move_time) as std_ln_move_time,
             count(*) as n
-        FROM _selected_moves
+        FROM {base_table}
         GROUP BY move_ply;
     """)
     
-    conn.execute("""
-        CREATE OR REPLACE TABLE _qbin_stats AS
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE _ply_qstats AS
         SELECT 
             move_ply_qbin,
             avg(move_ply) as mean_move_ply,
             avg(ln_move_time) as mean_ln_move_time,
             stddev(ln_move_time) as std_ln_move_time,
             count(*) as n
-        FROM _selected_moves
+        FROM {base_table}
         GROUP BY move_ply_qbin;
     """)
     
     # 4. Load Stats for Plotting
     print("Loading data from SQL tables...")
     df_ply_stats = conn.execute("SELECT * FROM _ply_stats").df()
-    df_qbin_stats = conn.execute("SELECT * FROM _qbin_stats ORDER BY move_ply_qbin").df()
+    df_qbin_stats = conn.execute("SELECT * FROM _ply_qstats ORDER BY move_ply_qbin").df()
     conn.close()
     
     # 5. Plotting
     apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(24, 11))
     
-    plot_raw_ply_trend(df_ply_stats, axes[0], min_samples=30)
+    plot_raw_trend(
+        axes[0], df_ply_stats, 
+        x_col='move_ply', 
+        y_col='mean_ln_move_time', 
+        std_col='std_ln_move_time', 
+        n_col='n',
+        x_label="Move Ply",
+        y_label=r"Mean $\log(T)$", 
+        show_legend = False
+    )
+
     plot_qbin_stats(
         axes[1], df_qbin_stats,
         x_col='mean_move_ply',
         y_col='mean_ln_move_time',
         std_col='std_ln_move_time',
         x_label="Mean Move Ply in Quantile Bin",
-        y_label=r"Mean $\log(T)$"
+        y_label=r"Mean $\log(T)$",
+        show_legend = False
     )
     
     # Single-line minimalist title
@@ -127,7 +115,9 @@ def main():
     plt.tight_layout()
     figures_dir = os.path.join(src_dir, "figures", "ply_movetime")
     os.makedirs(figures_dir, exist_ok=True)
-    output_plot = os.path.join(figures_dir, "combined.png")
+    
+    filename = "combined_nonzero_T.png" if args.nonzero_T else "combined.png"
+    output_plot = os.path.join(figures_dir, filename)
     plt.savefig(output_plot, dpi=300, bbox_inches='tight')
     print(f"\n✅ Combined plot saved to {output_plot}")
 

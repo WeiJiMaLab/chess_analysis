@@ -16,6 +16,9 @@ import numpy as np
 import dask.dataframe as dd
 from IPython.display import SVG, display
 
+# Constants
+EPSILON = 1e-6
+
 from .features import row_to_fen
 
 # Stockfish paths
@@ -175,3 +178,65 @@ def plot_metrics(metrics, color=MAIN_COLOR, ax=None):
         alpha=0.2,
         label="95% CI",
     )
+
+def calculate_ols(conn, table, x, y):
+    """
+    Calculate global OLS slope and intercept using SQL-native functions.
+    Returns (slope, intercept).
+    """
+    return conn.execute(f"""
+        SELECT 
+            regr_slope({y}, {x}) as slope,
+            regr_intercept({y}, {x}) as intercept
+        FROM {table}
+    """).fetchone()
+
+def calculate_plywise_betas(conn, table, x, y, ply_col='move_ply', min_n=30):
+    """
+    Calculate per-ply OLS slopes and SE using SQL-native functions.
+    Returns a DataFrame with [ply_col, beta, beta_se, n].
+    """
+    return conn.execute(f"""
+        SELECT 
+            {ply_col},
+            regr_slope({y}, {x}) as beta,
+            sqrt(
+                (regr_syy({y}, {x}) - pow(regr_slope({y}, {x}), 2) * regr_sxx({y}, {x})) / 
+                (NULLIF(CAST(regr_count({y}, {x}) AS BIGINT) - 2, 0)) / 
+                NULLIF(regr_sxx({y}, {x}), 0)
+            ) as beta_se,
+            count(*) as n
+        FROM {table}
+        GROUP BY {ply_col}
+        HAVING n > {min_n}
+    """).df()
+
+def preprocess(conn, target_table="_selected_moves", limit_clause=""):
+    """
+    Standard SQL-native preprocessing for chess timing analysis.
+    Creates a table with log-transformed variables and quantile bins.
+    """
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE {target_table} AS
+        SELECT 
+            gid,
+            move_ply,
+            player_clock_time,
+            move_time,
+            ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
+            ln(move_time + {EPSILON}) as ln_move_time,
+            ntile(10) over (order by player_clock_time) as player_clock_qbin,
+            ntile(10) over (order by move_ply) as move_ply_qbin
+        FROM (
+            SELECT gid, move_ply, player_clock_time, move_time
+            FROM selected_moves
+            {limit_clause}
+        );
+    """)
+
+    # Create companion table with zero-time moves (premoves) filtered out
+    conn.execute(f"""
+        CREATE OR REPLACE TABLE {target_table}_nonzero_T AS 
+        SELECT * FROM {target_table} 
+        WHERE move_time > 0;
+    """)

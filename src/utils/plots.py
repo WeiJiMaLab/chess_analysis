@@ -173,7 +173,34 @@ def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_tim
     else:
         plt.show()
 
-def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_col='n', x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", normalized=False):
+def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", min_n=30, show_legend=True):
+    """
+    Plot a raw (high-resolution) trend with shaded 95% CI.
+    Useful for per-ply or per-second analysis where markers would be too dense.
+    """
+    apply_poster_style()
+    df = df[df[n_col] >= min_n].copy()
+    df = df.sort_values(x_col)
+    
+    # Calculate 95% CI: 1.96 * SEM
+    sem = df[std_col] / np.sqrt(df[n_col])
+    ci_y = 1.96 * sem
+    
+    y_mean = df[y_col]
+    y_lower = y_mean - ci_y
+    y_upper = y_mean + ci_y
+    
+    ax.plot(df[x_col], y_mean, color=color, lw=3, label=label)
+    ax.fill_between(df[x_col], y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
+    
+    if x_label:
+        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
+    if y_label:
+        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
+    if show_legend:
+        ax.legend(fontsize=FONT_SIZE_TICKS)
+
+def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_col='n', x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", normalized=False, show_legend=True):
     """
     Generalized quantile-binned trend plot with shaded 95% CI.
     
@@ -189,6 +216,7 @@ def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_c
         color: Primary color for the plot.
         label: Label for the mean line.
         normalized: If True, plots x as quantile rank (0-1) based on bin order.
+        show_legend: If True, displays the legend.
     """
     apply_poster_style()
     df = df.sort_values(x_col).copy()
@@ -216,4 +244,73 @@ def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_c
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
+    if show_legend:
+        ax.legend(fontsize=FONT_SIZE_TICKS)
+
+def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_se', max_ply=150, title=None):
+    """
+    Plot per-ply sensitivity (betas) with 95% CI.
+    """
+    apply_poster_style()
+    df = df[df[ply_col] <= max_ply].copy()
+    ci_beta = 1.96 * df[se_col]
+    
+    ax.plot(df[ply_col], df[beta_col], color=MAIN_COLOR, lw=3, label=r"Slope ($\beta$)")
+    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[beta_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
+    ax.axhline(0, color='black', linestyle='--', alpha=0.5)
+    
+    ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
+    ax.set_ylabel(r"Sensitivity ($\beta$)", fontsize=FONT_SIZE_LABEL)
+    if title:
+        ax.set_title(title, fontsize=FONT_SIZE_LABEL)
+
+def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=10000, color=MAIN_COLOR, alpha=0.1, s=10):
+    """
+    Plot a sampled scatterplot of the data.
+    """
+    apply_poster_style()
+    if len(df) > n:
+        df_sub = df.sample(n=n, random_state=42)
+    else:
+        df_sub = df
+        
+    ax.scatter(df_sub[x_col], df_sub[y_col], color=color, alpha=alpha, s=s)
+    
+    if x_label:
+        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
+    if y_label:
+        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
+
+def plot_histogram_from_bins(
+    ax,
+    df_bins,
+    left_col="bin_left",
+    right_col="bin_right",
+    count_col="n",
+    x_label=None,
+    y_label="Count",
+    color=MAIN_COLOR,
+):
+    """
+    Plot a histogram-style bar chart from pre-binned SQL counts.
+    """
+    apply_poster_style()
+    if df_bins.empty:
+        return
+
+    widths = df_bins[right_col] - df_bins[left_col]
+    ax.bar(
+        df_bins[left_col],
+        df_bins[count_col],
+        width=widths,
+        align="edge",
+        color=color,
+        alpha=0.5,
+        edgecolor=color,
+        linewidth=1.5,
+    )
+
+    if x_label:
+        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
+    if y_label:
+        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
