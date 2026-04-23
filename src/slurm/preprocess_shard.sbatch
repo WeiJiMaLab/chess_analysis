@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=40
 #SBATCH --mem=16G
 #SBATCH --time=00:20:00
-#SBATCH --array=0-4
+#SBATCH --array=0-1
 
 # One array task per stride index; must match TOTAL_SHARDS / --total-shards in src/utils/load_data.py.
 # Raise --time if any task is killed mid-shard (see .out for last parquet).
@@ -33,6 +33,6 @@ if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
   exit 1
 fi
 
-python3 src/utils/preprocess_data.py process_shard --total-shards 5 --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/utils/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 16GB
 
 echo "Finished at $(date)"

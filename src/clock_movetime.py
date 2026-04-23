@@ -39,6 +39,8 @@ def main():
     args = parser.parse_args()
 
     base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
+    base_table = f"(SELECT * FROM {base_table} WHERE move_ply > 80)" # apply filter to moves after ply 80
+
     player = "player" if not args.opp else "opponent"
     ln_clock_col = f"ln_{player}_clock_time"
     clock_col = f"{player}_clock_time"

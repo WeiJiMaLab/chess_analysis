@@ -25,18 +25,16 @@ export LOAD_MOVES_TMPDIR="${TMPDIR}"
 echo "Fresh LOAD_MOVES_TMPDIR=${LOAD_MOVES_TMPDIR}"
 
 echo "Selecting games on $(hostname) at $(date)"
-python3 src/utils/preprocess_data.py select_games --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/utils/preprocess_data.py select_games --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
 
 echo "Submitting load_moves array job..."
 sbatch --wait --export=ALL "${PROJECT_DIR}/src/slurm/preprocess_shard.sbatch"
 
 echo "Merge job on $(hostname) at $(date)"
-python3 src/utils/preprocess_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}"
-
-echo "Identify berserk job on $(hostname) at $(date)"
-python3 src/utils/preprocess_data.py berserk --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/utils/preprocess_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
+python3 src/utils/preprocess_data.py berserk --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
 
 echo "Preprocess job on $(hostname) at $(date)"
-python3 src/utils/preprocess_data.py preprocess --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/utils/preprocess_data.py preprocess --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 128GB
 
 echo "Finished pipeline at $(date)"

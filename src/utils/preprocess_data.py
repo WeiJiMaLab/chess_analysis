@@ -6,7 +6,7 @@ import os
 import time
 
 # Must match Slurm: #SBATCH --array=0-(TOTAL_SHARDS-1)
-TOTAL_SHARDS = 5
+TOTAL_SHARDS = 2
 DEFAULT_TMPDIR = "/scratch/gpfs/GRIFFITHS/hl4291/tmp/"
 PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
@@ -14,9 +14,13 @@ DEFAULT_START_DATE = "2023-10-01"
 DEFAULT_END_DATE = "2023-12-31"  # Exclusive upper bound
 EPSILON = 1e-6
 
+# Global settings updated by CLI flags
+THREADS = 40
+MEMORY_LIMIT = "64GB"
+
 
 def _conn_kw(tmpdir: str) -> dict:
-    return {"threads": 40, "memory_limit": "16GB", "temp_directory": tmpdir}
+    return {"threads": THREADS, "memory_limit": MEMORY_LIMIT, "temp_directory": tmpdir}
 
 
 def _sql_str(s: str) -> str:
@@ -43,6 +47,15 @@ def preprocess_selected_games(
 
     s_start = _sql_str(start_date)
     s_end = _sql_str(end_date)
+    
+    # Optional optimization: use gid bounds if gid is sorted (likely)
+    # GID is YYYYMMSSSIIIIII (6 digits year-month, 3 segment, 6 index)
+    try:
+        start_yyyymm = int(start_date.replace("-", "")[:6])
+        end_yyyymm = int(end_date.replace("-", "")[:6]) + 1
+        gid_bounds = f"AND gid >= {start_yyyymm}000000000 AND gid < {end_yyyymm}000000000"
+    except Exception:
+        gid_bounds = ""
 
     candidate_count = conn.execute(
         f"""
@@ -50,6 +63,7 @@ def preprocess_selected_games(
         FROM core.games
         WHERE utc_datetime >= TIMESTAMP '{s_start}'
           AND utc_datetime < TIMESTAMP '{s_end}'
+          {gid_bounds}
           AND initial_clock = {int(initial_clock)}
           AND clock_increment = {int(clock_increment)}
           AND white_elo >= {int(min_elo)}
@@ -68,6 +82,7 @@ def preprocess_selected_games(
         FROM core.games
         WHERE utc_datetime >= TIMESTAMP '{s_start}'
           AND utc_datetime < TIMESTAMP '{s_end}'
+          {gid_bounds}
           AND initial_clock = {int(initial_clock)}
           AND clock_increment = {int(clock_increment)}
           AND white_elo >= {int(min_elo)}
@@ -192,18 +207,15 @@ def identify_berserk(tmpdir=DEFAULT_TMPDIR):
     print(f"✅ Identified {count:,} berserk games. Stored in 'berserk_games' table.")
 
 
-def preprocess(conn=None, tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clause=""):
+def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clause=""):
     """
     Standard SQL-native preprocessing for chess timing analysis.
     Creates a table with log-transformed variables and quantile bins.
     Excludes games identified as berserk.
     """
-    if conn is None:
-        tmpdir = os.path.abspath(tmpdir)
-        conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
-        should_close = True
-    else:
-        should_close = False
+    tmpdir = os.path.abspath(tmpdir)
+    conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
+    should_close = True
 
     print(f"🛠️  Preprocessing moves into {target_table} (excluding berserk games)...")
     conn.execute(f"""
@@ -225,9 +237,10 @@ def preprocess(conn=None, tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves",
             ntile(10) over (order by n_possible_moves) as n_possible_moves_qbin,
             ntile(10) over (order by move_ply) as move_ply_qbin
         FROM (
-            SELECT gid, move_ply, board_position, player_white, player_clock_time, opponent_clock_time, n_possible_moves, move_time
-            FROM selected_moves
-            WHERE gid NOT IN (SELECT gid FROM berserk_games)
+            SELECT m.gid, m.move_ply, m.board_position, m.player_white, m.player_clock_time, m.opponent_clock_time, m.n_possible_moves, m.move_time
+            FROM selected_moves m
+            LEFT JOIN berserk_games b ON m.gid = b.gid
+            WHERE b.gid IS NULL
             {limit_clause}
         );
     """)
@@ -268,7 +281,14 @@ def main():
     p.add_argument("--initial-clock", type=int, default=600, help="Initial clock in seconds (default %(default)s)")
     p.add_argument("--clock-increment", type=int, default=0, help="Clock increment in seconds (default %(default)s)")
     p.add_argument("--min-elo", type=int, default=2000, help="Minimum white/black elo (default %(default)s)")
+    p.add_argument("--limit", type=int, default=None, help="Limit number of moves for smoke testing")
+    p.add_argument("--threads", type=int, default=40, help="Number of threads for DuckDB (default %(default)s)")
+    p.add_argument("--memory", type=str, default="64GB", help="Memory limit for DuckDB (default %(default)s)")
     args = p.parse_args()
+    
+    global THREADS, MEMORY_LIMIT
+    THREADS = args.threads
+    MEMORY_LIMIT = args.memory
     tmpdir = os.path.abspath(args.tmpdir)
     if args.command == "select_games":
         print(
@@ -291,8 +311,9 @@ def main():
         print(f"🚀 identify_berserk | tmpdir={tmpdir}")
         identify_berserk(tmpdir)
     elif args.command == "preprocess":
-        print(f"🚀 preprocess | tmpdir={tmpdir}")
-        preprocess(tmpdir)
+        print(f"🚀 preprocess | tmpdir={tmpdir} | limit={args.limit}")
+        limit_clause = f"LIMIT {args.limit}" if args.limit else ""
+        preprocess(tmpdir, limit_clause=limit_clause)
     else:
         print(f"🚀 merge | tmpdir={tmpdir}")
         merge_shards(tmpdir)

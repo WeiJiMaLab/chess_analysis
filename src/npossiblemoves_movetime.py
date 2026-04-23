@@ -35,6 +35,7 @@ def main():
     args = parser.parse_args()
 
     base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
+    base_table = f"(SELECT * FROM {base_table} WHERE n_possible_moves < 50)" # moves with less than 50 possible actions
 
     print("Calculating aggregate statistics...")
     conn.execute(
