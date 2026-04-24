@@ -30,4 +30,7 @@ python3 src/npossiblemoves_movetime.py
 echo "5. Game Stage (Ply Movetime)..."
 python3 src/ply_movetime.py
 
+echo "6. Game Stage (Ply Pre-move Probability)..."
+python3 src/ply_premove.py
+
 echo "Analysis complete at $(date)"

@@ -4,9 +4,9 @@
 #SBATCH --error=/home/hl4291/chess_analysis/src/slurm/logs/ld-moves_%A_%a.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=40
-#SBATCH --mem=16G
-#SBATCH --time=00:20:00
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=8G
+#SBATCH --time=00:10:00
 #SBATCH --array=0-1
 
 # One array task per stride index; must match TOTAL_SHARDS / --total-shards in src/utils/load_data.py.
@@ -33,6 +33,6 @@ if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
   exit 1
 fi
 
-python3 src/utils/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 16GB
+python3 src/utils/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 20 --memory 8GB
 
 echo "Finished at $(date)"

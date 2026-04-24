@@ -304,14 +304,20 @@ math: katex
 
 ---
 
-# 6. Value of Computation (The Demand)
+# 6. Interaction: Clock & Ply (3D)
 
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-8 items-start">
-  <img class="w-full object-contain" src="/figures/voc_movetime/standard_voc_single_sample.png" />
+<div class="grid grid-cols-1 gap-4 h-full -mt-4">
+  <div class="h-[420px]">
+    <SurfPlot3D 
+      csvPath="/data/heatmap_quantile.csv" 
+      title="Thinking Topology: Quantile Interaction" 
+      :zScale="6.0"
+    />
+  </div>
   
-  <div class="takeaway bg-neutral-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">VOC</b><br><br>
-    Shallow vs deep value gap. $\log T$ tracks $\sqrt{\text{VOC}}$: more think time where search depth actually pays. Controller alignment target.
+  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
+    <b class="text-primary uppercase tracking-wider text-xs">The Thinking Landscape</b><br><br>
+    Interactive readout of resource allocation. The "peak" represents the mid-game where complexity is highest, modulated by remaining budget.
   </div>
 </div>
 
