@@ -1,3 +1,8 @@
+"""
+Preprocess Lichess data for move-time analysis.
+Includes selection of games, extraction of moves, and feature engineering.
+"""
+
 import argparse
 import duckdb
 import pandas as pd
@@ -207,17 +212,42 @@ def identify_berserk(tmpdir=DEFAULT_TMPDIR):
     print(f"✅ Identified {count:,} berserk games. Stored in 'berserk_games' table.")
 
 
+def identify_grant_more_time(tmpdir=DEFAULT_TMPDIR):
+    """
+    Identify games where at least one player was granted more time.
+    Detected if player_clock_time at ply n > player_clock_time at ply n-2.
+    """
+    tmpdir = os.path.abspath(tmpdir)
+    conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
+
+    print(f"🔍 Identifying 'grant more time' games in {PERSONAL_DB}...")
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE grant_more_time_games AS
+        SELECT DISTINCT m1.gid
+        FROM selected_moves m1
+        JOIN selected_moves m2 ON m1.gid = m2.gid 
+          AND m1.player_white = m2.player_white 
+          AND m1.move_ply = m2.move_ply + 2
+        WHERE m1.player_clock_time > m2.player_clock_time
+        """
+    )
+
+    count = conn.execute("SELECT count(*) FROM grant_more_time_games").fetchone()[0]
+    conn.close()
+    print(f"✅ Identified {count:,} 'grant more time' games. Stored in 'grant_more_time_games' table.")
+
+
 def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clause=""):
     """
     Standard SQL-native preprocessing for chess timing analysis.
     Creates a table with log-transformed variables and quantile bins.
-    Excludes games identified as berserk.
+    Excludes games identified as berserk or grant-more-time.
     """
     tmpdir = os.path.abspath(tmpdir)
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
-    should_close = True
 
-    print(f"🛠️  Preprocessing moves into {target_table} (excluding berserk games)...")
+    print(f"🛠️  Preprocessing moves into {target_table} (excluding berserk and grant-more-time games)...")
     conn.execute(f"""
         CREATE OR REPLACE TABLE {target_table} AS
         SELECT 
@@ -232,15 +262,15 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
             ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
             ln(opponent_clock_time + {EPSILON}) as ln_opponent_clock_time,
             ln(move_time + {EPSILON}) as ln_move_time,
-            ntile(10) over (order by player_clock_time) as player_clock_qbin,
-            ntile(10) over (order by opponent_clock_time) as opponent_clock_qbin,
-            ntile(10) over (order by n_possible_moves) as n_possible_moves_qbin,
-            ntile(10) over (order by move_ply) as move_ply_qbin
+            ntile(20) over (order by player_clock_time) as player_clock_qbin,
+            ntile(20) over (order by opponent_clock_time) as opponent_clock_qbin,
+            ntile(20) over (order by n_possible_moves) as n_possible_moves_qbin,
+            ntile(20) over (order by move_ply) as move_ply_qbin
         FROM (
             SELECT m.gid, m.move_ply, m.board_position, m.player_white, m.player_clock_time, m.opponent_clock_time, m.n_possible_moves, m.move_time
             FROM selected_moves m
-            LEFT JOIN berserk_games b ON m.gid = b.gid
-            WHERE b.gid IS NULL
+            WHERE m.gid NOT IN (SELECT gid FROM berserk_games)
+              AND m.gid NOT IN (SELECT gid FROM grant_more_time_games)
             {limit_clause}
         );
     """)
@@ -253,14 +283,13 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
     """)
 
     count = conn.execute(f"SELECT count(*) FROM {target_table}").fetchone()[0]
-    if should_close:
-        conn.close()
+    conn.close()
     print(f"✅ Preprocessing finished. {count:,} moves processed into {target_table}.")
 
 
 def main():
-    p = argparse.ArgumentParser(description="select_games: build selected_games; process_shard: stage parquet by shard; merge: load into personal.db; berserk: identify berserk games; preprocess: compute log-transforms/bins")
-    p.add_argument("command", choices=("select_games", "process_shard", "merge", "berserk", "preprocess"))
+    p = argparse.ArgumentParser(description="select_games: build selected_games; process_shard: stage parquet by shard; merge: load into personal.db; berserk: identify berserk games; grant_more_time: identify games with time added; preprocess: compute log-transforms/bins")
+    p.add_argument("command", choices=("select_games", "process_shard", "merge", "berserk", "grant_more_time", "preprocess"))
     p.add_argument("--total-shards", type=int, default=TOTAL_SHARDS, metavar="N", help="Slurm array width (default %(default)s)")
     p.add_argument("--job-id", type=int, default=None, metavar="I", help="Stride index (default: SLURM_ARRAY_TASK_ID or 0)")
     p.add_argument(
@@ -310,6 +339,9 @@ def main():
     elif args.command == "berserk":
         print(f"🚀 identify_berserk | tmpdir={tmpdir}")
         identify_berserk(tmpdir)
+    elif args.command == "grant_more_time":
+        print(f"🚀 identify_grant_more_time | tmpdir={tmpdir}")
+        identify_grant_more_time(tmpdir)
     elif args.command == "preprocess":
         print(f"🚀 preprocess | tmpdir={tmpdir} | limit={args.limit}")
         limit_clause = f"LIMIT {args.limit}" if args.limit else ""

@@ -306,7 +306,7 @@ math: katex
 
 # 6. Interaction: Clock & Ply (3D)
 
-<div class="grid grid-cols-1 gap-4 h-full -mt-4">
+<div class="grid grid-cols-1 gap-4 h-full -mt-6">
   <div class="h-[420px]">
     <SurfPlot3D 
       csvPath="/data/heatmap_quantile.csv" 

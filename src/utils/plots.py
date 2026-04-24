@@ -49,11 +49,6 @@ def plot_standard_analysis_quad(
 ):
     """
     Generate a standardized 2x2 quad view analysis plot.
-    
-    [0,0] - Hexbin Density (x vs y)
-    [0,1] - Binned Trend (x vs y, x is raw units)
-    [1,0] - Ply Stability (slope of x vs y by game phase)
-    [1,1] - Quantile Trend (x vs y, x is rank 0-1)
     """
     apply_poster_style()
     fig, axes = plt.subplots(2, 2, figsize=(20, 16))
@@ -89,14 +84,12 @@ def plot_standard_analysis_quad(
     # 3. Ply Stability [1, 0]
     results = []
     ply_counts = df_clean[ply_var].value_counts()
-    # Use plys that have a decent number of samples
     min_samples = 5
     common_plys = ply_counts[ply_counts > min_samples].index
     for ply in sorted(common_plys):
         df_ply = df_clean[df_clean[ply_var] == ply]
         if len(df_ply) > 10:
             try:
-                # OLS of y ~ x
                 model = smf.ols(f"Q('{y_var}') ~ Q('{x_var}')", data=df_ply).fit()
                 results.append({"ply": ply, "coeff": model.params[f"Q('{x_var}')"], "bse": model.bse[f"Q('{x_var}')"]})
             except:
@@ -116,7 +109,6 @@ def plot_standard_analysis_quad(
     # 4. Quantile Trend [1, 1] (Rank X 0-1)
     if 'metrics' in locals():
         metrics_rank = {k: list(v) for k, v in metrics.items()}
-        # Normalize x to 0-1 rank
         metrics_rank["x"] = np.linspace(0, 1, len(metrics_rank["x"]))
         plot_metrics(metrics_rank, color=color, ax=axes[1, 1])
             
@@ -133,13 +125,10 @@ def plot_standard_analysis_quad(
         plt.show()
 
 def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_time", color=MAIN_COLOR, save_path=None):
-    """Replaces analyze_distribution from clocktime_movetime.py"""
     apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(24, 10))
-    # line_kws styles the KDE curve; kde_kws is for the internal KDE estimator only (bw, cut, etc.).
     kde_line_kws = {"linewidth": 2.5}
     
-    # Raw
     sns.histplot(
         df[raw_col],
         bins=50,
@@ -153,7 +142,6 @@ def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_tim
     axes[0].set_xlabel("Move Time (seconds)", fontsize=FONT_SIZE_LABEL)
     axes[0].set_ylabel("Density", fontsize=FONT_SIZE_LABEL)
     
-    # Log
     sns.histplot(
         df[log_col],
         bins=50,
@@ -174,25 +162,16 @@ def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_tim
         plt.show()
 
 def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", min_n=30, show_legend=True):
-    """
-    Plot a raw (high-resolution) trend with shaded 95% CI.
-    Useful for per-ply or per-second analysis where markers would be too dense.
-    """
     apply_poster_style()
     df = df[df[n_col] >= min_n].copy()
     df = df.sort_values(x_col)
-    
-    # Calculate 95% CI: 1.96 * SEM
     sem = df[std_col] / np.sqrt(df[n_col])
     ci_y = 1.96 * sem
-    
     y_mean = df[y_col]
     y_lower = y_mean - ci_y
     y_upper = y_mean + ci_y
-    
     ax.plot(df[x_col], y_mean, color=color, lw=3, label=label)
     ax.fill_between(df[x_col], y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
-    
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
@@ -201,45 +180,21 @@ def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=N
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_col='n', x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", normalized=False, show_legend=True):
-    """
-    Generalized quantile-binned trend plot with shaded 95% CI.
-    
-    Args:
-        ax: Matplotlib axis to plot on.
-        df: DataFrame containing the pre-aggregated statistics.
-        x_col: Column for the x-axis (e.g., mean value of the bin).
-        y_col: Column for the y-axis (e.g., mean outcome).
-        std_col: Column containing standard deviation of the outcome.
-        n_col: Column containing sample size of the bin.
-        x_label: Label for x-axis.
-        y_label: Label for y-axis.
-        color: Primary color for the plot.
-        label: Label for the mean line.
-        normalized: If True, plots x as quantile rank (0-1) based on bin order.
-        show_legend: If True, displays the legend.
-    """
     apply_poster_style()
     df = df.sort_values(x_col).copy()
-    
-    # Calculate 95% CI: 1.96 * SEM
     sem = df[std_col] / np.sqrt(df[n_col])
     ci_y = 1.96 * sem
-    
     y_mean = df[y_col]
     y_lower = y_mean - ci_y
     y_upper = y_mean + ci_y
-    
-    # Determine x-values
     if normalized:
         x_vals = np.arange(1, len(df) + 1) / len(df)
         if x_label is None:
             x_label = "Quantile Rank"
     else:
         x_vals = df[x_col]
-    
     ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=12, label=label)
     ax.fill_between(x_vals, y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
-    
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
@@ -248,69 +203,48 @@ def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_c
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_se', max_ply=150, title=None):
-    """
-    Plot per-ply sensitivity (betas) with 95% CI.
-    """
     apply_poster_style()
     df = df[df[ply_col] <= max_ply].copy()
     ci_beta = 1.96 * df[se_col]
-    
     ax.plot(df[ply_col], df[beta_col], color=MAIN_COLOR, lw=3, label=r"Slope ($\beta$)")
-    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[beta_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
+    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[ply_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
     ax.axhline(0, color='black', linestyle='--', alpha=0.5)
-    
     ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
     ax.set_ylabel(r"Sensitivity ($\beta$)", fontsize=FONT_SIZE_LABEL)
     if title:
         ax.set_title(title, fontsize=FONT_SIZE_LABEL)
 
 def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=10000, color=MAIN_COLOR, alpha=0.1, s=10):
-    """
-    Plot a sampled scatterplot of the data.
-    """
     apply_poster_style()
     if len(df) > n:
         df_sub = df.sample(n=n, random_state=42)
     else:
         df_sub = df
-        
     ax.scatter(df_sub[x_col], df_sub[y_col], color=color, alpha=alpha, s=s)
-    
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
 
-def plot_histogram_from_bins(
-    ax,
-    df_bins,
-    left_col="bin_left",
-    right_col="bin_right",
-    count_col="n",
-    x_label=None,
-    y_label="Count",
-    color=MAIN_COLOR,
-):
-    """
-    Plot a histogram-style bar chart from pre-binned SQL counts.
-    """
+def plot_histogram_from_bins(ax, df_bins, left_col="bin_left", right_col="bin_right", count_col="n", x_label=None, y_label="Count", color=MAIN_COLOR):
     apply_poster_style()
     if df_bins.empty:
         return
-
     widths = df_bins[right_col] - df_bins[left_col]
-    ax.bar(
-        df_bins[left_col],
-        df_bins[count_col],
-        width=widths,
-        align="edge",
-        color=color,
-        alpha=0.5,
-        edgecolor=color,
-        linewidth=1.5,
-    )
-
+    ax.bar(df_bins[left_col], df_bins[count_col], width=widths, align="edge", color=color, alpha=0.5, edgecolor=color, linewidth=1.5)
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
+
+
+def get_isoluminant_cmap(name="isoluminant_dual", h1=0.6, h2=0.9, lightness=0.6, saturation=0.8):
+    """
+    Generate an isoluminant 2-color transition with constant HSL lightness.
+    h1, h2: Hue values (0-1). Default is Blue to Magenta/Pink.
+    """
+    import colorsys
+    from matplotlib.colors import ListedColormap
+    hues = np.linspace(h1, h2, 256)
+    colors = [colorsys.hls_to_rgb(h, lightness, saturation) for h in hues]
+    return ListedColormap(colors, name=name)
