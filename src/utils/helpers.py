@@ -108,6 +108,7 @@ def get_lc0_engine(
     options = {
         "Threads": threads,
         "WeightsFile": weights_path,
+        "UCI_ShowWDL": "true",
     }
     engine.configure(options)
     return engine

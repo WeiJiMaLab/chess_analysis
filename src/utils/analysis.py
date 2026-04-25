@@ -103,8 +103,13 @@ class Analyzer:
             GROUP BY qbin
         """).df()
         
-        # 5. Pull sample for scatter visualization
-        self.sample_df = self.conn.execute(f"SELECT _x_transformed as x, _y_transformed as y FROM _analyzer_view").df()
+        # 5. Pull sample for scatter visualization (sampled in SQL for memory efficiency)
+        print("Sampling moves for scatterplot...")
+        self.sample_df = self.conn.execute(f"""
+            SELECT _x_transformed as x, _y_transformed as y 
+            FROM _analyzer_view 
+            USING SAMPLE 100000 ROWS
+        """).df()
 
     def plot_raw_trend(self, ax):
         """Plots the raw trend of mean Y vs X."""

@@ -74,6 +74,7 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
     *   Specific font sizes for publication-ready "Posters."
 *   **Analyzer Framework**: For bivariate analysis, use `utils.analysis.Analyzer`. 
     *   **SQL-Native**: Binning and aggregations must be done in SQL where possible for performance.
+    *   **Memory Efficiency**: Always sample large datasets (e.g., `USING SAMPLE`) at the SQL level before pulling into DataFrames for visualization.
     *   **Variable Class**: Use the `Variable` dataclass to define metrics and transformations.
 *   **Standard Layouts**:
     *   **1x3 Dashboard**: Raw Trend, Quantile Bins, and Scatterplot.
@@ -96,4 +97,5 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 
 ## 7. Quality Control
 *   **Negative Times**: Always exclude games with *any* negative move times (lag compensation artifacts).
-*   **Berserk Games**: Flag and handle Berserk games (games where clock starts at half and no increment is added) separately in behavioral models.
+*   **Berserk Games**: Flag and handle Berserk games separately using range-based clock detection (`[-5.0, +0.1]` tolerance on Move 2).
+*   **Grant More Time**: Detect GMT anomalies using window functions (`lag()`), ensuring logic is restricted to zero-increment games.

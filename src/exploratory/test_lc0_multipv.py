@@ -25,9 +25,11 @@ def test_lc0_multipv(fen: str, multipv: int = 2, nodes: int = 1000):
         print("\nAnalysis Results:")
         for i, entry in enumerate(info):
             score = entry.get("score")
+            wdl = score.pov(board.turn).wdl() if score else None
+            e_win = (wdl.wins + 0.5 * wdl.draws) / wdl.total() if wdl else "N/A"
             pv = entry.get("pv")
             move = pv[0] if pv else "N/A"
-            print(f"Rank {i+1}: Move {move}, Score: {score}")
+            print(f"Rank {i+1}: Move {move}, Score: {score}, E[win]: {e_win}")
             
     finally:
         engine.quit()
