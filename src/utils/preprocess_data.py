@@ -9,7 +9,10 @@ import pandas as pd
 from tqdm import tqdm
 import os
 import time
-from .helpers import EPSILON
+try:
+    from .helpers import EPSILON
+except (ImportError, ValueError):
+    from helpers import EPSILON
 
 # Must match Slurm: #SBATCH --array=0-(TOTAL_SHARDS-1)
 TOTAL_SHARDS = 2

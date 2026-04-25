@@ -6,14 +6,24 @@ import matplotlib.colors as mcolors
 import seaborn as sns
 import statsmodels.formula.api as smf
 import colorsys
-from .helpers import (
-    apply_poster_style, 
-    compute_metrics_by_qbin, 
-    plot_metrics, 
-    FONT_SIZE_LABEL, 
-    FONT_SIZE_TICKS,
-    MAIN_COLOR
-)
+try:
+    from .helpers import (
+        apply_poster_style, 
+        compute_metrics_by_qbin, 
+        plot_metrics, 
+        FONT_SIZE_LABEL, 
+        FONT_SIZE_TICKS,
+        MAIN_COLOR
+    )
+except (ImportError, ValueError):
+    from helpers import (
+        apply_poster_style, 
+        compute_metrics_by_qbin, 
+        plot_metrics, 
+        FONT_SIZE_LABEL, 
+        FONT_SIZE_TICKS,
+        MAIN_COLOR
+    )
 
 def _label_one_line(label):
     """Collapse newlines / runs of whitespace for titles (axis labels may stay multiline)."""

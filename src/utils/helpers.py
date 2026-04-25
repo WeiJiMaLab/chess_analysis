@@ -19,8 +19,6 @@ from IPython.display import SVG, display
 # Constants
 EPSILON = 1e-6
 
-from .features import row_to_fen
-
 # Stockfish paths
 _STOCKFISH_HOME = os.path.expanduser("~/stockfish")
 _STOCKFISH_SF15_HOME = os.path.expanduser("~/stockfish-sf_15")
@@ -34,6 +32,10 @@ NNUE_SF15 = "nn-6877cd24400e.nnue"
 # Default binary
 STOCKFISH_PATH = STOCKFISH_SF14_PATH
 STOCKFISH_DIR = STOCKFISH_SF14_DIR
+
+# lc0 paths (aligned with lmcos/ysagiv version)
+LC0_PATH = "/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0"
+LC0_WEIGHTS_PATH = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz"
 
 # --- Plotting Design System (Poster Style) ---
 MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
@@ -89,6 +91,24 @@ def get_stockfish_engine(
     options = {"Threads": threads, "Hash": hash_mb}
     if nnue_path:
         options["EvalFile"] = nnue_path
+    engine.configure(options)
+    return engine
+
+def get_lc0_engine(
+    path: str = LC0_PATH,
+    weights_path: str = LC0_WEIGHTS_PATH,
+    threads: int = 1,
+):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"lc0 binary not found at {path}")
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(f"lc0 weights not found at {weights_path}")
+
+    engine = chess.engine.SimpleEngine.popen_uci(path)
+    options = {
+        "Threads": threads,
+        "WeightsFile": weights_path,
+    }
     engine.configure(options)
     return engine
 

@@ -51,7 +51,7 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 2.  **Extraction**: `bash src/slurm/script_preprocess.sh`
     *   Launches Slurm arrays to extract moves into shards.
     *   Merges shards into `personal.db`.
-    *   Runs **Berserk Detection** and **Log-Transform Preprocessing**.
+    *   Runs **Berserk Detection** and **Engine FEN construction**.
 3.  **VOC Generation**: `python src/script_process_data.py`
     *   Calculates complexity features (Value of Computation) using Stockfish.
 4.  **Analysis**: `bash src/slurm/script_analysis.sh`
@@ -67,14 +67,17 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 *   **Explicit Naming**: Use descriptive names (e.g., `log_clock_ply_controlled`) instead of shorthand.
 
 ### Statistical & Visual Standards
-*   **Log-Space**: Operate in $\log$ space for move times ($\log T$) and clock times to normalize heavy tails.
+*   **Log-Space**: Operate in $\log$ space for move times ($\log T$) and clock times to normalize heavy tails. Use `EPSILON = 1e-6` from `utils.helpers`.
 *   **Fixed Effects**: Use the "de-meaning" pattern (subtracting group means) to control for player profiles or game stages.
 *   **Poster Style**: Every plot **must** call `apply_poster_style()` from `src.utils.helpers`.
     *   No top/right borders.
     *   Specific font sizes for publication-ready "Posters."
+*   **Analyzer Framework**: For bivariate analysis, use `utils.analysis.Analyzer`. 
+    *   **SQL-Native**: Binning and aggregations must be done in SQL where possible for performance.
+    *   **Variable Class**: Use the `Variable` dataclass to define metrics and transformations.
 *   **Standard Layouts**:
-    *   **2x2 Quad-View**: Hexbin Density, Binned Trend (Raw), Ply-Stability ($\beta$), and Binned Trend (Rank).
-    *   **Side-by-Side**: Used for game stage dynamics (Ply).
+    *   **1x3 Dashboard**: Raw Trend, Quantile Bins, and Scatterplot.
+    *   **1x2 Side-by-Side**: Used for game stage dynamics (Ply).
 
 ---
 
