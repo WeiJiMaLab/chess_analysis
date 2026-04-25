@@ -31,15 +31,19 @@ BATCH_SIZE="${BATCH_SIZE:-1024}"
 EPISODE_BATCH_SIZE="${EPISODE_BATCH_SIZE:-8}"
 EPOCHS="${EPOCHS:-20}"
 LEARNING_RATE="${LEARNING_RATE:-1e-3}"
+MIN_LR="${MIN_LR:-0.0}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 SIGN_LOSS_WEIGHT="${SIGN_LOSS_WEIGHT:-1.0}"
+NONTRIVIAL_LOSS_WEIGHT="${NONTRIVIAL_LOSS_WEIGHT:-1.0}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
 NUM_WORKERS="${SLURM_CPUS_PER_TASK:-1}"
 LOG_INTERVAL="${LOG_INTERVAL:-10000}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-1}"
-GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-1}"
+GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-10}"
 OUTPUT_DIAGNOSTICS="${OUTPUT_DIAGNOSTICS:-${OUTPUT_CHECKPOINT%.pt}_diagnostics.jsonl}"
 UNFREEZE_ENCODER="${UNFREEZE_ENCODER:-0}"
+SEPARATE_SIGN_HEAD="${SEPARATE_SIGN_HEAD:-0}"
+INVERSE_FREQ_WEIGHTS="${INVERSE_FREQ_WEIGHTS:-0}"
 MAINTENANCE_SCALE="${MAINTENANCE_SCALE:-0.0}"
 MAINTENANCE_REF_NODES="${MAINTENANCE_REF_NODES:-30.0}"
 MAINTENANCE_EXPONENT="${MAINTENANCE_EXPONENT:-1.1}"
@@ -84,6 +88,12 @@ EXTRA_ARGS=()
 if [[ "${UNFREEZE_ENCODER}" == "1" ]]; then
   EXTRA_ARGS+=(--unfreeze-encoder)
 fi
+if [[ "${SEPARATE_SIGN_HEAD}" == "1" ]]; then
+  EXTRA_ARGS+=(--separate-sign-head)
+fi
+if [[ "${INVERSE_FREQ_WEIGHTS}" == "1" ]]; then
+  EXTRA_ARGS+=(--inverse-freq-weights)
+fi
 
 python3 scripts/train_fitted_q_controller.py \
   --packed-train-data "${PACKED_TRAIN_DATA}" \
@@ -104,8 +114,10 @@ python3 scripts/train_fitted_q_controller.py \
   --episode-batch-size "${EPISODE_BATCH_SIZE}" \
   --epochs "${EPOCHS}" \
   --learning-rate "${LEARNING_RATE}" \
+  --min-lr "${MIN_LR}" \
   --weight-decay "${WEIGHT_DECAY}" \
   --sign-loss-weight "${SIGN_LOSS_WEIGHT}" \
+  --nontrivial-loss-weight "${NONTRIVIAL_LOSS_WEIGHT}" \
   --max-grad-norm "${MAX_GRAD_NORM}" \
   --num-workers "${NUM_WORKERS}" \
   --log-interval "${LOG_INTERVAL}" \

@@ -237,6 +237,104 @@ class TrainFittedQControllerTests(unittest.TestCase):
         self.assertEqual(stop, 1)
         self.assertEqual(len(advantages), 2)
 
+    def test_separate_sign_head_builds_distinct_modules(self):
+        model = ComputeAdvantageTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=4,
+            d_embed=4,
+            d_message=4,
+            n_heads=1,
+            d_att=2,
+            q_hidden=8,
+            q_hidden_layers=3,
+            separate_sign_head=True,
+        )
+        self.assertIsNone(model.advantage_head)
+        self.assertIsNotNone(model.advantage_backbone)
+        self.assertIsNotNone(model.advantage_proj)
+        self.assertIsNotNone(model.sign_head)
+        # Backbone: 3 hidden layers × (Linear + ReLU) = 6 modules
+        self.assertEqual(len(model.advantage_backbone), 6)
+        # Projections are independent Linear(8, 1)
+        self.assertEqual(model.advantage_proj.in_features, 8)
+        self.assertEqual(model.sign_head.in_features, 8)
+        # No duplicate parameters in state_dict
+        sd = model.state_dict()
+        param_names = [k for k in sd if "advantage" in k or "sign" in k]
+        self.assertEqual(len(param_names), len(set(param_names)))
+
+    def test_separate_sign_head_predict_from_features(self):
+        model = ComputeAdvantageTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=4,
+            d_embed=4,
+            d_message=4,
+            n_heads=1,
+            d_att=2,
+            q_hidden=4,
+            q_hidden_layers=1,
+            separate_sign_head=True,
+        )
+        features = torch.randn(3, model.encoder.d_embed + 2)
+        advantage, sign_logit = model.predict_from_features(features)
+        self.assertEqual(advantage.shape, (3,))
+        self.assertEqual(sign_logit.shape, (3,))
+        # With separate head, advantage and sign_logit should generally differ
+        # (different random weights)
+        self.assertFalse(torch.equal(advantage, sign_logit))
+
+    def test_separate_sign_head_predict_stop_step(self):
+        episode = PackedControllerEpisode(
+            path="episode",
+            source_path="source.pt",
+            step_node_features=[torch.tensor([[0.0, 1.0]]), torch.tensor([[1.0, 1.0]])],
+            step_parent_index=[torch.tensor([-1]), torch.tensor([-1])],
+            step_edge_parent=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_edge_child=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_edge_slot=[torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long)],
+            step_depth=[torch.tensor([0]), torch.tensor([0])],
+            halt_rewards=[0.0, 1.0],
+            target_advantages=torch.tensor([0.9, -0.1], dtype=torch.float32),
+            tree_sizes=torch.tensor([1, 1], dtype=torch.long),
+            time_budgets=torch.tensor([10, 9], dtype=torch.long),
+            oracle_stop_step=1,
+            oracle_value=0.9,
+            starting_budget=10,
+            budget_bucket_name="large",
+        )
+        model = ComputeAdvantageTreeSearchModel(
+            k=1,
+            node_feat=2,
+            device="cpu",
+            node_embed_hidden=4,
+            d_embed=4,
+            d_message=4,
+            n_heads=1,
+            d_att=2,
+            q_hidden=4,
+            q_hidden_layers=1,
+            separate_sign_head=True,
+        )
+        # Sign head controls halt decision; set sign_head bias negative -> halt at 0
+        with torch.no_grad():
+            for p in model.parameters():
+                p.zero_()
+            model.sign_head.bias.fill_(-1.0)
+        stop, advantages = _predict_stop_step(model, episode)
+        self.assertEqual(stop, 0)
+        self.assertEqual(len(advantages), 2)
+
+        # Set sign_head bias positive -> continue past step 0
+        with torch.no_grad():
+            model.sign_head.bias.fill_(1.0)
+        stop, advantages = _predict_stop_step(model, episode)
+        self.assertEqual(stop, 1)
+        self.assertEqual(len(advantages), 2)
+
     def test_materialized_tensor_dataset_round_trips(self):
         episode = MaterializedAdvantageEpisode(
             path="episode",

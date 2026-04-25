@@ -65,10 +65,58 @@ class MaterializedAdvantageEpisode:
 
 
 @dataclass(frozen=True)
+class EpisodeMetadata:
+    path: str
+    source_path: str
+    halt_rewards: List[float]
+    tree_sizes: List[int]
+    time_budgets: List[int]
+    target_advantages: List[float]
+    oracle_stop_step: int
+    oracle_value: float
+    starting_budget: int
+    budget_bucket_name: str
+    num_steps: int
+
+
+@dataclass(frozen=True)
 class MaterializedCache:
     shard_paths: List[str]
     shard_sizes: List[int]
     examples: int
+
+
+ORACLE_STOP_BIN_BOUNDARIES = torch.tensor([1, 2, 3, 4, 8, 16])
+ORACLE_STOP_NUM_BINS = len(ORACLE_STOP_BIN_BOUNDARIES) + 1  # 7
+
+
+def _compute_inverse_freq_bin_weights(
+    cache: MaterializedCache,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute per-bin inverse frequency weights from cached oracle_stop_steps.
+
+    Bins: 0, 1, 2, 3, 4-7, 8-15, 16+
+    Returns (bin_weights, bin_boundaries) where bin_weights[i] is the loss weight
+    for bin i, normalized so the expected weight per snapshot is 1.
+    """
+    bin_counts = torch.zeros(ORACLE_STOP_NUM_BINS, dtype=torch.long)
+    for shard_path in cache.shard_paths:
+        payload = torch.load(shard_path, weights_only=False)
+        oracle_steps = payload.get("oracle_stop_steps")
+        if oracle_steps is None:
+            raise ValueError(
+                "Materialized cache missing oracle_stop_steps. "
+                "Delete the cache and re-materialize to use --inverse-freq-weights."
+            )
+        bins = torch.bucketize(oracle_steps, ORACLE_STOP_BIN_BOUNDARIES)
+        bin_counts += torch.bincount(bins, minlength=ORACLE_STOP_NUM_BINS)
+    total = bin_counts.sum().float()
+    bin_counts_safe = bin_counts.float().clamp(min=1)
+    bin_weights = total / (ORACLE_STOP_NUM_BINS * bin_counts_safe)
+    bin_names = ["0", "1", "2", "3", "4-7", "8-15", "16+"]
+    for name, count, weight in zip(bin_names, bin_counts.tolist(), bin_weights.tolist()):
+        print(f"  bin={name:>4s}  count={count:>8d}  weight={weight:.3f}", flush=True)
+    return bin_weights, ORACLE_STOP_BIN_BOUNDARIES
 
 
 @dataclass(frozen=True)
@@ -106,6 +154,7 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
         d_att: int,
         q_hidden: int,
         q_hidden_layers: int,
+        separate_sign_head: bool = False,
     ) -> None:
         super().__init__()
         self.encoder = TreeNN(
@@ -121,16 +170,43 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
         resolved_device = self.encoder.device
         if q_hidden_layers <= 0:
             raise ValueError("q_hidden_layers must be positive.")
-        self.advantage_head = _build_advantage_head(
-            input_dim=self.encoder.d_embed + 2,
-            hidden_dim=q_hidden,
-            hidden_layers=q_hidden_layers,
-            device=resolved_device,
-        )
+        input_dim = self.encoder.d_embed + 2
+        self.sign_head: nn.Linear | None = None
+        if separate_sign_head:
+            backbone_layers: list[nn.Module] = []
+            current_dim = input_dim
+            for _ in range(q_hidden_layers):
+                backbone_layers.append(nn.Linear(current_dim, q_hidden, device=resolved_device))
+                backbone_layers.append(nn.ReLU())
+                current_dim = q_hidden
+            self.advantage_backbone = nn.Sequential(*backbone_layers)
+            self.advantage_proj = nn.Linear(q_hidden, 1, device=resolved_device)
+            self.sign_head = nn.Linear(q_hidden, 1, device=resolved_device)
+            self.advantage_head = None
+        else:
+            self.advantage_head = _build_advantage_head(
+                input_dim=input_dim,
+                hidden_dim=q_hidden,
+                hidden_layers=q_hidden_layers,
+                device=resolved_device,
+            )
 
     def freeze_encoder(self) -> None:
         for parameter in self.encoder.parameters():
             parameter.requires_grad = False
+
+    def predict_from_features(
+        self,
+        features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return (advantage, sign_logit). Identical when sign_head is None."""
+        if self.sign_head is not None:
+            backbone_out = self.advantage_backbone(features)
+            advantage = self.advantage_proj(backbone_out).squeeze(-1)
+            sign_logit = self.sign_head(backbone_out).squeeze(-1)
+            return advantage, sign_logit
+        advantage = self.advantage_head(features).squeeze(-1)
+        return advantage, advantage
 
     def encode_with_state_features(
         self,
@@ -153,9 +229,9 @@ class ComputeAdvantageTreeSearchModel(nn.Module):
         tree_batch: TreeBatch,
         tree_sizes: torch.Tensor,
         time_budgets: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.encode_with_state_features(tree_batch, tree_sizes, time_budgets)
-        return self.advantage_head(features).squeeze(-1)
+        return self.predict_from_features(features)
 
 
 @dataclass(frozen=True)
@@ -332,6 +408,52 @@ class PackedControllerEpisodeDataset(Dataset):
             starting_budget=starting_budget,
             budget_bucket_name=payload["budget_bucket_names"][episode_offset],
         )
+
+
+def _extract_all_episode_metadata(
+    dataset: PackedControllerEpisodeDataset,
+) -> List[EpisodeMetadata]:
+    """Extract per-episode metadata from packed shards without tree reconstruction."""
+    metadata: List[EpisodeMetadata] = []
+    for shard_index in range(len(dataset.shard_paths)):
+        payload = torch.load(dataset.shard_paths[shard_index], weights_only=False)
+        episode_step_ptr = payload["episode_step_ptr"]
+        episode_trajectory_index = payload["episode_trajectory_index"]
+        trajectory_step_ptr = payload["trajectory_step_ptr"]
+        step_node_cutoffs = payload["step_node_cutoffs"]
+        trajectory_halt_rewards = payload["trajectory_halt_rewards"]
+        target_advantages = payload["target_advantages"]
+        oracle_stop_steps = payload["oracle_stop_steps"]
+        oracle_values = payload["oracle_values"]
+        starting_budgets = payload["starting_budgets"]
+        budget_bucket_names = payload["budget_bucket_names"]
+        episode_keys = payload["episode_keys"]
+        trajectory_source_paths = payload["trajectory_source_paths"]
+
+        num_episodes = len(episode_step_ptr) - 1
+        for i in range(num_episodes):
+            ep_step_begin = int(episode_step_ptr[i].item())
+            ep_step_end = int(episode_step_ptr[i + 1].item())
+            num_steps = ep_step_end - ep_step_begin
+
+            trajectory_index = int(episode_trajectory_index[i].item())
+            traj_step_begin = int(trajectory_step_ptr[trajectory_index].item())
+
+            starting_budget = int(starting_budgets[i].item())
+            metadata.append(EpisodeMetadata(
+                path=episode_keys[i],
+                source_path=trajectory_source_paths[trajectory_index],
+                halt_rewards=trajectory_halt_rewards[traj_step_begin:traj_step_begin + num_steps].tolist(),
+                tree_sizes=step_node_cutoffs[traj_step_begin:traj_step_begin + num_steps].tolist(),
+                time_budgets=list(range(starting_budget, starting_budget - num_steps, -1)),
+                target_advantages=target_advantages[ep_step_begin:ep_step_end].tolist(),
+                oracle_stop_step=int(oracle_stop_steps[i].item()),
+                oracle_value=float(oracle_values[i].item()),
+                starting_budget=starting_budget,
+                budget_bucket_name=budget_bucket_names[i],
+                num_steps=num_steps,
+            ))
+    return metadata
 
 
 def _build_advantage_head(
@@ -562,6 +684,7 @@ def _save_materialized_cache_shards(
     shard_sizes: List[int] = []
     shard_features: List[torch.Tensor] = []
     shard_targets: List[torch.Tensor] = []
+    shard_oracle_stop_steps: List[torch.Tensor] = []
     shard_snapshots = 0
     total_snapshots = 0
     total_episodes = 0
@@ -569,17 +692,19 @@ def _save_materialized_cache_shards(
     started = time.time()
 
     def flush_shard() -> None:
-        nonlocal shard_features, shard_targets, shard_snapshots, shard_index
+        nonlocal shard_features, shard_targets, shard_oracle_stop_steps, shard_snapshots, shard_index
         if not shard_features:
             return
         features = torch.cat(shard_features, dim=0)
         targets = torch.cat(shard_targets, dim=0)
+        oracle_steps = torch.cat(shard_oracle_stop_steps, dim=0)
         shard_path = shard_dir / f"shard_{shard_index:05d}.pt"
         torch.save(
             {
                 "format": "cts_materialized_advantage_cache_shard_v2",
                 "features": features,
                 "target_advantages": targets,
+                "oracle_stop_steps": oracle_steps,
             },
             shard_path,
         )
@@ -587,6 +712,7 @@ def _save_materialized_cache_shards(
         shard_sizes.append(int(features.shape[0]))
         shard_features = []
         shard_targets = []
+        shard_oracle_stop_steps = []
         shard_snapshots = 0
         shard_index += 1
 
@@ -596,8 +722,12 @@ def _save_materialized_cache_shards(
                 continue
             features = model.encode_with_state_features(batch.tree_batch, batch.tree_sizes, batch.time_budgets).detach().cpu()
             targets = batch.target_advantages.detach().cpu()
+            oracle_steps = torch.tensor(batch.oracle_stop_steps, dtype=torch.int32)
+            path_lengths = torch.tensor(batch.path_lengths, dtype=torch.int32)
+            oracle_steps_per_snapshot = oracle_steps.repeat_interleave(path_lengths)
             shard_features.append(features)
             shard_targets.append(targets)
+            shard_oracle_stop_steps.append(oracle_steps_per_snapshot)
             batch_snapshots = int(features.shape[0])
             shard_snapshots += batch_snapshots
             total_snapshots += batch_snapshots
@@ -657,9 +787,16 @@ def _load_materialized_cache(
 def _advantage_loss_components(
     predicted_advantages: torch.Tensor,
     target_advantages: torch.Tensor,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    advantage_mse = F.mse_loss(predicted_advantages, target_advantages)
-    mean_abs_advantage_error = torch.mean(torch.abs(predicted_advantages - target_advantages))
+    if weights is not None:
+        per_element_mse = (predicted_advantages - target_advantages) ** 2
+        advantage_mse = (per_element_mse * weights).sum() / weights.sum()
+        per_element_abs = torch.abs(predicted_advantages - target_advantages)
+        mean_abs_advantage_error = (per_element_abs * weights).sum() / weights.sum()
+    else:
+        advantage_mse = F.mse_loss(predicted_advantages, target_advantages)
+        mean_abs_advantage_error = torch.mean(torch.abs(predicted_advantages - target_advantages))
     sign_accuracy = ((predicted_advantages > 0) == (target_advantages > 0)).float().mean()
     return advantage_mse, mean_abs_advantage_error, sign_accuracy
 
@@ -667,8 +804,12 @@ def _advantage_loss_components(
 def _sign_auxiliary_loss(
     predicted_advantages: torch.Tensor,
     target_advantages: torch.Tensor,
+    weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     sign_targets = (target_advantages > 0).to(dtype=predicted_advantages.dtype)
+    if weights is not None:
+        per_element = F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets, reduction="none")
+        return (per_element * weights).sum() / weights.sum()
     return F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets)
 
 
@@ -696,9 +837,9 @@ def _train_epoch(
         if batch is None:
             continue
         targets = batch.target_advantages.to(device, non_blocking=True)
-        predicted = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
+        predicted, sign_logits = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
         advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, targets)
-        sign_loss = _sign_auxiliary_loss(predicted, targets)
+        sign_loss = _sign_auxiliary_loss(sign_logits, targets)
         total_loss = advantage_mse + sign_loss_weight * sign_loss
 
         optimizer.zero_grad()
@@ -712,7 +853,7 @@ def _train_epoch(
         total_sign_bce += float(sign_loss.item()) * examples
         total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
         total_examples += examples
-        total_correct += int(((predicted.detach() > 0) == (targets > 0)).sum().item())
+        total_correct += int(((sign_logits.detach() > 0) == (targets > 0)).sum().item())
 
         if log_interval > 0 and batch_index % log_interval == 0:
             elapsed = time.time() - started
@@ -759,9 +900,9 @@ def evaluate_advantage_predictions(
             if batch is None:
                 continue
             targets = batch.target_advantages.to(device, non_blocking=True)
-            predicted = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
+            predicted, sign_logits = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, targets)
-            sign_loss = _sign_auxiliary_loss(predicted, targets)
+            sign_loss = _sign_auxiliary_loss(sign_logits, targets)
             total_loss = advantage_mse + sign_loss_weight * sign_loss
             examples = int(targets.shape[0])
             total_loss_sum += float(total_loss.item()) * examples
@@ -769,7 +910,7 @@ def evaluate_advantage_predictions(
             total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
-            total_correct += int(((predicted > 0) == (targets > 0)).sum().item())
+            total_correct += int(((sign_logits > 0) == (targets > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Evaluation loader produced no valid controller states.")
     return AdvantageMetrics(
@@ -805,9 +946,9 @@ def _train_tensor_epoch(
     for batch_index, (features, target_advantages) in enumerate(loader, start=1):
         features = features.to(device, non_blocking=True)
         target_advantages = target_advantages.to(device, non_blocking=True)
-        predicted = model.advantage_head(features).squeeze(-1)
+        predicted, sign_logits = model.predict_from_features(features)
         advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
-        sign_loss = _sign_auxiliary_loss(predicted, target_advantages)
+        sign_loss = _sign_auxiliary_loss(sign_logits, target_advantages)
         total_loss = advantage_mse + sign_loss_weight * sign_loss
 
         optimizer.zero_grad()
@@ -821,7 +962,7 @@ def _train_tensor_epoch(
         total_sign_bce += float(sign_loss.item()) * examples
         total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
         total_examples += examples
-        total_correct += int(((predicted.detach() > 0) == (target_advantages > 0)).sum().item())
+        total_correct += int(((sign_logits.detach() > 0) == (target_advantages > 0)).sum().item())
 
         if log_interval > 0 and batch_index % log_interval == 0:
             elapsed = time.time() - started
@@ -867,9 +1008,9 @@ def evaluate_tensor_advantage_predictions(
         for features, target_advantages in loader:
             features = features.to(device, non_blocking=True)
             target_advantages = target_advantages.to(device, non_blocking=True)
-            predicted = model.advantage_head(features).squeeze(-1)
+            predicted, sign_logits = model.predict_from_features(features)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
-            sign_loss = _sign_auxiliary_loss(predicted, target_advantages)
+            sign_loss = _sign_auxiliary_loss(sign_logits, target_advantages)
             total_loss = advantage_mse + sign_loss_weight * sign_loss
             examples = int(target_advantages.shape[0])
             total_loss_sum += float(total_loss.item()) * examples
@@ -877,7 +1018,7 @@ def evaluate_tensor_advantage_predictions(
             total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
-            total_correct += int(((predicted > 0) == (target_advantages > 0)).sum().item())
+            total_correct += int(((sign_logits > 0) == (target_advantages > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Tensor evaluation loader produced no controller states.")
     return AdvantageMetrics(
@@ -898,10 +1039,13 @@ def _train_materialized_cache_epoch(
     device: torch.device,
     batch_size: int,
     sign_loss_weight: float,
+    nontrivial_loss_weight: float,
     max_grad_norm: float,
     epoch: int,
     log_interval: int,
     seed: int,
+    bin_weights: torch.Tensor | None = None,
+    bin_boundaries: torch.Tensor | None = None,
 ) -> AdvantageMetrics:
     model.train()
     total_loss_sum = 0.0
@@ -912,6 +1056,8 @@ def _train_materialized_cache_epoch(
     total_correct = 0
     started = time.time()
     batch_counter = 0
+    use_bin_weighting = bin_weights is not None
+    use_nontrivial_weighting = not use_bin_weighting and nontrivial_loss_weight != 1.0
 
     shard_order = list(range(len(cache.shard_paths)))
     random.Random(seed + epoch).shuffle(shard_order)
@@ -919,15 +1065,29 @@ def _train_materialized_cache_epoch(
         payload = torch.load(cache.shard_paths[shard_index], weights_only=False)
         features = payload["features"]
         target_advantages = payload["target_advantages"]
+        shard_oracle = payload.get("oracle_stop_steps")
+        if (use_bin_weighting or use_nontrivial_weighting) and shard_oracle is None:
+            raise ValueError(
+                "Materialized cache missing oracle_stop_steps. "
+                "Delete the cache and re-materialize to use loss weighting."
+            )
         order = torch.randperm(features.shape[0])
         for start in range(0, int(features.shape[0]), batch_size):
             batch_counter += 1
             batch_index = order[start : start + batch_size]
             batch_features = features[batch_index].to(device, non_blocking=True)
             batch_targets = target_advantages[batch_index].to(device, non_blocking=True)
-            predicted = model.advantage_head(batch_features).squeeze(-1)
-            advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, batch_targets)
-            sign_loss = _sign_auxiliary_loss(predicted, batch_targets)
+            if use_bin_weighting:
+                batch_bins = torch.bucketize(shard_oracle[batch_index], bin_boundaries)
+                weights = bin_weights[batch_bins].to(device, non_blocking=True)
+            elif use_nontrivial_weighting:
+                batch_oracle = shard_oracle[batch_index]
+                weights = torch.where(batch_oracle > 1, nontrivial_loss_weight, 1.0).to(device, non_blocking=True)
+            else:
+                weights = None
+            predicted, sign_logits = model.predict_from_features(batch_features)
+            advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, batch_targets, weights)
+            sign_loss = _sign_auxiliary_loss(sign_logits, batch_targets, weights)
             total_loss = advantage_mse + sign_loss_weight * sign_loss
 
             optimizer.zero_grad()
@@ -941,7 +1101,7 @@ def _train_materialized_cache_epoch(
             total_sign_bce += float(sign_loss.item()) * examples
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
-            total_correct += int(((predicted.detach() > 0) == (batch_targets > 0)).sum().item())
+            total_correct += int(((sign_logits.detach() > 0) == (batch_targets > 0)).sum().item())
 
             if log_interval > 0 and batch_counter % log_interval == 0:
                 elapsed = time.time() - started
@@ -992,9 +1152,9 @@ def evaluate_materialized_cache_predictions(
             for start in range(0, int(features.shape[0]), batch_size):
                 batch_features = features[start : start + batch_size].to(device, non_blocking=True)
                 batch_targets = target_advantages[start : start + batch_size].to(device, non_blocking=True)
-                predicted = model.advantage_head(batch_features).squeeze(-1)
+                predicted, sign_logits = model.predict_from_features(batch_features)
                 advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, batch_targets)
-                sign_loss = _sign_auxiliary_loss(predicted, batch_targets)
+                sign_loss = _sign_auxiliary_loss(sign_logits, batch_targets)
                 total_loss = advantage_mse + sign_loss_weight * sign_loss
                 examples = int(batch_targets.shape[0])
                 total_loss_sum += float(total_loss.item()) * examples
@@ -1002,7 +1162,7 @@ def evaluate_materialized_cache_predictions(
                 total_sign_bce += float(sign_loss.item()) * examples
                 total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
                 total_examples += examples
-                total_correct += int(((predicted > 0) == (batch_targets > 0)).sum().item())
+                total_correct += int(((sign_logits > 0) == (batch_targets > 0)).sum().item())
     if total_examples == 0:
         raise ValueError("Materialized cache evaluation produced no controller states.")
     return AdvantageMetrics(
@@ -1022,15 +1182,18 @@ def _predict_stop_step(
     model.eval()
     with torch.inference_mode():
         if isinstance(episode, MaterializedAdvantageEpisode):
-            predicted_advantages = model.advantage_head(episode.features.to(next(model.parameters()).device)).squeeze(-1)
+            device = next(model.parameters()).device
+            predicted_advantages, sign_logits = model.predict_from_features(
+                episode.features.to(device),
+            )
         else:
             batch = PackedControllerCollator()([episode])
             assert batch is not None
-            predicted_advantages = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
+            predicted_advantages, sign_logits = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
         values = predicted_advantages.detach().cpu().tolist()
     stop = len(values) - 1
-    for step_index, advantage in enumerate(values):
-        if float(advantage) <= 0.0:
+    for step_index, v in enumerate(values):
+        if float(v) <= 0.0:
             stop = step_index
             break
     return stop, values
@@ -1112,70 +1275,110 @@ def evaluate_packed_greedy_policy(
     )
 
 
-def evaluate_materialized_greedy_policy(
+def evaluate_batched_greedy_policy(
     model: ComputeAdvantageTreeSearchModel,
-    episodes: Sequence[MaterializedAdvantageEpisode],
+    dataset: PackedControllerEpisodeDataset,
+    cache: MaterializedCache,
     oracle_config: BudgetedOracleConfig,
     *,
     log_interval: int,
     diagnostics_out: List[Dict[str, Any]] | None = None,
+    predict_batch_size: int = 65536,
 ) -> GreedyPolicyMetrics:
+    """Greedy eval using materialized cache features in batched forward passes."""
+    started = time.time()
+
+    # Phase 1: extract per-episode metadata from packed shards (no tree reconstruction).
+    episode_metadata = _extract_all_episode_metadata(dataset)
+    assert len(episode_metadata) == len(dataset), (
+        f"Metadata extraction returned {len(episode_metadata)} episodes but dataset has {len(dataset)}"
+    )
+    step_counts = [m.num_steps for m in episode_metadata]
+    total_steps = sum(step_counts)
+
+    # Phase 2: batched forward pass over cached features.
+    model.eval()
+    device = next(model.parameters()).device
+    all_predicted: List[torch.Tensor] = []
+    with torch.inference_mode():
+        for shard_path in cache.shard_paths:
+            payload = torch.load(shard_path, weights_only=False)
+            features = payload["features"]
+            for start in range(0, features.shape[0], predict_batch_size):
+                batch_features = features[start:start + predict_batch_size].to(device, non_blocking=True)
+                predicted, _ = model.predict_from_features(batch_features)
+                all_predicted.append(predicted.detach().cpu())
+    all_advantages = torch.cat(all_predicted, dim=0)
+    assert all_advantages.shape[0] == total_steps, (
+        f"Cache has {all_advantages.shape[0]} steps but packed dataset has {total_steps}"
+    )
+
+    # Phase 3: per-episode stop-step + return computation.
     exact = 0
     first_action = 0
     total_return = 0.0
     total_oracle_value = 0.0
     total_expansions = 0
-    started = time.time()
+    offset = 0
 
-    for index, episode in enumerate(episodes, start=1):
-        predicted_stop, predicted_advantages = _predict_stop_step(model, episode)
+    for index, meta in enumerate(episode_metadata):
+        episode_advantages = all_advantages[offset:offset + meta.num_steps].tolist()
+        offset += meta.num_steps
+
+        predicted_stop = len(episode_advantages) - 1
+        for step_index, v in enumerate(episode_advantages):
+            if v <= 0.0:
+                predicted_stop = step_index
+                break
+
         predicted_return = return_for_stop_step(
-            episode.halt_rewards,
-            episode.tree_sizes,
-            episode.time_budgets,
+            meta.halt_rewards,
+            meta.tree_sizes,
+            meta.time_budgets,
             predicted_stop,
             oracle_config,
         )
-        regret = episode.oracle_value - predicted_return
-        exact += int(predicted_stop == episode.oracle_stop_step)
-        first_action += int((predicted_stop == 0) == (episode.oracle_stop_step == 0))
+        regret = meta.oracle_value - predicted_return
+        exact += int(predicted_stop == meta.oracle_stop_step)
+        first_action += int((predicted_stop == 0) == (meta.oracle_stop_step == 0))
         total_return += predicted_return
-        total_oracle_value += episode.oracle_value
+        total_oracle_value += meta.oracle_value
         total_expansions += predicted_stop
 
         if diagnostics_out is not None:
             diagnostics_out.append(
                 {
-                    "path": episode.path,
-                    "source_path": episode.source_path,
-                    "episode_length": len(episode.halt_rewards),
-                    "starting_budget": episode.starting_budget,
-                    "budget_bucket_name": episode.budget_bucket_name,
-                    "tree_sizes": episode.tree_sizes,
-                    "time_budgets": episode.time_budgets,
-                    "halt_rewards": episode.halt_rewards,
-                    "oracle_stop_step": episode.oracle_stop_step,
-                    "oracle_value": episode.oracle_value,
+                    "path": meta.path,
+                    "source_path": meta.source_path,
+                    "episode_length": meta.num_steps,
+                    "starting_budget": meta.starting_budget,
+                    "budget_bucket_name": meta.budget_bucket_name,
+                    "tree_sizes": meta.tree_sizes,
+                    "time_budgets": meta.time_budgets,
+                    "halt_rewards": meta.halt_rewards,
+                    "oracle_stop_step": meta.oracle_stop_step,
+                    "oracle_value": meta.oracle_value,
                     "predicted_stop_step": predicted_stop,
                     "predicted_value": predicted_return,
                     "regret": regret,
-                    "predicted_advantages": predicted_advantages,
-                    "target_advantages": episode.target_advantages.tolist(),
+                    "predicted_advantages": episode_advantages,
+                    "target_advantages": meta.target_advantages,
                 }
             )
 
-        if log_interval > 0 and (index % log_interval == 0 or index == len(episodes)):
+        if log_interval > 0 and ((index + 1) % log_interval == 0 or index + 1 == len(episode_metadata)):
             elapsed = time.time() - started
             print(
-                f"greedy_eval_progress={index}/{len(episodes)} "
-                f"exact_stop_step_accuracy={exact / max(index, 1):.3f} "
+                f"greedy_eval_progress={index + 1}/{len(episode_metadata)} "
+                f"exact_stop_step_accuracy={exact / max(index + 1, 1):.3f} "
                 f"elapsed_s={elapsed:.1f}",
                 flush=True,
             )
 
-    evaluated = len(episodes)
+    assert offset == total_steps
+    evaluated = len(episode_metadata)
     if evaluated == 0:
-        raise ValueError("Greedy evaluation produced no materialized episodes.")
+        raise ValueError("Greedy evaluation produced no episodes.")
     return GreedyPolicyMetrics(
         exact_stop_step_accuracy=exact / evaluated,
         first_action_accuracy=first_action / evaluated,
@@ -1264,8 +1467,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episode-batch-size", type=int, default=8)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--min-lr", type=float, default=0.0,
+                        help="Minimum LR for cosine decay. 0 disables the scheduler.")
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--sign-loss-weight", type=float, default=1.0)
+    parser.add_argument("--nontrivial-loss-weight", type=float, default=1.0,
+                        help="Upweight loss on non-trivial episodes (oracle_stop_step > 1). 1.0 = uniform.")
+    parser.add_argument("--inverse-freq-weights", action="store_true",
+                        help="Weight loss by inverse bin frequency. Overrides --nontrivial-loss-weight.")
+    parser.add_argument("--separate-sign-head", action="store_true")
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=25)
@@ -1327,16 +1537,22 @@ def main() -> None:
         d_att=args.d_att,
         q_hidden=args.q_hidden,
         q_hidden_layers=args.q_hidden_layers,
+        separate_sign_head=args.separate_sign_head,
     )
     load_encoder_checkpoint(args.encoder_checkpoint, model.encoder)
     if not args.unfreeze_encoder:
         model.freeze_encoder()
 
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    scheduler = None
+    if args.min_lr > 0:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=args.min_lr,
+        )
 
     print(
         f"[compute_advantage] packed_train={args.packed_train_data} packed_validation={args.packed_validation_data}",
@@ -1406,6 +1622,13 @@ def main() -> None:
     best_metadata: dict | None = None
     validation_dataset = PackedControllerEpisodeDataset(args.packed_validation_data)
     print(json.dumps(budgeted_oracle_metadata(oracle_config), sort_keys=True), flush=True)
+
+    bin_weights: torch.Tensor | None = None
+    bin_boundaries: torch.Tensor | None = None
+    if args.inverse_freq_weights and train_cache is not None:
+        print("[compute_advantage] stage=compute_inverse_freq_weights", flush=True)
+        bin_weights, bin_boundaries = _compute_inverse_freq_bin_weights(train_cache)
+
     print("[compute_advantage] stage=train_start", flush=True)
 
     for epoch in range(1, args.epochs + 1):
@@ -1417,10 +1640,13 @@ def main() -> None:
                 device=device,
                 batch_size=args.batch_size,
                 sign_loss_weight=args.sign_loss_weight,
+                nontrivial_loss_weight=args.nontrivial_loss_weight,
                 max_grad_norm=args.max_grad_norm,
                 epoch=epoch,
                 log_interval=args.log_interval,
                 seed=args.seed,
+                bin_weights=bin_weights,
+                bin_boundaries=bin_boundaries,
             )
         else:
             train_metrics = _train_epoch(
@@ -1443,6 +1669,8 @@ def main() -> None:
             f"train_snapshots={train_metrics.examples}",
             flush=True,
         )
+        if scheduler is not None:
+            scheduler.step()
 
         if args.validation_interval > 0 and (epoch % args.validation_interval == 0 or epoch == args.epochs):
             if validation_cache is not None:
@@ -1480,6 +1708,9 @@ def main() -> None:
                     "encoder_checkpoint": args.encoder_checkpoint,
                     "unfreeze_encoder": args.unfreeze_encoder,
                     "sign_loss_weight": args.sign_loss_weight,
+                    "nontrivial_loss_weight": args.nontrivial_loss_weight,
+                    "inverse_freq_weights": args.inverse_freq_weights,
+                    "separate_sign_head": args.separate_sign_head,
                     "controller_inputs": ["z_t", "N_t", "T_t"],
                     **budgeted_oracle_metadata(oracle_config),
                 }
@@ -1489,13 +1720,23 @@ def main() -> None:
 
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
             diagnostics: List[Dict[str, Any]] | None = [] if (epoch == args.epochs and args.output_diagnostics) else None
-            greedy_metrics = evaluate_packed_greedy_policy(
-                model,
-                validation_dataset,
-                oracle_config,
-                log_interval=args.log_interval,
-                diagnostics_out=diagnostics,
-            )
+            if validation_cache is not None:
+                greedy_metrics = evaluate_batched_greedy_policy(
+                    model,
+                    validation_dataset,
+                    validation_cache,
+                    oracle_config,
+                    log_interval=args.log_interval,
+                    diagnostics_out=diagnostics,
+                )
+            else:
+                greedy_metrics = evaluate_packed_greedy_policy(
+                    model,
+                    validation_dataset,
+                    oracle_config,
+                    log_interval=args.log_interval,
+                    diagnostics_out=diagnostics,
+                )
             print(
                 f"greedy_epoch={epoch}/{args.epochs} "
                 f"exact_stop_step_accuracy={greedy_metrics.exact_stop_step_accuracy:.3f} "

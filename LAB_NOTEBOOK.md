@@ -1474,3 +1474,132 @@ Conclusion:
   - training-data filtering should apply only to the training split
   - natural validation should remain representative of the unfiltered corpus
   - a separate bespoke metacontrol challenge set is likely needed for paper-quality evaluation
+
+## 2026-04-23
+
+### Hyperparameter sweep on the standard no_xaba dataset
+
+Intent:
+- Sweep sign_loss_weight, weight_decay, and head depth around the cosine LR scheduler baseline to find the best frozen-encoder controller configuration.
+
+Setup:
+- Base config: cosine LR schedule (`min_lr = 1e-5`), `learning_rate = 1e-3`, `q_hidden = 256`, 3 hidden layers, 20 epochs.
+- Five runs varying one or two axes from baseline:
+  - `slw01`: `sign_loss_weight = 0.1`
+  - `slw05`: `sign_loss_weight = 0.5`
+  - `wd4`: `weight_decay = 1e-4`
+  - `slw05wd4`: `sign_loss_weight = 0.5`, `weight_decay = 1e-4`
+  - `deep5`: `q_hidden_layers = 5`
+- All trained on `controller_packed_combined_nomaint_no_xaba` with the `tree_encoder_child_wdl_async_k1` encoder.
+
+Result:
+- `slw01` was the best run by regret: `0.035` (vs `0.037` for the scheduler baseline).
+- `slw01` also had the best return (`0.312`) and lowest MSE (`0.012`).
+- Weight decay and deeper heads reduced oversearch (fewer expansions, ~3.7) but increased undersearch regret, netting worse overall regret (`0.049`).
+- Higher sign loss weight improved exact stop accuracy but not regret.
+
+Conclusion:
+- `sign_loss_weight = 0.1` with cosine LR schedule became the new best configuration.
+- Weight decay and depth act as regularizers that make the model halt too early.
+
+### PUCT-filtered data augmentation
+
+Intent:
+- Augment the training corpus with positions specifically selected because search changes the best move, hypothesizing that these would produce more informative controller episodes.
+
+Setup:
+- Ran a PUCT stability filter on ~100k FENs: kept only positions where the best move at 1 expansion differs from the best move at full budget, and the midpoint best move also differs.
+- Generated 96-node trees from the filtered FENs (25 shards, ~2250 FENs each).
+- Combined with the existing tree corpus, repacked, and trained.
+
+Result:
+- `puct_run0` (combined v2 dataset, `sign_loss_weight = 0.1`, cosine LR): regret `0.043` on the v2 validation set.
+- Cross-evaluation on the same v2 validation set: `slw01` (trained on v1 only) achieved regret `0.044`.
+- Nearly identical — the PUCT-filtered trees did not meaningfully improve the controller.
+- A 100-epoch run showed no improvement beyond epoch 20.
+
+Conclusion:
+- PUCT-filtered data augmentation was not useful. The trivial-episode proportion only dropped from ~80% to ~73%, suggesting the filter was not selective enough.
+
+## 2026-04-24
+
+### Trivial episode downsampling
+
+Intent:
+- The training distribution is ~80% trivial episodes (oracle_stop_step <= 1). Rather than augmenting with filtered data, directly downsample trivial episodes to shift the training distribution toward non-trivial cases.
+
+Setup:
+- Added `--downsample-trivial` to `scripts/pack_controller_episodes.py`.
+- Deterministic per-episode hash decides keep/drop for trivial episodes.
+- Applied only to training split; validation remains unfiltered.
+- Used `keep_prob = 0.167` on trivials, targeting a 40/60 (trivial/non-trivial) training distribution.
+
+Result:
+- `subsample_hard_trees_run0`: regret `0.057`, average expansions `11.9`.
+- Compared to `puct_run0` baseline: regret `0.043`, expansions `8.1`.
+- The model massively oversearched: it learned a "continue" bias from the non-trivial-heavy training set and applied it broadly.
+- Training metrics were also worse: MSE `0.020` vs `0.014`, sign_accuracy `0.761` vs `0.835`.
+
+Conclusion:
+- Downsampling trivial episodes backfired. The 80/20 trivial/non-trivial ratio reflects the true distribution. The model needs to see trivial examples to calibrate its stopping decisions.
+
+### Flat loss reweighting (nontrivial_loss_weight = 4.0)
+
+Intent:
+- Instead of changing the data distribution (which removes calibration examples), upweight the loss on non-trivial episodes. This preserves all data while amplifying the gradient signal on harder cases.
+
+Setup:
+- Added `--nontrivial-loss-weight` to `scripts/train_fitted_q_controller.py`.
+- Materialized cache now stores per-snapshot `oracle_stop_steps` to enable per-snapshot weighting.
+- Loss functions (`_advantage_loss_components`, `_sign_auxiliary_loss`) accept optional per-snapshot weights; weighted loss uses `(loss * weights).sum() / weights.sum()`.
+- Training run: `nontrivial_loss_weight = 4.0`, `sign_loss_weight = 0.1`, cosine LR, 20 epochs on `controller_packed_combined_nomaint_no_xaba`.
+
+Result (evaluated on the same 30,630-episode validation set as slw01):
+- Overall regret `0.029` (vs slw01 `0.029`). Identical.
+- Exact stop accuracy `0.613` (vs slw01 `0.564`). Higher.
+- Per-bin comparison revealed a clear pattern:
+  - Bins 0-1: reweighting improved exact stop (0.814/0.681 vs 0.830/0.595) and regret on bin 1 (0.009 vs 0.011).
+  - Bins 2+: slw01 had lower regret on every bin. The reweighting regressed on bins 4-7 (0.139 vs 0.122) and 8-15 (0.196 vs 0.164).
+- The improvements on bin 1 (60% of episodes) exactly offset the regressions on the tail bins, netting the same overall regret.
+
+Conclusion:
+- Flat reweighting improved the dominant bins but hurt the rare bins — the ones it was supposed to help. A flat weight treats bin-2 and bin-15 identically despite very different difficulty and frequency.
+
+### Inverse frequency loss reweighting
+
+Intent:
+- Replace flat reweighting with a principled scheme: weight each snapshot inversely proportional to the frequency of its oracle halt-step bin. This automatically gives higher weight to rarer (deeper) episodes.
+
+Setup:
+- Added `--inverse-freq-weights` flag to `scripts/train_fitted_q_controller.py`.
+- Before training, the script scans cache shards and computes bin frequencies across 7 bins (0, 1, 2, 3, 4-7, 8-15, 16+).
+- Per-bin weight = `total / (num_bins * bin_count)`, normalized so expected weight per snapshot is ~1.
+- Training run: `inverse_freq_weights = True`, `sign_loss_weight = 0.1`, cosine LR, 20 epochs on `controller_packed_combined_nomaint_no_xaba`.
+
+Result (same 30,630-episode validation set):
+- Overall regret `0.029`. Same as slw01 and flat reweighting.
+- Exact stop accuracy `0.628` (highest of all three).
+- Per-bin exact stop improved on bins 1 (0.705 vs 0.595) and 3 (0.100 vs 0.088) relative to slw01.
+- Per-bin regret: slw01 still won on every bin except bin 1. The pattern was the same as flat reweighting — gains on the dominant bins offset by losses on the tail.
+
+Conclusion:
+- All three approaches (slw01, flat reweight, inverse frequency) converge to the same ~0.029 regret.
+- Loss reweighting can improve exact stop accuracy on bins 0-1 but cannot improve regret on bins 2+.
+- Exact stop accuracy on bins 2+ remained stuck at 5-12% across all interventions.
+- The bottleneck is likely in the frozen encoder features, not the loss function or data distribution. The encoder representations do not carry enough information to distinguish "stop at step 4" from "stop at step 8."
+
+### Summary of the data/loss intervention sequence
+
+All runs below use the async frozen encoder (`tree_encoder_child_wdl_async_k1`), cosine LR schedule, 20 epochs. Regret and exact stop evaluated on the same 30,630-episode validation set except where noted.
+
+| Run | Intervention | Regret | Exact stop | Avg expansions |
+|-----|-------------|--------|------------|----------------|
+| slw01 | sign_loss_weight=0.1 (baseline) | 0.029 | 0.564 | 6.9 |
+| puct_run0 | + PUCT-filtered data | 0.030* | 0.500* | 8.1* |
+| subsample | downsample trivials (keep 0.167) | 0.057* | 0.377* | 11.9* |
+| reweight_w4 | nontrivial_loss_weight=4.0 | 0.029 | 0.613 | 5.5 |
+| inv_freq | inverse frequency weights | 0.029 | 0.628 | 5.5 |
+
+(*) Evaluated on 52,350-episode v2 validation set, not directly comparable.
+
+The main remaining lever is unfreezing the encoder, which would allow the representation to adapt to the stopping task but invalidates the materialized cache and is substantially more expensive to train.

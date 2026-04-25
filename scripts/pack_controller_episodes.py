@@ -636,6 +636,7 @@ def _pack_split(
     shard_size: int,
     num_workers: int,
     log_interval: int,
+    downsample_trivial: float = 1.0,
 ) -> tuple[Path, int, int, int]:
     split_name = manifest_path.stem.replace("_manifest", "")
     split_output_dir = output_root / split_name
@@ -702,6 +703,7 @@ def _pack_split(
                 max_budget_score,
                 feature_names,
                 oracle_config,
+                downsample_trivial,
             )
             for path in shard_paths
         ]
@@ -905,7 +907,7 @@ def _pack_split(
 
 
 def _process_one_task(
-    task: Tuple[str, float, float, float, bool, float, bool, float, Tuple[str, ...], BudgetedOracleConfig],
+    task: Tuple[str, float, float, float, bool, float, bool, float, Tuple[str, ...], BudgetedOracleConfig, float],
 ) -> Optional[dict[str, Any]]:
     (
         path_str,
@@ -918,6 +920,7 @@ def _process_one_task(
         max_budget_score,
         feature_names,
         oracle_config,
+        downsample_trivial,
     ) = task
 
     try:
@@ -953,6 +956,14 @@ def _process_one_task(
             }
     for episode in packed_tree_result["episodes"]:
         episode.pop("halt_rewards", None)
+    if downsample_trivial < 1.0:
+        packed_tree_result["episodes"] = [
+            episode for episode in packed_tree_result["episodes"]
+            if episode["oracle_stop_step"] > 1
+            or _deterministic_unit_interval(episode["episode_key"], oracle_config.seed) < downsample_trivial
+        ]
+        if not packed_tree_result["episodes"]:
+            return None
     return {
         "trajectory": packed_tree_result["trajectory"],
         "episodes": packed_tree_result["episodes"],
@@ -1095,6 +1106,12 @@ def main() -> None:
     parser.add_argument("--large-max-time", type=int, default=60)
     parser.add_argument("--very-large-min-time", type=int, default=61)
     parser.add_argument("--very-large-max-time", type=int, default=120)
+    parser.add_argument(
+        "--downsample-trivial",
+        type=float,
+        default=1.0,
+        help="Keep probability for episodes with oracle_stop_step <= 1. Default 1.0 (keep all).",
+    )
     parser.add_argument("--clear", action="store_true")
     args = parser.parse_args()
 
@@ -1128,6 +1145,7 @@ def main() -> None:
     print(f"sample_trees_by_tree_strata={args.sample_trees_by_tree_strata}", flush=True)
     print(f"tree_stratification_mode={args.tree_stratification_mode}", flush=True)
     print(f"sample_trees_by_budget_score={args.sample_trees_by_budget_score}", flush=True)
+    print(f"downsample_trivial={args.downsample_trivial}", flush=True)
     print(json.dumps(budgeted_oracle_metadata(oracle_config), sort_keys=True), flush=True)
 
     train_manifest_out, train_count, train_skipped, train_tree_strata_filtered, train_budget_score_filtered = _pack_split(
@@ -1145,6 +1163,7 @@ def main() -> None:
         args.shard_size,
         args.num_workers,
         args.log_interval,
+        downsample_trivial=args.downsample_trivial,
     )
     validation_manifest_out, val_count, val_skipped, val_tree_strata_filtered, val_budget_score_filtered = _pack_split(
         validation_manifest,

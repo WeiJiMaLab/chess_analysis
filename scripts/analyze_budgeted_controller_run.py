@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import PercentFormatter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -384,6 +385,150 @@ def _plot_regret_by_oracle_stop(diagnostics: list[dict[str, Any]], out_path: Pat
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
     return {str(x): {"mean_regret": means[i], "episodes": len(grouped[x])} for i, x in enumerate(xs)}
+
+
+def _oracle_stop_bin_label(stop_step: int) -> str:
+    if stop_step == 0:
+        return "0"
+    if stop_step == 1:
+        return "1"
+    if stop_step == 2:
+        return "2"
+    if stop_step == 3:
+        return "3"
+    if 4 <= stop_step <= 7:
+        return "4-7"
+    if 8 <= stop_step <= 15:
+        return "8-15"
+    return "16+"
+
+
+def _plot_accuracy_by_oracle_stop_bin(
+    diagnostics: list[dict[str, Any]],
+    oracle_config: BudgetedOracleConfig,
+    out_path: Path,
+) -> dict[str, Any]:
+    bin_order = ["0", "1", "2", "3", "4-7", "8-15", "16+"]
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for episode in diagnostics:
+        grouped[_oracle_stop_bin_label(int(episode["oracle_stop_step"]))].append(episode)
+
+    exact_rates = []
+    first_action_rates = []
+    episode_shares = []
+    mean_regrets = []
+    mean_halt_terms = []
+    mean_time_terms = []
+    mean_over_errors = []
+    mean_under_errors = []
+    summary: dict[str, Any] = {}
+    total_episodes = len(diagnostics)
+    for bin_label in bin_order:
+        episodes = grouped.get(bin_label, [])
+        count = len(episodes)
+        if count == 0:
+            exact_rate = 0.0
+            first_action_rate = 0.0
+            mean_regret = 0.0
+            mean_halt_term = 0.0
+            mean_time_term = 0.0
+            mean_over_error = 0.0
+            mean_under_error = 0.0
+        else:
+            exact_rate = statistics.mean(
+                int(int(episode["predicted_stop_step"]) == int(episode["oracle_stop_step"]))
+                for episode in episodes
+            )
+            first_action_rate = statistics.mean(
+                int((int(episode["predicted_stop_step"]) == 0) == (int(episode["oracle_stop_step"]) == 0))
+                for episode in episodes
+            )
+            decomposed = [_episode_regret_decomposition(episode, oracle_config) for episode in episodes]
+            mean_regret = statistics.mean(float(episode["regret"]) for episode in episodes)
+            mean_halt_term = statistics.mean(float(row["halt_reward_term"]) for row in decomposed)
+            mean_time_term = statistics.mean(float(row["time_term"]) for row in decomposed)
+            deltas = [
+                int(episode["predicted_stop_step"]) - int(episode["oracle_stop_step"])
+                for episode in episodes
+            ]
+            over_errors = [delta for delta in deltas if delta > 0]
+            under_errors = [-delta for delta in deltas if delta < 0]
+            mean_over_error = statistics.mean(over_errors) if over_errors else 0.0
+            mean_under_error = statistics.mean(under_errors) if under_errors else 0.0
+        exact_rates.append(exact_rate)
+        first_action_rates.append(first_action_rate)
+        episode_shares.append(count / total_episodes if total_episodes else 0.0)
+        mean_regrets.append(mean_regret)
+        mean_halt_terms.append(mean_halt_term)
+        mean_time_terms.append(mean_time_term)
+        mean_over_errors.append(mean_over_error)
+        mean_under_errors.append(mean_under_error)
+        summary[bin_label] = {
+            "episodes": count,
+            "episode_fraction": count / total_episodes if total_episodes else 0.0,
+            "exact_stop_step_accuracy": exact_rate,
+            "first_action_accuracy": first_action_rate,
+            "mean_regret": mean_regret,
+            "mean_halt_reward_term": mean_halt_term,
+            "mean_time_term": mean_time_term,
+            "mean_oversearch_error": mean_over_error,
+            "mean_undersearch_error": mean_under_error,
+        }
+
+    x = np.arange(len(bin_order))
+    fig, (ax_acc, ax_share, ax_regret, ax_decomp, ax_error) = plt.subplots(
+        5,
+        1,
+        figsize=(9, 15),
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [3, 1.5, 2, 2, 2]},
+        sharex=True,
+    )
+    width = 0.36
+    ax_acc.bar(x - width / 2, exact_rates, width=width, color="tab:blue", label="exact stop")
+    ax_acc.bar(x + width / 2, first_action_rates, width=width, color="tab:orange", label="first action")
+    ax_acc.set_ylim(0.0, 1.0)
+    ax_acc.set_ylabel("Accuracy")
+    ax_acc.set_title("Accuracy by Oracle Halt-Step Bin")
+    ax_acc.legend()
+    ax_acc.grid(True, axis="y", alpha=0.3)
+
+    ax_share.bar(x, episode_shares, color="tab:gray", alpha=0.8)
+    ax_share.set_ylabel("Episode share")
+    ax_share.set_title("Episode Share by Oracle Halt-Step Bin")
+    ax_share.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+    ax_share.grid(True, axis="y", alpha=0.3)
+
+    ax_regret.bar(x, mean_regrets, color="tab:red", alpha=0.8)
+    ax_regret.set_ylabel("Mean regret")
+    ax_regret.set_title("Mean Regret by Oracle Halt-Step Bin")
+    ax_regret.grid(True, axis="y", alpha=0.3)
+
+    ax_decomp.plot(x, mean_regrets, marker="o", linewidth=2, color="black", label="total regret")
+    ax_decomp.plot(x, mean_halt_terms, marker="o", linewidth=1.5, color="tab:purple", label="halt-reward term")
+    ax_decomp.plot(x, mean_time_terms, marker="o", linewidth=1.5, color="tab:green", label="time term")
+    ax_decomp.axhline(0.0, color="black", linewidth=0.8, alpha=0.4)
+    ax_decomp.set_xticks(x)
+    ax_decomp.set_xticklabels(bin_order)
+    ax_decomp.set_xlabel("Oracle halt-step bin")
+    ax_decomp.set_ylabel("Mean contribution")
+    ax_decomp.set_title("Regret Decomposition by Oracle Halt-Step Bin")
+    ax_decomp.legend()
+    ax_decomp.grid(True, axis="y", alpha=0.3)
+
+    ax_error.plot(x, mean_over_errors, marker="o", linewidth=1.8, color="tab:red", label="oversearch error")
+    ax_error.plot(x, mean_under_errors, marker="o", linewidth=1.8, color="tab:blue", label="undersearch error")
+    ax_error.set_xticks(x)
+    ax_error.set_xticklabels(bin_order)
+    ax_error.set_xlabel("Oracle halt-step bin")
+    ax_error.set_ylabel("Mean stop-step error")
+    ax_error.set_title("Mean Halt-Step Error by Oracle Halt-Step Bin")
+    ax_error.legend()
+    ax_error.grid(True, axis="y", alpha=0.3)
+
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return summary
 
 
 def _stop_step_delta_summary(diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2421,6 +2566,11 @@ def main() -> None:
     regret_by_bucket = _plot_episode_regret_by_bucket(diagnostics, output_dir / "regret_by_budget_bucket.png")
     stop_by_bucket = _plot_stop_error_by_bucket(diagnostics, output_dir / "stop_error_by_budget_bucket.png")
     regret_by_oracle_stop = _plot_regret_by_oracle_stop(diagnostics, output_dir / "regret_by_oracle_stop.png")
+    accuracy_by_oracle_stop_bin = _plot_accuracy_by_oracle_stop_bin(
+        diagnostics,
+        oracle_config,
+        output_dir / "accuracy_by_oracle_stop_bin.png",
+    )
     stop_step_delta = _stop_step_delta_summary(diagnostics)
     _plot_regret_by_stop_step_delta(diagnostics, output_dir / "regret_by_stop_step_delta.png")
     regret_decomposition = _regret_decomposition_summary(diagnostics, oracle_config)
@@ -2565,6 +2715,7 @@ def main() -> None:
         "regret_by_budget_bucket": regret_by_bucket,
         "stop_error_by_budget_bucket": stop_by_bucket,
         "regret_by_oracle_stop_step": regret_by_oracle_stop,
+        "accuracy_by_oracle_stop_bin": accuracy_by_oracle_stop_bin,
         "regret_by_stop_step_delta": stop_step_delta,
         "regret_decomposition": regret_decomposition,
         "oracle_stop_factors": oracle_stop_factors,
