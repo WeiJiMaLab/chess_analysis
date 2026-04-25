@@ -71,8 +71,47 @@ Current `selected_games` filter (used by `select_games`):
 - Strength floor: `white_elo >= 2000` and `black_elo >= 2000`.
 - Projection: `SELECT gid, utc_datetime`.
 
-Smoke-test status: this query's count matches `selected_games` exactly (`1,309,489` games).
+### Engine Evaluation (Stockfish & lc0)
+We generate high-quality move evaluations by distributing search tasks across the cluster:
+- **Unified Pipeline**: `src/script_engine_eval.py` supports both Stockfish and `lc0`.
+- **Determinism**: We ensure reproducible results by clearing the Stockfish hash table before every position search.
+- **Scale**: The pipeline is designed to evaluate over **116 million unique positions**, utilizing Slurm arrays to process 1,000,000 positions per node in parallel.
 
+---
+
+## 4. How to Run the Analysis
+
+1. **Select Games**: `python src/utils/preprocess_data.py select_games` (Builds `selected_games` from `core.games` using Nov-Dec 2023, 10+0, both Elo ≥ 2000).
+2. **Extraction & Preprocess**: `bash src/slurm/script_preprocess.sh` (Pulls moves for selected games, merges, identifies berserkers, and precalculates features).
+3. **Engine Evaluation**: 
+   - `sbatch src/slurm/engine_eval_array.sbatch` (Runs Stockfish evaluation at Depth 5).
+   - Use `--export=ALL,ENGINE=lc0` for `lc0` evaluations.
+4. **Analysis**: 
+   - `bash src/slurm/script_analysis.sh` (Runs all core analysis scripts below).
+   - `python src/move_time_summary.py` (SQL-binned move-time / log move-time histograms).
+   - `python src/clock_movetime.py` (Player clock vs. move time).
+   - `python src/npossiblemoves_movetime.py` (Number of legal moves vs. raw move time).
+   - `python src/ply_movetime.py` (Ply stage vs. log move time).
+   - `python src/ply_premove.py` (Ply stage vs. probability of "instant moves").
+   - `python src/voc_movetime.py` (VOC vs. think time).
+
+Results and figures are saved to `src/figures/`.
+
+---
+
+## 5. Multi-Engine Benchmarks (Depth 5)
+
+We compared Stockfish 14 and `lc0 v0.32.1` to optimize our evaluation strategy:
+
+| Engine | Throughput (pos/s) | Notes |
+| :--- | :--- | :--- |
+| **Stockfish (No Clear Hash)** | **~800** | Highly inconsistent at low depth. |
+| **Stockfish (Clear Hash)** | **~75** | **100% Deterministic**. Used for production. |
+| **lc0 v0.32.1 (A100)** | **~30** | Deterministic but slower for sequential UCI. |
+
+---
+
+## 6. Guide for Contributors
 
 This repository follows a strict "Readability First" philosophy. If you are adding new analysis scripts or modifying the pipeline, you are expected to adhere to these design principles:
 
@@ -92,5 +131,3 @@ This repository follows a strict "Readability First" philosophy. If you are addi
 - **Memory Efficiency**: The `Analyzer` framework automatically samples large datasets for visualization (100k points for scatterplots), preventing OOM errors on compute nodes while maintaining statistical integrity.
 - **Fixed-Effect Pipeline**: When controlling for game stage or player speed, use the "de-meaning" pattern (subtracting the group mean) demonstrated in `fe_clocktime_movetime.py`.
 - **Log-Space Normalization**: Always operate in $\log$ space for move times and clock times unless there is a specific theoretical reason to do otherwise. We use a standardized `EPSILON = 1e-6` from `utils.helpers` for all log transforms.
-
-When generating new code for this directory, do not suggest "highly flexible" or "generalized" frameworks. Instead, provide linear, readable, and modular scripts that follow the existing patterns in `src/utils/`. Prioritize code that can be understood at a glance.

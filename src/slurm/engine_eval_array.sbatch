@@ -16,6 +16,7 @@
 set -euo pipefail
 
 ENGINE="${ENGINE:-stockfish}"
+LIMIT="${LIMIT:-1000000}"
 PROJECT_DIR="/home/hl4291/chess_analysis"
 cd "${PROJECT_DIR}"
 
@@ -31,6 +32,6 @@ srun python src/script_engine_eval.py \
     --engine "${ENGINE}" \
     --shard_id "${SLURM_ARRAY_TASK_ID}" \
     --total_shards 117 \
-    --limit 1000000 \
+    --limit "${LIMIT}" \
     --n_workers "${N_WORKERS}" \
     --depth 5
