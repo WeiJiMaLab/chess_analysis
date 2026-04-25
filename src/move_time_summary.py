@@ -8,7 +8,7 @@ import duckdb
 import argparse
 import matplotlib.pyplot as plt
 
-from utils import apply_poster_style, FONT_SIZE_LABEL
+from utils import apply_poster_style, FONT_SIZE_LABEL, EPSILON
 from utils.plots import plot_histogram_from_bins
 
 # Constants
@@ -78,7 +78,7 @@ def main():
     # 4. SQL histogram binning
     print("Building SQL histogram bins...")
     # Create temporary view with computed log-transform
-    conn.execute(f"CREATE OR REPLACE TEMPORARY VIEW _summary_view AS SELECT *, ln(move_time + 1e-6) as ln_move_time FROM {base_table}")
+    conn.execute(f"CREATE OR REPLACE TEMPORARY VIEW _summary_view AS SELECT *, ln(move_time + {EPSILON}) as ln_move_time FROM {base_table}")
     
     create_histogram_bins(conn, "_summary_view", "move_time", "_move_time_hist_bins")
     create_histogram_bins(conn, "_summary_view", "ln_move_time", "_ln_move_time_hist_bins")

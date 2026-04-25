@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import (
-    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS
+    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS, EPSILON
 )
 
 # Constants
@@ -55,7 +55,7 @@ def main():
         SELECT 
             game_phase,
             player_clock_time,
-            ln_move_time,
+            ln(move_time + {EPSILON}) as ln_move_time,
             ntile(20) OVER (PARTITION BY game_phase ORDER BY player_clock_time) as qbin
         FROM {base_table}
     )

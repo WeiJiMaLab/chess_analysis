@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import (
-    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS
+    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, EPSILON
 )
 from utils.plots import get_isoluminant_cmap
 
@@ -97,7 +97,7 @@ def main():
             SELECT 
                 floor(n_possible_moves / 2.0) * 2 as moves_bin,
                 floor(move_ply / 5.0) * 5 as ply_bin,
-                ln_move_time
+                ln(move_time + {EPSILON}) as ln_move_time
             FROM {base_table}
             WHERE move_ply <= 150 AND n_possible_moves <= 100
         )
@@ -117,12 +117,23 @@ def main():
     
     # Quantile Heatmap
     df_q_mean = conn.execute(f"""
-        PIVOT {base_table}
+        PIVOT (
+            SELECT 
+                ntile(20) over (order by n_possible_moves) as n_possible_moves_qbin,
+                ntile(20) over (order by move_ply) as move_ply_qbin,
+                ln(move_time + {EPSILON}) as ln_move_time
+            FROM {base_table}
+        )
         ON n_possible_moves_qbin USING avg(ln_move_time) GROUP BY move_ply_qbin
     """).df().set_index('move_ply_qbin')
 
     df_q_counts = conn.execute(f"""
-        PIVOT {base_table}
+        PIVOT (
+            SELECT 
+                ntile(20) over (order by n_possible_moves) as n_possible_moves_qbin,
+                ntile(20) over (order by move_ply) as move_ply_qbin
+            FROM {base_table}
+        )
         ON n_possible_moves_qbin USING count(*) GROUP BY move_ply_qbin
     """).df().set_index('move_ply_qbin')
     conn.close()

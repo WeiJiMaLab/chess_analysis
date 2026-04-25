@@ -9,6 +9,7 @@ import pandas as pd
 from tqdm import tqdm
 import os
 import time
+from .helpers import EPSILON
 
 # Must match Slurm: #SBATCH --array=0-(TOTAL_SHARDS-1)
 TOTAL_SHARDS = 2
@@ -17,7 +18,6 @@ PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
 DEFAULT_START_DATE = "2023-10-01"
 DEFAULT_END_DATE = "2023-12-31"  # Exclusive upper bound
-EPSILON = 1e-6
 
 # Global settings updated by CLI flags
 THREADS = 40

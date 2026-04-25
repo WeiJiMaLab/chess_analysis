@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import (
-    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS
+    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS, EPSILON
 )
 
 import argparse
@@ -62,7 +62,7 @@ def main():
         SELECT 
             game_phase,
             (CAST(player_clock_time AS INTEGER) - CAST(opponent_clock_time AS INTEGER)) as clock_diff,
-            ln_move_time
+            ln(move_time + {EPSILON}) as ln_move_time
         FROM {base_table}
     ),
     binned_data AS (

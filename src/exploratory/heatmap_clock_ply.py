@@ -16,7 +16,7 @@ import seaborn as sns
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import (
-    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR
+    apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, EPSILON
 )
 from utils.plots import get_isoluminant_cmap
 
@@ -138,17 +138,46 @@ def main():
     # Aggregation
     print("Aggregating grids...")
     df_log_mean_grid = conn.execute(f"""
-        PIVOT (SELECT floor(ln_player_clock_time * 5)/5.0 as log_clock_bin, floor(move_ply/5.0)*5 as ply_bin, ln_move_time FROM {base_table} WHERE move_ply <= 150)
+        PIVOT (
+            SELECT 
+                floor(ln(player_clock_time + {EPSILON}) * 5)/5.0 as log_clock_bin, 
+                floor(move_ply/5.0)*5 as ply_bin, 
+                ln(move_time + {EPSILON}) as ln_move_time 
+            FROM {base_table} WHERE move_ply <= 150
+        )
         ON log_clock_bin USING avg(ln_move_time) GROUP BY ply_bin
     """).df().set_index('ply_bin')
 
     df_log_counts_grid = conn.execute(f"""
-        PIVOT (SELECT floor(ln_player_clock_time * 5)/5.0 as log_clock_bin, floor(move_ply/5.0)*5 as ply_bin FROM {base_table} WHERE move_ply <= 150)
+        PIVOT (
+            SELECT 
+                floor(ln(player_clock_time + {EPSILON}) * 5)/5.0 as log_clock_bin, 
+                floor(move_ply/5.0)*5 as ply_bin 
+            FROM {base_table} WHERE move_ply <= 150
+        )
         ON log_clock_bin USING count(*) GROUP BY ply_bin
     """).df().set_index('ply_bin')
     
-    df_q_mean_grid = conn.execute(f"PIVOT {base_table} ON player_clock_qbin USING avg(ln_move_time) GROUP BY move_ply_qbin").df().set_index('move_ply_qbin')
-    df_q_counts_grid = conn.execute(f"PIVOT {base_table} ON player_clock_qbin USING count(*) GROUP BY move_ply_qbin").df().set_index('move_ply_qbin')
+    df_q_mean_grid = conn.execute(f"""
+        PIVOT (
+            SELECT 
+                ntile(20) over (order by player_clock_time) as player_clock_qbin,
+                ntile(20) over (order by move_ply) as move_ply_qbin,
+                ln(move_time + {EPSILON}) as ln_move_time
+            FROM {base_table}
+        ) 
+        ON player_clock_qbin USING avg(ln_move_time) GROUP BY move_ply_qbin
+    """).df().set_index('move_ply_qbin')
+
+    df_q_counts_grid = conn.execute(f"""
+        PIVOT (
+            SELECT 
+                ntile(20) over (order by player_clock_time) as player_clock_qbin,
+                ntile(20) over (order by move_ply) as move_ply_qbin
+            FROM {base_table}
+        ) 
+        ON player_clock_qbin USING count(*) GROUP BY move_ply_qbin
+    """).df().set_index('move_ply_qbin')
     conn.close()
     
     # Save Figures
