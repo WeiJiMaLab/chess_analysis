@@ -1,6 +1,6 @@
 """
-Heatmap analysis of the interaction between game stage (ply) and branching complexity (n_possible_moves).
-Visualizes how thinking time varies as a function of both game phase and local complexity.
+Heatmap analysis of the interaction between game stage (ply) and the number of possible moves.
+Visualizes how thinking time varies as a function of both game phase and available legal moves.
 Uses a custom isoluminant colormap with log-frequency alpha.
 """
 
@@ -33,7 +33,7 @@ def plot_heatmap_with_alpha(ax, pivot_values, pivot_counts, cmap, label=r'Mean $
     pivot_counts.columns = pivot_counts.columns.astype(float)
     pivot_counts.index = pivot_counts.index.astype(float)
 
-    # Sort: High Ply top (descending index), High Complexity right (ascending columns)
+    # Sort: High Ply top (descending index), High Possible Moves right (ascending columns)
     pivot_values = pivot_values.sort_index(ascending=False).sort_index(axis=1, ascending=True)
     pivot_counts = pivot_counts.reindex(index=pivot_values.index, columns=pivot_values.columns)
 
@@ -90,29 +90,29 @@ def main():
     n_games = conn.execute(f"SELECT count(distinct gid) FROM {base_table}").fetchone()[0]
     n_moves = conn.execute(f"SELECT count(*) FROM {base_table}").fetchone()[0]
     
-    print("Aggregating grids (Ply vs Complexity)...")
+    print("Aggregating grids (Ply vs Possible Moves)...")
     # Raw bins Heatmap
     df_raw_mean = conn.execute(f"""
         PIVOT (
             SELECT 
-                floor(n_possible_moves / 2.0) * 2 as complexity_bin,
+                floor(n_possible_moves / 2.0) * 2 as moves_bin,
                 floor(move_ply / 5.0) * 5 as ply_bin,
                 ln_move_time
             FROM {base_table}
             WHERE move_ply <= 150 AND n_possible_moves <= 100
         )
-        ON complexity_bin USING avg(ln_move_time) GROUP BY ply_bin
+        ON moves_bin USING avg(ln_move_time) GROUP BY ply_bin
     """).df().set_index('ply_bin')
 
     df_raw_counts = conn.execute(f"""
         PIVOT (
             SELECT 
-                floor(n_possible_moves / 2.0) * 2 as complexity_bin,
+                floor(n_possible_moves / 2.0) * 2 as moves_bin,
                 floor(move_ply / 5.0) * 5 as ply_bin
             FROM {base_table}
             WHERE move_ply <= 150 AND n_possible_moves <= 100
         )
-        ON complexity_bin USING count(*) GROUP BY ply_bin
+        ON moves_bin USING count(*) GROUP BY ply_bin
     """).df().set_index('ply_bin')
     
     # Quantile Heatmap
@@ -130,23 +130,23 @@ def main():
     # Plotting
     apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(34, 11))
-    iso_cmap = get_isoluminant_cmap(h1=0.6, h2=0.9, lightness=0.6, saturation=0.8)
+    iso_cmap = get_isoluminant_cmap()
     
     # Plot 1: Raw Heatmap
     plot_heatmap_with_alpha(axes[0], df_raw_mean, df_raw_counts, cmap=iso_cmap)
-    axes[0].set_xlabel("Possible Moves (Complexity)", fontsize=FONT_SIZE_LABEL, labelpad=40)
-    axes[0].text(0.5, -0.2, "Low → High Branching", transform=axes[0].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='top')
+    axes[0].set_xlabel("Possible Moves", fontsize=FONT_SIZE_LABEL, labelpad=40)
+    axes[0].text(0.5, -0.2, "Few → Many", transform=axes[0].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='top')
     axes[0].set_ylabel("Move Ply", fontsize=FONT_SIZE_LABEL, labelpad=60)
     axes[0].text(-0.2, 0.5, "Early → Late", transform=axes[0].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='center', rotation=90)
     
     # Plot 2: Quantile Heatmap
     plot_heatmap_with_alpha(axes[1], df_q_mean, df_q_counts, cmap=iso_cmap)
-    axes[1].set_xlabel("Complexity Quantile", fontsize=FONT_SIZE_LABEL, labelpad=40)
-    axes[1].text(0.5, -0.2, "Low → High Branching", transform=axes[1].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='top')
+    axes[1].set_xlabel("Possible Moves Quantile", fontsize=FONT_SIZE_LABEL, labelpad=40)
+    axes[1].text(0.5, -0.2, "Few → Many", transform=axes[1].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='top')
     axes[1].set_ylabel("Ply Quantile", fontsize=FONT_SIZE_LABEL, labelpad=60)
     axes[1].text(-0.15, 0.5, "Early → Late", transform=axes[1].transAxes, fontsize=FONT_SIZE_TICKS, ha='center', va='center', rotation=90)
     
-    title_text = f"{n_games:,} games | {n_moves:,} moves | Complexity × Game Stage"
+    title_text = f"{n_games:,} games | {n_moves:,} moves | Possible Moves × Game Stage"
     fig.suptitle(title_text, fontsize=FONT_SIZE_LABEL + 10, y=1.05)
     
     plt.subplots_adjust(wspace=0.4)
@@ -156,7 +156,7 @@ def main():
     plt.savefig(output_plot, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\n✅ Complexity heatmap saved to {output_plot}")
+    print(f"\n✅ Possible moves heatmap saved to {output_plot}")
 
 if __name__ == "__main__":
     main()

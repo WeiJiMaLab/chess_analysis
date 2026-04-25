@@ -77,8 +77,11 @@ def main():
 
     # 4. SQL histogram binning
     print("Building SQL histogram bins...")
-    create_histogram_bins(conn, base_table, "move_time", "_move_time_hist_bins")
-    create_histogram_bins(conn, base_table, "ln_move_time", "_ln_move_time_hist_bins")
+    # Create temporary view with computed log-transform
+    conn.execute(f"CREATE OR REPLACE TEMPORARY VIEW _summary_view AS SELECT *, ln(move_time + 1e-6) as ln_move_time FROM {base_table}")
+    
+    create_histogram_bins(conn, "_summary_view", "move_time", "_move_time_hist_bins")
+    create_histogram_bins(conn, "_summary_view", "ln_move_time", "_ln_move_time_hist_bins")
 
     # 5. Load binned data
     print("Loading binned histograms...")

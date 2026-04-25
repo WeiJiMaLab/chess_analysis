@@ -60,7 +60,10 @@ def main():
             AVG(move_time) AS mean_y,
             STDDEV(move_time) AS std_y,
             COUNT(*) AS n
-        FROM {base_table}
+        FROM (
+            SELECT *, ntile(20) over (order by n_possible_moves) as n_possible_moves_qbin
+            FROM {base_table}
+        )
         GROUP BY n_possible_moves_qbin;
         """
     )

@@ -40,6 +40,13 @@ MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
 FONT_SIZE_LABEL = 45
 FONT_SIZE_TICKS = 35
 
+# Standard palette for game phases (segmented analysis)
+PHASE_COLORS = {
+    1: "#16a085",  # Teal (Early)
+    2: "#2980b9",  # Blue (Mid)
+    3: "#8e44ad"   # Purple (End)
+}
+
 def apply_poster_style():
     """Apply global matplotlib settings for Poster Style."""
     plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS

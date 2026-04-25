@@ -259,15 +259,17 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
             opponent_clock_time,
             n_possible_moves,
             move_time,
-            ln(player_clock_time + {EPSILON}) as ln_player_clock_time,
-            ln(opponent_clock_time + {EPSILON}) as ln_opponent_clock_time,
-            ln(move_time + {EPSILON}) as ln_move_time,
-            ntile(20) over (order by player_clock_time) as player_clock_qbin,
-            ntile(20) over (order by opponent_clock_time) as opponent_clock_qbin,
-            ntile(20) over (order by n_possible_moves) as n_possible_moves_qbin,
-            ntile(20) over (order by move_ply) as move_ply_qbin
+            -- Construct FEN (minimal engine-ready state: board, turn, castling, EP)
+            board_position || ' ' || 
+            CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' || 
+            COALESCE(castling_rights, '-') || ' ' || 
+            COALESCE(en_passant_targets, '-') AS fen,
+            ntile(3) over (order by move_ply) as game_phase
         FROM (
-            SELECT m.gid, m.move_ply, m.board_position, m.player_white, m.player_clock_time, m.opponent_clock_time, m.n_possible_moves, m.move_time
+            SELECT 
+                m.gid, m.move_ply, m.board_position, m.player_white, 
+                m.player_clock_time, m.opponent_clock_time, m.n_possible_moves, 
+                m.move_time, m.castling_rights, m.en_passant_targets, m.halfmove_clock
             FROM selected_moves m
             WHERE m.gid NOT IN (SELECT gid FROM berserk_games)
               AND m.gid NOT IN (SELECT gid FROM grant_more_time_games)

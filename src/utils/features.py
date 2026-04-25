@@ -50,8 +50,21 @@ def voc_single_sample(engine, board):
         return ev_after_move(engine, board, best_deep_move) - ev_after_move(engine, board, best_shallow_move)
 
 def row_to_fen(row): 
-    fen = f"{row['board_position']} {'w' if row['player_white'] else 'b'}"
-    return fen
+    """FEN for engines: includes board, turn, castling rights, and en passant targets."""
+    turn = 'w' if row['player_white'] else 'b'
+    
+    # Handle optional columns (Dask/Pandas Series or dict)
+    try:
+        cr = row['castling_rights'] if row['castling_rights'] is not None else '-'
+    except (KeyError, ValueError, TypeError):
+        cr = '-'
+        
+    try:
+        ep = row['en_passant_targets'] if row['en_passant_targets'] is not None else '-'
+    except (KeyError, ValueError, TypeError):
+        ep = '-'
+        
+    return f"{row['board_position']} {turn} {cr} {ep}"
 
 # Preprocess sample games to add time_left and time_left_after columns
 def preprocess_data(df: dd.DataFrame) -> dd.DataFrame:

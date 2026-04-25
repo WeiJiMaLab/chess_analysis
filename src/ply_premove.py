@@ -52,7 +52,10 @@ def main():
             avg(CASE WHEN move_time = 0 THEN 1.0 ELSE 0.0 END) as mean_premove,
             stddev(CASE WHEN move_time = 0 THEN 1.0 ELSE 0.0 END) as std_premove,
             count(*) as n
-        FROM {base_table}
+        FROM (
+            SELECT *, ntile(20) over (order by move_ply) as move_ply_qbin
+            FROM {base_table}
+        )
         GROUP BY move_ply_qbin
         ORDER BY move_ply_qbin;
     """).df()

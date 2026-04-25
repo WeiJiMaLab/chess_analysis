@@ -102,7 +102,7 @@ def generate_figure(df_log_mean, df_log_counts, df_q_mean, df_q_counts, n_games,
     apply_poster_style()
     fig, axes = plt.subplots(1, 2, figsize=(34, 11))
     
-    iso_cmap = get_isoluminant_cmap(h1=0.6, h2=0.9, lightness=0.6, saturation=0.8)
+    iso_cmap = get_isoluminant_cmap()
     
     # Plot 1: Log-scale Heatmap
     plot_heatmap_with_alpha(axes[0], df_log_mean, df_log_counts, cmap=iso_cmap, alpha_mode=alpha_mode)

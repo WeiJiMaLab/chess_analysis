@@ -207,7 +207,7 @@ def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_s
     df = df[df[ply_col] <= max_ply].copy()
     ci_beta = 1.96 * df[se_col]
     ax.plot(df[ply_col], df[beta_col], color=MAIN_COLOR, lw=3, label=r"Slope ($\beta$)")
-    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[ply_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
+    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[beta_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
     ax.axhline(0, color='black', linestyle='--', alpha=0.5)
     ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
     ax.set_ylabel(r"Sensitivity ($\beta$)", fontsize=FONT_SIZE_LABEL)
@@ -238,13 +238,22 @@ def plot_histogram_from_bins(ax, df_bins, left_col="bin_left", right_col="bin_ri
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
 
 
-def get_isoluminant_cmap(name="isoluminant_dual", h1=0.6, h2=0.9, lightness=0.6, saturation=0.8):
+def get_isoluminant_cmap(name="isoluminant_azure", h1=0.58, h2=None, s1=0.0, s2=0.85, lightness=0.6, saturation=None):
     """
-    Generate an isoluminant 2-color transition with constant HSL lightness.
-    h1, h2: Hue values (0-1). Default is Blue to Magenta/Pink.
+    Generate an isoluminant colormap with constant HSL lightness.
+    Supports either Hue transitions or Saturation (Gray-to-Color) transitions.
     """
     import colorsys
     from matplotlib.colors import ListedColormap
+    
+    # Handle backward compatibility and defaults
+    if h2 is None: h2 = h1
+    if s2 is None: s2 = 0.85
+    if saturation is not None:
+        s1 = s2 = saturation
+        
     hues = np.linspace(h1, h2, 256)
-    colors = [colorsys.hls_to_rgb(h, lightness, saturation) for h in hues]
+    sats = np.linspace(s1, s2, 256)
+    
+    colors = [colorsys.hls_to_rgb(h, lightness, s) for h, s in zip(hues, sats)]
     return ListedColormap(colors, name=name)

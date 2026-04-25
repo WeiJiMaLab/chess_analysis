@@ -47,8 +47,8 @@ def main():
         CREATE OR REPLACE TABLE _ply_stats AS
         SELECT 
             move_ply,
-            avg(ln_move_time) as mean_ln_move_time,
-            stddev(ln_move_time) as std_ln_move_time,
+            avg(ln(move_time + {EPSILON})) as mean_ln_move_time,
+            stddev(ln(move_time + {EPSILON})) as std_ln_move_time,
             count(*) as n
         FROM {base_table}
         GROUP BY move_ply;
@@ -59,10 +59,13 @@ def main():
         SELECT 
             move_ply_qbin,
             avg(move_ply) as mean_move_ply,
-            avg(ln_move_time) as mean_ln_move_time,
-            stddev(ln_move_time) as std_ln_move_time,
+            avg(ln(move_time + {EPSILON})) as mean_ln_move_time,
+            stddev(ln(move_time + {EPSILON})) as std_ln_move_time,
             count(*) as n
-        FROM {base_table}
+        FROM (
+            SELECT *, ntile(20) over (order by move_ply) as move_ply_qbin
+            FROM {base_table}
+        )
         GROUP BY move_ply_qbin;
     """)
     

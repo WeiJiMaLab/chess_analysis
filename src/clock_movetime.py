@@ -49,38 +49,45 @@ def main():
 
     # 3. Aggregate Statistics
     print("Calculating aggregate statistics...")
+    # High-resolution (raw) stats
     conn.execute(f"""
         CREATE OR REPLACE TABLE _clock_stats AS
         SELECT 
-            {ln_clock_col},
+            ln({clock_col} + {EPSILON}) as {ln_clock_col},
             avg({clock_col}) as mean_clock,
-            avg(ln_move_time) as mean_y,
-            stddev(ln_move_time) as std_y,
+            avg(ln(move_time + {EPSILON})) as mean_y,
+            stddev(ln(move_time + {EPSILON})) as std_y,
             count(*) as n
         FROM {base_table}
         GROUP BY {ln_clock_col};
     """)
 
+    # Quantile-binned stats
     conn.execute(f"""
         CREATE OR REPLACE TABLE _clock_qstats AS
         SELECT 
             {clock_qbin_col},
             avg({clock_col}) as mean_clock,
-            avg(ln_move_time) as mean_y,
-            stddev(ln_move_time) as std_y,
+            avg(ln(move_time + {EPSILON})) as mean_y,
+            stddev(ln(move_time + {EPSILON})) as std_y,
             count(*) as n
-        FROM {base_table}
+        FROM (
+            SELECT *, ntile(20) over (order by {clock_col}) as {clock_qbin_col}
+            FROM {base_table}
+        )
         GROUP BY {clock_qbin_col};
     """)
     
     # 4. Global Regression (SQL-native)
     print("Calculating global OLS parameters (SQL-native)...")
-    slope_global, intercept_global = calculate_ols(conn, base_table, ln_clock_col, "ln_move_time")
+    ln_y_expr = f"ln(move_time + {EPSILON})"
+    ln_x_expr = f"ln({clock_col} + {EPSILON})"
+    slope_global, intercept_global = calculate_ols(conn, base_table, ln_x_expr, ln_y_expr)
     print(f"Global OLS: Slope={slope_global:.4f}, Intercept={intercept_global:.4f}")
 
     # 5. Per-Ply Regression (SQL-native)
     print("Calculating per-ply OLS slopes (SQL-native)...")
-    df_betas = calculate_plywise_betas(conn, base_table, ln_clock_col, "ln_move_time")
+    df_betas = calculate_plywise_betas(conn, base_table, ln_x_expr, ln_y_expr)
 
     # 6. Get Counts
     n_games = conn.execute(f"SELECT count(distinct gid) FROM {base_table}").fetchone()[0]
@@ -89,7 +96,7 @@ def main():
     
     # 7. Load Data for Plotting
     print("Loading data for visualization...")
-    df_raw = conn.execute(f"SELECT {ln_clock_col}, ln_move_time FROM {base_table}").df()
+    df_raw = conn.execute(f"SELECT ln({clock_col} + {EPSILON}) as {ln_clock_col}, ln(move_time + {EPSILON}) as ln_move_time FROM {base_table}").df()
     df_stats = conn.execute(f"SELECT * FROM _clock_stats ORDER BY {ln_clock_col}").df()
     df_qstats = conn.execute(f"SELECT * FROM _clock_qstats ORDER BY {clock_qbin_col}").df()
     conn.close()
