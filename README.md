@@ -1,73 +1,194 @@
-# Chess analysis
+# Workspace overview: chess behavior, value of computation, and learned search control
 
-Analysis of chess games and positions using DuckDB, the python-chess library, and Stockfish.
+This home directory is the working root for a research thread that combines **large-scale human chess analytics** in `chess_analysis/` with a neural **meta-controller** codebase **`chess_analysis/lmcos/`** (learned metacontrol over search). The long-form experimental record is `chess_analysis/lmcos/LAB_NOTEBOOK.md`. This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
 
-## Requirements
+**Primary code locations**
 
-- Python 3 (tested with 3.11)
-- [DuckDB](https://duckdb.org/)
-- [python-chess](https://python-chess.readthedocs.io/)
-- [pandas](https://pandas.pydata.org/)
-- A **Stockfish** binary (UCI engine) for position evaluation
+| Path | Role |
+| :--- | :--- |
+| `chess_analysis/` | DuckDB + analysis scripts, figures, presentations |
+| `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
+| `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
+| `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
+| `chess_analysis/presentations/cmc-overview/` | Slidev deck: motivation, method, human validation |
 
-Optional: Jupyter for running `test_db.ipynb`, and matplotlib for plots.
+For environment setup, Stockfish paths, and notebook entry points, start from `chess_analysis/README.md`. For the behavioral analysis pipeline and figure conventions, see `chess_analysis/src/README.md`.
 
-## Setup
+---
 
-1. Create a virtual environment and install dependencies:
+## 1. Scientific intent
 
-   ```bash
-   cd chess_analysis
-   python -m venv .venv
-   source .venv/bin/activate   # or .venv\Scripts\activate on Windows
-   pip install duckdb pandas chess matplotlib jupyter
-   ```
+### 1.1 Long-term goal (planning model)
 
-2. **Stockfish** (defaults in `utils.py`, under your home directory on Della):
-   - **SF14**: `~/stockfish/src/stockfish` (SF14 tree, portable NNUE bundled in the binary).
-   - **SF15**: `~/stockfish-sf_15/src/stockfish` with NNUE `nn-6877cd24400e.nnue` in the same `src/` directory (clone `sf_15` from [official-stockfish/Stockfish](https://github.com/official-stockfish/Stockfish), then `cd src && make -j build ARCH=x86-64-avx2`).
-   - Override by passing `path=` to `get_stockfish_engine()` or by editing `STOCKFISH_SF14_PATH` / `STOCKFISH_SF15_PATH` in `utils.py`.
+The motivating picture is a **planning system** that keeps explicit **tree search** as scaffolding but replaces hand-written search-control rules with **neural decision modules**. At a high level:
 
-3. **Lichess database** (optional): The notebook can attach a read-only DuckDB database (e.g. `lichess.db`). Set the path in the notebook when attaching.
+- A **meta-controller** chooses: **act** in the real environment (play a move) vs **plan** inside an internal search tree.
+- The **act** path uses a policy at the root of the current tree; the **plan** path uses a **planning head** over a learned **tree representation** to choose **planning operations** (navigation, expansion, evaluation) that update the tree through a **learned world model** and value feedback, before committing to a real move.
+- In principle, such a system could be trained in an **AlphaZero-style** loop with self-play.
 
-## Project layout
+### 1.2 Current research slice (this codebase)
 
-- `test_db.ipynb` – Exploratory queries and analysis (games, endgame positions, FEN display, Stockfish evaluation).
-- `utils.py` – Shared helpers: `display_fen`, DB connection, Stockfish engine, evaluation.
-- `personal.db` – Local DuckDB database (created on first run; ignored by git).
+The implementation is **deliberately narrower**: **meta-control of search only** (when to keep expanding vs when to **halt** and play), on **teacher-generated** search trees and **offline** targets. Trajectories are snapshots of a growing search (e.g. from **Leela / lc0**-style search on positions sampled from Lichess with simple filters). Supervision is derived from **counterfactual value-of-computation**: comparing halting at each expansion step to continuing, under a defined **continue cost** and **halt rewards** from the search state (see §3).
 
-## Usage
+**Central empirical questions** include: Can a **simple** halt/continue policy learn (near-)optimal control given a **TreeNN** encoding? Which encoding or **cost architecture** (linear vs budget-aware) supports learning? How does behavior relate to **human** time allocation and engine-based **VOC** (value of computation) from the behavioral track?
 
-Run the notebook from the project root so that `import utils` works:
+A future layer is a **full planning head** (which node to expand, etc.) on the same representation; the lab notebook and `demos/05_meta_controller_tutorial.ipynb` are aligned with that roadmap.
 
-```bash
-cd chess_analysis
-jupyter notebook test_db.ipynb
-```
+---
 
-Or in Jupyter/Lab, ensure the working directory is `chess_analysis` when running the notebook.
+## 2. Human behavioral track (context for “broad implications”)
 
-## Slide presentation (project overview)
+Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `presentations/cmc-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
-A [Slidev](https://sli.dev) deck (Vue-based slides) summarizes the **Chess Meta-Control** goals: the `lmcos` meta-controller stack and the behavioral analysis in `src/`. It lives under `presentations/cmc-overview/`.
+The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
-From the repository root:
+---
 
-```bash
-cd chess_analysis/presentations/cmc-overview
-npm install    # first time only
-npm run dev
-```
+## 3. Formal problem: halting, costs, and oracles
 
-Slidev prints a local URL (typically `http://localhost:3030`). Open it in a browser; use **Presenter Mode** from the UI or keyboard shortcuts documented in the Slidev navigation bar.
+### 3.1 Snapshots and halt rewards
 
-The deck serves figures via `presentations/cmc-overview/public/figures` (symlink to `src/figures/`). If plots 404, recreate the symlink and run the analysis scripts — see `presentations/cmc-overview/README.md`.
+Along one search episode, let snapshots be \(s_0,\ldots,s_{K-1}\) with step index \(t\) over expansions. The **halt reward** at \(t\), written \(h_t\), scores the **quality of the move selected if the agent stops at \(t\)**. The project moved from a **regret** formulation to an **absolute** full-reference target: \(h_t\) is driven by the **value of the best move at snapshot \(t\)** under the full teacher search (e.g. \(Q\)-full), not by difference to the final best move only. That avoids degenerate small margins on intermediate steps (see `LAB_NOTEBOOK`, 2026-04-05).
 
-Optional:
+### 3.2 Linear continue cost and DP oracle (scalar cost)
 
-- `npm run build` — static export to `dist/`
-- `npm run export` — PDF export (see [Slidev export docs](https://sli.dev/guide/exporting))
+Let **continue cost** be \(c > 0\) per expansion (possibly extended to **linear vs power** cumulative costs via `planning_cost.PlanningCostConfig`). If the agent **halts** at step \(j\), a natural return is
+\[
+R(j) = h_j - C(j),
+\]
+where \(C(j)\) is the **cumulative** planning cost paid for **continues** before stopping (e.g. \(C(j) = c\cdot j\) for a linear per-step cost with \(j\) continues before halt at the same index in the lab’s indexing conventions—implementation details in `planning_cost.py` and `controller_oracle.py`).
 
-## License
+The **offline oracle** for “halt vs continue” is obtained by **backward dynamic programming** on the finite horizon (see `compute_oracle_policy` in `controller_oracle.py`):
+- At the last index, the value is the halt payoff.
+- For each earlier \(t\), compare **halt now** vs **continue** (pay incremental cost, transition to \(t+1\)).
 
-Use and adapt as you like.
+Actions are typically encoded with **0 = continue**, **1 = halt**. The optimal **stop step** is \(\arg\max_j R(j)\) under the same cost model.
+
+**Role of \(c\).** The lab found that for real data, **very small** \(c\) (e.g. order \(10^{-3}\)) yields a **meaningfully adaptive** oracle (nontrivial continuation rate), while larger \(c\) can collapse the oracle to **immediate halt**—so the same dataset supports different “economies of thought” depending on the cost scale.
+
+### 3.3 Value-of-computation and advantage
+
+Define **Q-style** targets:
+\[
+Q_{\mathrm{halt}}(s_t) = h_t, \qquad
+Q_{\mathrm{continue}}(s_t) = -c + V^*(s_{t+1}),
+\]
+with \(V^*\) the oracle value of following the optimal policy from the next snapshot (or the DP value in tabular form on the chain). The **compute advantage** (scalar actually trained in the fitted-**Q** / advantage path) is
+\[
+A_{\mathrm{compute}}(s_t) = Q_{\mathrm{continue}}(s_t) - Q_{\mathrm{halt}}(s_t).
+\]
+A **greedy** policy **continues** iff \(A_{\mathrm{compute}}(s_t) > 0\). Training minimizes MSE to Bellman-derived \(A_{\mathrm{compute}}\) to avoid “common-mode” value fitting that matches levels but not the **decision boundary** (see `LAB_NOTEBOOK`, fitted-Q and advantage-only sections).
+
+### 3.4 Budget-aware oracle (state: tree size and time budget)
+
+The **scalar-\(c\)** model ignores literal **tree size** and **remaining time budget**. The **budgeted** extension (`budgeted_controller_oracle.py`) augments the state with **node count** \(N_t\) and **remaining planning budget** \(T_t\). A step cost combines:
+
+- **Maintenance** (superlinear in tree size by default), e.g.
+  \[
+  c_{\mathrm{maint}}(N) = s \left(\frac{N}{N_0}\right)^\eta
+  \]
+  with learnable/defaults for \(s, N_0, \eta\).
+- **Time** cost from a **discrete** budget consumed each step, e.g. using a **power-law**-style **incremental** cost
+  \[
+  c_{\mathrm{time}}(T) = \lambda\Big[ (T-1+\tau)^{-(p-1)} - (T+\tau)^{-(p-1)} \Big]
+  \]
+  (see `time_cost` in code; when budget is exhausted, a **timeout value** is used).
+
+The Bellman backup matches the same halt-vs-continue pattern with **state-dependent** continue cost. Packed episodes augment raw trajectories with **synthetic starting budgets** across buckets so the controller sees diverse \((N,T)\) (manifest format `v2` in the lab). The trained head often uses **concat\((z_t, N_t, T_t)\)** with encoder embedding \(z_t\).
+
+### 3.5 Episode difficulty (data-only diagnostics)
+
+`episode_difficulty.py` defines metrics (halt reward **range**, optimal vs second-best **return gap**, **entropy** over per-stop returns, **regret** of “halt at 0,” **curvature** of halt-reward differences) to characterize whether stopping time matters. Analysis showed many episodes have **nearly flat** return landscapes, motivating **filtering** (e.g. by halt reward range) before retraining.
+
+---
+
+## 4. Tree representation and pretraining (TreeNN / GNN)
+
+### 4.1 Encoding
+
+Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-forest** layout with parent/child pointers, packed into **fat shards** for I/O efficiency. A **TreeNN**-style model (`GNN.py`, `TreeMHA.py`) runs **rounds** of message passing: **upward** (children → parent, attention + **GRU** updates) and **downward** (parent → children), in **topological** order, so evidence aggregates to the **root** representation used for readouts and control.
+
+**Slot encodings** (sinusoidal / learned) disambiguate **child order** (canonical ordering by UCI) for **per-edge** prediction heads—relevant to **child-WDL** pretraining (predict consolidated **win/draw/loss** targets per edge).
+
+### 4.2 Oracle data construction (pretrain)
+
+- **Mode (research):** **dynamic growth** — run a full **oracle** search (e.g. large node budget), then take a **prefix** of the expansion sequence as input and **consolidate** deep statistics from the full tree as **supervised targets** (prefix / deep targets: `cts_pretrain.py`, demos `01`–`02`).
+- **Targets:** Scalar value backups and, after fixes in 2026-04-10, **search-consolidated per-edge WDL** targets (visit-weighted, perspective-correct) stored as `edge_wdl_targets`, not raw value-head slices at a node in isolation.
+- **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see `LAB_NOTEBOOK`).
+
+### 4.3 Packing and Slurm
+
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates live under `chess_analysis/lmcos/slurm/`.
+
+---
+
+## 5. Training protocols: controller
+
+### 5.1 On-policy RL (PPO / REINFORCE)
+
+`supervised_branch.py` / `cts_rl.py` implement **PPO** (and baselines) on **frozen-encoder** or **unfrozen** encoders, with **Bernoulli** halt/continue, **value** head, and diagnostics (**approx kl**, **clipfrac**, **explained variance**). A **rollout collection bug** was fixed so batch size is \( \texttt{num\_envs} \times \texttt{rollout\_steps} \) (regression test in `test_supervised_branch.py`).
+
+`scripts/rl_sanity_checks.py` validates **sign** of updates and logit **drift** on toy tasks—used to rule out **gradient wiring** bugs when long runs are flat.
+
+### 5.2 Offline fitted advantage regression
+
+`scripts/train_fitted_q_controller.py` fits **scalar** \(A_{\mathrm{compute}}\) (or budget-aware MLP on features) with **MSE** to DP targets, with **greedy** evaluation and optional **diagnostics** JSONL. **Materialization caches** for frozen-encoder **root embeddings** avoid repeating heavy encoding each epoch when manifests/checkpoints are unchanged.
+
+### 5.3 Probes and controls
+
+- **`probe_controller_representation.py`:** Train a small **MLP/linear** probe on **frozen root embeddings** to predict **oracle action** or regress **advantage**—tests whether the **representation** carries the **halting** signal *without* full RL.
+- **`controller_representation_control.py`:** Trivial or oracle-derived features (e.g. **oracle-action-now** one-hot) to isolate **PPO** vs **representation**; includes **one-step bandit** and **supervised** checks.
+
+### 5.4 Empirical patterns (from the lab record)
+
+- **PPO** on real trees can be **stable** but **over-search** relative to the offline oracle at low \(c\); validation return can **plateau early**.
+- **Unfreezing** the encoder in one large run did **not** improve validation vs frozen.
+- **Fitted advantage** on frozen embeddings can get **return** near oracle but **poor** exact stop-step / sign unless data are **filtered** to nontrivial episodes; **async** vs **sync** encoders can differ on filtered data.
+- **Budgeted** packing and training are the **current** intended path for state-aware costs.
+
+These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers and run IDs.
+
+---
+
+## 6. Demos, talks, and notebooks
+
+| Resource | Content |
+| :--- | :--- |
+| `lmcos/demos/01_prefix_tutorial.ipynb` | Prefix sampling and deep target consolidation |
+| `02_tensorization_tutorial.ipynb` | Flat-forest batching |
+| `03_gnn_tutorial.ipynb` | Bidirectional GNN “heartbeat” |
+| `04_pretrain_tutorial.ipynb` | Supervised pretraining and losses |
+| `05_meta_controller_tutorial.ipynb` | Halt/continue and economy of thought |
+| `lmcos/demos/understanding.md` | GNN wiring, slot encodings, dense recursive WDL head |
+| `presentations/cmc-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+
+Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
+
+---
+
+## 7. Literature search guide (for agents or humans)
+
+The project sits at the intersection of several named research areas. Useful **query families** and **paper clusters**:
+
+- **Metareasoning / rational metareasoning** (Horvitz, Russell & Wefald, Han & Stewart): deciding when to stop deliberation; **anytime** algorithms; **value of computation** as an explicit object.
+- **Optimal stopping** on finite horizons: **backward induction**, **threshold policies**, **regret** vs **reward** parameterizations (connections to §3).
+- **GNNs on trees / graphs** for search: **TreeLSTM**, **GAT**, **graph transformers**, **UCT** + learned value (AlphaZero, MuZero, **Sampled MuZero**); **neural MCTS** and **search policy** learning.
+- **Reinforcement learning** for **budgeted** or **horizon** problems: **PPO**, **REINFORCE**, **contextual bandits** (one-step diagnostics in this repo); **Offline RL** and **imitation of oracles**; **Fitted Q-Iteration** / **Bellman** regression for **discrete** control on fixed datasets.
+- **Chess and game AI**: **MCTS + NN** (Leela, Stockfish NNUE as non-learned control); **adaptive** search time in engines.
+- **Cognitive** / **psychophysics** of **chess** (if linking to human data): time pressure, **depth of search** vs **task difficulty**; the behavioral scripts formalize **VOC** and **clock elasticity**.
+
+**Contrast this work:** offline **teacher trees**, **no** full self-play loop yet, **explicit** cost models (linear or budgeted) with **DP oracles** rather than end-game outcome only.
+
+---
+
+## 8. How to work in this workspace
+
+- **Environment:** Prefer a dedicated venv/conda (see `chess_analysis/README.md`; cluster jobs may use `trm` / `cts_supervised`-style envs as in the lab).
+- **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
+- **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
+
+For day-to-day commands and paths inside `chess_analysis`, keep using **`chess_analysis/README.md`**; for meta-controller and tree visualization, see **`chess_analysis/src/README.md`** (including `src/performance/visualize_tree_expansion.py`).
+
+---
+
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md` and demos through 2026-04-14 (budgeted oracle and packing v2).*

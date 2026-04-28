@@ -20,13 +20,17 @@ The goal of this project is to analyze human resource allocation (time) in chess
 ```text
 .
 ├── .venv/                  # Virtual environment (Python 3.10+)
-├── README.md               # Main project overview
-├── skills.md               # This guide
+├── README.md               # Main project overview (repo root)
 ├── data/                   # Staging parquet shards and processed data
 └── src/
     ├── README.md           # Technical analysis overview
-    ├── figures/            # Output directory for all plots (git-ignored)
-    ├── slurm/              # Batch processing scripts for the cluster
+    ├── skills.md              # This guide
+    ├── figures/            # Output for matplotlib/posters, exploratory, performance SVGs, etc.
+    │   ├── exploratory/
+    │   └── performance/    # e.g. Graphviz output from performance/visualize_tree_expansion.py
+    ├── performance/      # Meta-controller / lmcos-adjacent tooling (tree expansion viz, future benchmarks)
+    ├── exploratory/        # Ad hoc analysis scripts
+    ├── slurm/              # Batch scripts (preprocess, engine_eval_shard.sbatch, engine_eval.sh, …)
     ├── utils/              # Core library: helpers, plotting, preprocessing
     ├── clock_movetime.py   # Analysis: Clock effect
     ├── ply_movetime.py     # Analysis: Mid-game arc
@@ -40,6 +44,7 @@ The goal of this project is to analyze human resource allocation (time) in chess
 *   **DuckDB**: The primary engine for data manipulation. 
     *   `core` (`lichess.db`): Read-only, multi-terabyte database.
     *   `personal.db`: Local "write-back" database for game subsets and intermediate results.
+*   **PyTorch & Graphviz** (as needed): Scripts under `src/performance/` that load `.pt` tree checkpoints (e.g. `visualize_tree_expansion.py`) require `torch`, the Python `graphviz` package, and a system `graphviz` install (`dot` on `PATH`), plus `python-chess` for Unicode board text in node labels. Install as needed, e.g. `pip install torch graphviz` and `pip install chess` (see `requirements-jupyter.txt` for `chess`).
 
 ---
 
@@ -79,6 +84,7 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 *   **Standard Layouts**:
     *   **1x3 Dashboard**: Raw Trend, Quantile Bins, and Scatterplot.
     *   **1x2 Side-by-Side**: Used for game stage dynamics (Ply).
+*   **Non-matplotlib diagrams**: Graph-based exports (e.g. **Graphviz** `.svg` from `src/performance/visualize_tree_expansion.py`) do not use `apply_poster_style()`; keep labels readable (monospace helps for aligned Unicode boards) and write outputs under `src/figures/performance/` using path anchoring as usual.
 
 ---
 
@@ -90,8 +96,10 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 | **Select Games** | `python src/utils/preprocess_data.py select_games` |
 | **Run Full Pipeline** | `bash src/slurm/script_preprocess.sh` |
 | **Run All Analysis** | `bash src/slurm/script_analysis.sh` |
+| **Engine eval: shards + merge + `selected_moves_with_engine`** | `bash src/slurm/engine_eval.sh` (or `bash src/slurm/engine_eval.sh --merge-only` after parquets exist) |
 | **Plot Clock Effect** | `python src/clock_movetime.py` |
 | **Plot Ply Effect** | `python src/ply_movetime.py` |
+| **Tree expansion (lmcos `.pt`, Graphviz + Unicode boards)** | `python src/performance/visualize_tree_expansion.py` (see `src/README.md`, section 4) |
 
 ---
 

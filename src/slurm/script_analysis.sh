@@ -1,6 +1,10 @@
 #!/bin/bash
 # End-to-end analysis script. Runs all standardized plots.
 #
+# Engine-backed plots are NOT run here (heavy DB work / overage risk). After merge + build:
+#   python3 src/build_selected_moves_with_engine.py
+#   python3 src/top2diff_movetime.py
+#
 # Usage:
 #   bash /home/hl4291/chess_analysis/src/slurm/script_analysis.sh
 

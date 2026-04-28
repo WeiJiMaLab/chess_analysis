@@ -73,9 +73,11 @@ Current `selected_games` filter (used by `select_games`):
 
 ### Engine Evaluation (Stockfish & lc0)
 We generate high-quality move evaluations by distributing search tasks across the cluster:
-- **Unified Pipeline**: `src/script_engine_eval.py` supports both Stockfish and `lc0`.
-- **Determinism**: We ensure reproducible results by clearing the Stockfish hash table before every position search.
-- **Scale**: The pipeline is designed to evaluate over **116 million unique positions**, utilizing Slurm arrays to process 1,000,000 positions per node in parallel.
+- **Unified worker**: `src/script_engine_eval.py` evaluates both Stockfish and `lc0` and writes one **parquet per Slurm array task** (sharded by hash over unique FENs).
+- **End-to-end runner**: `bash src/slurm/engine_eval.sh` (from the repo root) submits the full shard array and **blocks with `sbatch --wait`** until every array task finishes (same wait pattern as `src/slurm/_preprocess.sh`), then runs `src/script_engine_eval.py merge` to build **`{stockfish,lc0}_evaluations`** in `personal.db` and create **`selected_moves_with_engine`**. Slurm logs: `src/slurm/logs/eval_*.out`. Use `--merge-only` if shards already exist; `--no-wait` to only submit the array.
+- **Shard batch file**: `src/slurm/engine_eval_shard.sbatch` (array over all shards, Depth 5). Submit alone with `sbatch` if you are not using `engine_eval.sh`.
+- **Determinism**: We clear the Stockfish hash table before every position search.
+- **Scale**: Sharding is set up to cover all unique positions (e.g. 117 tasks × ~1M positions per task at default `LIMIT`); tune `LIMIT` and array bounds in the `.sbatch` file if you change the dataset.
 
 ---
 
@@ -83,9 +85,7 @@ We generate high-quality move evaluations by distributing search tasks across th
 
 1. **Select Games**: `python src/utils/preprocess_data.py select_games` (Builds `selected_games` from `core.games` using Nov-Dec 2023, 10+0, both Elo ≥ 2000).
 2. **Extraction & Preprocess**: `bash src/slurm/script_preprocess.sh` (Pulls moves for selected games, merges, identifies berserkers, and precalculates features).
-3. **Engine Evaluation**: 
-   - `sbatch src/slurm/engine_eval_array.sbatch` (Runs Stockfish evaluation at Depth 5).
-   - Use `--export=ALL,ENGINE=lc0` for `lc0` evaluations.
+3. **Engine evaluation** (cluster): from the repo root, `bash src/slurm/engine_eval.sh` (see **Engine Evaluation** above), or `sbatch src/slurm/engine_eval_shard.sbatch` with `ENGINE=lc0` if you only want the array job.
 4. **Analysis**: 
    - `bash src/slurm/script_analysis.sh` (Runs all core analysis scripts below).
    - `python src/move_time_summary.py` (SQL-binned move-time / log move-time histograms).
@@ -96,6 +96,20 @@ We generate high-quality move evaluations by distributing search tasks across th
    - `python src/voc_movetime.py` (VOC vs. think time).
 
 Results and figures are saved to `src/figures/`.
+
+### Search-tree expansion visualization (meta-controller / lmcos)
+
+The [`visualize_tree_expansion.py`](performance/visualize_tree_expansion.py) script in `src/performance/` helps inspect **Leela / MCTS search trees** used by the `lmcos` stack (e.g. frozen encoders, halt/continue work). It loads a **single** PyTorch checkpoint that contains either a legacy `PretrainExample` (`.tree`) or a **raw v1** dict (`format == cts_raw_pretrain_example_v1` as produced on cluster, with `parent_index` / `incoming_moves`), rebuilds a `SearchTree` in [`lmcos/tree.py`](../lmcos/tree.py), and renders **expansion-prefix** snapshots (first `--steps` expansions) with **Graphviz** (`.svg` and `.gv` under the output directory). Each node’s label includes a **Unicode** board from `python-chess` (optional `--no-boards` for text-only). Scratch paths such as the ysagiv tree shards are **read-only**; paths are not written outside `--out-dir`.
+
+**Dependencies (beyond the base env):** `torch`, the Python `graphviz` package, a system `dot` binary, and `chess`. Example install: `pip install torch graphviz chess` (see also `requirements-jupyter.txt` for `chess`).
+
+**Example (from repository root, with `.venv` activated):**
+
+```bash
+python src/performance/visualize_tree_expansion.py --pt-path /path/to/example.pt --name myrun --steps 5
+```
+
+Default output directory is `src/figures/performance/` (anchored to the script via `__file__`).
 
 ---
 

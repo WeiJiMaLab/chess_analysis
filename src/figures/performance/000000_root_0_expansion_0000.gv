@@ -1,0 +1,7 @@
+// 000000_root_0 expansion_prefix k=0
+digraph {
+	charset="UTF-8" rankdir=TB
+	graph [fontname="Noto Color Emoji, Apple Color Emoji, Segoe UI Emoji, Inter, Arial, sans-serif" fontsize=10 label="000000_root_0 expansion_prefix k=0 · 1 nodes · 0 expansion event(s)" labelloc=t]
+	node [color="#94a3b8" shape=rect style="rounded,filled"]
+	0 [label="—" color="#94a3b8" fillcolor="#f8fafc" fontcolor="#64748b" fontname="Consolas, DejaVu Sans Mono, Liberation Mono, monospace" fontsize=8 penwidth=0.9]
+}
