@@ -5,30 +5,32 @@ css: ./style.css
 mdc: true
 math: katex
 ---
-<div class="h-full flex flex-col items-center justify-center">
+
+<div class="figure-container figure-leela">
   <LeelaSearchLoop />
 </div>
+
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <MetaControllerZoom />
 </div>
 
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <GnnTwoSweeps />
 </div>
 
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <GnnPretrainDiagram />
 </div>
 
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <div class="w-4/5">
     <ChildWdlDiagram />
   </div>
@@ -36,13 +38,13 @@ math: katex
 
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <PolicyPretrainDiagram />
 </div>
 
 ---
 
-<div class="h-full flex flex-col items-center justify-center">
+<div class="figure-container">
   <div class="w-full max-w-5xl">
     <DpOracleDiagram />
   </div>

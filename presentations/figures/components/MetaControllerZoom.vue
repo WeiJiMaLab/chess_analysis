@@ -9,7 +9,7 @@
 
 <template>
   <div class="zoom-container">
-    <svg viewBox="0 0 1050 420" xmlns="http://www.w3.org/2000/svg" class="zoom-svg">
+    <svg viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg" class="zoom-svg">
       <defs>
         <marker id="arr-m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
           <path d="M0,0 L8,4 L0,8 Z" class="fill-primary" />
@@ -122,15 +122,15 @@
 .zoom-container { width: 100%; padding: 1rem; background: white; border-radius: 2rem; }
 .zoom-svg { width: 100%; height: auto; font-family: var(--font-diagram); overflow: visible; }
 
-.subplot-title { font-size: 15px; font-weight: 800; letter-spacing: 0.05em; }
-.subplot-label { font-size: 14px; font-weight: 600; fill: var(--color-primary); }
-.subplot-tiny { font-size: 11px; }
+.subplot-title { font-weight: 800; letter-spacing: 0.05em; }
+.subplot-label { font-weight: 600; fill: var(--color-primary); }
+.subplot-tiny { }
 
-.label-large { font-size: 18px; font-weight: 800; }
-.label-bold { font-size: 15px; font-weight: 700; }
-.label-tiny { font-size: 12px; }
-.label-ph { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; }
-.tiny { font-size: 11px; }
+.label-large { font-weight: 800; }
+.label-bold { font-weight: 700; }
+.label-tiny { }
+.label-ph { font-weight: 800; letter-spacing: 0.1em; }
+.tiny { }
 
 .edge { stroke: var(--color-primary); stroke-width: 2.5; fill: none; }
 .edge-loop { stroke: var(--color-accent); stroke-width: 2.5; fill: none; stroke-dasharray: 6; }

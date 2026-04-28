@@ -82,7 +82,6 @@
 }
 
 .panel-header {
-  font-size: 13px;
   font-weight: 800;
   font-family: var(--font-header);
   text-transform: uppercase;
@@ -97,7 +96,6 @@
 }
 
 .panel-subtitle {
-  font-size: 18px;
   font-weight: 800;
   text-transform: none;
   letter-spacing: -0.01em;

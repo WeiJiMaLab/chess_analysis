@@ -147,13 +147,13 @@
 .box-process-accent { fill: var(--bg-accent); stroke: var(--color-accent); }
 .box-loss { fill: var(--bg-danger); stroke: var(--color-danger); }
 
-.label-main { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
-.label-box { font-size: 20px; font-weight: 800; }
-.label-sub { font-size: 13px; font-weight: 700; fill: var(--color-secondary); }
-.label-loss-title { font-size: 22px; font-weight: 900; }
-.label-formula { font-size: 15px; font-family: var(--font-mono); fill: var(--color-danger); }
-.label-tiny { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
-.txt-id { font-size: 13px; font-weight: 800; fill: var(--color-secondary); }
+.label-main { font-weight: 800; letter-spacing: -0.01em; }
+.label-box { font-weight: 800; }
+.label-sub { font-weight: 700; fill: var(--color-secondary); }
+.label-loss-title { font-weight: 900; }
+.label-formula { font-family: var(--font-mono); fill: var(--color-danger); }
+.label-tiny { font-weight: 700; letter-spacing: 0.02em; }
+.txt-id { font-weight: 800; fill: var(--color-secondary); }
 .font-diagram { font-family: var(--font-diagram); }
 
 .uppercase { text-transform: uppercase; }

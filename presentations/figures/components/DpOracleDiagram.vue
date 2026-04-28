@@ -121,13 +121,13 @@
 .dp-tree-container { width: 100%; padding: 0.25rem 0; background: white; }
 .dp-svg { width: 100%; height: auto; font-family: var(--font-diagram); overflow: visible; }
 
-.label-large { font-size: 18px; font-weight: 800; }
-.label-node-desc { font-size: 13px; font-weight: 700; }
-.label-tiny { font-size: 12px; }
-.label-box-text { font-size: 13px; font-weight: 800; font-family: var(--font-mono); }
+.label-large { font-weight: 800; }
+.label-node-desc { font-weight: 700; }
+.label-tiny { }
+.label-box-text { font-weight: 800; font-family: var(--font-mono); }
 
-.formula-label { font-size: 12px; letter-spacing: 0.05em; }
-.formula-main { font-size: 14px; font-family: var(--font-mono); }
+.formula-label { letter-spacing: 0.05em; }
+.formula-main { font-family: var(--font-mono); }
 
 .text-accent { fill: var(--color-accent); }
 .text-success { fill: var(--color-success); }

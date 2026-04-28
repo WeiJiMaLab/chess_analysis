@@ -8,7 +8,7 @@
 
 <template>
   <div class="gnn-container">
-    <svg viewBox="0 0 850 340" xmlns="http://www.w3.org/2000/svg" class="gnn-svg">
+    <svg viewBox="0 0 1000 450" xmlns="http://www.w3.org/2000/svg" class="gnn-svg">
       <defs>
         <marker id="arr-up" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
           <path d="M0,0 L6,3 L0,6 Z" class="fill-accent-dark" />
@@ -114,10 +114,10 @@
 <style scoped>
 .gnn-container { width: 100%; padding: 0.5rem; background: white; border-radius: 1rem; }
 .gnn-svg { width: 100%; height: auto; display: block; font-family: var(--font-diagram); overflow: visible; }
-.ph-label { font-size: 14px; font-weight: 800; letter-spacing: 0.05em; }
-.label-bold { font-size: 15px; font-weight: 700; }
-.tiny { font-size: 11px; }
-.tiny-i { font-size: 11px; font-style: italic; }
+.ph-label { font-weight: 800; letter-spacing: 0.05em; }
+.label-bold { font-weight: 700; }
+.tiny { }
+.tiny-i { font-style: italic; }
 
 .edge-up { stroke: var(--color-accent-dark); stroke-width: 2.5; fill: none; }
 .edge-down { stroke: var(--color-info-dark); stroke-width: 2.5; fill: none; }

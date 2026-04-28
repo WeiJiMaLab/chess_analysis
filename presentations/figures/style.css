@@ -32,6 +32,81 @@
   
   /* Borders */
   --border-subtle: #e2e8f0;
+
+  /* Global Diagram Font Sizes */
+  --font-size-tiny: 22px;
+  --font-size-sub: 24px;
+  --font-size-box: 28px;
+  --font-size-large: 32px;
+  --font-size-xl: 40px;
+}
+
+/* Global Diagram Typography */
+.label-xl { font-size: var(--font-size-xl) !important; font-weight: 800; letter-spacing: -0.02em; }
+.label-large { font-size: var(--font-size-large) !important; font-weight: 800; }
+.label-box { font-size: var(--font-size-box) !important; font-weight: 700; }
+.label-bold { font-size: var(--font-size-box) !important; font-weight: 700; }
+.label-sub { font-size: var(--font-size-sub) !important; letter-spacing: 0.05em; }
+.label-tiny { font-size: var(--font-size-tiny) !important; }
+.tiny { font-size: var(--font-size-tiny) !important; }
+.tiny-i { font-size: var(--font-size-tiny) !important; font-style: italic; }
+
+.subplot-title { font-size: var(--font-size-box) !important; font-weight: 800; letter-spacing: 0.05em; }
+.subplot-label { font-size: var(--font-size-sub) !important; font-weight: 600; }
+.subplot-tiny { font-size: var(--font-size-tiny) !important; }
+.ph-label { font-size: var(--font-size-box) !important; font-weight: 800; letter-spacing: 0.05em; }
+.txt-id { font-size: var(--font-size-tiny) !important; font-weight: 800; }
+.label-formula { font-size: var(--font-size-box) !important; }
+
+.axis-label { font-size: var(--font-size-sub) !important; font-weight: 700; }
+.legend-label { font-size: var(--font-size-sub) !important; font-weight: 800; }
+.micro-label { font-size: var(--font-size-tiny) !important; letter-spacing: 0.05em; }
+.txt-small { font-size: var(--font-size-sub) !important; }
+.label-node-desc { font-size: var(--font-size-sub) !important; font-weight: 700; }
+.label-box-text { font-size: var(--font-size-sub) !important; font-weight: 800; font-family: var(--font-mono); }
+.formula-label { font-size: var(--font-size-sub) !important; letter-spacing: 0.05em; }
+.formula-main { font-size: var(--font-size-box) !important; font-family: var(--font-mono); }
+
+/* PaperSketch Styles */
+.sketch-step h2 { font-size: var(--font-size-large) !important; font-weight: 800; }
+.step-subtitle { font-size: var(--font-size-tiny) !important; font-weight: 700; }
+.step-list { font-size: var(--font-size-sub) !important; }
+.step-marker { font-size: var(--font-size-tiny) !important; }
+
+/* Figure Constraints */
+.figure-container {
+  height: 100%;
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  padding: 2rem;
+  padding-top: 4rem;
+}
+
+.figure-container.figure-leela {
+  box-sizing: border-box;
+  padding: 0.35rem 0.75rem;
+  padding-top: 0.25rem;
+  padding-left: 0.35rem;
+  justify-content: flex-start;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.figure-container.figure-leela svg {
+  max-width: min(100%, 95vw);
+  width: auto;
+  height: auto;
+  max-height: min(52vh, calc(100dvh - 11rem));
+}
+
+.figure-container svg, 
+.figure-container .surf-plot-wrapper {
+  max-height: 100%;
+  max-width: 100%;
 }
 
 /* Global Styles */

@@ -42,10 +42,10 @@
 .policy-diag { width: 100%; padding: 1rem 0; background: white; }
 .policy-svg { width: 100%; height: auto; font-family: var(--font-diagram); overflow: visible; }
 
-.axis-label { font-size: 13px; font-weight: 700; fill: var(--color-secondary); }
-.legend-label { font-size: 13px; font-weight: 800; }
-.micro-label { font-size: 12px; letter-spacing: 0.05em; }
-.txt-small { font-size: 14px; }
+.axis-label { font-weight: 700; fill: var(--color-secondary); }
+.legend-label { font-weight: 800; }
+.micro-label { letter-spacing: 0.05em; }
+.txt-small { }
 .bold { font-weight: 800; }
 .uppercase { text-transform: uppercase; }
 .opacity-40 { opacity: 0.4; }
