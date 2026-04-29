@@ -103,6 +103,24 @@
   max-height: min(52vh, calc(100dvh - 11rem));
 }
 
+/* Slide 2 — same viewport + alignment pattern as .figure-leela */
+.figure-container.figure-meta-zoom {
+  box-sizing: border-box;
+  padding: 0.35rem 0.75rem;
+  padding-top: 0.25rem;
+  padding-left: 0.35rem;
+  justify-content: flex-start;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.figure-container.figure-meta-zoom svg {
+  max-width: min(100%, 95vw);
+  width: auto;
+  height: auto;
+  max-height: min(86vh, calc(100dvh - 4rem));
+}
+
 .figure-container svg, 
 .figure-container .surf-plot-wrapper {
   max-height: 100%;

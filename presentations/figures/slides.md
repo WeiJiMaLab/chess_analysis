@@ -12,14 +12,8 @@ math: katex
 
 ---
 
-<div class="figure-container">
-  <MetaControllerZoom />
-</div>
-
----
-
-<div class="figure-container">
-  <GnnTwoSweeps />
+<div class="figure-container figure-meta-zoom">
+  <CmcUnifiedDiagram />
 </div>
 
 ---
