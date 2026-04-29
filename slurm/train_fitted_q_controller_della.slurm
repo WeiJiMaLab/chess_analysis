@@ -84,6 +84,9 @@ echo "hostname=$(hostname)"
 nvidia-smi -L || true
 date
 
+MATERIALIZED_TRAIN_CACHE="${MATERIALIZED_TRAIN_CACHE:-}"
+MATERIALIZED_VALIDATION_CACHE="${MATERIALIZED_VALIDATION_CACHE:-}"
+
 EXTRA_ARGS=()
 if [[ "${UNFREEZE_ENCODER}" == "1" ]]; then
   EXTRA_ARGS+=(--unfreeze-encoder)
@@ -93,6 +96,12 @@ if [[ "${SEPARATE_SIGN_HEAD}" == "1" ]]; then
 fi
 if [[ "${INVERSE_FREQ_WEIGHTS}" == "1" ]]; then
   EXTRA_ARGS+=(--inverse-freq-weights)
+fi
+if [[ -n "${MATERIALIZED_TRAIN_CACHE}" ]]; then
+  EXTRA_ARGS+=(--materialized-train-cache "${MATERIALIZED_TRAIN_CACHE}")
+fi
+if [[ -n "${MATERIALIZED_VALIDATION_CACHE}" ]]; then
+  EXTRA_ARGS+=(--materialized-validation-cache "${MATERIALIZED_VALIDATION_CACHE}")
 fi
 
 python3 scripts/train_fitted_q_controller.py \

@@ -1800,5 +1800,26 @@ Commands (all submitted in parallel):
   ```
 - All use the same packed data (`controller_packed_combined_nomaint_no_xaba`) and rerun encoder checkpoint. Output checkpoints named `fittedq_{variant}_rerun.pt`.
 
-Result:
-- Pending.
+Infrastructure changes for rerun:
+- **Regret-based checkpointing**: Changed checkpoint selection from minimal validation MSE to minimal greedy regret. MSE can plateau while metacontrol stays poor; greedy regret is the actual metric of interest. Checkpointing now happens inside the greedy eval block.
+- **Materialized cache support**: Added `MATERIALIZED_TRAIN_CACHE` / `MATERIALIZED_VALIDATION_CACHE` env vars to the slurm script, enabling pre-computed encoder forward passes to skip re-materialization.
+- **Parallel materialization**: New `scripts/materialize_controller_cache.py` with `materialize` (per-worker) and `merge` subcommands. Splits episodes across workers by index range, each writing partial shards. Merge combines them via symlinks into a single cache. Reduced 72-min single-GPU materialization to ~24 min across 3 workers.
+- **Storage migration**: Scratch filesystem hit capacity mid-run. All new outputs redirected to `/tigress/ysagiv/chess/cts/`.
+
+Result (all checkpointed by minimal greedy regret):
+
+| Variant     | Regret (rerun) | Regret (original) | Return (rerun) | Stop acc (rerun) |
+|-------------|----------------|--------------------|----------------|------------------|
+| slw01       | 0.031          | 0.029              | —              | —                |
+| reweight_w4 | 0.034          | 0.030              | —              | —                |
+| inv_freq    | 0.047          | 0.029              | —              | —                |
+| affine      | 0.045          | 0.055              | —              | —                |
+| affine+rw   | 0.036          | 0.034              | —              | —                |
+
+- slw01, reweight_w4, affine+rw within ~0.005 of originals. affine improved (0.045 vs 0.055).
+- **inv_freq regressed significantly** (0.047 vs 0.029). Greedy eval log confirms epoch 10 was best (0.047, 6.7 expansions) and epoch 20 worse (0.054, 10.5 expansions). Checkpointing correctly selected epoch 10. The regression appears real—likely due to the rerun encoder (trained on 96-node trees vs original variable-size prefix trees) interacting differently with inverse-frequency loss weighting.
+
+Output paths:
+- Checkpoints: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun.pt`
+- Diagnostics: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun_diagnostics.jsonl`
+- Materialized caches: `/tigress/ysagiv/chess/cts/train_cache_rerun.pt`, `validation_cache_rerun.pt`

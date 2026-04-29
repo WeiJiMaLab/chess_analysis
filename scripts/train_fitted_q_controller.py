@@ -1618,7 +1618,7 @@ def main() -> None:
         train_loader = train_loader_raw
         validation_loader = validation_loader_raw
 
-    best_validation_advantage_mse = float("inf")
+    best_greedy_regret = float("inf")
     best_metadata: dict | None = None
     validation_dataset = PackedControllerEpisodeDataset(args.packed_validation_data)
     print(json.dumps(budgeted_oracle_metadata(oracle_config), sort_keys=True), flush=True)
@@ -1698,26 +1698,6 @@ def main() -> None:
                 f"validation_snapshots={validation_metrics.examples}",
                 flush=True,
             )
-            if validation_metrics.advantage_mse < best_validation_advantage_mse:
-                best_validation_advantage_mse = validation_metrics.advantage_mse
-                best_metadata = {
-                    "stage": "compute_advantage_controller",
-                    "epoch": epoch,
-                    "validation_advantage_mse": validation_metrics.advantage_mse,
-                    "validation_sign_accuracy": validation_metrics.sign_accuracy,
-                    "encoder_checkpoint": args.encoder_checkpoint,
-                    "unfreeze_encoder": args.unfreeze_encoder,
-                    "sign_loss_weight": args.sign_loss_weight,
-                    "nontrivial_loss_weight": args.nontrivial_loss_weight,
-                    "inverse_freq_weights": args.inverse_freq_weights,
-                    "separate_sign_head": args.separate_sign_head,
-                    "controller_inputs": ["z_t", "N_t", "T_t"],
-                    **budgeted_oracle_metadata(oracle_config),
-                }
-                if args.output_checkpoint:
-                    print(f"[compute_advantage] stage=save_best path={args.output_checkpoint}", flush=True)
-                    _save_checkpoint(args.output_checkpoint, model, best_metadata)
-
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
             diagnostics: List[Dict[str, Any]] | None = [] if (epoch == args.epochs and args.output_diagnostics) else None
             if validation_cache is not None:
@@ -1748,6 +1728,26 @@ def main() -> None:
                 f"evaluated_episodes={greedy_metrics.evaluated_episodes}",
                 flush=True,
             )
+            if greedy_metrics.average_regret < best_greedy_regret:
+                best_greedy_regret = greedy_metrics.average_regret
+                best_metadata = {
+                    "stage": "compute_advantage_controller",
+                    "epoch": epoch,
+                    "average_regret": greedy_metrics.average_regret,
+                    "average_return": greedy_metrics.average_return,
+                    "exact_stop_step_accuracy": greedy_metrics.exact_stop_step_accuracy,
+                    "encoder_checkpoint": args.encoder_checkpoint,
+                    "unfreeze_encoder": args.unfreeze_encoder,
+                    "sign_loss_weight": args.sign_loss_weight,
+                    "nontrivial_loss_weight": args.nontrivial_loss_weight,
+                    "inverse_freq_weights": args.inverse_freq_weights,
+                    "separate_sign_head": args.separate_sign_head,
+                    "controller_inputs": ["z_t", "N_t", "T_t"],
+                    **budgeted_oracle_metadata(oracle_config),
+                }
+                if args.output_checkpoint:
+                    print(f"[compute_advantage] stage=save_best regret={best_greedy_regret:.6f} path={args.output_checkpoint}", flush=True)
+                    _save_checkpoint(args.output_checkpoint, model, best_metadata)
             if diagnostics is not None:
                 _write_diagnostics(diagnostics, args.output_diagnostics)
 
