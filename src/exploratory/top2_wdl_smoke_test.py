@@ -14,8 +14,9 @@ import sys
 import chess
 import duckdb
 
-# parent = src/
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# repo_root/src/exploratory → add slurm/scripts for script_engine_eval
+_src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_src, "slurm", "scripts"))
 
 from script_engine_eval import get_e_win
 from utils.helpers import EPSILON, get_stockfish_engine
@@ -89,7 +90,7 @@ def run_sql_checks(db_path: str) -> None:
             conn.execute("SELECT 1 FROM selected_moves_with_engine LIMIT 1").fetchone()
         except Exception as ex:
             if "selected_moves_with_engine" in str(ex):
-                print("Table selected_moves_with_engine does not exist — run build_selected_moves_with_engine.py first.")
+                print("Table selected_moves_with_engine does not exist — run src/slurm/scripts/build_selected_moves_with_engine.py first.")
                 return
             raise
 

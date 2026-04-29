@@ -33,6 +33,6 @@ if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
   exit 1
 fi
 
-python3 src/utils/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 20 --memory 8GB
+python3 src/slurm/scripts/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 20 --memory 8GB
 
 echo "Finished at $(date)"

@@ -94,7 +94,7 @@ export LIMIT
 
 run_merge_and_join() {
   echo "Merge into ${DB} (${ENGINE}_evaluations) and build selected_moves_with_engine on $(hostname) at $(date)"
-  python3 src/script_engine_eval.py merge --engine "${ENGINE}" --db "${DB}" --input_dir "${INPUT_DIR}"
+  python3 src/slurm/scripts/script_engine_eval.py merge --engine "${ENGINE}" --db "${DB}" --input_dir "${INPUT_DIR}"
   echo "Finished engine eval pipeline at $(date)"
 }
 

@@ -31,9 +31,9 @@ The goal of this project is to analyze human resource allocation (time) in chess
     ├── performance/      # Meta-controller / lmcos-adjacent tooling (tree expansion viz, future benchmarks)
     ├── exploratory/        # Ad hoc analysis scripts
     ├── slurm/              # Batch scripts (preprocess, engine_eval_shard.sbatch, engine_eval.sh, …)
-    ├── utils/              # Core library: helpers, plotting, preprocessing
-    ├── clock_movetime.py   # Analysis: Clock effect
-    ├── ply_movetime.py     # Analysis: Mid-game arc
+    │   └── scripts/        # Pipeline CLIs: preprocess_data, engine eval, VOC build, …
+    ├── utils/              # Core library: helpers, plotting, analysis (no pipeline entrypoints)
+    ├── movetime_analysis.py  # Move-time dashboards (clock, ply, branching)
     └── ...                 # Other specific analysis scripts
 ```
 
@@ -51,13 +51,13 @@ The goal of this project is to analyze human resource allocation (time) in chess
 ## 4. The Data Pipeline
 The analysis follows a strict sequential pipeline to handle 100M+ moves:
 
-1.  **Selection**: `python src/utils/preprocess_data.py select_games`
+1.  **Selection**: `python src/slurm/scripts/preprocess_data.py select_games`
     *   Filters games by date, Elo, and time control from `core`.
 2.  **Extraction**: `bash src/slurm/script_preprocess.sh`
     *   Launches Slurm arrays to extract moves into shards.
     *   Merges shards into `personal.db`.
     *   Runs **Berserk Detection** and **Engine FEN construction**.
-3.  **VOC Generation**: `python src/script_process_data.py`
+3.  **VOC Generation**: `python src/slurm/scripts/script_process_data.py`
     *   Calculates complexity features (Value of Computation) using Stockfish.
 4.  **Analysis**: `bash src/slurm/script_analysis.sh`
     *   Executes individual analysis scripts (Clock, Ply, VOC, etc.).
@@ -93,12 +93,11 @@ The analysis follows a strict sequential pipeline to handle 100M+ moves:
 | Task | Command |
 | :--- | :--- |
 | **Activate Env** | `source .venv/bin/activate` |
-| **Select Games** | `python src/utils/preprocess_data.py select_games` |
+| **Select Games** | `python src/slurm/scripts/preprocess_data.py select_games` |
 | **Run Full Pipeline** | `bash src/slurm/script_preprocess.sh` |
 | **Run All Analysis** | `bash src/slurm/script_analysis.sh` |
 | **Engine eval: shards + merge + `selected_moves_with_engine`** | `bash src/slurm/engine_eval.sh` (or `bash src/slurm/engine_eval.sh --merge-only` after parquets exist) |
-| **Plot Clock Effect** | `python src/clock_movetime.py` |
-| **Plot Ply Effect** | `python src/ply_movetime.py` |
+| **Plot move-time dashboards** | `python src/movetime_analysis.py` (or `--only clock ply …`) |
 | **Tree expansion (lmcos `.pt`, Graphviz + Unicode boards)** | `python src/performance/visualize_tree_expansion.py` (see `src/README.md`, section 4) |
 
 ---

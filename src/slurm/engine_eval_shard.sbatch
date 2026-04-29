@@ -38,7 +38,7 @@ echo "Starting evaluation with engine: ${ENGINE}"
 echo "Output Directory: ${OUTPUT_DIR}"
 echo "Job ${SLURM_JOB_ID:-?} task ${SLURM_ARRAY_TASK_ID:-?} on $(hostname) at $(date)"
 
-srun python3 src/script_engine_eval.py eval \
+srun python3 src/slurm/scripts/script_engine_eval.py eval \
     --engine "${ENGINE}" \
     --shard_id "${SLURM_ARRAY_TASK_ID}" \
     --total_shards 117 \

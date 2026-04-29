@@ -1,5 +1,4 @@
 import os
-import sys
 import argparse
 import duckdb
 import chess
@@ -8,10 +7,9 @@ import multiprocessing as mp
 from tqdm import tqdm
 import time
 
-# Ensure src is in the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
+from _bootstrap import ensure_src
+
+ensure_src()
 
 from utils.helpers import get_lc0_engine, get_stockfish_engine
 from utils.features import row_to_fen

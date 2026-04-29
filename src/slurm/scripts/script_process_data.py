@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import pandas as pd
 import dask.dataframe as dd
@@ -7,16 +6,17 @@ import chess
 import multiprocessing as mp
 from tqdm import tqdm
 
-# Ensure the src directory is in the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
+from _bootstrap import ensure_src, project_root
 
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+ensure_src()
 
-from src.utils import preprocess_data, voc_single_sample, voc_consideration_set, best_two_diff, get_stockfish_engine
+from utils.features import (
+    preprocess_data,
+    voc_single_sample,
+    voc_consideration_set,
+    best_two_diff,
+)
+from utils.helpers import get_stockfish_engine
 
 # Global engine variable per worker process
 _worker_engine = None
@@ -62,7 +62,7 @@ def main():
     n_workers = args.n_workers
     
     # 1. Load and Preprocess Data
-    data_path = os.path.join(parent_dir, "data", "moves_500.parquet")
+    data_path = os.path.join(project_root(), "data", "moves_500.parquet")
     if not os.path.exists(data_path):
         print(f"Error: Data path {data_path} not found.")
         return
@@ -101,7 +101,7 @@ def main():
     for col in res_df.columns:
         df_sub[col] = res_df[col].values
     
-    output_dir = os.path.join(parent_dir, "data", "processed")
+    output_dir = os.path.join(project_root(), "data", "processed")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "processed_moves_500.parquet")
     

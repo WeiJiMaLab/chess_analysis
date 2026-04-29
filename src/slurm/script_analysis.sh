@@ -1,9 +1,7 @@
 #!/bin/bash
 # End-to-end analysis script. Runs all standardized plots.
 #
-# Engine-backed plots are NOT run here (heavy DB work / overage risk). After merge + build:
-#   python3 src/build_selected_moves_with_engine.py
-#   python3 src/top2diff_movetime.py
+# Engine-backed workflows (e.g. selected_moves_with_engine) are not run here.
 #
 # Usage:
 #   bash /home/hl4291/chess_analysis/src/slurm/script_analysis.sh
@@ -22,19 +20,10 @@ echo "Running analysis pipeline at $(date)"
 echo "1. Move Time Summary..."
 python3 src/move_time_summary.py
 
-echo "2. Clock Movetime (Player)..."
-python3 src/clock_movetime.py
+echo "2. Move-time dashboards (clock, branching, ply)..."
+python3 src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
 
-echo "3. Clock Movetime (Opponent)..."
-python3 src/clock_movetime.py --opp
-
-echo "4. Branching Factor (n_possible_moves)..."
-python3 src/npossiblemoves_movetime.py
-
-echo "5. Game Stage (Ply Movetime)..."
-python3 src/ply_movetime.py
-
-echo "6. Game Stage (Ply Pre-move Probability)..."
+echo "3. Game Stage (Ply Pre-move Probability)..."
 python3 src/ply_premove.py
 
 echo "Analysis complete at $(date)"

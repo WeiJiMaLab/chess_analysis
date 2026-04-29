@@ -77,15 +77,7 @@ To update the figures, run the analysis scripts from the repository root (after 
 ```bash
 python src/move_time_summary.py
 python src/move_time_summary.py --nonzero_T
-python src/ply_movetime.py
-python src/ply_movetime.py --nonzero_T
-python src/clock_movetime.py
-python src/clock_movetime.py --nonzero_T
-python src/clock_movetime.py --opp
-python src/clock_movetime.py --nonzero_T --opp
-python src/npossiblemoves_movetime.py
-python src/npossiblemoves_movetime.py --nonzero_T
-python src/voc_movetime.py
+python src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
 ```
 
-The deck reads PNGs from the symlinked `public/figures` → `src/figures` (e.g. `combined.png` and `combined_nonzero_T.png` under `move_time_summary/`, `ply_movetime/`, and `npossiblemoves_movetime/`; under `clock_movetime/` add `combined_opp.png` and `combined_nonzero_T_opp.png` for the opponent-clock slides; plus `/figures/voc_movetime/standard_voc_single_sample.png`).
+The deck reads PNGs from the symlinked `public/figures` → `src/figures` (e.g. `combined.png` and `combined_nonzero_T.png` under `move_time_summary/`, `ply_movetime/`, and `npossiblemoves_movetime/`; under `clock_movetime/` add `combined_opp.png` and `combined_nonzero_T_opp.png` for the opponent-clock slides; historical VOC slides used `/figures/voc_movetime/standard_voc_single_sample.png`).

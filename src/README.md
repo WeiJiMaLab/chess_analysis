@@ -42,7 +42,7 @@ To maintain consistency across metrics, we analyze every variable using a standa
 | **Panel 2** | Quantile Bins | Aggregates data into 20 equal-sized bins to show the robust trend. |
 | **Panel 3** | Scatterplot | Density view of raw data, sampled to 100k points for performance. |
 
-For game stage analysis (`ply_movetime.py`), we use a side-by-side view comparing raw ply trends with quantile-binned perspectives, utilizing shaded 95% Confidence Interval regions for visual clarity.
+For game stage analysis (`movetime_analysis.ply_movetime`), we use a side-by-side view comparing raw ply trends with quantile-binned perspectives, utilizing shaded 95% Confidence Interval regions for visual clarity.
 
 ---
 
@@ -59,7 +59,7 @@ Handling millions of moves requires more than just a simple script. We use a hig
 
 ### Sharded Extraction (Slurm)
 To handle "larger-than-memory" move extraction, we use a Slurm-based sharding process:
-1. **Select Games**: `python src/utils/preprocess_data.py select_games` builds `selected_games` from `core.games`.
+1. **Select Games**: `python src/slurm/scripts/preprocess_data.py select_games` builds `selected_games` from `core.games`.
 2. **Pipeline Launch**: `bash src/slurm/script_preprocess.sh` manages the full extraction cycle:
    - Submits a Slurm array (`preprocess_shard.sbatch` using `process_shard`) to extract moves.
    - Once shards are ready, it locally runs **merge**, **berserk detection**, and **preprocessing** into final analysis tables.
@@ -73,8 +73,8 @@ Current `selected_games` filter (used by `select_games`):
 
 ### Engine Evaluation (Stockfish & lc0)
 We generate high-quality move evaluations by distributing search tasks across the cluster:
-- **Unified worker**: `src/script_engine_eval.py` evaluates both Stockfish and `lc0` and writes one **parquet per Slurm array task** (sharded by hash over unique FENs).
-- **End-to-end runner**: `bash src/slurm/engine_eval.sh` (from the repo root) submits the full shard array and **blocks with `sbatch --wait`** until every array task finishes (same wait pattern as `src/slurm/_preprocess.sh`), then runs `src/script_engine_eval.py merge` to build **`{stockfish,lc0}_evaluations`** in `personal.db` and create **`selected_moves_with_engine`**. Slurm logs: `src/slurm/logs/eval_*.out`. Use `--merge-only` if shards already exist; `--no-wait` to only submit the array.
+- **Unified worker**: `src/slurm/scripts/script_engine_eval.py` evaluates both Stockfish and `lc0` and writes one **parquet per Slurm array task** (sharded by hash over unique FENs).
+- **End-to-end runner**: `bash src/slurm/engine_eval.sh` (from the repo root) submits the full shard array and **blocks with `sbatch --wait`** until every array task finishes (same wait pattern as `src/slurm/_preprocess.sh`), then runs `src/slurm/scripts/script_engine_eval.py merge` to build **`{stockfish,lc0}_evaluations`** in `personal.db` and create **`selected_moves_with_engine`**. Slurm logs: `src/slurm/logs/eval_*.out`. Use `--merge-only` if shards already exist; `--no-wait` to only submit the array.
 - **Shard batch file**: `src/slurm/engine_eval_shard.sbatch` (array over all shards, Depth 5). Submit alone with `sbatch` if you are not using `engine_eval.sh`.
 - **Determinism**: We clear the Stockfish hash table before every position search.
 - **Scale**: Sharding is set up to cover all unique positions (e.g. 117 tasks × ~1M positions per task at default `LIMIT`); tune `LIMIT` and array bounds in the `.sbatch` file if you change the dataset.
@@ -83,17 +83,14 @@ We generate high-quality move evaluations by distributing search tasks across th
 
 ## 4. How to Run the Analysis
 
-1. **Select Games**: `python src/utils/preprocess_data.py select_games` (Builds `selected_games` from `core.games` using Nov-Dec 2023, 10+0, both Elo ≥ 2000).
+1. **Select Games**: `python src/slurm/scripts/preprocess_data.py select_games` (Builds `selected_games` from `core.games` using Nov-Dec 2023, 10+0, both Elo ≥ 2000).
 2. **Extraction & Preprocess**: `bash src/slurm/script_preprocess.sh` (Pulls moves for selected games, merges, identifies berserkers, and precalculates features).
 3. **Engine evaluation** (cluster): from the repo root, `bash src/slurm/engine_eval.sh` (see **Engine Evaluation** above), or `sbatch src/slurm/engine_eval_shard.sbatch` with `ENGINE=lc0` if you only want the array job.
 4. **Analysis**: 
    - `bash src/slurm/script_analysis.sh` (Runs all core analysis scripts below).
    - `python src/move_time_summary.py` (SQL-binned move-time / log move-time histograms).
-   - `python src/clock_movetime.py` (Player clock vs. move time).
-   - `python src/npossiblemoves_movetime.py` (Number of legal moves vs. raw move time).
-   - `python src/ply_movetime.py` (Ply stage vs. log move time).
+   - `python src/movetime_analysis.py` (Clock, branching, ply move-time dashboards; use `--only` for subsets).
    - `python src/ply_premove.py` (Ply stage vs. probability of "instant moves").
-   - `python src/voc_movetime.py` (VOC vs. think time).
 
 Results and figures are saved to `src/figures/`.
 
