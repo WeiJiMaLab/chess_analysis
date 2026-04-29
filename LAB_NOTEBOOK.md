@@ -1823,3 +1823,33 @@ Output paths:
 - Checkpoints: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun.pt`
 - Diagnostics: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun_diagnostics.jsonl`
 - Materialized caches: `/tigress/ysagiv/chess/cts/train_cache_rerun.pt`, `validation_cache_rerun.pt`
+
+## 2026-04-29
+
+### Paper figures: first pass
+
+Motivation:
+- Generate all paper figures (Section 1: Figs 1a–1d, Section 3: Figs 3a–3f) using the five rerun controller variants. First complete pass to evaluate figure quality and identify issues.
+
+Technical details:
+- **VPI computation**: Replaced Monte Carlo sampling (1000 draws per snapshot) with closed-form VPI (Dearden). For children with WDL distributions $(w_c, d_c, l_c)$: $\text{VPI} = 1 - \prod_c(1-w_c) - \prod_c l_c - \max_c(w_c - l_c)$. Two products and a max, O(C) per snapshot. Derived from Dearden's VPI framework treating the decoded WDL as the belief distribution over child values on $\{+1, 0, -1\}$.
+- **Decoder**: Rerun encoder pretraining already saved the decoder in the right format (`decoder_state_dict` + `metadata`). No retraining step needed.
+- Section 1 ran without GPU (~minutes). Section 3 ran on 1 GPU, materialized 953,562 validation snapshots in ~8 minutes (3829 batches at episode_batch_size=8), total job ~12 minutes.
+- Figures output to `/tigress/ysagiv/chess/cts/paper_figures/section{1,3}/`.
+
+Results — Section 1:
+- **Fig 1a (Pareto)**: All 5 models well below constant-probability baseline curve. Models cluster at low regret (0.03–0.06) but spread horizontally: affine/affine+rw halt earliest (~2–4 expansions), slw01 at ~7, inv_freq at ~11. Value-gap baseline skipped (needs raw .pt loading).
+- **Fig 1b (Budget behavior)**: Models generally track oracle's increasing-with-budget pattern. inv_freq overshoots; affine halts too early. Oracle sometimes non-monotone, which no model captures.
+- **Fig 1c (Regret decomposition)**: affine has highest halt-reward regret (stops too early). inv_freq has large positive time-cost regret in medium+ buckets (oversearches). slw01 most balanced.
+- **Fig 1d (Return CDF)**: All models track oracle closely above return 0.5. More mass on negative returns than oracle. Models nearly indistinguishable from each other.
+
+Results — Section 3:
+- **Fig 3a (VPI correlation)**: Weak. Pearson r = 0.07–0.09, Spearman ρ = 0.16–0.34. VPI is one signal but far from dominant. affine+rw highest Spearman (0.34), inv_freq lowest (0.16).
+- **Fig 3b (WDL ablation)**: Most informative. Top 1–2 WDL principal components carry most useful signal; adding more WDL directions *decreases* sign accuracy. Ablating top-k causes modest drop (~88%→77%) then recovery. Controller uses both WDL and non-WDL directions.
+- **Fig 3c (Layer correlation)**: VOC correlation peaks at middle hidden layer then drops — network builds VPI-like representation internally before collapsing. slw01 strongest mid-layer VOC correlation (~0.17).
+- **Fig 3d (Residuals)**: All models show ~0.34 correlation between VOC-regression residuals and T_t. Remarkably consistent — after VPI, the dominant remaining signal is time budget.
+- **Fig 3e (T_t gating)**: Neuron n13 in top-10 T_t-gated neurons for 4/5 models. Clear linear T_t-activation relationships with bimodal structure.
+- **Fig 3f (Example episodes)**: Easy/medium/hard/high-regret episodes. Models correctly predict negative advantage for easy cases. High-regret case shows failure to track non-monotone target advantage.
+
+Key finding:
+- **The controller is NOT primarily computing VPI.** Pearson correlations with decoded VPI are 0.07–0.09 — barely above noise. The WDL subspace ablation shows the first few WDL principal components matter, but the controller also relies heavily on non-WDL features (T_t especially, r~0.34 with residuals after VPI regression). The controller appears to use a coarse WDL summary + time budget rather than computing the full VPI integral. Open question: can training be adjusted to encourage explicit VPI computation?
