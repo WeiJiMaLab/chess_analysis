@@ -1907,4 +1907,20 @@ Commands:
 - affine: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,ACTIVATION=swiglu` (from affine_swiglu)
 - affine+rw: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,REGRET_WEIGHTED_BCE=1,ACTIVATION=swiglu` (from affine_swiglu)
 
-Result: pending.
+v1 result (default Kaiming init): All 3 non-affine variants exploded (loss 5e29), producing degenerate always-halt policies (regret 0.233, avg_expansions 1.44). Kaiming init on multiplicative projections causes variance blowup.
+
+v2 fixes: Xavier uniform with gain=1/√2 on both projections + zero biases, `nn.LayerNorm(input_dim)` before first SwiGLU layer, MAX_GRAD_NORM=2.0 (2× parameters → more generous clipping).
+
+v2 result (3 non-affine variants; affine variants pending):
+
+| Variant | ReLU regret | SwiGLU regret | Δ |
+|---------|------------|---------------|------|
+| slw01 | 0.031 | 0.033 | +0.002 |
+| reweight_w4 | 0.034 | 0.039 | +0.005 |
+| inv_freq | 0.047 | 0.051 | +0.004 |
+
+Learning curve instability: MSE oscillates wildly between epochs while sign accuracy improves steadily. Example (slw01): validation MSE ranges from 0.012 (stable epochs) to 52,174 (epoch 18), yet sign_accuracy stays 0.85–0.90 throughout. reweight_w4 has a catastrophic spike at epoch 19 (MSE=3.3e13) but recovers at epoch 20. Pattern is consistent across all 3 variants — intermittent epochs produce very large scalar predictions while the sign (halt/continue direction) remains correct.
+
+Interpretation: SwiGLU's multiplicative interaction amplifies outlier predictions when gate and linear projections align on extreme inputs. The sign head is unaffected because it only sees the direction, not the magnitude. The greedy evaluation (which only uses sign) improves steadily, but the MSE component of the loss is dominated by these spikes. This is a fundamental instability of the multiplicative architecture under L2 loss — the model finds good sign decisions but hasn't learned to regularize scalar magnitude.
+
+Conclusion: SwiGLU does not improve over ReLU. The dead neuron problem (56% first-layer) is apparently not a bottleneck — the live neurons carry enough capacity. The T_t-gated z_root reading strategy works fine with sparse activation. Pursuing activation function changes further is unlikely to be productive.
