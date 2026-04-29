@@ -2,7 +2,7 @@
 # Fresh tmpdir → single-shard export → merge into personal.db (same tmpdir on all jobs).
 #
 # Usage:
-#   bash /home/hl4291/chess_analysis/src/slurm/script_preprocess.sh
+#   bash /home/hl4291/chess_analysis/src/slurm/_preprocess.sh
 
 set -euo pipefail
 

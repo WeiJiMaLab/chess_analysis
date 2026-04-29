@@ -29,7 +29,7 @@ fi
 echo "Job ${SLURM_JOB_ID:-?} task ${SLURM_ARRAY_TASK_ID:-?} on $(hostname) at $(date)"
 
 if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
-  echo "ERROR: set LOAD_MOVES_TMPDIR (script_preprocess.sh does this)." >&2
+  echo "ERROR: set LOAD_MOVES_TMPDIR (_preprocess.sh does this)." >&2
   exit 1
 fi
 

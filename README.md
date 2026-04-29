@@ -6,13 +6,16 @@ This home directory is the working root for a research thread that combines **la
 
 | Path | Role |
 | :--- | :--- |
-| `chess_analysis/` | DuckDB + analysis scripts, figures, presentations |
+| `chess_analysis/` | DuckDB, figures, presentations |
+| `chess_analysis/src/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
+| `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, VOC parquet, joins) |
+| `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
 | `chess_analysis/presentations/cmc-overview/` | Slidev deck: motivation, method, human validation |
 
-For environment setup, Stockfish paths, and notebook entry points, start from `chess_analysis/README.md`. For the behavioral analysis pipeline and figure conventions, see `chess_analysis/src/README.md`.
+For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/src/README.md`. The latter documents **code layout** (`src/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
 ---
 
@@ -187,7 +190,7 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, keep using **`chess_analysis/README.md`**; for meta-controller and tree visualization, see **`chess_analysis/src/README.md`** (including `src/performance/visualize_tree_expansion.py`).
+For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/src/README.md`** (pipeline CLIs under **`src/slurm/scripts/`**); for meta-controller and tree visualization, see **`src/performance/visualize_tree_expansion.py`** and **`lmcos/`**.
 
 ---
 
