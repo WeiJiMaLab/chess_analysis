@@ -171,7 +171,22 @@ def plot_distribution_side_by_side(df, raw_col="move_time", log_col="ln_move_tim
     else:
         plt.show()
 
-def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", min_n=30, show_legend=True):
+def plot_raw_trend(
+    ax,
+    df,
+    x_col,
+    y_col,
+    std_col,
+    n_col,
+    x_label=None,
+    y_label=None,
+    color=MAIN_COLOR,
+    label="Mean",
+    min_n=30,
+    show_legend=True,
+    *,
+    ci_legend_label="95% CI",
+):
     apply_poster_style()
     df = df[df[n_col] >= min_n].copy()
     df = df.sort_values(x_col)
@@ -181,7 +196,10 @@ def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=N
     y_lower = y_mean - ci_y
     y_upper = y_mean + ci_y
     ax.plot(df[x_col], y_mean, color=color, lw=3, label=label)
-    ax.fill_between(df[x_col], y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
+    fb_kwargs = {"color": color, "alpha": 0.2}
+    if ci_legend_label is not None:
+        fb_kwargs["label"] = ci_legend_label
+    ax.fill_between(df[x_col], y_lower, y_upper, **fb_kwargs)
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
@@ -189,7 +207,22 @@ def plot_raw_trend(ax, df, x_col, y_col, std_col, n_col, x_label=None, y_label=N
     if show_legend:
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
-def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_col='n', x_label=None, y_label=None, color=MAIN_COLOR, label="Mean", normalized=False, show_legend=True):
+def plot_qbin_stats(
+    ax,
+    df,
+    x_col='mean_x',
+    y_col='mean_y',
+    std_col='std_y',
+    n_col='n',
+    x_label=None,
+    y_label=None,
+    color=MAIN_COLOR,
+    label="Mean",
+    normalized=False,
+    show_legend=True,
+    *,
+    ci_legend_label="95% CI",
+):
     apply_poster_style()
     df = df.sort_values(x_col).copy()
     sem = df[std_col] / np.sqrt(df[n_col])
@@ -204,7 +237,10 @@ def plot_qbin_stats(ax, df, x_col='mean_x', y_col='mean_y', std_col='std_y', n_c
     else:
         x_vals = df[x_col]
     ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=12, label=label)
-    ax.fill_between(x_vals, y_lower, y_upper, color=color, alpha=0.2, label="95% CI")
+    fb_kwargs = {"color": color, "alpha": 0.2}
+    if ci_legend_label is not None:
+        fb_kwargs["label"] = ci_legend_label
+    ax.fill_between(x_vals, y_lower, y_upper, **fb_kwargs)
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
