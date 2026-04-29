@@ -1924,3 +1924,57 @@ Learning curve instability: MSE oscillates wildly between epochs while sign accu
 Interpretation: SwiGLU's multiplicative interaction amplifies outlier predictions when gate and linear projections align on extreme inputs. The sign head is unaffected because it only sees the direction, not the magnitude. The greedy evaluation (which only uses sign) improves steadily, but the MSE component of the loss is dominated by these spikes. This is a fundamental instability of the multiplicative architecture under L2 loss — the model finds good sign decisions but hasn't learned to regularize scalar magnitude.
 
 Conclusion: SwiGLU does not improve over ReLU. The dead neuron problem (56% first-layer) is apparently not a bottleneck — the live neurons carry enough capacity. The T_t-gated z_root reading strategy works fine with sparse activation. Pursuing activation function changes further is unlikely to be productive.
+
+### GeLU activation ablation
+
+Motivation: Isolate whether dead neurons matter, without SwiGLU's multiplicative instability. GeLU is a drop-in replacement for ReLU — same parameter count, same architecture, no dead neurons, no magnitude blowup.
+
+Technical details: Added `--activation gelu` option (Linear+GELU instead of Linear+ReLU). Same training setup as SwiGLU runs, from `~/chess/cts/swiglu/`. Checkpoints to `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_gelu.pt`.
+
+Result:
+
+| Variant | ReLU regret | GeLU regret |
+|---------|------------|-------------|
+| slw01 | 0.031 | 0.031 |
+| reweight_w4 | 0.034 | 0.033 |
+| inv_freq | 0.047 | 0.047 (best at ep10; 0.055 at ep20) |
+
+GeLU matches ReLU exactly. Learning curves are completely stable (validation MSE steady at 0.011–0.014, no spikes). Confirms: (1) SwiGLU's problem was the multiplicative interaction, not the activation shape; (2) dead neurons are neither helping nor hurting — they're irrelevant; (3) activation function is not the bottleneck.
+
+### WDL subspace ablation (activation-space causal test)
+
+Motivation: The weight-space analysis showed ~78% of advantage head z_root weights are orthogonal to the decoder's WDL readout directions. But that's a weight-level observation — does the controller actually depend on WDL information in the data? Two hypotheses: (A) the controller genuinely ignores child WDL, reading non-WDL tree structure from z_root; (B) the controller uses WDL information through different linear directions than the decoder, so weight-space alignment underestimates WDL dependence.
+
+Technical details: For each model, take the materialized validation cache (953K snapshots × 130 features). SVD the decoder's root-readout matrix to get the WDL readout basis Vt [128×128]. For k=1..128:
+- **Keep-only**: replace z_root with its projection onto top-k WDL directions. Run advantage head, measure sign accuracy and MSE.
+- **Ablate**: remove top-k WDL directions from z_root (keep the orthogonal complement). Run advantage head, measure sign accuracy and MSE.
+Script: `analyze_advantage_head.py`, function `wdl_subspace_ablation()`.
+
+Sign accuracy results (selected k values):
+
+| Model | Baseline | Keep k=5 | Ablate k=5 | Ablate k=128 (scalars only) |
+|-------|----------|----------|------------|----------------------------|
+| slw01 | 0.871 | 0.835 | **0.896** | 0.871 |
+| reweight_w4 | 0.812 | 0.681 | 0.812 | 0.820 |
+| inv_freq | 0.852 | 0.751 | 0.853 | 0.822 |
+| affine | 0.733 | 0.671 | **0.786** | **0.829** |
+| affine+rw | 0.713 | 0.776 | 0.769 | **0.841** |
+
+MSE results:
+
+| Model | Baseline MSE | Ablate k=128 MSE |
+|-------|-------------|-----------------|
+| slw01 | 0.012 | 0.281 |
+| reweight_w4 | 0.012 | 0.318 |
+| inv_freq | 0.017 | 0.284 |
+| affine | 0.012 | 0.284 |
+| affine+rw | 0.013 | 0.289 |
+
+Key findings:
+1. **Ablating WDL directions does not hurt sign accuracy — it often helps.** For slw01, removing the 8 most WDL-informative directions gives the best sign accuracy (0.903 vs 0.871 baseline). The WDL subspace injects noise into the controller's halt/continue decision.
+2. **Zeroing ALL z_root (k=128 ablation) barely changes sign accuracy for slw01** (0.871 → 0.871). For affine/affine+rw, removing z_root *improves* sign accuracy by 10–13 points. The halt/continue decision is almost entirely determined by T_t (and N_t).
+3. **z_root matters for magnitude, not sign.** MSE jumps 23× when z_root is zeroed (0.012 → 0.28), confirming z_root does affect the output value. But it rarely flips the sign. Most snapshots have T_t far from the transition band (T_t=10–20) where z_root could change the sign.
+4. **Keep-only is non-monotonic.** Performance drops as more WDL directions are included (dip at k=30–80), recovering only at k=128 (full z_root). The intermediate WDL directions actively interfere.
+5. **Explanation A confirmed**: the controller genuinely ignores child WDL for the halt/continue decision. It's not reading WDL through alternative directions.
+
+Interpretation: The greedy controller policy (threshold at advantage=0) is effectively a T_t countdown rule. z_root modulates the advantage magnitude (how confident the decision is) but almost never changes which side of zero the prediction falls on. The GNN representation, trained to encode child WDL, contributes to calibration of the advantage prediction but not to the binary halt/continue decision that determines regret. Open question: does z_root's magnitude contribution matter for regret at marginal decisions? Sign accuracy averages over all snapshots including trivially easy ones; the regret-critical snapshots are exactly those near the sign boundary where z_root might matter. Need greedy evaluation with zeroed z_root to measure actual regret impact.
