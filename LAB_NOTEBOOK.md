@@ -1853,3 +1853,58 @@ Results — Section 3:
 
 Key finding:
 - **The controller is NOT primarily computing VPI.** Pearson correlations with decoded VPI are 0.07–0.09 — barely above noise. The WDL subspace ablation shows the first few WDL principal components matter, but the controller also relies heavily on non-WDL features (T_t especially, r~0.34 with residuals after VPI regression). The controller appears to use a coarse WDL summary + time budget rather than computing the full VPI integral. Open question: can training be adjusted to encourage explicit VPI computation?
+
+### Mechanistic analysis of the advantage head
+
+Motivation:
+- The controller doesn't compute VPI. What does it compute instead? We want to understand how the advantage head MLP (Linear(130→256)→ReLU→Linear(256→256)→ReLU→Linear(256→256)→ReLU→Linear(256→1)) processes its inputs [z_root(128), N_t, T_t]. Script: `scripts/analyze_advantage_head.py`.
+
+Technical details:
+- **Weight decomposition**: For each model's first layer (256×130), partition columns into z_root (128) and scalars (N_t, T_t). Compute per-neuron weight norm fractions.
+- **WDL subspace alignment**: SVD the child-WDL decoder's first-layer root-readout submatrix (128×128). Project each first-layer advantage-head neuron's z_root weights onto the top-k decoder readout directions. Measure fraction of weight norm in that subspace. This is rotationally invariant (subspace overlap is a geometric quantity).
+- **Neuron classification**: Correlate each first-layer post-ReLU activation with VPI and T_t. Classify as T_t-dominated (|r_tt|>0.3, |r_vpi|<0.1), VPI-sensitive (|r_vpi|>0.1, |r_tt|<0.1), mixed, or dead (std < 1e-8).
+- **Output neuron profiles**: Rank penultimate-layer neurons by output contribution (|w_out| × std(activation)), report correlations with VPI, T_t, and target advantage.
+- **T_t sweep**: Hold 50 z_roots fixed (stratified across target range), sweep T_t from 0→120 in 100 steps. Plot predicted advantage and per-neuron activations.
+- **z_root progression**: For 12 episodes, encode each step's tree with frozen encoder, hold T_t fixed at {10, 40, 80}, run through advantage head. Plot predicted advantage and penultimate-layer activations.
+
+Ran on cluster: `salloc --gres=gpu:1 --mem=32G --cpus-per-task=4 -t 01:00:00`, interactive.
+
+Results:
+- **Weight decomposition**: z_root accounts for ~98% of first-layer weight norm across all 5 models. T_t fraction is 5–10%. By weight magnitude, the MLP devotes nearly all input capacity to reading z_root.
+- **WDL subspace alignment**: Only ~6% of z_root weight projects onto top-5 WDL decoder readout directions, ~11% onto top-10, ~22% onto top-20. Chance level for a 128-dim space would be ~15.6% (top-20). The advantage head reads mostly from z_root directions orthogonal to the child-WDL subspace — it is NOT extracting the information VPI would need from z_root.
+- **Neuron classification**: 55–60% of first-layer neurons are dead (never activate on validation set). Only 3–6 per model are T_t-dominated, 14–24 are VPI-sensitive (weak threshold), 4–8 mixed. The effective network is much smaller than the 256-neuron architectural capacity.
+- **Output neuron profiles**: Top-contribution penultimate neurons have strong r(target) (~0.8–0.9) but near-zero r(VPI) (~0.01). The network tracks the target accurately without using VPI. r(T_t) for top neurons ranges 0.2–0.5.
+- **T_t sweep**: Sharp nonlinear response. Predicted advantage ~-3.5 at T_t=0, rapid rise through T_t=10–20, asymptoting near 0 by T_t≥40. Individual z_root curves are tight at high T_t (network indifferent regardless of position) and fan out at low T_t (z_root determines how negative). Functional form: T_t sets the output scale; z_root modulates the threshold at low budgets.
+- **z_root progression**: Varying z_root along an episode (tree grows) does change the output, but changes are subtle at T_t=40/80 and only become large at T_t=10 where T_t gating amplifies z_root differences. All 5 models mostly agree with each other.
+
+Summary interpretation:
+- The controller is a **T_t-gated z_root reader**. T_t controls the output scale (ample budget → ~0, low budget → strongly negative). z_root provides a position-dependent modulation, but from directions largely orthogonal to child WDL — likely encoding tree-structural features (search topology, evaluation stability) rather than decision uncertainty. The heuristic is approximately "halt when budget is low, with a position-dependent threshold."
+- **Dead neurons**: 56% dead first-layer neurons is a known ReLU pathology (dying ReLU). Gradient is zero for neurons whose pre-activation is always negative, so they never recover. Potential fix: replace ReLU with LeakyReLU or GELU in the advantage head, giving gradient flow even when pre-activation is negative.
+- **What z_root directions does it read?** Unknown from current analysis. The ~78% of z_root weight orthogonal to the WDL subspace could encode tree depth, branching factor, evaluation volatility, etc. Probing experiments needed.
+- First-pass intervention figures only captured scalar output, not per-layer activations. Updated script to register forward hooks on each ReLU and capture per-neuron activation profiles during both T_t sweep and z_root progression.
+
+Activation hook results (rerun):
+- **T_t sweep, first hidden layer**: Two distinct neuron populations across all 5 models. (1) Linearly increasing with T_t: several neurons ramp ~0→40-50 as T_t goes 0→120 — direct T_t readers. (2) High at T_t≈0, decaying — encoding "budget nearly exhausted." Neuron n13 appears across all 5 models as a linearly T_t-responsive feature detector.
+- **T_t sweep, penultimate layer**: All neuron activations compressed to 0–2 for T_t > 20, with sharp spikes at T_t ≈ 0. The nonlinear elbow (T_t=10–20) in the scalar output is fully formed by this layer. slw01/reweight_w4 have more active neurons at high T_t than affine variants.
+- **z_root progression, penultimate layer** (slw01, 4 episodes × 3 T_t): Large transient at steps 0–3 (tree going from small to meaningful structure), then slow drift. Initial assessment dominates, but some neurons (e.g., n218 in ep 11298) continue ramping over 80 steps. Activation patterns are similar across T_t=10/40/80 for the same episode — z_root processing is largely T_t-invariant at penultimate depth.
+- **Key question**: For late-stopping episodes (oracle_stop > 20), does z_root drift drive the halting decision, or is T_t countdown sufficient? Scalar output at T_t=80 stays near 0 through entire episodes, suggesting T_t countdown is the primary mechanism. The z_root sets an initial "position complexity" threshold; T_t counts down to it.
+
+### SwiGLU advantage head experiment
+
+Motivation:
+- 56% of first-layer ReLU neurons are dead. SwiGLU (`(xW₁)·swish(xV)`) avoids dying neurons entirely (swish has nonzero gradient everywhere) and provides a learned gating mechanism that could help with T_t × z_root interaction.
+
+Technical details:
+- Added `SwiGLULayer` module to `train_fitted_q_controller.py`: two parallel `nn.Linear` projections, output is `linear(x) * F.silu(gate(x))`. Drop-in replacement for Linear+ReLU in `nn.Sequential`.
+- New `--activation` CLI arg (default `"relu"`, choices `["relu", "swiglu"]`).
+- Code lives in separate project directories on the cluster: `~/chess/cts/swiglu/` (copy of async_soph) and `~/chess/cts/affine_swiglu/` (copy of affine).
+- 5 variants submitted with same loss configurations as the rerun, same frozen encoder and materialized caches (`train_cache_rerun.pt`, `validation_cache_rerun.pt`), checkpoints to `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_swiglu.pt`.
+
+Commands:
+- slw01: `SIGN_LOSS_WEIGHT=0.1,ACTIVATION=swiglu`
+- reweight_w4: `SIGN_LOSS_WEIGHT=0.1,NONTRIVIAL_LOSS_WEIGHT=4.0,ACTIVATION=swiglu`
+- inv_freq: `SIGN_LOSS_WEIGHT=0.1,INVERSE_FREQ_WEIGHTS=1,ACTIVATION=swiglu`
+- affine: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,ACTIVATION=swiglu` (from affine_swiglu)
+- affine+rw: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,REGRET_WEIGHTED_BCE=1,ACTIVATION=swiglu` (from affine_swiglu)
+
+Result: pending.
