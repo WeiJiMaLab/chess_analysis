@@ -1604,6 +1604,109 @@ All runs below use the async frozen encoder (`tree_encoder_child_wdl_async_k1`),
 
 The main remaining lever is unfreezing the encoder, which would allow the representation to adapt to the stopping task but invalidates the materialized cache and is substantially more expensive to train.
 
+## 2026-04-25
+
+### Affine calibration controller variant
+
+Intent:
+- Test whether learning a separate affine transform `alpha * advantage + beta` for the halt/continue sign logit improves metacontrol, decoupling the magnitude regression (advantage_head) from the halt decision boundary.
+
+Meaningful change:
+- Extended `scripts/train_fitted_q_controller.py` on the `affine-calibration` branch:
+  - `ComputeAdvantageTreeSearchModel` gains `--affine-calibration` flag.
+  - When enabled, adds learnable `affine_alpha_raw` and `affine_beta` parameters. The sign logit becomes `softplus(alpha_raw) * advantage + beta`, ensuring positive scale.
+  - `_predict_stop_step()` now returns `(stop_step, raw_advantages, sign_logits)` — the halt decision uses sign_logits, not raw advantages.
+  - Diagnostics JSONL now logs both `predicted_advantages` (raw MLP output) and `sign_logits` (affine-transformed halt decision values).
+- Also added `--regret-weighted-bce` flag: weights the sign BCE loss by `|target_advantage| / mean(|target_advantage|)`, clamped to `[0.25, 10.0]`. This upweights high-regret snapshots in the sign loss without changing the MSE term.
+- Code lives in `~/chess/cts/affine` on cluster (local worktree at `worktrees/affine-calibration`).
+
+Run configurations (all on `controller_packed_combined_nomaint_no_xaba`, `sign_loss_weight=0.1`, 20 epochs):
+
+**affine_run0 / affine_run1** (jobs 7345567 / 7345908):
+- `AFFINE_CALIBRATION=1`
+- Two identical runs to check stability. Results were effectively identical.
+
+**affine_regretweighted_run0** (job 7348396):
+- `AFFINE_CALIBRATION=1, REGRET_WEIGHTED_BCE=1`
+
+Result (30,630-episode validation set):
+
+| Run | Regret | Return | Oracle | Exact stop | Expansions |
+|-----|--------|--------|--------|------------|------------|
+| affine | 0.055 | 0.299 | 0.354 | 0.789 | 2.68 |
+| affine+rw | 0.034 | 0.320 | 0.354 | 0.679 | 3.87 |
+| slw01 (baseline) | 0.029 | 0.325 | 0.354 | 0.564 | 7.90 |
+
+Interpretation:
+- Plain affine calibration dramatically undersearches: 2.68 expansions vs slw01's 7.90. Exact stop accuracy is highest (0.789) because most episodes have oracle_stop <= 1 and the model correctly halts early — but it halts too eagerly on the non-trivial episodes, producing 0.055 regret.
+- Regret-weighted BCE partially corrects this: the regret weighting amplifies the gradient signal on episodes where incorrect halting is costly, pushing the model to search more (3.87 expansions) and reducing regret to 0.034.
+- Neither affine variant matches slw01 on regret. The affine transform decouples scale from the decision boundary, but the underlying problem is that the advantage head's magnitude near zero doesn't carry enough information — rescaling it doesn't help.
+
+### Five candidate models for the paper
+
+Intent:
+- Consolidate the five controller variants that will be compared in the paper. All use the same frozen encoder (`tree_encoder_child_wdl_async_k1`), same packed data (`controller_packed_combined_nomaint_no_xaba`), same `sign_loss_weight=0.1`, 20 epochs.
+
+Summary table (30,630-episode validation set, same oracle config):
+
+| Model | Intervention | Regret | Return | Oracle | Exact stop | Expansions |
+|-------|-------------|--------|--------|--------|------------|------------|
+| slw01 | baseline | 0.029 | 0.325 | 0.354 | 0.564 | 7.90 |
+| reweight_w4 | nontrivial_loss_weight=4.0 | 0.030 | 0.324 | 0.354 | 0.613 | 6.55 |
+| inv_freq | inverse frequency weights | 0.029 | 0.324 | 0.354 | 0.628 | 5.52 |
+| affine | affine calibration | 0.055 | 0.299 | 0.354 | 0.789 | 2.68 |
+| affine+rw | affine + regret-weighted BCE | 0.034 | 0.320 | 0.354 | 0.679 | 3.87 |
+
+Diagnostics JSONL paths (local):
+- `analysis_outputs/slw01_reweight_comp/slw01_on_current_val_diagnostics.jsonl`
+- `analysis_outputs/slw01_reweight_comp/reweight_w4_on_current_val_diagnostics.jsonl`
+- `analysis_outputs/inv_rew_loss_run0/fittedq_invfreq_run0_diagnostics.jsonl`
+- `analysis_outputs/affine_run1/fittedq_affine_cal_diagnostics.jsonl`
+- `analysis_outputs/affine_regretweighted_run0/fittedq_affine_cal_regret_wt_diagnostics.jsonl`
+
+Conclusion:
+- The top three models (slw01, reweight_w4, inv_freq) all converge to ~0.029 regret despite different loss interventions. Loss reweighting improves exact stop accuracy on trivial bins but cannot improve regret on non-trivial bins.
+- The affine variants show that decoupling magnitude from sign is insufficient; the bottleneck is representational.
+- All five are included in the paper to demonstrate the robustness of the near-optimal result and to show the effect of different loss calibration strategies.
+
+## 2026-04-26
+
+### Paper structure and figure plan
+
+The paper has three main result sections (Section 2, human comparison, is on hold pending collaborator data):
+
+**Section 1: The model learns near-optimal metacontrol.**
+Compare all five candidate models against meaningful baselines.
+
+Figures planned:
+- **Fig 1a: Model vs baselines Pareto curve.** x = avg expansions, y = avg regret. Four baseline families: always halt, never halt, constant probability (sweep p), value gap threshold (sweep threshold). Each model as a starred point. Baselines computed from diagnostics + raw examples.
+- **Fig 1b: Budget-conditioned behavior.** 2x3 subplots showing 6 representative trees. For each tree: x = starting budget, y = stop step. Overlay all five models' predicted stop steps plus oracle.
+- **Fig 1c: Regret decomposition by budget bucket.** Grouped bar chart: 5 budget buckets x 5 models, stacked halt-reward + time-cost components.
+- **Fig 1d: Return distribution.** Overlaid CDFs of predicted_value per model, plus oracle CDF.
+
+**Section 3: What does the controller compute?**
+Test whether the controller implements VOC using children's WDL information decoded from the root embedding.
+
+Figures planned:
+- **Fig 3a: Controller output vs decoded VOC.** Scatter plot of predicted advantage vs VOC for each model. VOC = E[max_c V_c] - max_c E[V_c] computed via Monte Carlo from decoded child WDLs.
+- **Fig 3b: WDL subspace ablation.** SVD of decoder readout directions in z_root space. Sweep k = 1..128: keep-only or ablate top-k directions. Measure sign accuracy of advantage_head on ablated features.
+- **Fig 3c: Layer-by-layer VOC correlation.** Forward hooks on each ReLU in advantage_head. Canonical correlation of activations with VOC at each layer.
+- **Fig 3d: Residual analysis beyond VOC.** Regress predicted advantage on VOC, correlate residuals with T_t and other predictors.
+- **Fig 3e: T_t gating.** Partial correlation of individual neurons with T_t controlling for VOC.
+- **Fig 3f: Example episodes.** Multi-axis subplots showing target_adv, per-model predicted_adv, decoded VOC, and T_t over step index for selected episodes.
+
+**Dependency chain:**
+The child-WDL decoder is needed for all Section 3 analyses. The original decoder was discarded at encoder checkpoint time. Two paths:
+1. The rerun encoder pretraining now saves the decoder alongside the encoder (preferred).
+2. Fallback: `scripts/retrain_child_wdl_decoder.py` retrains a fresh decoder on frozen encoder outputs.
+
+Scripts created:
+- `scripts/paper_section1_figures.py`
+- `scripts/paper_section3_figures.py`
+- `scripts/paper_figure_utils.py`
+- `scripts/retrain_child_wdl_decoder.py` (fallback)
+- Slurm wrappers for each.
+
 ## 2026-04-28
 
 ### Full pipeline rerun for paper reproducibility
