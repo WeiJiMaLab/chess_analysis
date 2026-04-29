@@ -515,6 +515,13 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
             persistent_workers=not args.disable_persistent_workers,
         ),
     )
+    resume_path = args.output_checkpoint.replace(".pt", "_resume.pt")
+    start_epoch = 1
+    if os.path.isfile(resume_path):
+        print(f"[child-wdl-pretrain] stage=resume path={resume_path}", flush=True)
+        start_epoch = trainer.load_training_state(resume_path) + 1
+        print(f"[child-wdl-pretrain] resuming_from_epoch={start_epoch}", flush=True)
+
     print("[child-wdl-pretrain] stage=train_start", flush=True)
 
     last_logged_batch = {"train": 0, "validation": 0}
@@ -564,6 +571,8 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
     history = trainer.fit(
         progress_callback=_log_epoch,
         batch_progress_callback=_log_batch_progress,
+        start_epoch=start_epoch,
+        resume_path=resume_path,
     )
     print(f"[child-wdl-pretrain] stage=save_checkpoint path={args.output_checkpoint}", flush=True)
     trainer.save_best_encoder(
@@ -573,6 +582,15 @@ def pretrain_child_wdl_encoder_command(args: argparse.Namespace) -> None:
             "pretrain_objective": "search_consolidated_edge_wdl_v1",
         },
     )
+    decoder_path = args.output_checkpoint.replace(".pt", "_decoder.pt")
+    trainer.save_best_decoder(
+        decoder_path,
+        metadata={
+            "stage": "supervised_pretrain",
+            "encoder_checkpoint": args.output_checkpoint,
+        },
+    )
+    print(f"[child-wdl-pretrain] stage=save_decoder path={decoder_path}", flush=True)
     final_validation = history[-1]["validation"]
     print(
         f"validation_total_loss={final_validation.total_loss:.6f} "

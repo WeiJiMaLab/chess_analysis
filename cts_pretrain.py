@@ -711,66 +711,47 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         if not entries:
             raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
 
-        self.paths: List[str] = []
-        self.cumulative_sizes: List[int] = []
-        total = 0
+        # Preload all shards and flatten into individual examples to avoid
+        # shard-thrashing under shuffled access and view-pinning of large shard
+        # storages.  Total memory is ~20KB per example (vs ~600MB per shard).
+        self._examples: List[TensorizedTreeExample] = []
         for entry in entries:
             path = entry["path"]
+            payload = torch.load(path, weights_only=False)
+            if not isinstance(payload, dict) or payload.get("format") != "cts_tensorized_pretrain_shard_v1":
+                raise ValueError(f"Packed tensorized shard file has unexpected format: {path}")
+            node_ptr = payload["node_ptr"]
+            edge_ptr = payload["edge_ptr"]
+            feature_names = tuple(payload["feature_names"])
+            edge_wdl_targets = payload.get("edge_wdl_targets")
             num_examples = int(entry["num_examples"])
-            if num_examples <= 0:
-                raise ValueError(f"Packed shard entry has non-positive num_examples: {entry}")
-            total += num_examples
-            self.paths.append(path)
-            self.cumulative_sizes.append(total)
-
-        self._loaded_shard_index: Optional[int] = None
-        self._loaded_payload: Optional[Dict[str, Any]] = None
+            for i in range(num_examples):
+                ns = int(node_ptr[i].item())
+                ne = int(node_ptr[i + 1].item())
+                es = int(edge_ptr[i].item())
+                ee = int(edge_ptr[i + 1].item())
+                if "edge_slot" in payload:
+                    edge_slot = payload["edge_slot"][es:ee].clone()
+                else:
+                    edge_slot = torch.arange(ee - es, dtype=torch.long)
+                self._examples.append(TensorizedTreeExample(
+                    node_features=payload["node_features"][ns:ne].clone(),
+                    parent_index=payload["parent_index"][ns:ne].clone(),
+                    edge_parent=payload["edge_parent"][es:ee].clone(),
+                    edge_child=payload["edge_child"][es:ee].clone(),
+                    edge_slot=edge_slot,
+                    depth=payload["depth"][ns:ne].clone(),
+                    node_targets=payload["node_targets"][ns:ne].clone(),
+                    feature_names=feature_names,
+                    edge_wdl_targets=edge_wdl_targets[es:ee].clone() if edge_wdl_targets is not None else None,
+                ))
+            del payload
 
     def __len__(self) -> int:
-        return self.cumulative_sizes[-1]
+        return len(self._examples)
 
     def __getitem__(self, index: int) -> TensorizedTreeExample:
-        if index < 0:
-            index += len(self)
-        if index < 0 or index >= len(self):
-            raise IndexError(index)
-
-        shard_index = bisect_right(self.cumulative_sizes, index)
-        shard_start = 0 if shard_index == 0 else self.cumulative_sizes[shard_index - 1]
-        example_offset = index - shard_start
-
-        if self._loaded_shard_index != shard_index:
-            payload = torch.load(self.paths[shard_index], weights_only=False)
-            if not isinstance(payload, dict) or payload.get("format") != "cts_tensorized_pretrain_shard_v1":
-                raise ValueError(f"Packed tensorized shard file has unexpected format: {self.paths[shard_index]}")
-            self._loaded_shard_index = shard_index
-            self._loaded_payload = payload
-
-        assert self._loaded_payload is not None
-        payload = self._loaded_payload
-        node_ptr = payload["node_ptr"]
-        edge_ptr = payload["edge_ptr"]
-        node_start = int(node_ptr[example_offset].item())
-        node_end = int(node_ptr[example_offset + 1].item())
-        edge_start = int(edge_ptr[example_offset].item())
-        edge_end = int(edge_ptr[example_offset + 1].item())
-        feature_names = tuple(payload["feature_names"])
-        if "edge_slot" in payload:
-            edge_slot = payload["edge_slot"][edge_start:edge_end]
-        else:
-            edge_slot = torch.arange(edge_end - edge_start, dtype=torch.long)
-        edge_wdl_targets = payload.get("edge_wdl_targets")
-        return TensorizedTreeExample(
-            node_features=payload["node_features"][node_start:node_end],
-            parent_index=payload["parent_index"][node_start:node_end],
-            edge_parent=payload["edge_parent"][edge_start:edge_end],
-            edge_child=payload["edge_child"][edge_start:edge_end],
-            edge_slot=edge_slot,
-            depth=payload["depth"][node_start:node_end],
-            node_targets=payload["node_targets"][node_start:node_end],
-            feature_names=feature_names,
-            edge_wdl_targets=edge_wdl_targets[edge_start:edge_end] if edge_wdl_targets is not None else None,
-        )
+        return self._examples[index]
 
     @staticmethod
     def collate_fn(batch: Sequence[TensorizedTreeExample]) -> tuple[Any, Any]:
@@ -1595,6 +1576,7 @@ class ChildWdlPretrainer:
         )
         self.best_validation_loss = float("inf")
         self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+        self.best_decoder_state = copy.deepcopy(self.model.child_wdl_head.state_dict())
 
     def _iter_batches(self, examples: Sequence[PretrainExample], shuffle: bool):
         collate_fn = getattr(examples, "collate_fn", list)
@@ -1733,23 +1715,54 @@ class ChildWdlPretrainer:
             batch_progress_callback=batch_progress_callback,
         )
 
+    def save_training_state(self, path: str, epoch: int) -> None:
+        torch.save({
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "best_encoder_state": self.best_encoder_state,
+            "best_decoder_state": self.best_decoder_state,
+            "best_validation_loss": self.best_validation_loss,
+            "epoch": epoch,
+        }, path)
+
+    def load_training_state(self, path: str) -> int:
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        self.model.load_state_dict(state["model_state_dict"])
+        self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        self.best_encoder_state = state["best_encoder_state"]
+        self.best_decoder_state = state["best_decoder_state"]
+        self.best_validation_loss = state["best_validation_loss"]
+        return int(state["epoch"])
+
     def fit(
         self,
         progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
         batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+        start_epoch: int = 1,
+        resume_path: Optional[str] = None,
     ) -> List[Dict[str, ChildWdlMetrics]]:
         history: List[Dict[str, ChildWdlMetrics]] = []
-        for epoch_index in range(1, self.config.epochs + 1):
+        for epoch_index in range(start_epoch, self.config.epochs + 1):
             train_metrics = self.train_epoch(epoch_index, batch_progress_callback=batch_progress_callback)
             validation_metrics = self.validate(epoch_index, batch_progress_callback=batch_progress_callback)
             history.append({"train": train_metrics, "validation": validation_metrics})
             if validation_metrics.total_loss < self.best_validation_loss:
                 self.best_validation_loss = validation_metrics.total_loss
                 self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+                self.best_decoder_state = copy.deepcopy(self.model.child_wdl_head.state_dict())
             if progress_callback is not None:
                 progress_callback(epoch_index, train_metrics, validation_metrics)
+            if resume_path is not None:
+                self.save_training_state(resume_path, epoch_index)
         self.model.encoder.load_state_dict(self.best_encoder_state)
+        self.model.child_wdl_head.load_state_dict(self.best_decoder_state)
         return history
 
     def save_best_encoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
         save_encoder_checkpoint(path, self.model.encoder, metadata=metadata)
+
+    def save_best_decoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
+        torch.save({
+            "decoder_state_dict": self.model.child_wdl_head.state_dict(),
+            "metadata": dict(metadata or {}),
+        }, path)

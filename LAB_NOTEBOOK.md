@@ -1603,3 +1603,99 @@ All runs below use the async frozen encoder (`tree_encoder_child_wdl_async_k1`),
 (*) Evaluated on 52,350-episode v2 validation set, not directly comparable.
 
 The main remaining lever is unfreezing the encoder, which would allow the representation to adapt to the stopping task but invalidates the materialized cache and is substantially more expensive to train.
+
+## 2026-04-28
+
+### Full pipeline rerun for paper reproducibility
+
+Intent:
+- Retrain the entire pipeline from scratch (encoder pretraining through controller training and diagnostics) to produce clean, reproducible quantities for the paper. All outputs suffixed `_rerun` to preserve original quantities for comparison.
+
+### Encoder pretraining rerun
+
+Motivation:
+- The original encoder was trained on variable-size prefix trees derived from the 96-node source trees. The rerun trains on the same 96-node trees used for controller training, ensuring semantic alignment. The original decoder weights were discarded at checkpoint time; the rerun saves both encoder and decoder.
+
+Technical changes:
+- `cts_pretrain.py`:
+  - `PackedTensorizedShardDataset` rewritten to preload all shards at init and flatten into individual examples (`.clone()` each). This avoids two failure modes on 96-node trees: (a) tensor slice views pinning entire ~600MB shard storages in memory under shuffled access, and (b) Python 3.14's forkserver default requiring dataset pickling for DataLoader workers.
+  - `ChildWdlPretrainer` now tracks `best_decoder_state` alongside `best_encoder_state`.
+  - Added `save_training_state()` / `load_training_state()` for mid-training resumption across Slurm jobs.
+  - `fit()` accepts `start_epoch` and `resume_path` for resume chaining.
+  - Added `save_best_decoder()` to persist the decoder checkpoint.
+- `supervised_branch_cli.py`:
+  - Auto-detects resume checkpoint (`*_resume.pt`) and resumes from last completed epoch.
+  - Saves decoder alongside encoder after training.
+
+Commands:
+- Initial submission (epochs 1-50, 1-hour Slurm limit):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=01:00:00 --constraint="" \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,K=1,EPOCHS=100,NUM_WORKERS=0,\
+  TRAIN_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/train_manifest.json,\
+  VALIDATION_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/validation_manifest.json,\
+  OUTPUT_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt \
+    slurm/pretrain_child_wdl_encoder_della.slurm
+  ```
+- `NUM_WORKERS=0` required because the preloaded flat dataset (~700MB, 35k examples) cannot be pickled to forkserver workers under Python 3.14.
+- `--constraint=""` and `--time=01:00:00` to avoid 7-8 hour queue waits from the 24h/nomig defaults.
+- Chained jobs via `--dependency=afterany:<job_id>` with increasing `EPOCHS` (100, 150, 200) to extend training across multiple 1-hour slots. Resume checkpoint stores last completed epoch; resubmission with higher EPOCHS continues seamlessly.
+
+Training speed:
+- ~1.1 minutes per epoch at batch_size=128 (slurm default) with NUM_WORKERS=0.
+
+Result:
+- Encoder pretraining completed through 200 epochs.
+- Outputs:
+  - Encoder: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt`
+  - Decoder: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun_decoder.pt`
+
+### Controller rerun: 5 variants
+
+Motivation:
+- Retrain all five candidate controller variants from the hyperparameter/loss sweep on the rerun encoder checkpoint. All share the same frozen encoder and packed controller data; they differ only in loss configuration.
+
+Commands (all submitted in parallel):
+- **slw01** (`sign_loss_weight=0.1`, baseline):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  PACKED_TRAIN_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json,\
+  PACKED_VALIDATION_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json,\
+  ENCODER_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt,\
+  OUTPUT_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_slw01_rerun.pt,\
+  SIGN_LOSS_WEIGHT=0.1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **reweight_w4** (`nontrivial_loss_weight=4.0`):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  ...,SIGN_LOSS_WEIGHT=0.1,NONTRIVIAL_LOSS_WEIGHT=4.0 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **inv_freq** (inverse frequency weights):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  ...,SIGN_LOSS_WEIGHT=0.1,INVERSE_FREQ_WEIGHTS=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **affine** (affine calibration, from `~/chess/cts/affine`):
+  ```
+  cd ~/chess/cts/affine && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/affine,\
+  ...,SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **affine+rw** (affine + regret-weighted BCE):
+  ```
+  cd ~/chess/cts/affine && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/affine,\
+  ...,SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,REGRET_WEIGHTED_BCE=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- All use the same packed data (`controller_packed_combined_nomaint_no_xaba`) and rerun encoder checkpoint. Output checkpoints named `fittedq_{variant}_rerun.pt`.
+
+Result:
+- Pending.
