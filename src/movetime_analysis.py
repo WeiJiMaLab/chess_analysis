@@ -32,7 +32,7 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
     if src_dir is None:
         src_dir = _src_dir()
     x_var = Variable(column="n_possible_moves", is_log=False, name="Number of Legal Moves")
-    y_var = Variable(column="move_time", is_log=False, name="Move Time (s)")
+    y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
         table_name="_selected_moves_nonzero_T",

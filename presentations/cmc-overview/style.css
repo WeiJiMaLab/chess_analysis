@@ -97,3 +97,27 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
 .text-danger { color: var(--color-danger); }
 .bg-danger-soft { background-color: var(--bg-danger); }
 .bg-neutral-soft { background-color: var(--bg-neutral); }
+
+/*
+ * Tall PNGs in CSS Grid: grid items default to min-height: auto, so the row
+ * stays as tall as the image's intrinsic height and ignores max-height for layout.
+ * min-height: 0 on a wrapper lets the figure scale down; max-height uses vh so
+ * exports and different viewports stay inside the slide.
+ */
+.slide-quantile-heatmap-wrap {
+  /* min-height: 0;
+  min-width: 0; */
+  /* width: 100%;
+  /* max-width: 80%; */
+  background-color: red !important;
+}
+
+/* .slide-quantile-heatmap-wrap img {
+  display: block;
+  min-height: 0;
+  width: 100%;
+  max-width: 80%;
+  height: 80%;
+  /* max-height: min(36vh, 360px); */
+  /* object-fit: contain; */
+/* } */ */

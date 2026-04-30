@@ -171,7 +171,9 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Same sample as §4. Joint <code>ntile</code> bins of player clock × move ply; cell color = mean ln <i>T</i>, opacity = mass (see figure colorbar).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_quantile_heatmap.png" />
+  <div class="slide-quantile-heatmap-wrap min-w-0">
+    <!-- <img src="/figures/clock_movetime/combined_quantile_heatmap.png" alt="" /> -->
+  </div>
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">clock × ply</b><br><br>
@@ -249,7 +251,7 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of <b>opponent</b> remaining clock × move ply; same encoding as §5.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
+  <img class="w-full object-contain max-h-[400px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">opp clock × ply</b><br><br>
@@ -261,14 +263,14 @@ math: katex
 
 # 9. Branching: legal moves vs. think time — dashboard
 
-<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes <code>move_time = 0</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = log move time (<code>ln(move_time + ε)</code>), same convention as ply/clock dashboards. Excludes <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">npossiblemoves_movetime</b><br><br>
-    2×2: branching vs raw T, OLS, per-ply β. Complements the log-time / clock slides.
+    2×2: branching vs log <i>T</i>, OLS, per-ply β. Matches ply/clock y-axis scaling.
   </div>
 </div>
 
@@ -276,10 +278,10 @@ math: katex
 
 # 10. Branching: legal moves vs. think time — quantile heatmap
 
-<div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of legal-move count × move ply; cell color = mean raw <i>T</i> (this analysis uses linear move time on <i>y</i>).</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of legal-move count × move ply; cell color = mean log <i>T</i> (same transform as the main branching dashboard).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
+  <img class="w-full object-contain max-h-[400px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">branching × ply</b><br><br>
@@ -292,7 +294,7 @@ math: katex
 # 11. Interaction: Clock & Ply (3D)
 
 <div class="grid grid-cols-1 gap-4 h-full -mt-6">
-  <div class="h-[420px]">
+  <div class="h-[340px]">
     <SurfPlot3D 
       csvPath="/data/heatmap_quantile.csv" 
       title="Thinking Topology: Quantile Interaction" 
