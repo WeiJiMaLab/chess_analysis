@@ -27,172 +27,10 @@ math: katex
 </div>
 
 ---
-
-# Paper Sketch
-
-<div class="h-full flex flex-col justify-start mt-2">
-  <PaperSketch />
-</div>
-
----
-
 <div class="h-full flex items-center justify-center text-center">
   <div>
-    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Background</div>
-    <h1 class="text-4xl">Related work</h1>
-    <div class="mt-3 text-sm opacity-60 max-w-xl mx-auto">
-      Adaptive “when to think,” imagination-based control, and learned tree search — with citations on-slide.
-    </div>
-  </div>
-</div>
-
----
-
-# Why meta-control (in one minute)
-
-<div class="text-sm leading-relaxed max-w-3xl space-y-3 mt-1">
-  <ul class="list-disc pl-5 space-y-2">
-    <li>Inference cost (tokens, rollouts, MCTS nodes) is <b>budget</b> you want to spend where it helps.</li>
-    <li>A <b>meta-controller</b> that only decides whether to continue can keep an <b>outside view</b>; baking the same choice into the planner often <b>entangles</b> “when” with “how.”</li>
-    <li>The same tradeoff is <b>fast vs. slow</b> reasoning: model-free heuristics vs. model-based lookahead (e.g. Kahneman, 2011; Daw, Niv &amp; Dayan, 2005 on MB/MF RL).</li>
-  </ul>
-</div>
-
----
-
-# Adaptive Computation Time (ACT)
-
-<div class="text-xs opacity-80 mb-2">Alex Graves — <i>Adaptive Computation Time for Recurrent Neural Networks</i>, NeurIPS 2016; arXiv:1603.08983. Figures reproduced from the paper (Fig. 1–2).</div>
-
-<div class="grid grid-cols-2 gap-5 items-start mt-1">
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-52" src="/figures/lit/act-fig1-rnn.png" alt="Standard RNN computation graph" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 1 — Standard RNN (two input steps).</figcaption>
-  </figure>
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-52" src="/figures/lit/act-fig2-act.png" alt="RNN with ACT" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — Same graph with variable intermediate “ponder” steps and halting.</figcaption>
-  </figure>
-</div>
-
-<p class="mt-3 text-sm max-w-4xl">
-  <b>Idea:</b> sigmoidal <b>halting unit</b> + <b>ponder cost</b> $\tau$ in the loss so depth-per-input is learned. Precursors: self-delimiting nets (SLIMs) with hard thresholds.
-</p>
-
----
-
-# Imagination-Based Planner (IBP)
-
-<div class="text-xs opacity-80 mb-2">R. Pascanu, Y. Li, O. Vinyals, N. Heess, L. Buesing, S. Racanière, D. Reichert, T. Weber, D. Wierstra &amp; P. Battaglia — <i>Learning model-based planning from scratch</i>, arXiv:1707.06170. Figures reproduced from the paper (Fig. 1–2); raster assets extracted from the arXiv PDF.</div>
-
-<div class="grid grid-cols-2 gap-4 items-start">
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-64" src="/figures/lit/ibp-fig1.png" alt="IBP schematic" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 1 — Manager imagines vs. acts; memory aggregates the trace.</figcaption>
-  </figure>
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-64" src="/figures/lit/ibp-fig2.png" alt="IBP imagination strategies" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — 1-step / <i>n</i>-step / tree imagination strategies over imagined states.</figcaption>
-  </figure>
-</div>
-
-<p class="mt-3 text-sm max-w-4xl">
-  <b>For us:</b> explicit <i>when-to-imagine</i>, but <b>end-to-end</b> training and an <b>RNN</b> trace → strong on <i>order</i>, weak on explicit <b>tree topology</b> in the representation.
-</p>
-
----
-
-# Thinker
-
-<div class="text-xs opacity-80 mb-2">S. Chung, I. Anokhin &amp; D. Krueger — <i>Thinker: Learning to Plan and Act</i>, arXiv:2307.14993. Figures reproduced from the paper (Fig. 2–3); source SVGs from the arXiv package.</div>
-
-<div class="grid grid-cols-2 gap-4 items-start">
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-64" src="/figures/lit/thinker-fig2-stage.svg" alt="Thinker stage" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — One stage: <i>K − 1</i> imaginary model steps, then one real env step.</figcaption>
-  </figure>
-  <figure class="m-0">
-    <img class="w-full object-contain max-h-64" src="/figures/lit/thinker-fig3-tree.svg" alt="Thinker tree traversal" />
-    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 3 — Rollout / reset dynamics under a stage budget and max depth.</figcaption>
-  </figure>
-</div>
-
-<p class="mt-3 text-sm max-w-4xl">
-  <b>Progress:</b> planning and acting separated via augmented actions. <b>Limits here:</b> fixed stage geometry and a learned model-specific interface — not a separate halting policy over arbitrary search trees.
-</p>
-
----
-
-# Learned tree search (fixed budget)
-
-<div class="text-sm leading-relaxed max-w-3xl space-y-3 mt-1">
-  <p>
-    <b>AlphaZero</b> (Silver et al., 2018, <i>Science</i>): policy + value coupled to MCTS — strong structure, but simulations per move are set externally, not a per-node “worth another expansion?” learner.
-  </p>
-  <p>
-    <b>MCTSnets</b> (Guez et al., 2018, ICML; arXiv:1802.04697): backups and visit patterns through learned embeddings — topology in the net, still not an independent meta-controller for compute.
-  </p>
-</div>
-
----
-
-# Gap → this deck
-
-<div class="grid grid-cols-2 gap-6 mt-2 text-sm leading-relaxed">
-  <div class="p-3 bg-neutral-soft border-l-2 border-accent">
-    <b class="text-accent text-xs uppercase tracking-wider">Meta-control</b>
-    <p class="mt-1">Good on <i>when</i> to stop / imagine; often sequential summaries of the trace.</p>
-  </div>
-  <div class="p-3 bg-neutral-soft border-l-2 border-secondary">
-    <b class="text-secondary text-xs uppercase tracking-wider">Tree search</b>
-    <p class="mt-1">Good on <i>how</i> to search; budget usually fixed, not a trained halt policy on the tree.</p>
-  </div>
-</div>
-
-<p class="mt-5 text-sm max-w-3xl">
-  <b>Our thread:</b> halting / allocation using a <b>structural</b> view of the search tree (later slides), trainable <b>beside</b> a fixed engine — with chess oracle + human timing as targets.
-</p>
-
----
-
-<div class="h-full flex items-center justify-center text-center">
-  <div>
-    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
-    <h1 class="text-4xl">Part 1 — The Problem</h1>
-  </div>
-</div>
-
----
-
-# Why Meta-Control?
-
-<v-clicks>
-
-- **Fixed Budgets are Wasteful:** Standard engines spend the same time on a "forced" move as a complex tactical blunder.
-- **The Trade-off:** Is the move-quality I’m about to discover worth the computational "electricity" (time/tokens) I’m about to spend?
-- **Real-World Constraints:** Tokens cost money, but more importantly, **real-time decisions have a physical cost**. Most LLM tasks are sufficiently time-intensive that every token of "thought" must justify itself.
-- **Human Intuition:** Skilled players know *when* to stop thinking—a stopping problem we can formalize.
-
-</v-clicks>
-
----
-
-# Part 2: High-Level Architecture
-
-<div class="h-full flex flex-col items-center justify-center bg-transparent">
-  <LeelaSearchLoop />
-  
-  <div class="mt-8 p-3 bg-neutral-soft border-l-2 border-accent italic text-[11px] opacity-80">
-    Implementation details (GNN sweeps, DP Oracle, Halt Controller) are in the Appendix.
-  </div>
-</div>
-
----
-
-<div class="h-full flex items-center justify-center text-center">
-  <div>
-    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section II</div>
-    <h1 class="text-4xl">Part 2 — Validation & Alignment</h1>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Behavioral results</div>
+    <h1 class="text-4xl">Human move timing & figures</h1>
     <div class="mt-4 text-sm opacity-60 max-w-xl mx-auto">
       How do we know the meta-controller works as intended? Humans serve as an <b>existence proof</b> and a <b>target distribution</b> for efficient search.
     </div>
@@ -430,109 +268,265 @@ math: katex
 
 ---
 
+# Paper Sketch
+
+<div class="h-full flex flex-col justify-start mt-2">
+  <PaperSketch />
+</div>
+
+---
+
 <div class="h-full flex items-center justify-center text-center">
   <div>
-    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Appendix</div>
-    <h1 class="text-4xl">Technical Implementation Details</h1>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Background</div>
+    <h1 class="text-4xl">Related work</h1>
+    <div class="mt-3 text-sm opacity-60 max-w-xl mx-auto">
+      Adaptive “when to think,” imagination-based control, and learned tree search — with citations on-slide.
+    </div>
   </div>
 </div>
 
 ---
 
-# 1. Control Flow: The Loop
+# Why meta-control (in one minute)
 
-The Meta-Controller sits on top of a standard MCTS planner (like Leela), deciding at each step whether to expand further or act.
-
-<div class="mt-8">
-  <LeelaSearchLoop />
+<div class="text-sm leading-snug max-w-3xl space-y-2 mt-1">
+  <ul class="list-disc pl-5 space-y-1 m-0">
+    <li>Inference cost (tokens, rollouts, MCTS nodes) is <b>budget</b> you want to spend where it helps.</li>
+    <li>A <b>meta-controller</b> that only decides whether to continue can keep an <b>outside view</b>; baking the same choice into the planner often <b>entangles</b> “when” with “how.”</li>
+    <li>The same tradeoff is <b>fast vs. slow</b> reasoning: model-free heuristics vs. model-based lookahead (e.g. Kahneman, 2011; Daw, Niv &amp; Dayan, 2005 on MB/MF RL).</li>
+  </ul>
 </div>
 
 ---
 
-# 2. Representation & Architecture
-
-<div class="mt-8">
-  <MetaControllerZoom />
+<div class="lit-ref-header">
+<h1>Adaptive Computation Time (ACT)</h1>
+<p class="lit-ref-cite">Graves (2016) <i>Adaptive Computation Time for Recurrent Neural Networks</i>. NeurIPS.</p>
 </div>
 
----
-
-# 3. Learning: Bidirectional Sweeps
-
-The GNN performs representation learning over the tree using two sequential passes.
-
-<div class="mt-4">
-  <GnnTwoSweeps />
+<div class="pt-2 mt-0">
+<div class="grid grid-cols-2 gap-3 items-start text-sm">
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-56" src="/figures/lit/act-fig1-rnn.png" alt="Standard RNN computation graph" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 1</b> — One state update per input tick.</figcaption>
+  </figure>
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-56" src="/figures/lit/act-fig2-act.png" alt="RNN with ACT" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 2</b> — Multiple internal updates per input; halting ends the mini-loop.</figcaption>
+  </figure>
+</div>
 </div>
 
----
-
-# 4. Decision: The Halt Controller
-
-We frame search depth as a learnable policy $\pi_\theta$. The **Halt Controller** solves a stopping problem by maximizing the net value of computation.
-
-**The Economy of Thought**
-The agent seeks an optimal depth $k^*$ that maximizes the expected reward:
-
-$$
-R(k) = \mathbb{E} \left[ \text{Value}(T_k) \right] - C \cdot k
-$$
-
-**Mechanistic Readout**
-- **Input:** The current root hidden state $h_{root}$.
-- **Output:** A halting probability $P(\text{halt} | h_{root})$ predicted by an MLP.
-- **Optimization:** Trained via Policy Gradients ($\nabla_\theta J$) against a DP Oracle to learn the inflection point of the "Thinking Curve."
-
----
-
-# 5. Training Stage 1: Representation
-
-<div>
-  <GnnPretrainDiagram />
-</div>
-
-
----
-
-# ChildWDL: Calibrating the Thinking Curve
-
-<div class="flex flex-col items-center justify-start mt-4">
-  <div class="w-4/5">
-    <ChildWdlDiagram />
+<div class="grid grid-cols-2 gap-2 mt-1 text-sm leading-tight">
+  <div class="pl-2 pr-4 border-l-2 border-accent/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-accent font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What it does</div>
+    <p class="m-0 p-0 leading-tight">Stops the RNN early or late per input; halt + ponder cost $\tau$ trades error vs. compute (cf. SLIMs: discrete thresholds).</p>
+  </div>
+  <div class="pl-2 pr-4 border-l-2 border-secondary/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-secondary font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What’s missing</div>
+    <p class="m-0 p-0 leading-tight">Still a <b>sequence</b> model — no representation of <b>search-tree topology</b> for “where to expand.”</p>
   </div>
 </div>
 
 ---
 
-# 6. Training Stage 2: Policy (The DP Oracle)
+<div class="lit-ref-header">
+<h1>Imagination-Based Planner (IBP)</h1>
+<p class="lit-ref-cite">Pascanu et al. (2017) <i>Learning model-based planning from scratch</i>. arXiv.</p>
+</div>
 
-Identifying the **"Economy of Thought"** inflection point. The model learns to halt when the expected **net reward $R$** begins to drop, rather than just maximizing raw value $V$.
+<div class="pt-2 mt-0">
+<div class="grid grid-cols-2 gap-3 items-start text-sm">
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-[138px]" src="/figures/lit/ibp-fig1.png" alt="IBP schematic" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 1</b> — Manager: <i>imagine</i> (model) vs <i>act</i> (world); memory updates each tick.</figcaption>
+  </figure>
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-[185px]" src="/figures/lit/ibp-fig2.png" alt="IBP imagination strategies" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 2</b> — Where to imagine from: <b>1-step</b>, <b><i>n</i>-step</b> chain, or <b>tree</b> over prior imagined nodes.</figcaption>
+  </figure>
+</div>
+</div>
 
-<div class="mt-8">
-  <PolicyPretrainDiagram />
+<div class="grid grid-cols-2 gap-2 mt-1 text-sm leading-tight">
+  <div class="pl-2 pr-4 border-l-2 border-accent/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-accent font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What it does</div>
+    <p class="m-0 p-0 leading-tight">Manager learns <b>imagine vs act</b> and <b>where</b> to branch imagination (1-step / chain / tree).</p>
+  </div>
+  <div class="pl-2 pr-4 border-l-2 border-secondary/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-secondary font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What’s missing</div>
+    <p class="m-0 p-0 leading-tight">Trained <b>end-to-end</b>; plan state is an <b>RNN over time</b> — not a controller that <i>sees</i> the imagined graph as such.</p>
+  </div>
 </div>
 
 ---
 
-# Intuition: The DP Oracle
+<div class="lit-ref-header">
+<h1>Thinker</h1>
+<p class="lit-ref-cite">Chung et al. (2023) <i>Thinker: Learning to Plan and Act</i>. NeurIPS.</p>
+</div>
 
-<div class="h-full flex flex-col items-center justify-start mt-4">
-  <div class="w-full max-w-4xl">
-    <DpOracleDiagram />
+<div class="pt-2 mt-0">
+<div class="grid grid-cols-2 gap-3 items-start text-sm">
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-[220px]" src="/figures/lit/thinker-fig2-stage.svg" alt="Thinker stage" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 2</b> — <i>K − 1</i> steps on the <b>model</b>, then <b>one</b> real env step per stage.</figcaption>
+  </figure>
+  <figure class="m-0">
+    <div class="bg-white rounded-md p-1.5 shadow-sm">
+      <img class="w-full object-contain max-h-[220px]" src="/figures/lit/thinker-fig3-tree.svg" alt="Thinker tree traversal" />
+    </div>
+    <figcaption class="mt-1 opacity-80 leading-tight text-sm"><b>Fig. 3</b> — Plan steps: <b>advance</b> in the imagined tree or <b>reset</b> to root; depth cap <i>L</i> forces reset.</figcaption>
+  </figure>
+</div>
+</div>
+
+<div class="grid grid-cols-2 gap-2 mt-1 text-sm leading-tight">
+  <div class="pl-2 pr-4 border-l-2 border-accent/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-accent font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What it does</div>
+    <p class="m-0 p-0 leading-tight">Splits <b>model rollouts</b> and <b>real env</b> via augmented actions; rollouts stay <b>inspectable</b>.</p>
+  </div>
+  <div class="pl-2 pr-4 border-l-2 border-secondary/40 opacity-90 flex flex-col gap-0 mt-5">
+    <div class="text-secondary font-bold uppercase tracking-wide text-xs leading-none m-0 p-0">What’s missing</div>
+    <p class="m-0 p-0 leading-tight"><i>K</i>, <i>L</i> fix the <b>stage script</b> — not a learned <b>halt / where-to-expand</b> policy on an arbitrary explicit tree.</p>
   </div>
 </div>
 
-<div class="grid grid-cols-3 gap-6 mt-8 text-sm px-8">
+---
+
+# Learned tree search (fixed budget)
+
+<div class="text-sm leading-snug max-w-3xl space-y-2 mt-1">
+  <p class="m-0">
+    <b>AlphaZero</b> (Silver et al., 2018, <i>Science</i>): policy + value coupled to MCTS — strong structure, but simulations per move are set externally, not a per-node “worth another expansion?” learner.
+  </p>
+  <p class="m-0">
+    <b>MCTSnets</b> (Guez et al., 2018, ICML; arXiv:1802.04697): backups and visit patterns through learned embeddings — topology in the net, still not an independent meta-controller for compute.
+  </p>
+</div>
+
+---
+
+# Gap → this deck
+
+<div class="grid grid-cols-2 gap-4 mt-2 text-sm leading-snug">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent">
+    <b class="text-accent text-xs uppercase tracking-wider block leading-none mb-1">Meta-control</b>
+    <p class="m-0">Good on <i>when</i> to stop / imagine; often sequential summaries of the trace.</p>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary">
+    <b class="text-secondary text-xs uppercase tracking-wider block leading-none mb-1">Tree search</b>
+    <p class="m-0">Good on <i>how</i> to search; budget usually fixed, not a trained halt policy on the tree.</p>
+  </div>
+</div>
+
+<p class="mt-3 text-sm max-w-3xl leading-snug m-0">
+  <b>Our thread:</b> halting / allocation using a <b>structural</b> view of the search tree (later slides), trainable <b>beside</b> a fixed engine — with chess oracle + human timing as targets.
+</p>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
   <div>
-    <b class="text-accent block mb-2">Why DP?</b>
-    Optimal search is recursive. To know if a move is right, we must reason <b>backwards</b> from terminal leaf outcomes.
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
+    <h1 class="text-4xl">Part 1 — The Problem</h1>
   </div>
-  <div>
-    <b class="text-accent block mb-2">Why does it work?</b>
-    We solve for $V^*(s) = \max(V, \mathbb{E}[V^*_{child}] - C)$. This defines the <b>mathematical optimum</b> for halting.
-  </div>
-  <div>
-    <b class="text-accent block mb-2">How do we train?</b>
-    We use the DP result as <b>Ground Truth</b>. The GNN's $h_i$ is mapped to this "perfect" binary decision.
-  </div>
+</div>
+
+---
+
+# Why Meta-Control?
+
+<v-clicks>
+
+- **Fixed Budgets are Wasteful:** Standard engines spend the same time on a "forced" move as a complex tactical blunder.
+- **The Trade-off:** Is the move-quality I’m about to discover worth the computational "electricity" (time/tokens) I’m about to spend?
+- **Real-World Constraints:** Tokens cost money, but more importantly, **real-time decisions have a physical cost**. Most LLM tasks are sufficiently time-intensive that every token of "thought" must justify itself.
+- **Human Intuition:** Skilled players know *when* to stop thinking—a stopping problem we can formalize.
+
+</v-clicks>
+
+---
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Original — Illustrator export (<code>diagram-01.svg</code>), unchanged</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureDiagram />
+</div>
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Schematic · minimal — light panels, mono labels</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureSchematic variant="minimal" />
+</div>
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Schematic · blueprint — dark field, Plex Mono, in-figure header</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureSchematic variant="blueprint" />
+</div>
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Schematic · editorial — serif + mono mix, caption block</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureSchematic variant="editorial" />
+</div>
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Schematic · cards — floating modules, Grotesk titles, soft shadow</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureSchematic variant="cards" />
+</div>
+
+---
+
+# High-Level Architecture
+
+<p class="architecture-preset-caption">Schematic · swiss — grid poster, heavy rules, figure legend</p>
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <ArchitectureSchematic variant="swiss" />
+</div>
+
+---
+
+# Training
+
+<div class="h-full flex flex-col items-center justify-center bg-transparent">
+  <img
+    class="w-full max-h-[min(78vh,620px)] object-contain"
+    src="/diagrams/diagram-02.svg"
+    alt="Training: tree consolidation, backward values V(a_t), halt targets, cross-entropy"
+  />
 </div>
