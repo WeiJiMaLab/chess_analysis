@@ -40,9 +40,11 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
         y_var=y_var,
         filter_query="n_possible_moves < 50",
         title="Branching Factor Influence",
+        quantile_heatmap_row="move_ply",
+        quantile_heatmap_row_label="Move ply",
     )
     figures_dir = os.path.join(src_dir, "figures", "npossiblemoves_movetime")
-    analyzer.save_dashboard(os.path.join(figures_dir, "combined.png"))
+    analyzer.save_dashboard(os.path.join(figures_dir, "combined.png"), include_quantile_heatmap=True)
 
 
 def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
@@ -81,10 +83,12 @@ def clock_movetime(
         y_var=y_var,
         filter_query=f"{clock_col} < 600",
         title=f"{player.capitalize()} Clock Pressure",
+        quantile_heatmap_row="move_ply",
+        quantile_heatmap_row_label="Move ply",
     )
     figures_dir = os.path.join(src_dir, "figures", "clock_movetime")
     filename = f"combined{'_opp' if opponent else ''}.png"
-    analyzer.save_dashboard(os.path.join(figures_dir, filename))
+    analyzer.save_dashboard(os.path.join(figures_dir, filename), include_quantile_heatmap=True)
 
 
 def _run_duckdb_analysis(

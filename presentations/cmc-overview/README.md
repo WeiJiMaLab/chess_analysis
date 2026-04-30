@@ -1,6 +1,6 @@
 # ♟️ Resource Rational Meta-Control (Slidev)
 
-High-fidelity presentation deck for the **Chess Meta-Control (CMC)** project. This deck synthesizes the motivation, mechanistic methods, and empirical validation of learned search stopping rules.
+High-fidelity presentation deck for the **Chess Meta-Control (CMC)** project. This deck synthesizes the motivation, mechanistic methods, and empirical validation of learned search stopping rules using human timing data.
 
 ## 🚀 Quick Start
 
@@ -38,11 +38,8 @@ Technical deep-dive into the CMC architecture and training pipeline.
 - **The Halt Controller**: Mechanics of the policy gradient optimization against a DP Oracle.
 - **Economy of Thought**: Defining the optimal inflection point $k^*$ on the "Thinking Curve."
 
-### **Part 3: Empirical Results (Behavioral Validation)**
-Validation using human behavioral data and engine-derived VOC.
-- **Clock Elasticity**: Resolving the "Ply Paradox" to show how humans adapt thinking budgets to available time.
-- **Response Time Arc**: Tracking cognitive demand across game stages (Opening vs. Middle vs. Endgame).
-- **VOC Demand**: Correlating human deliberation time with the "Value of Computation."
+### **Part 3: Behavioral Validation (Human Data)**
+Human move timing as an existence proof and target distribution for efficient search (histograms, ply arc, clock pressure, branching, 3D clock×ply surface).
 
 ---
 
@@ -73,11 +70,20 @@ Figures are served from the core `chess_analysis/src/figures` directory via a sy
 
 To update the figures, run the analysis scripts from the repository root (after `selected_moves` is loaded, e.g. via `src/slurm/script_load_moves.sh` and `load_data.py`).
 
-**Default** (`combined.png`) and **nonzero_T** (`combined_nonzero_T.png`, premoves / `move_time = 0` removed) for the main timing / branching scripts:
+**Move-time histograms** (both variants): deliberation-only vs including premoves:
 ```bash
 python src/move_time_summary.py
-python src/move_time_summary.py --nonzero_T
+python src/move_time_summary.py --include_zeroT
+```
+
+**Dashboards** (`movetime_analysis.py`; all use `_selected_moves_nonzero_T` → one PNG per analysis):
+```bash
 python src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
 ```
 
-The deck reads PNGs from the symlinked `public/figures` → `src/figures` (e.g. `combined.png` and `combined_nonzero_T.png` under `move_time_summary/`, `ply_movetime/`, and `npossiblemoves_movetime/`; under `clock_movetime/` add `combined_opp.png` and `combined_nonzero_T_opp.png` for the opponent-clock slides; historical VOC slides used `/figures/voc_movetime/standard_voc_single_sample.png`).
+**3D slide data** (`SurfPlot3D`): written next to the deck:
+```bash
+python src/exploratory/heatmap_clock_ply.py
+```
+
+The symlink `public/figures` → `src/figures` serves `move_time_summary/{combined.png,combined_include_zeroT.png}`, `ply_movetime/combined.png`, `clock_movetime/{combined.png,combined_opp.png}`, `npossiblemoves_movetime/combined.png`, and optional `exploratory/heatmap_clock_ply_*.png`. CSVs live in `public/data/heatmap_*.csv`.

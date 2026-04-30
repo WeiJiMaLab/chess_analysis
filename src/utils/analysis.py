@@ -7,6 +7,7 @@ using a clean, object-oriented approach.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
@@ -19,9 +20,25 @@ from .helpers import (
     MAIN_COLOR,
     PHASE_COLORS,
 )
-from .plots import plot_raw_trend, plot_qbin_stats, plot_subset_scatterplot
+from .plots import (
+    get_isoluminant_cmap,
+    plot_heatmap_with_alpha,
+    plot_qbin_stats,
+    plot_raw_trend,
+    plot_subset_scatterplot,
+)
 
 _DEFAULT_PHASE_LABELS = {1: "Opening", 2: "Midgame", 3: "Endgame"}
+
+_SQL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _validate_sql_identifier(name: str) -> str:
+    if not _SQL_IDENTIFIER.match(name):
+        raise ValueError(
+            f"quantile_heatmap_row must be a simple SQL identifier (letters, digits, underscore); got {name!r}"
+        )
+    return name
 
 
 @dataclass
@@ -51,6 +68,9 @@ class Analyzer:
     Phase segmentation is always by ``game_phase`` (preprocess: global ply tertiles 1/2/3).
     ``raw_trend_phase_df`` and ``quantile_phase_df`` hold per-phase aggregates; quantile bins
     use ``ntile`` **partitioned by** ``game_phase`` so ranks are recomputed within each phase.
+
+    Optional ``quantile_heatmap_row``: second column (e.g. ``move_ply``) for a
+    quantile×quantile heatmap of mean transformed Y (same pattern as ``exploratory/heatmap_clock_ply``).
     """
 
     def __init__(
@@ -62,6 +82,8 @@ class Analyzer:
         n_bins=20,
         filter_query=None,
         title=None,
+        quantile_heatmap_row: str | None = None,
+        quantile_heatmap_row_label: str | None = None,
     ):
         self.conn = db_conn
         self.table = table_name
@@ -70,6 +92,20 @@ class Analyzer:
         self.n_bins = n_bins
         self.filter_query = filter_query
         self.title = title or f"{self.x.label} vs {self.y.label}"
+
+        self.quantile_heatmap_row = None
+        self._quantile_heatmap_row_label = ""
+        self.quantile_heatmap_mean_df = None
+        self.quantile_heatmap_count_df = None
+
+        if quantile_heatmap_row is not None:
+            qhr = _validate_sql_identifier(quantile_heatmap_row)
+            if _SQL_IDENTIFIER.match(self.x.column.strip()) and qhr == self.x.column.strip():
+                raise ValueError(
+                    "quantile_heatmap_row must differ from x_var.column (otherwise the quantile grid is degenerate)."
+                )
+            self.quantile_heatmap_row = qhr
+            self._quantile_heatmap_row_label = quantile_heatmap_row_label or qhr.replace("_", " ")
 
         # Results to be populated by _run_sql_pipeline()
         self.n_games = 0
@@ -171,6 +207,29 @@ class Analyzer:
             USING SAMPLE 100000 ROWS
         """).df()
 
+        if self.quantile_heatmap_row:
+            hr = self.quantile_heatmap_row
+            nb = self.n_bins
+            self.quantile_heatmap_mean_df = self.conn.execute(f"""
+                PIVOT (
+                    SELECT
+                        ntile({nb}) OVER (ORDER BY {self.x.column}) AS x_qbin,
+                        ntile({nb}) OVER (ORDER BY {hr}) AS row_qbin,
+                        _y_transformed
+                    FROM _analyzer_view
+                )
+                ON x_qbin USING avg(_y_transformed) GROUP BY row_qbin
+            """).df().set_index("row_qbin")
+            self.quantile_heatmap_count_df = self.conn.execute(f"""
+                PIVOT (
+                    SELECT
+                        ntile({nb}) OVER (ORDER BY {self.x.column}) AS x_qbin,
+                        ntile({nb}) OVER (ORDER BY {hr}) AS row_qbin
+                    FROM _analyzer_view
+                )
+                ON x_qbin USING count(*) GROUP BY row_qbin
+            """).df().set_index("row_qbin")
+
     def _phase_sorted_ids(self) -> list:
         df = self.raw_trend_phase_df
         if df.empty:
@@ -246,6 +305,34 @@ class Analyzer:
             )
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
+    def plot_quantile_heatmap(self, ax, *, alpha_mode: str = "log"):
+        """
+        Joint quantile bins of ``x`` and ``quantile_heatmap_row``: cell color = mean transformed Y;
+        alpha = cell frequency (see ``plot_heatmap_with_alpha``).
+        """
+        if not self.quantile_heatmap_row:
+            raise ValueError(
+                "Quantile heatmap requires Analyzer(..., quantile_heatmap_row='<column>', ...), "
+                "e.g. quantile_heatmap_row='move_ply' for clock vs ply."
+            )
+        mean_df = self.quantile_heatmap_mean_df
+        count_df = self.quantile_heatmap_count_df
+        if mean_df is None or mean_df.empty:
+            return
+
+        y_disp = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
+        plot_heatmap_with_alpha(
+            ax,
+            mean_df,
+            count_df,
+            get_isoluminant_cmap(),
+            alpha_mode=alpha_mode,
+            value_label=f"Mean {y_disp}",
+        )
+        ax.set_xlabel(f"{self.x.label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=36)
+        ax.set_ylabel(f"{self._quantile_heatmap_row_label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=48)
+        ax.set_title("Quantile × quantile heatmap", fontsize=FONT_SIZE_LABEL, pad=12)
+
     def plot_raw_trend(self, ax):
         """Plots the raw trend of mean Y vs X."""
         x_label = self.x.label + (" (log)" if self.x.is_log else "")
@@ -293,25 +380,61 @@ class Analyzer:
             n=n_points,
         )
 
-    def save_dashboard(self, output_path, layout="2x2"):
+    def save_dashboard(
+        self,
+        output_path,
+        layout="2x2",
+        *,
+        include_quantile_heatmap: bool = False,
+        heatmap_alpha_mode: str = "log",
+    ):
         """Generates and saves a publication-ready dashboard.
 
         ``2x2`` (default): global raw trend | global quantile bins; then the same pair by
         ``game_phase`` (overlaid phases). ``1x3`` keeps raw | quantile | scatter. ``1x2`` is
         raw | quantile only.
+
+        Set ``include_quantile_heatmap=True`` (with ``layout="2x2"`` only after construction
+        ``quantile_heatmap_row='...'``) to add a full-width third row: quantile×quantile heatmap
+        of mean Y vs joint bins of X and that row column.
         """
         apply_poster_style()
 
+        if include_quantile_heatmap and layout != "2x2":
+            raise ValueError("include_quantile_heatmap is only supported with layout='2x2'.")
+        if include_quantile_heatmap and not self.quantile_heatmap_row:
+            raise ValueError(
+                "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
+            )
+
         if layout == "2x2":
-            fig, axes = plt.subplots(2, 2, figsize=(36, 22))
-            self.plot_raw_trend(axes[0, 0])
-            self.plot_quantile_bins(axes[0, 1])
-            self.plot_raw_trend_phase_segmented(axes[1, 0])
-            self.plot_quantile_bins_phase_segmented(axes[1, 1])
-            axes[0, 0].set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[0, 1].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[1, 0].set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[1, 1].set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+            if include_quantile_heatmap:
+                fig = plt.figure(figsize=(36, 30))
+                gs = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.0, 0.92], hspace=0.24, wspace=0.16)
+                ax00 = fig.add_subplot(gs[0, 0])
+                ax01 = fig.add_subplot(gs[0, 1])
+                ax10 = fig.add_subplot(gs[1, 0])
+                ax11 = fig.add_subplot(gs[1, 1])
+                ax_h = fig.add_subplot(gs[2, :])
+                self.plot_raw_trend(ax00)
+                self.plot_quantile_bins(ax01)
+                self.plot_raw_trend_phase_segmented(ax10)
+                self.plot_quantile_bins_phase_segmented(ax11)
+                ax00.set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
+                ax01.set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
+                ax10.set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+                ax11.set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+                self.plot_quantile_heatmap(ax_h, alpha_mode=heatmap_alpha_mode)
+            else:
+                fig, axes = plt.subplots(2, 2, figsize=(36, 22))
+                self.plot_raw_trend(axes[0, 0])
+                self.plot_quantile_bins(axes[0, 1])
+                self.plot_raw_trend_phase_segmented(axes[1, 0])
+                self.plot_quantile_bins_phase_segmented(axes[1, 1])
+                axes[0, 0].set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
+                axes[0, 1].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
+                axes[1, 0].set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+                axes[1, 1].set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
         elif layout == "1x3":
             fig, axes = plt.subplots(1, 3, figsize=(36, 11))
             self.plot_raw_trend(axes[0])

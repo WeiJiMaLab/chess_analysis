@@ -303,3 +303,80 @@ def get_isoluminant_cmap(name="isoluminant_azure", h1=0.58, h2=None, s1=0.0, s2=
     
     colors = [colorsys.hls_to_rgb(h, lightness, s) for h, s in zip(hues, sats)]
     return ListedColormap(colors, name=name)
+
+
+def plot_heatmap_with_alpha(
+    ax,
+    pivot_values,
+    pivot_counts,
+    cmap,
+    *,
+    alpha_mode="log",
+    value_label="Mean Y",
+):
+    """
+    Heatmap: cell color encodes ``pivot_values``; alpha encodes ``pivot_counts`` (frequency).
+    ``alpha_mode`` is ``\"log\"`` (``log1p`` normalized) or ``\"linear\"``.
+    """
+    from matplotlib.cm import ScalarMappable
+
+    pivot_values = pivot_values.copy()
+    pivot_counts = pivot_counts.copy()
+    pivot_values.columns = pivot_values.columns.astype(float)
+    pivot_values.index = pivot_values.index.astype(float)
+    pivot_counts.columns = pivot_counts.columns.astype(float)
+    pivot_counts.index = pivot_counts.index.astype(float)
+
+    pivot_values = pivot_values.sort_index(ascending=False).sort_index(axis=1, ascending=False)
+    pivot_counts = pivot_counts.reindex(index=pivot_values.index, columns=pivot_values.columns)
+
+    vals = pivot_values.values
+    v_min, v_max = np.nanmin(vals), np.nanmax(vals)
+    norm = mcolors.Normalize(vmin=v_min, vmax=v_max)
+
+    rgba = cmap(norm(vals))
+
+    counts = pivot_counts.values
+    counts_clean = np.nan_to_num(counts, nan=0.0)
+    c_max = np.nanmax(counts_clean)
+
+    if c_max > 0:
+        if alpha_mode == "log":
+            alpha = np.log1p(counts_clean) / np.log1p(c_max)
+            alpha_label = r"$\alpha = \log(1 + \text{freq})$"
+        else:
+            alpha = counts_clean / c_max
+            alpha_label = r"$\alpha = \text{freq}$"
+    else:
+        alpha = np.zeros_like(counts_clean)
+        alpha_label = r"$\alpha = 0$"
+
+    rgba[..., 3] = alpha
+
+    x_coords = pivot_values.columns
+    y_coords = pivot_values.index
+
+    dx = abs(x_coords[0] - x_coords[1]) if len(x_coords) > 1 else 1.0
+    dy = abs(y_coords[0] - y_coords[1]) if len(y_coords) > 1 else 1.0
+
+    extent = [
+        x_coords.max() + dx / 2,
+        x_coords.min() - dx / 2,
+        y_coords.min() - dy / 2,
+        y_coords.max() + dy / 2,
+    ]
+
+    ax.imshow(rgba, extent=extent, aspect="auto", interpolation="nearest")
+
+    sm = ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+
+    cb_label = f"{value_label}, {alpha_label}"
+    cbar = plt.colorbar(sm, ax=ax)
+    cbar.set_label(cb_label, fontsize=FONT_SIZE_LABEL - 8)
+    cbar.ax.tick_params(labelsize=FONT_SIZE_TICKS - 6)
+
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=8))
+    ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=10))
+
+    return sm

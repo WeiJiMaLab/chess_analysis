@@ -106,7 +106,7 @@ math: katex
 
 ---
 
-# 1a. Move times: raw and log (default)
+# 1. Move times: raw and log (deliberation only)
 
 <div class="text-xs opacity-60 mb-2 -mt-2">Excludes premoves / <code>move_time = 0</code>.</div>
 
@@ -121,7 +121,7 @@ math: katex
 
 ---
 
-# 1b. Move times: raw and log (with premoves)
+# 2. Move times: raw and log (with premoves)
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code> — including zero-time moves.</div>
 
@@ -129,16 +129,16 @@ math: katex
   <img class="w-full object-contain" src="/figures/move_time_summary/combined_include_zeroT.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
-    <b class="text-secondary uppercase tracking-wider text-xs">vs 1a</b><br><br>
+    <b class="text-secondary uppercase tracking-wider text-xs">vs §1</b><br><br>
     Strips the origin spike; “deliberation-only” when paired with the same filter in other plots.
   </div>
 </div>
 
 ---
 
-# 2a. Game stage: ply vs. think time (default)
+# 3. Game stage: ply vs. think time
 
-<div class="text-xs opacity-60 mb-2 -mt-2">Excludes <code>move_time = 0</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Excludes <code>move_time = 0</code> (same sample as dashboards in <code>movetime_analysis.py</code>).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/ply_movetime/combined.png" />
@@ -151,22 +151,7 @@ math: katex
 
 ---
 
-# 2b. Game stage: ply vs. mean log think time (with premoves)
-
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/ply_movetime/combined_include_zeroT.png" />
-  
-  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">vs 2a</b><br><br>
-    How much the fast end is real zeros vs short thinks.
-  </div>
-</div>
-
----
-
-# 3a. Remaining clock vs. think time (default)
+# 4. Remaining clock vs. think time
 
 <div class="text-xs opacity-60 mb-2 -mt-2">Player clock; excludes <code>move_time = 0</code>.</div>
 
@@ -181,7 +166,7 @@ math: katex
 
 ---
 
-# 3a (intuition). Per-ply β in the opening
+# 5. Intuition: per-ply β in the opening
 
 <div class="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 mt-2 items-start">
   <div class="text-sm leading-relaxed max-w-md space-y-3">
@@ -229,54 +214,24 @@ math: katex
 
 ---
 
-# 3b. Remaining clock vs. think time (nonzero)
+# 6. Opponent clock vs. think time
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/clock_movetime/combined_include_zeroT.png" />
-  
-  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
-    <b class="text-accent uppercase tracking-wider text-xs">vs 3a</b><br><br>
-    Slopes and per-ply β are sensitive to dropping instants.
-  </div>
-</div>
-
----
-
-# 4a. Opponent clock vs. think time (default)
-
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--opp</code>: x = their remaining clock; excludes 0s.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2"><code>opp</code> variant: x = their remaining clock; excludes <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/clock_movetime/combined_opp.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
-    <b class="text-success uppercase tracking-wider text-xs">clock_movetime --opp</b><br><br>
-    Same 2×2 as §3, but the predictor is opponent clock. Contrast to §3a.
+    <b class="text-success uppercase tracking-wider text-xs">clock_movetime (opponent)</b><br><br>
+    Same 2×2 as §4, but the predictor is opponent clock. Contrast to player clock.
   </div>
 </div>
 
 ---
 
-# 4b. Opponent clock vs. think time (nonzero)
+# 7. Branching: legal moves vs. think time
 
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT --opp</code>.</div>
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/clock_movetime/combined_include_zeroT_opp.png" />
-  
-  <div class="takeaway border-success bg-success-soft text-sm py-4">
-    <b class="text-success uppercase tracking-wider text-xs">vs 4a</b><br><br>
-    Opponent-clock analogue of §3b: instants out.
-  </div>
-</div>
-
----
-
-# 5a. Branching: legal moves vs. think time (default)
-
-<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes 0s.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes <code>move_time = 0</code>.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined.png" />
@@ -289,22 +244,7 @@ math: katex
 
 ---
 
-# 5b. Branching: legal moves vs. think time (nonzero)
-
-<div class="text-xs opacity-60 mb-2 -mt-2"><code>--include_zeroT</code>.</div>
-
-<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain" src="/figures/npossiblemoves_movetime/combined_include_zeroT.png" />
-  
-  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
-    <b class="text-secondary uppercase tracking-wider text-xs">vs 5a</b><br><br>
-    Instants out; slopes / β panel can move.
-  </div>
-</div>
-
----
-
-# 6. Interaction: Clock & Ply (3D)
+# 8. Interaction: Clock & Ply (3D)
 
 <div class="grid grid-cols-1 gap-4 h-full -mt-6">
   <div class="h-[420px]">
