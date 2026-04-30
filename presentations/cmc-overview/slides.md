@@ -84,23 +84,14 @@ math: katex
 
 # Behavioral data: how we chose these games
 
-<div class="grid grid-cols-1 gap-4 mt-4 text-sm leading-relaxed max-w-5xl">
+<div class="mt-4 text-sm leading-relaxed max-w-3xl space-y-3">
   <p>
-    All timing plots use the same DuckDB sample: <b>move-level rows in <code>selected_moves</code></b> inside the project personal database, joined to analysis tables built by the Python scripts.
+    Every timing slide uses the <b>same</b> pool of human moves from Lichess, loaded into DuckDB. The full recipe is in <code>src/slurm/scripts/preprocess_data.py</code>.
   </p>
-  <ul class="list-disc pl-6 space-y-2">
-    <li>
-      <b>Game list:</b> We restrict to game IDs listed in the <code>selected_games</code> table (in that same database). The exact inclusion rule (Elo, time control, etc.) is whatever that table encodes.
-    </li>
-    <li>
-      <b>Extracting moves (<code>src/utils/load_data.py</code>):</b> A Slurm array walks Lichess parquet shards under the archive root, keeps only those <code>gid</code>s, and by default <b>drops an entire game</b> if any row has a negative <code>move_time</code> (bad timestamps). Staging <code>.parquet</code> files are merged into <code>selected_moves</code>.
-    </li>
-    <li>
-      <b>Launch script (<code>src/slurm/script_load_moves.sh</code>):</b> Reserves a clean temp directory, submits the load-shards array job, and submits a <b>merge</b> job that runs only after the array succeeds, repopulating <code>selected_moves</code> from the combined parquet.
-    </li>
-    <li>
-      <b>Downstream analysis:</b> Preprocessing is now centralized in <code>load_data.py</code>, which precalculates <code>ln_move_time</code>, clock features, <b><code>n_possible_moves</code></b>, and quantile bins. Analysis scripts assume these tables (<code>_selected_moves</code> or <code>_selected_moves_nonzero_T</code>) already exist.
-    </li>
+  <ul class="list-disc pl-5 space-y-2">
+    <li><b>Which games</b> — Strong rapid by default: <b>10+0</b>, <b>both players 2000+ Elo</b>, <b>Oct–Dec 2023</b> (exact window in the script).</li>
+    <li><b>Cleaning</b> — Drop a game if <i>any</i> move has bad timing (negative think time). Remove berserk games and games where someone was granted extra time, before building the tables the plots read.</li>
+    <li><b>Plots</b> — Unless a slide says otherwise, we use <b>positive</b> think time only (no premoves). Log time and heatmap bucketing happen in the analysis code when we draw the figure.</li>
   </ul>
 </div>
 
@@ -171,11 +162,11 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Same sample as §4. Joint <code>ntile</code> bins of player clock × move ply; cell color = mean ln <i>T</i>, opacity = mass (see figure colorbar).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_quantile_heatmap.png" />
+  <img class="w-full object-contain max-h-[340px]" src="/figures/clock_movetime/combined_quantile_heatmap.png" />
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">clock × ply</b><br><br>
-    Reads like the static dashboards in <code>exploratory/heatmap_clock_ply.py</code>, but built inside the same <code>Analyzer</code> pipeline as §4.
+    Reads? like the static dashboards in <code>exploratory/heatmap_clock_ply.py</code>, but built inside the same <code>Analyzer</code> pipeline as §4.
   </div>
 </div>
 
@@ -249,7 +240,7 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of <b>opponent</b> remaining clock × move ply; same encoding as §5.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
+  <img class="w-full object-contain max-h-[340px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">opp clock × ply</b><br><br>
@@ -279,30 +270,11 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of legal-move count × move ply; cell color = mean raw <i>T</i> (this analysis uses linear move time on <i>y</i>).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
-  <img class="w-full object-contain max-h-[520px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
+  <img class="w-full object-contain max-h-[340px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">branching × ply</b><br><br>
     Where complexity (width) and stage interact after marginalizing the main dashboards in §9.
-  </div>
-</div>
-
----
-
-# 11. Interaction: Clock & Ply (3D)
-
-<div class="grid grid-cols-1 gap-4 h-full -mt-6">
-  <div class="h-[420px]">
-    <SurfPlot3D 
-      csvPath="/data/heatmap_quantile.csv" 
-      title="Thinking Topology: Quantile Interaction" 
-      :zScale="6.0"
-    />
-  </div>
-  
-  <div class="takeaway border-primary bg-primary-soft text-sm py-4">
-    <b class="text-primary uppercase tracking-wider text-xs">The Thinking Landscape</b><br><br>
-    Interactive readout of resource allocation. The "peak" represents the mid-game where complexity is highest, modulated by remaining budget.
   </div>
 </div>
 
