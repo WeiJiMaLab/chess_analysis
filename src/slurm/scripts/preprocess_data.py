@@ -251,16 +251,20 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
     Standard SQL-native preprocessing for chess timing analysis.
     Creates a table with log-transformed variables and quantile bins.
     Excludes games identified as berserk or grant-more-time.
-    Adds n_pieces_on_board_inc_pawns and n_pieces_on_board_exc_pawns from
-    board_position via regexp_extract_all.
+    Adds n_pieces_on_board_inc_pawns, n_pieces_on_board_exc_pawns, and per-side
+    non-pawn counts for the moving player vs opponent (n_self_pieces_exc_pawns,
+    n_opp_pieces_exc_pawns) from board_position and player_white.
     """
     tmpdir = os.path.abspath(tmpdir)
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
 
     print(f"🛠️  Preprocessing moves into {target_table} (excluding berserk and grant-more-time games)...")
     conn.execute(f"""
+        /* Move-level feature table: pass-through row metrics + SQL-derived board/phase fields.
+           board_position is only the first FEN field (piece placement); digits 1–8 are empty-run lengths. */
         CREATE OR REPLACE TABLE {target_table} AS
         SELECT 
+            -- --- Keys and raw telemetry (from Lichess parquet / selected_moves) ---
             gid,
             move_ply,
             board_position,
@@ -269,20 +273,33 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
             opponent_clock_time,
             n_possible_moves,
             move_time,
-            -- Piece counts from FEN board field only (placement before side/castling/EP)
+
+            -- --- Board material from placement (slashes removed so each square run is one string) ---
+            -- Every letter a–z / A–Z is a piece; p/P are pawns; digits are not letters so not counted.
             len(regexp_extract_all(replace(board_position, '/', ''), '[a-zA-Z]')) AS n_pieces_on_board_inc_pawns,
+            -- Non-pawn pieces only: rnbqk (Black) and RNBQK (White); excludes p/P.
             len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqkRNBQK]')) AS n_pieces_on_board_exc_pawns,
-            -- Construct FEN (minimal engine-ready state: board, turn, castling, EP)
-            board_position || ' ' || 
-            CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' || 
-            COALESCE(castling_rights, '-') || ' ' || 
+            -- Side to move: self = moving player's non-pawn count, opp = opponent's (FEN case convention).
+            CASE WHEN player_white THEN len(regexp_extract_all(replace(board_position, '/', ''), '[RNBQK]'))
+                 ELSE len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqk]'))
+            END AS n_self_pieces_exc_pawns,
+            CASE WHEN player_white THEN len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqk]'))
+                 ELSE len(regexp_extract_all(replace(board_position, '/', ''), '[RNBQK]'))
+            END AS n_opp_pieces_exc_pawns,
+
+            -- --- Partial FEN string (board + active color + castling + EP); not full FEN (no hm/fullmove). ---
+            board_position || ' ' ||
+            CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' ||
+            COALESCE(castling_rights, '-') || ' ' ||
             COALESCE(en_passant_targets, '-') AS fen,
-            -- Global ply tertiles: ntile(3) over all rows ordered by move_ply (not per-game)
-            ntile(3) over (order by move_ply) as ply_tertiles
+
+            -- Global tertiles: all moves in this query, ordered by move_ply; assigns 1/2/3 (not per-game).
+            ntile(3) OVER (ORDER BY move_ply) AS ply_tertiles
         FROM (
-            SELECT 
-                m.gid, m.move_ply, m.board_position, m.player_white, 
-                m.player_clock_time, m.opponent_clock_time, m.n_possible_moves, 
+            -- Source: merged move rows; exclude gids listed in berserk_games / grant_more_time_games.
+            SELECT
+                m.gid, m.move_ply, m.board_position, m.player_white,
+                m.player_clock_time, m.opponent_clock_time, m.n_possible_moves,
                 m.move_time, m.castling_rights, m.en_passant_targets, m.halfmove_clock
             FROM selected_moves m
             WHERE m.gid NOT IN (SELECT gid FROM berserk_games)
