@@ -20,8 +20,8 @@ echo "Running analysis pipeline at $(date)"
 echo "1. Move Time Summary..."
 python3 src/move_time_summary.py
 
-echo "2. Move-time dashboards (clock, branching, ply)..."
-python3 src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
+echo "2. Move-time dashboards (clock, branching, material, ply)..."
+python3 src/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc ply
 
 echo "3. Game Stage (Ply Pre-move Probability)..."
 python3 src/ply_premove.py

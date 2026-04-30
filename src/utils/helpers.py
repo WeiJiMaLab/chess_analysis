@@ -42,7 +42,7 @@ MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
 FONT_SIZE_LABEL = 45
 FONT_SIZE_TICKS = 35
 
-# Standard palette for game phases (segmented analysis)
+# Standard palette for ply tertiles 1–3 (segmented dashboards; matches preprocess ntile)
 PHASE_COLORS = {
     1: "#16a085",  # Teal (Early)
     2: "#2980b9",  # Blue (Mid)

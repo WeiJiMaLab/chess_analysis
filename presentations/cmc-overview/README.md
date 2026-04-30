@@ -78,7 +78,7 @@ python src/move_time_summary.py --include_zeroT
 
 **Dashboards** (`movetime_analysis.py`; all use `_selected_moves_nonzero_T` → one PNG per analysis):
 ```bash
-python src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
+python src/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc ply
 ```
 
 **3D slide data** (`SurfPlot3D`): written next to the deck:
@@ -86,4 +86,4 @@ python src/movetime_analysis.py --only clock clock_opp npossiblemoves ply
 python src/exploratory/heatmap_clock_ply.py
 ```
 
-The symlink `public/figures` → `src/figures` serves `move_time_summary/{combined.png,combined_include_zeroT.png}`, `ply_movetime/combined.png`, `clock_movetime/{combined.png,combined_opp.png,...}`, `npossiblemoves_movetime/combined.png`, plus companion `*_quantile_heatmap.png` files where `movetime_analysis` requests them, and optional `exploratory/heatmap_clock_ply_*.png`. CSVs live in `public/data/heatmap_*.csv`.
+The symlink `public/figures` → `src/figures` serves `move_time_summary/{combined.png,combined_include_zeroT.png}`, `ply_movetime/combined.png`, `clock_movetime/{combined.png,combined_opp.png,...}`, `npossiblemoves_movetime/`, `n_pieces_exc_pawns_movetime/`, plus companion `*_quantile_heatmap.png` files where `movetime_analysis` requests them, and optional `exploratory/heatmap_clock_ply_*.png`. CSVs live in `public/data/heatmap_*.csv`.

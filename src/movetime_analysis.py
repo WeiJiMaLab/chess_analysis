@@ -20,6 +20,7 @@ DEFAULT_ANALYSES = (
     "clock",
     "clock_opp",
     "npossiblemoves",
+    "pieces_exc",
     "ply",
 )
 
@@ -44,6 +45,29 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
         quantile_heatmap_row_label="Move ply",
     )
     figures_dir = os.path.join(src_dir, "figures", "npossiblemoves_movetime")
+    analyzer.save_dashboard(os.path.join(figures_dir, "combined.png"), include_quantile_heatmap=True)
+
+
+def pieces_exc_pawns_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
+    if src_dir is None:
+        src_dir = _src_dir()
+    x_var = Variable(
+        column="n_pieces_on_board_exc_pawns",
+        is_log=False,
+        name="Pieces on board (excl. pawns)",
+    )
+    y_var = Variable(column="move_time", is_log=True, name="T")
+    analyzer = Analyzer(
+        db_conn=conn,
+        table_name="_selected_moves_nonzero_T",
+        x_var=x_var,
+        y_var=y_var,
+        filter_query="n_pieces_on_board_exc_pawns IS NOT NULL",
+        title="Think Time vs Non-Pawn Material",
+        quantile_heatmap_row="move_ply",
+        quantile_heatmap_row_label="Move ply",
+    )
+    figures_dir = os.path.join(src_dir, "figures", "n_pieces_exc_pawns_movetime")
     analyzer.save_dashboard(os.path.join(figures_dir, "combined.png"), include_quantile_heatmap=True)
 
 
@@ -98,6 +122,8 @@ def _run_duckdb_analysis(
 ) -> None:
     if name == "npossiblemoves":
         npossiblemoves_movetime(conn, src_dir)
+    elif name == "pieces_exc":
+        pieces_exc_pawns_movetime(conn, src_dir)
     elif name == "ply":
         ply_movetime(conn, src_dir)
     elif name == "clock":
@@ -118,7 +144,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["npossiblemoves", "ply", "clock", "clock_opp", "all"],
+        choices=["npossiblemoves", "pieces_exc", "ply", "clock", "clock_opp", "all"],
         metavar="NAME",
         help="Run only these analyses (default: full DEFAULT_ANALYSES set). Use 'all' as a single token.",
     )

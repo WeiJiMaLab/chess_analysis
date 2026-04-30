@@ -210,7 +210,7 @@ math: katex
   <ul class="list-disc pl-5 space-y-2">
     <li><b>Which games</b> — Strong rapid by default: <b>10+0</b>, <b>both players 2000+ Elo</b>, <b>Oct–Dec 2023</b> (filters in <code>preprocess_data.py select_games</code>).</li>
     <li><b>Extract &amp; merge</b> — Array job <code>preprocess_shard.sbatch</code> runs <code>preprocess_data.py process_shard</code> on Lichess parquet, restricted to <code>selected_games</code>; shards load into <code>selected_moves</code>. By default, drop a whole game if <i>any</i> move has negative <code>move_time</code>.</li>
-    <li><b>Feature tables</b> — <code>preprocess_data.py preprocess</code> writes <code>_selected_moves</code> and <code>_selected_moves_nonzero_T</code> (e.g. <code>game_phase</code>, clocks, <code>n_possible_moves</code>, raw <code>move_time</code>), excluding berserk / grant-more-time games per the SQL in that step.</li>
+    <li><b>Feature tables</b> — <code>preprocess_data.py preprocess</code> writes <code>_selected_moves</code> and <code>_selected_moves_nonzero_T</code> (e.g. <code>ply_tertiles</code>, clocks, <code>n_possible_moves</code>, board counts <code>n_pieces_on_board_exc_pawns</code> / <code>n_pieces_on_board_inc_pawns</code> from FEN placement, raw <code>move_time</code>), excluding berserk / grant-more-time games per the SQL in that step.</li>
     <li><b>Plots</b> — Unless noted, positive think time only (no premoves; same sample as <code>movetime_analysis.py</code> on <code>_selected_moves_nonzero_T</code>). Histograms / dashboards (<code>move_time_summary.py</code>, <code>movetime_analysis.py</code>, …) add ln&nbsp;<i>T</i>, <code>ntile</code> bins, and heatmaps in analysis SQL—not as extra columns frozen at ingest.</li>
   </ul>
 </div>
@@ -395,6 +395,36 @@ math: katex
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">branching × ply</b><br><br>
     Where complexity (width) and stage interact after marginalizing the main dashboards in §9.
+  </div>
+</div>
+
+---
+
+# 11. Material: non-pawn pieces vs. think time — dashboard
+
+<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_pieces_on_board_exc_pawns</code> (pieces on board excluding pawns, from SQL on <code>board_position</code>); y = <code>ln(move_time + ε)</code>. Excludes <code>move_time = 0</code>. <code>movetime_analysis.py --only pieces_exc</code>.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/n_pieces_exc_pawns_movetime/combined.png" />
+  
+  <div class="takeaway border-sky-500 bg-sky-50/90 text-sm py-4">
+    <b class="text-sky-700 uppercase tracking-wider text-xs">n_pieces_exc_pawns_movetime</b><br><br>
+    2×2: material vs log <i>T</i>, same structure as clock/branching; bottom row splits by global ply tertiles (<code>ply_tertiles</code>).
+  </div>
+</div>
+
+---
+
+# 12. Material: non-pawn pieces vs. think time — quantile heatmap
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Joint <code>ntile</code> bins of non-pawn piece count × move ply; cell color = mean log <i>T</i> (same transform as §11).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain max-h-[340px]" src="/figures/n_pieces_exc_pawns_movetime/combined_quantile_heatmap.png" />
+  
+  <div class="takeaway border-sky-500 bg-sky-50/90 text-sm py-4">
+    <b class="text-sky-700 uppercase tracking-wider text-xs">material × ply</b><br><br>
+    Endgame-rich counts vs opening ply, analogous to §10 after conditioning on width in §9.
   </div>
 </div>
 

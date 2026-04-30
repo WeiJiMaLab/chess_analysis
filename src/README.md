@@ -20,7 +20,7 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | **Extract / merge / preprocess moves** | `bash src/slurm/_preprocess.sh` |
 | **Regenerate standard figures** | `bash src/slurm/script_analysis.sh` |
 | **Move-time histograms** | `python src/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, ply) | `python src/movetime_analysis.py` (optional: `--only clock ply …`) |
+| **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc ply …`) |
 | **Ply vs instant-move probability** | `python src/ply_premove.py` |
 | **Engine eval (cluster)** | `bash src/slurm/engine_eval.sh` (or `--merge-only` when parquets exist) |
 | **Build `selected_moves_with_engine`** | `python src/slurm/scripts/build_selected_moves_with_engine.py` (after eval tables exist) |
@@ -77,7 +77,7 @@ chess_analysis/
 | **VOC (value of computation)** | Engine-defined gain from deep vs shallow search relates to think time; often discussed vs **ply** “arc” (midgame peak ~40–50). |
 | **Scale** | Core DuckDB pipelines target on the order of **~10⁸ moves**; always prefer **SQL-side** aggregation and sampling. |
 
-For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults to **2×2**: global raw trend and quantile bins on the top row, the same pair **by `game_phase`** (overlaid) on the bottom. Pass **`include_quantile_heatmap=True`** (and **`quantile_heatmap_row='move_ply'`** on construction) to also write a **standalone** quantile×quantile heatmap PNG (default path: same stem as the dashboard plus `_quantile_heatmap` before the extension; override with ``heatmap_output_path``). Use **`layout="1x3"`** for raw | quantile | scatter, or **`layout="1x2"`** for raw | quantile only (see `movetime_analysis.ply_movetime`).
+For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults to **2×2**: global raw trend and quantile bins on the top row, the same pair **by `ply_tertiles`** (global ply tertiles from preprocess; overlaid) on the bottom. Pass **`include_quantile_heatmap=True`** (and **`quantile_heatmap_row='move_ply'`** on construction) to also write a **standalone** quantile×quantile heatmap PNG (default path: same stem as the dashboard plus `_quantile_heatmap` before the extension; override with ``heatmap_output_path``). Use **`layout="1x3"`** for raw | quantile | scatter, or **`layout="1x2"`** for raw | quantile only (see `movetime_analysis.ply_movetime`).
 
 ---
 

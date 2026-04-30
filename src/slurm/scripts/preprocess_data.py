@@ -251,6 +251,8 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
     Standard SQL-native preprocessing for chess timing analysis.
     Creates a table with log-transformed variables and quantile bins.
     Excludes games identified as berserk or grant-more-time.
+    Adds n_pieces_on_board_inc_pawns and n_pieces_on_board_exc_pawns from
+    board_position via regexp_extract_all.
     """
     tmpdir = os.path.abspath(tmpdir)
     conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
@@ -267,12 +269,16 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
             opponent_clock_time,
             n_possible_moves,
             move_time,
+            -- Piece counts from FEN board field only (placement before side/castling/EP)
+            len(regexp_extract_all(replace(board_position, '/', ''), '[a-zA-Z]')) AS n_pieces_on_board_inc_pawns,
+            len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqkRNBQK]')) AS n_pieces_on_board_exc_pawns,
             -- Construct FEN (minimal engine-ready state: board, turn, castling, EP)
             board_position || ' ' || 
             CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' || 
             COALESCE(castling_rights, '-') || ' ' || 
             COALESCE(en_passant_targets, '-') AS fen,
-            ntile(3) over (order by move_ply) as game_phase
+            -- Global ply tertiles: ntile(3) over all rows ordered by move_ply (not per-game)
+            ntile(3) over (order by move_ply) as ply_tertiles
         FROM (
             SELECT 
                 m.gid, m.move_ply, m.board_position, m.player_white, 
