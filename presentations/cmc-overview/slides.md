@@ -86,20 +86,20 @@ math: katex
 
 <div class="grid grid-cols-1 gap-4 mt-4 text-sm leading-relaxed max-w-5xl">
   <p>
-    All timing plots use the same DuckDB sample: <b>move-level rows in <code>selected_moves</code></b> inside the project personal database, joined to analysis tables built by the Python scripts.
+    All timing plots use the same DuckDB sample: merged <b><code>selected_moves</code></b>, then analysis table <b><code>_selected_moves_nonzero_T</code></b> from <code>preprocess_data.py preprocess</code> (same notion as <code>movetime_analysis.py</code>).
   </p>
   <ul class="list-disc pl-6 space-y-2">
     <li>
       <b>Game list:</b> We restrict to game IDs listed in the <code>selected_games</code> table (in that same database). The exact inclusion rule (Elo, time control, etc.) is whatever that table encodes.
     </li>
     <li>
-      <b>Extracting moves (<code>src/utils/load_data.py</code>):</b> A Slurm array walks Lichess parquet shards under the archive root, keeps only those <code>gid</code>s, and by default <b>drops an entire game</b> if any row has a negative <code>move_time</code> (bad timestamps). Staging <code>.parquet</code> files are merged into <code>selected_moves</code>.
+      <b>Extracting moves (<code>src/slurm/scripts/preprocess_data.py process_shard</code>):</b> Run from a Slurm array (<code>preprocess_shard.sbatch</code>), each job walks parquet under the archive root scoped to <code>selected_games</code>, and by default <b>drops an entire game</b> if any row has negative <code>move_time</code>. Shards merge into table <code>selected_moves</code>.
     </li>
     <li>
-      <b>Launch script (<code>src/slurm/script_load_moves.sh</code>):</b> Reserves a clean temp directory, submits the load-shards array job, and submits a <b>merge</b> job that runs only after the array succeeds, repopulating <code>selected_moves</code> from the combined parquet.
+      <b>Launcher (<code>src/slurm/_preprocess.sh</code>):</b> Fresh temp dir → <code>select_games</code> → array <code>process_shard</code> → <code>merge</code> → <code>berserk</code> id pass → <code>preprocess</code> (<code>_selected_moves</code> / <code>_selected_moves_nonzero_T</code>).
     </li>
     <li>
-      <b>Downstream analysis:</b> Preprocessing is now centralized in <code>load_data.py</code>, which precalculates <code>ln_move_time</code>, clock features, <b><code>n_possible_moves</code></b>, and quantile bins. Analysis scripts assume these tables (<code>_selected_moves</code> or <code>_selected_moves_nonzero_T</code>) already exist.
+      <b>Downstream analysis:</b> <code>preprocess_data.py preprocess</code> materializes <code>_selected_moves</code> (with <code>game_phase</code>, clocks, raw <code>move_time</code>, <b><code>n_possible_moves</code></b>). Histograms / dashboards (<code>move_time_summary.py</code>, <code>movetime_analysis.py</code>) use SQL for ln <i>T</i> and bins on top of <code>_selected_moves_nonzero_T</code> where appropriate.
     </li>
   </ul>
 </div>
