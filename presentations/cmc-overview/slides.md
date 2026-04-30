@@ -38,6 +38,125 @@ math: katex
 
 <div class="h-full flex items-center justify-center text-center">
   <div>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Background</div>
+    <h1 class="text-4xl">Related work</h1>
+    <div class="mt-3 text-sm opacity-60 max-w-xl mx-auto">
+      Adaptive “when to think,” imagination-based control, and learned tree search — with citations on-slide.
+    </div>
+  </div>
+</div>
+
+---
+
+# Why meta-control (in one minute)
+
+<div class="text-sm leading-relaxed max-w-3xl space-y-3 mt-1">
+  <ul class="list-disc pl-5 space-y-2">
+    <li>Inference cost (tokens, rollouts, MCTS nodes) is <b>budget</b> you want to spend where it helps.</li>
+    <li>A <b>meta-controller</b> that only decides whether to continue can keep an <b>outside view</b>; baking the same choice into the planner often <b>entangles</b> “when” with “how.”</li>
+    <li>The same tradeoff is <b>fast vs. slow</b> reasoning: model-free heuristics vs. model-based lookahead (e.g. Kahneman, 2011; Daw, Niv &amp; Dayan, 2005 on MB/MF RL).</li>
+  </ul>
+</div>
+
+---
+
+# Adaptive Computation Time (ACT)
+
+<div class="text-xs opacity-80 mb-2">Alex Graves — <i>Adaptive Computation Time for Recurrent Neural Networks</i>, NeurIPS 2016; arXiv:1603.08983. Figures reproduced from the paper (Fig. 1–2).</div>
+
+<div class="grid grid-cols-2 gap-5 items-start mt-1">
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-52" src="/figures/lit/act-fig1-rnn.png" alt="Standard RNN computation graph" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 1 — Standard RNN (two input steps).</figcaption>
+  </figure>
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-52" src="/figures/lit/act-fig2-act.png" alt="RNN with ACT" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — Same graph with variable intermediate “ponder” steps and halting.</figcaption>
+  </figure>
+</div>
+
+<p class="mt-3 text-sm max-w-4xl">
+  <b>Idea:</b> sigmoidal <b>halting unit</b> + <b>ponder cost</b> $\tau$ in the loss so depth-per-input is learned. Precursors: self-delimiting nets (SLIMs) with hard thresholds.
+</p>
+
+---
+
+# Imagination-Based Planner (IBP)
+
+<div class="text-xs opacity-80 mb-2">R. Pascanu, Y. Li, O. Vinyals, N. Heess, L. Buesing, S. Racanière, D. Reichert, T. Weber, D. Wierstra &amp; P. Battaglia — <i>Learning model-based planning from scratch</i>, arXiv:1707.06170. Figures reproduced from the paper (Fig. 1–2); raster assets extracted from the arXiv PDF.</div>
+
+<div class="grid grid-cols-2 gap-4 items-start">
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-64" src="/figures/lit/ibp-fig1.png" alt="IBP schematic" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 1 — Manager imagines vs. acts; memory aggregates the trace.</figcaption>
+  </figure>
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-64" src="/figures/lit/ibp-fig2.png" alt="IBP imagination strategies" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — 1-step / <i>n</i>-step / tree imagination strategies over imagined states.</figcaption>
+  </figure>
+</div>
+
+<p class="mt-3 text-sm max-w-4xl">
+  <b>For us:</b> explicit <i>when-to-imagine</i>, but <b>end-to-end</b> training and an <b>RNN</b> trace → strong on <i>order</i>, weak on explicit <b>tree topology</b> in the representation.
+</p>
+
+---
+
+# Thinker
+
+<div class="text-xs opacity-80 mb-2">S. Chung, I. Anokhin &amp; D. Krueger — <i>Thinker: Learning to Plan and Act</i>, arXiv:2307.14993. Figures reproduced from the paper (Fig. 2–3); source SVGs from the arXiv package.</div>
+
+<div class="grid grid-cols-2 gap-4 items-start">
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-64" src="/figures/lit/thinker-fig2-stage.svg" alt="Thinker stage" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 2 — One stage: <i>K − 1</i> imaginary model steps, then one real env step.</figcaption>
+  </figure>
+  <figure class="m-0">
+    <img class="w-full object-contain max-h-64" src="/figures/lit/thinker-fig3-tree.svg" alt="Thinker tree traversal" />
+    <figcaption class="mt-1 opacity-70 text-[11px]">Fig. 3 — Rollout / reset dynamics under a stage budget and max depth.</figcaption>
+  </figure>
+</div>
+
+<p class="mt-3 text-sm max-w-4xl">
+  <b>Progress:</b> planning and acting separated via augmented actions. <b>Limits here:</b> fixed stage geometry and a learned model-specific interface — not a separate halting policy over arbitrary search trees.
+</p>
+
+---
+
+# Learned tree search (fixed budget)
+
+<div class="text-sm leading-relaxed max-w-3xl space-y-3 mt-1">
+  <p>
+    <b>AlphaZero</b> (Silver et al., 2018, <i>Science</i>): policy + value coupled to MCTS — strong structure, but simulations per move are set externally, not a per-node “worth another expansion?” learner.
+  </p>
+  <p>
+    <b>MCTSnets</b> (Guez et al., 2018, ICML; arXiv:1802.04697): backups and visit patterns through learned embeddings — topology in the net, still not an independent meta-controller for compute.
+  </p>
+</div>
+
+---
+
+# Gap → this deck
+
+<div class="grid grid-cols-2 gap-6 mt-2 text-sm leading-relaxed">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent">
+    <b class="text-accent text-xs uppercase tracking-wider">Meta-control</b>
+    <p class="mt-1">Good on <i>when</i> to stop / imagine; often sequential summaries of the trace.</p>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary">
+    <b class="text-secondary text-xs uppercase tracking-wider">Tree search</b>
+    <p class="mt-1">Good on <i>how</i> to search; budget usually fixed, not a trained halt policy on the tree.</p>
+  </div>
+</div>
+
+<p class="mt-5 text-sm max-w-3xl">
+  <b>Our thread:</b> halting / allocation using a <b>structural</b> view of the search tree (later slides), trainable <b>beside</b> a fixed engine — with chess oracle + human timing as targets.
+</p>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
     <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section I</div>
     <h1 class="text-4xl">Part 1 — The Problem</h1>
   </div>
@@ -84,8 +203,9 @@ math: katex
 
 # Behavioral data: how we chose these games
 
-<div class="grid grid-cols-1 gap-4 mt-4 text-sm leading-relaxed max-w-5xl">
+<div class="mt-4 text-sm leading-relaxed max-w-3xl space-y-3">
   <p>
+<<<<<<< HEAD
     All timing plots use the same DuckDB sample: merged <b><code>selected_moves</code></b>, then analysis table <b><code>_selected_moves_nonzero_T</code></b> from <code>preprocess_data.py preprocess</code> (same notion as <code>movetime_analysis.py</code>).
   </p>
   <ul class="list-disc pl-6 space-y-2">
@@ -101,6 +221,14 @@ math: katex
     <li>
       <b>Downstream analysis:</b> <code>preprocess_data.py preprocess</code> materializes <code>_selected_moves</code> (with <code>game_phase</code>, clocks, raw <code>move_time</code>, <b><code>n_possible_moves</code></b>). Histograms / dashboards (<code>move_time_summary.py</code>, <code>movetime_analysis.py</code>) use SQL for ln <i>T</i> and bins on top of <code>_selected_moves_nonzero_T</code> where appropriate.
     </li>
+=======
+    Every timing slide uses the <b>same</b> pool of human moves from Lichess, loaded into DuckDB. The full recipe is in <code>src/slurm/scripts/preprocess_data.py</code>.
+  </p>
+  <ul class="list-disc pl-5 space-y-2">
+    <li><b>Which games</b> — Strong rapid by default: <b>10+0</b>, <b>both players 2000+ Elo</b>, <b>Oct–Dec 2023</b> (exact window in the script).</li>
+    <li><b>Cleaning</b> — Drop a game if <i>any</i> move has bad timing (negative think time). Remove berserk games and games where someone was granted extra time, before building the tables the plots read.</li>
+    <li><b>Plots</b> — Unless a slide says otherwise, we use <b>positive</b> think time only (no premoves). Log time and heatmap bucketing happen in the analysis code when we draw the figure.</li>
+>>>>>>> b4c38bd84aadfd70b0e7156c5123c09ac5148352
   </ul>
 </div>
 
@@ -171,13 +299,17 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Same sample as §4. Joint <code>ntile</code> bins of player clock × move ply; cell color = mean ln <i>T</i>, opacity = mass (see figure colorbar).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+<<<<<<< HEAD
   <div class="slide-quantile-heatmap-wrap min-w-0">
     <!-- <img src="/figures/clock_movetime/combined_quantile_heatmap.png" alt="" /> -->
   </div>
+=======
+  <img class="w-full object-contain max-h-[340px]" src="/figures/clock_movetime/combined_quantile_heatmap.png" />
+>>>>>>> b4c38bd84aadfd70b0e7156c5123c09ac5148352
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">clock × ply</b><br><br>
-    Reads like the static dashboards in <code>exploratory/heatmap_clock_ply.py</code>, but built inside the same <code>Analyzer</code> pipeline as §4.
+    Reads? like the static dashboards in <code>exploratory/heatmap_clock_ply.py</code>, but built inside the same <code>Analyzer</code> pipeline as §4.
   </div>
 </div>
 
@@ -251,7 +383,11 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of <b>opponent</b> remaining clock × move ply; same encoding as §5.</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+<<<<<<< HEAD
   <img class="w-full object-contain max-h-[400px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
+=======
+  <img class="w-full object-contain max-h-[340px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
+>>>>>>> b4c38bd84aadfd70b0e7156c5123c09ac5148352
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">opp clock × ply</b><br><br>
@@ -281,7 +417,11 @@ math: katex
 <div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of legal-move count × move ply; cell color = mean log <i>T</i> (same transform as the main branching dashboard).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+<<<<<<< HEAD
   <img class="w-full object-contain max-h-[400px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
+=======
+  <img class="w-full object-contain max-h-[340px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
+>>>>>>> b4c38bd84aadfd70b0e7156c5123c09ac5148352
   
   <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
     <b class="text-secondary uppercase tracking-wider text-xs">branching × ply</b><br><br>
@@ -291,6 +431,7 @@ math: katex
 
 ---
 
+<<<<<<< HEAD
 # 11. Interaction: Clock & Ply (3D)
 
 <div class="grid grid-cols-1 gap-4 h-full -mt-6">
@@ -310,6 +451,8 @@ math: katex
 
 ---
 
+=======
+>>>>>>> b4c38bd84aadfd70b0e7156c5123c09ac5148352
 <div class="h-full flex items-center justify-center text-center">
   <div>
     <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Appendix</div>
