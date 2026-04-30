@@ -313,10 +313,12 @@ def plot_heatmap_with_alpha(
     *,
     alpha_mode="log",
     value_label="Mean Y",
+    imshow_aspect="auto",
 ):
     """
     Heatmap: cell color encodes ``pivot_values``; alpha encodes ``pivot_counts`` (frequency).
     ``alpha_mode`` is ``\"log\"`` (``log1p`` normalized) or ``\"linear\"``.
+    ``imshow_aspect``: passed to ``imshow`` (``\"equal\"`` gives square cells on quantile×quantile grids).
     """
     from matplotlib.cm import ScalarMappable
 
@@ -366,7 +368,7 @@ def plot_heatmap_with_alpha(
         y_coords.max() + dy / 2,
     ]
 
-    ax.imshow(rgba, extent=extent, aspect="auto", interpolation="nearest")
+    ax.imshow(rgba, extent=extent, aspect=imshow_aspect, interpolation="nearest")
 
     sm = ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])

@@ -70,7 +70,8 @@ class Analyzer:
     use ``ntile`` **partitioned by** ``game_phase`` so ranks are recomputed within each phase.
 
     Optional ``quantile_heatmap_row``: second column (e.g. ``move_ply``) for a
-    quantile×quantile heatmap of mean transformed Y (same pattern as ``exploratory/heatmap_clock_ply``).
+    quantile×quantile heatmap of mean transformed Y, saved as its own figure when
+    ``save_dashboard(..., include_quantile_heatmap=True)`` (not embedded in the 2×2 grid).
     """
 
     def __init__(
@@ -328,6 +329,7 @@ class Analyzer:
             get_isoluminant_cmap(),
             alpha_mode=alpha_mode,
             value_label=f"Mean {y_disp}",
+            imshow_aspect="equal",
         )
         ax.set_xlabel(f"{self.x.label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=36)
         ax.set_ylabel(f"{self._quantile_heatmap_row_label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=48)
@@ -380,6 +382,30 @@ class Analyzer:
             n=n_points,
         )
 
+    def save_quantile_heatmap_figure(
+        self,
+        output_path,
+        *,
+        heatmap_alpha_mode: str = "log",
+    ):
+        """Save a single-panel quantile×quantile heatmap (not embedded in the 2×2 dashboard)."""
+        if not self.quantile_heatmap_row:
+            raise ValueError(
+                "save_quantile_heatmap_figure requires Analyzer(..., quantile_heatmap_row='<column>')."
+            )
+        apply_poster_style()
+        fig, ax = plt.subplots(figsize=(22, 18))
+        self.plot_quantile_heatmap(ax, alpha_mode=heatmap_alpha_mode)
+        subtitle = f"{self.n_games:,} games | {self.n_moves:,} moves"
+        fig.suptitle(f"{self.title}\n{subtitle}", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"✅ Quantile heatmap saved to {output_path}")
+
     def save_dashboard(
         self,
         output_path,
@@ -387,6 +413,7 @@ class Analyzer:
         *,
         include_quantile_heatmap: bool = False,
         heatmap_alpha_mode: str = "log",
+        heatmap_output_path: str | None = None,
     ):
         """Generates and saves a publication-ready dashboard.
 
@@ -394,9 +421,11 @@ class Analyzer:
         ``game_phase`` (overlaid phases). ``1x3`` keeps raw | quantile | scatter. ``1x2`` is
         raw | quantile only.
 
-        Set ``include_quantile_heatmap=True`` (with ``layout="2x2"`` only after construction
-        ``quantile_heatmap_row='...'``) to add a full-width third row: quantile×quantile heatmap
-        of mean Y vs joint bins of X and that row column.
+        Set ``include_quantile_heatmap=True`` (with ``layout="2x2"`` only, and
+        ``quantile_heatmap_row='...'`` on construction) to also write the quantile×quantile
+        heatmap as a **separate** PNG next to the dashboard (by default:
+        ``<stem>_quantile_heatmap<ext>`` beside ``output_path``). Pass ``heatmap_output_path``
+        to override the heatmap destination.
         """
         apply_poster_style()
 
@@ -408,50 +437,43 @@ class Analyzer:
             )
 
         if layout == "2x2":
-            if include_quantile_heatmap:
-                fig = plt.figure(figsize=(36, 30))
-                gs = fig.add_gridspec(3, 2, height_ratios=[1.0, 1.0, 0.92], hspace=0.24, wspace=0.16)
-                ax00 = fig.add_subplot(gs[0, 0])
-                ax01 = fig.add_subplot(gs[0, 1])
-                ax10 = fig.add_subplot(gs[1, 0])
-                ax11 = fig.add_subplot(gs[1, 1])
-                ax_h = fig.add_subplot(gs[2, :])
-                self.plot_raw_trend(ax00)
-                self.plot_quantile_bins(ax01)
-                self.plot_raw_trend_phase_segmented(ax10)
-                self.plot_quantile_bins_phase_segmented(ax11)
-                ax00.set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
-                ax01.set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
-                ax10.set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
-                ax11.set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
-                self.plot_quantile_heatmap(ax_h, alpha_mode=heatmap_alpha_mode)
-            else:
-                fig, axes = plt.subplots(2, 2, figsize=(36, 22))
-                self.plot_raw_trend(axes[0, 0])
-                self.plot_quantile_bins(axes[0, 1])
-                self.plot_raw_trend_phase_segmented(axes[1, 0])
-                self.plot_quantile_bins_phase_segmented(axes[1, 1])
-                axes[0, 0].set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
-                axes[0, 1].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
-                axes[1, 0].set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
-                axes[1, 1].set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+            fig, axes = plt.subplots(2, 2, figsize=(36, 26))
+            self.plot_raw_trend(axes[0, 0])
+            self.plot_quantile_bins(axes[0, 1])
+            self.plot_raw_trend_phase_segmented(axes[1, 0])
+            self.plot_quantile_bins_phase_segmented(axes[1, 1])
+            axes[0, 0].set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
+            axes[0, 1].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
+            axes[1, 0].set_title("Raw trend (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
+            axes[1, 1].set_title("Quantile bins (by phase)", fontsize=FONT_SIZE_LABEL, pad=12)
         elif layout == "1x3":
-            fig, axes = plt.subplots(1, 3, figsize=(36, 11))
+            fig, axes = plt.subplots(1, 3, figsize=(36, 12))
             self.plot_raw_trend(axes[0])
             self.plot_quantile_bins(axes[1])
             self.plot_scatter(axes[2])
         elif layout == "1x2":
-            fig, axes = plt.subplots(1, 2, figsize=(24, 11))
+            fig, axes = plt.subplots(1, 2, figsize=(24, 12))
             self.plot_raw_trend(axes[0])
             self.plot_quantile_bins(axes[1])
         else:
             raise ValueError(f"Unsupported layout: {layout}")
 
         subtitle = f"{self.n_games:,} games | {self.n_moves:,} moves"
-        fig.suptitle(f"{self.title}\n{subtitle}", fontsize=FONT_SIZE_LABEL + 10, y=1.05)
+        fig.suptitle(f"{self.title}\n{subtitle}", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
 
-        plt.tight_layout()
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✅ Dashboard saved to {output_path}")
+
+        if include_quantile_heatmap:
+            if heatmap_output_path is None:
+                root, ext = os.path.splitext(output_path)
+                heatmap_output_path = f"{root}_quantile_heatmap{ext}"
+            self.save_quantile_heatmap_figure(
+                heatmap_output_path,
+                heatmap_alpha_mode=heatmap_alpha_mode,
+            )

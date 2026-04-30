@@ -151,9 +151,9 @@ math: katex
 
 ---
 
-# 4. Remaining clock vs. think time
+# 4. Remaining clock vs. think time — dashboard
 
-<div class="text-xs opacity-60 mb-2 -mt-2">Player clock; excludes <code>move_time = 0</code>.</div>
+<div class="text-xs opacity-60 mb-2 -mt-2">Player clock; excludes <code>move_time = 0</code>. Four-panel figure from <code>movetime_analysis.py</code> (saved separately from the heatmap).</div>
 
 <div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
   <img class="w-full object-contain" src="/figures/clock_movetime/combined.png" />
@@ -166,7 +166,22 @@ math: katex
 
 ---
 
-# 5. Intuition: per-ply β in the opening
+# 5. Remaining clock vs. think time — quantile heatmap
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Same sample as §4. Joint <code>ntile</code> bins of player clock × move ply; cell color = mean ln <i>T</i>, opacity = mass (see figure colorbar).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_quantile_heatmap.png" />
+  
+  <div class="takeaway border-accent bg-accent-soft text-sm py-4">
+    <b class="text-accent uppercase tracking-wider text-xs">clock × ply</b><br><br>
+    Reads like the static dashboards in <code>exploratory/heatmap_clock_ply.py</code>, but built inside the same <code>Analyzer</code> pipeline as §4.
+  </div>
+</div>
+
+---
+
+# 6. Intuition: per-ply β in the opening
 
 <div class="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 mt-2 items-start">
   <div class="text-sm leading-relaxed max-w-md space-y-3">
@@ -214,7 +229,7 @@ math: katex
 
 ---
 
-# 6. Opponent clock vs. think time
+# 7. Opponent clock vs. think time — dashboard
 
 <div class="text-xs opacity-60 mb-2 -mt-2"><code>opp</code> variant: x = their remaining clock; excludes <code>move_time = 0</code>.</div>
 
@@ -223,13 +238,28 @@ math: katex
   
   <div class="takeaway border-success bg-success-soft text-sm py-4">
     <b class="text-success uppercase tracking-wider text-xs">clock_movetime (opponent)</b><br><br>
-    Same 2×2 as §4, but the predictor is opponent clock. Contrast to player clock.
+    Same 2×2 structure as §4, but the predictor is opponent clock. Contrast to player clock.
   </div>
 </div>
 
 ---
 
-# 7. Branching: legal moves vs. think time
+# 8. Opponent clock vs. think time — quantile heatmap
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of <b>opponent</b> remaining clock × move ply; same encoding as §5.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain max-h-[520px]" src="/figures/clock_movetime/combined_opp_quantile_heatmap.png" />
+  
+  <div class="takeaway border-success bg-success-soft text-sm py-4">
+    <b class="text-success uppercase tracking-wider text-xs">opp clock × ply</b><br><br>
+    Side-by-side with §5 highlights whose budget pressure matters once ply is held in quantile space.
+  </div>
+</div>
+
+---
+
+# 9. Branching: legal moves vs. think time — dashboard
 
 <div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_possible_moves</code>; y = raw T (s), not log. Excludes <code>move_time = 0</code>.</div>
 
@@ -244,7 +274,22 @@ math: katex
 
 ---
 
-# 8. Interaction: Clock & Ply (3D)
+# 10. Branching: legal moves vs. think time — quantile heatmap
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Joint bins of legal-move count × move ply; cell color = mean raw <i>T</i> (this analysis uses linear move time on <i>y</i>).</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain max-h-[520px]" src="/figures/npossiblemoves_movetime/combined_quantile_heatmap.png" />
+  
+  <div class="takeaway border-secondary bg-neutral-soft text-sm py-4">
+    <b class="text-secondary uppercase tracking-wider text-xs">branching × ply</b><br><br>
+    Where complexity (width) and stage interact after marginalizing the main dashboards in §9.
+  </div>
+</div>
+
+---
+
+# 11. Interaction: Clock & Ply (3D)
 
 <div class="grid grid-cols-1 gap-4 h-full -mt-6">
   <div class="h-[420px]">
