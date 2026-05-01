@@ -17,6 +17,8 @@ This home directory is the working root for a research thread that combines **la
 
 For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/src/README.md`. The latter documents **code layout** (`src/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
+**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files share **one directory per step** (`work_dir` for `get_games`, `staging_dir` for shard extract + merge into `moves`). Defaults are **module constants** in `preprocess.py`, not `**kwargs` plumbing—see `chess_analysis/src/README.md` §4.
+
 ---
 
 ## 1. Scientific intent

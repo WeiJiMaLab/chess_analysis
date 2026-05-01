@@ -25,17 +25,19 @@ export LOAD_MOVES_TMPDIR="${TMPDIR}"
 echo "Fresh LOAD_MOVES_TMPDIR=${LOAD_MOVES_TMPDIR}"
 
 echo "Selecting games on $(hostname) at $(date)"
-python3 src/slurm/scripts/preprocess_data.py select_games --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
+export DUCKDB_THREADS="${DUCKDB_THREADS:-40}"
+export DUCKDB_MEMORY_LIMIT="${DUCKDB_MEMORY_LIMIT:-64GB}"
+python3 src/slurm/scripts/preprocess_data.py select_games --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Submitting load_moves array job..."
 sbatch --wait --export=ALL "${PROJECT_DIR}/src/slurm/preprocess_shard.sbatch"
 
 echo "Merge job on $(hostname) at $(date)"
-python3 src/slurm/scripts/preprocess_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
-python3 src/slurm/scripts/preprocess_data.py berserk --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
-python3 src/slurm/scripts/preprocess_data.py grant_more_time --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
+python3 src/slurm/scripts/preprocess_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/slurm/scripts/preprocess_data.py berserk --tmpdir "${LOAD_MOVES_TMPDIR}"
+python3 src/slurm/scripts/preprocess_data.py grant_more_time --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Preprocess job on $(hostname) at $(date)"
-python3 src/slurm/scripts/preprocess_data.py preprocess --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 128GB
+DUCKDB_MEMORY_LIMIT=128GB python3 src/slurm/scripts/preprocess_data.py preprocess --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Finished pipeline at $(date)"

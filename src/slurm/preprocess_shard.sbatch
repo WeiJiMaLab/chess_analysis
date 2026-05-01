@@ -33,6 +33,9 @@ if [[ -z "${LOAD_MOVES_TMPDIR:-}" ]]; then
   exit 1
 fi
 
-python3 src/slurm/scripts/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 20 --memory 8GB
+export DUCKDB_THREADS="${SLURM_CPUS_PER_TASK}"
+export DUCKDB_MEMORY_LIMIT="${DUCKDB_MEMORY_LIMIT:-8GB}"
+
+python3 src/slurm/scripts/preprocess_data.py process_shard --total-shards 2 --tmpdir "${LOAD_MOVES_TMPDIR}"
 
 echo "Finished at $(date)"

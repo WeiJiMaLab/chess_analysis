@@ -99,6 +99,20 @@ For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults
 
 Typical filters for `selected_games` (verify in `preprocess_data.py` defaults): Nov–Dec 2023 window, **10+0**, both Elos **≥ 2000**.
 
+### `preprocess.py` — explicit DuckDB + staging layout
+
+Use **`src/slurm/scripts/preprocess.py`** for **`games` → shard parquets → table `moves`**. Behavior is intentionally rigid:
+
+| Step | Argument | Same directory holds |
+| :--- | :--- | :--- |
+| **`get_games`** | **`work_dir`** | DuckDB `temp_directory` while building **`games`** |
+| **`preprocess_game_shard`** | **`staging_dir`** | DuckDB `temp_directory` **and** `selected_moves_<partition>_<segment>.parquet` |
+| **`merge_game_shards`** | **`staging_dir`** | DuckDB `temp_directory` **and** glob `selected_moves_*.parquet` → **`moves`** |
+
+**Defaults:** `DEFAULT_THREADS`, `DEFAULT_MEMORY_LIMIT`, `DEFAULT_MOVES_ROOT` at top of that module. Adjust load only via explicit **`threads=`** / **`memory_limit=`** arguments at call sites (cluster wrappers may set env for `preprocess_data.py`, which forwards numeric limits into `merge_game_shards`).
+
+**Hygiene:** start each merge batch from an empty **`staging_dir`** or delete old `selected_moves_*.parquet` first; the merge glob otherwise pulls in stale shards.
+
 ### Engine evaluation
 
 - **Worker:** `src/slurm/scripts/script_engine_eval.py` → shard parquets.
@@ -122,6 +136,7 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 
 - **Readability over cleverness:** prefer two explicit functions to one overloaded CLI.
 - **Minimal CLIs:** stable, few flags; document defaults in `--help`.
+- **`preprocess.py`:** one directory per step for DuckDB spill **and** artifacts (`work_dir` / `staging_dir` above); do not add parallel “alternate tmpdir” tunnels via `**kwargs`.
 - **Names:** descriptive columns and variables (`log_clock_ply_residual`), not `x_adj`.
 - **Paths:** `os.path.join` + anchor to `__file__`, or use `_bootstrap.src_root()` / `project_root()` in **`slurm/scripts/`**.
 

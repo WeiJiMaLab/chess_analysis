@@ -117,7 +117,7 @@ def run_eval(args):
     query = f"""
         SELECT 
             board_position, player_white, castling_rights, en_passant_targets, ANY_VALUE(move_uci) as move_uci
-        FROM selected_moves
+        FROM moves
         GROUP BY 1, 2, 3, 4
         HAVING (hash(board_position) % {args.total_shards}) = {args.shard_id}
     """

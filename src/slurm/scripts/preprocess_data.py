@@ -5,7 +5,6 @@ Includes selection of games, extraction of moves, and feature engineering.
 
 import argparse
 import duckdb
-import pandas as pd
 from tqdm import tqdm
 import os
 import time
@@ -13,7 +12,7 @@ import time
 from _bootstrap import ensure_src
 
 ensure_src()
-from utils.helpers import EPSILON
+from preprocess import merge_game_shards
 
 # Must match Slurm: #SBATCH --array=0-(TOTAL_SHARDS-1)
 TOTAL_SHARDS = 2
@@ -23,9 +22,9 @@ MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
 DEFAULT_START_DATE = "2023-10-01"
 DEFAULT_END_DATE = "2023-12-31"  # Exclusive upper bound
 
-# Global settings updated by CLI flags
-THREADS = 40
-MEMORY_LIMIT = "64GB"
+# DuckDB resource hints (no CLI flags—override with env if needed).
+THREADS = int(os.environ.get("DUCKDB_THREADS") or os.environ.get("SLURM_CPUS_PER_TASK") or "40")
+MEMORY_LIMIT = os.environ.get("DUCKDB_MEMORY_LIMIT") or "128GB"
 
 
 def _conn_kw(tmpdir: str) -> dict:
@@ -114,7 +113,7 @@ def preprocess_selected_games(
     print(f"   selected_games min/max utc_datetime: {min_utc} / {max_utc}")
 
 
-def process_shard(_JOBID, total_shards=TOTAL_SHARDS, tmpdir=DEFAULT_TMPDIR, exclude_negative=True):
+def process_shard(_JOBID, total_shards=TOTAL_SHARDS, tmpdir=DEFAULT_TMPDIR):
     tmpdir = os.path.abspath(tmpdir)
     # Local working database (opened as read-only).
     conn = duckdb.connect(database=PERSONAL_DB, read_only=True, config=_conn_kw(tmpdir))
@@ -148,18 +147,13 @@ def process_shard(_JOBID, total_shards=TOTAL_SHARDS, tmpdir=DEFAULT_TMPDIR, excl
         out_path = os.path.join(tmpdir, f"selected_moves_{partition}_{segment}.parquet")
         pq, op = _sql_str(parquet_read_path), _sql_str(out_path)
         gid_sql = ",".join(str(int(g)) for g in gid_list)
-        qualify_clause = (
-            "QUALIFY COUNT(*) FILTER (WHERE move_time < 0) OVER (PARTITION BY gid) = 0"
-            if exclude_negative
-            else ""
-        )
         conn.execute(
             f"""
             COPY (
                 SELECT *
                 FROM read_parquet('{pq}')
                 WHERE gid IN ({gid_sql})
-                {qualify_clause}
+                QUALIFY COUNT(*) FILTER (WHERE move_time < 0) OVER (PARTITION BY gid) = 0
             ) TO '{op}' (FORMAT PARQUET)
             """
         )
@@ -171,23 +165,6 @@ def process_shard(_JOBID, total_shards=TOTAL_SHARDS, tmpdir=DEFAULT_TMPDIR, excl
 
     print(f"✅ Process shard job {_JOBID} finished.")
     conn.close()
-
-
-def merge_shards(tmpdir=DEFAULT_TMPDIR):
-    """Load staging parquet shards into personal.db (single writer)."""
-    tmpdir = os.path.abspath(tmpdir)
-    pattern = os.path.join(tmpdir, "*.parquet")
-    print(f"🔀 Merge: reading {pattern!r} into {PERSONAL_DB}")
-    conn = duckdb.connect(database=PERSONAL_DB, read_only=False, config=_conn_kw(tmpdir))
-    pat = _sql_str(pattern)
-    conn.execute(
-        f"""
-        CREATE OR REPLACE TABLE selected_moves AS
-        SELECT * FROM read_parquet('{pat}')
-        """
-    )
-    conn.close()
-    print("✅ Merge finished — table selected_moves replaced.")
 
 
 def identify_berserk(tmpdir=DEFAULT_TMPDIR):
@@ -204,7 +181,7 @@ def identify_berserk(tmpdir=DEFAULT_TMPDIR):
         """
         CREATE OR REPLACE TABLE berserk_games AS
         SELECT DISTINCT m.gid
-        FROM selected_moves m
+        FROM moves m
         JOIN core.games g ON m.gid = g.gid
         WHERE m.move_ply IN (3, 4)
           AND m.player_clock_time >= (CAST(g.initial_clock AS DOUBLE) / 2) - 5.0
@@ -235,7 +212,7 @@ def identify_grant_more_time(tmpdir=DEFAULT_TMPDIR):
                    lag(player_clock_time) OVER (
                        PARTITION BY m.gid, player_white ORDER BY move_ply
                    ) AS prev_clock
-            FROM selected_moves m
+            FROM moves m
             JOIN core.games g ON m.gid = g.gid
             WHERE g.clock_increment = 0
         )
@@ -267,7 +244,7 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
            board_position is only the first FEN field (piece placement); digits 1–8 are empty-run lengths. */
         CREATE OR REPLACE TABLE {target_table} AS
         SELECT 
-            -- --- Keys and raw telemetry (from Lichess parquet / selected_moves) ---
+            -- --- Keys and raw telemetry (from Lichess parquet / moves) ---
             gid,
             move_ply,
             board_position,
@@ -304,7 +281,7 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
                 m.gid, m.move_ply, m.board_position, m.player_white,
                 m.player_clock_time, m.opponent_clock_time, m.n_possible_moves,
                 m.move_time, m.castling_rights, m.en_passant_targets, m.halfmove_clock
-            FROM selected_moves m
+            FROM moves m
             WHERE m.gid NOT IN (SELECT gid FROM berserk_games)
               AND m.gid NOT IN (SELECT gid FROM grant_more_time_games)
             {limit_clause}
@@ -324,7 +301,7 @@ def preprocess(tmpdir=DEFAULT_TMPDIR, target_table="_selected_moves", limit_clau
 
 
 def main():
-    p = argparse.ArgumentParser(description="select_games: build selected_games; process_shard: stage parquet by shard; merge: load into personal.db; berserk: identify berserk games; grant_more_time: identify games with time added; preprocess: compute log-transforms/bins")
+    p = argparse.ArgumentParser(description="select_games: build selected_games; process_shard: stage parquet by shard; merge: parquet shards → moves (see preprocess.merge_game_shards); berserk/grant_more_time/preprocess: downstream on moves")
     p.add_argument("command", choices=("select_games", "process_shard", "merge", "berserk", "grant_more_time", "preprocess"))
     p.add_argument("--total-shards", type=int, default=TOTAL_SHARDS, metavar="N", help="Slurm array width (default %(default)s)")
     p.add_argument("--job-id", type=int, default=None, metavar="I", help="Stride index (default: SLURM_ARRAY_TASK_ID or 0)")
@@ -332,28 +309,16 @@ def main():
         "--tmpdir",
         default=os.environ.get("LOAD_MOVES_TMPDIR") or DEFAULT_TMPDIR,
         metavar="DIR",
-        help="Fresh dir for staging parquet + DuckDB temp (default: env LOAD_MOVES_TMPDIR or %(default)s)",
+        help="Staging parquet + DuckDB temp (default: env LOAD_MOVES_TMPDIR or %(default)s)",
     )
-    p.add_argument(
-        "--exclude-negative",
-        action="store_true",
-        default=True,
-        help="Exclude entire games if they contain any negative move_time (default: %(default)s)",
-    )
-    p.add_argument("--no-exclude-negative", action="store_false", dest="exclude_negative", help="Disable negative move_time exclusion")
     p.add_argument("--start-date", default=DEFAULT_START_DATE, help="Inclusive lower datetime/date for selected_games")
     p.add_argument("--end-date", default=DEFAULT_END_DATE, help="Exclusive upper datetime/date for selected_games")
     p.add_argument("--initial-clock", type=int, default=600, help="Initial clock in seconds (default %(default)s)")
     p.add_argument("--clock-increment", type=int, default=0, help="Clock increment in seconds (default %(default)s)")
     p.add_argument("--min-elo", type=int, default=2000, help="Minimum white/black elo (default %(default)s)")
     p.add_argument("--limit", type=int, default=None, help="Limit number of moves for smoke testing")
-    p.add_argument("--threads", type=int, default=40, help="Number of threads for DuckDB (default %(default)s)")
-    p.add_argument("--memory", type=str, default="64GB", help="Memory limit for DuckDB (default %(default)s)")
     args = p.parse_args()
-    
-    global THREADS, MEMORY_LIMIT
-    THREADS = args.threads
-    MEMORY_LIMIT = args.memory
+
     tmpdir = os.path.abspath(args.tmpdir)
     if args.command == "select_games":
         print(
@@ -370,8 +335,8 @@ def main():
         )
     elif args.command == "process_shard":
         jid = args.job_id if args.job_id is not None else int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
-        print(f"🚀 process_shard | job-id={jid} | total-shards={args.total_shards} | tmpdir={tmpdir} | exclude-negative={args.exclude_negative}")
-        process_shard(jid, args.total_shards, tmpdir, exclude_negative=args.exclude_negative)
+        print(f"🚀 process_shard | job-id={jid} | total-shards={args.total_shards} | tmpdir={tmpdir}")
+        process_shard(jid, args.total_shards, tmpdir)
     elif args.command == "berserk":
         print(f"🚀 identify_berserk | tmpdir={tmpdir}")
         identify_berserk(tmpdir)
@@ -384,7 +349,7 @@ def main():
         preprocess(tmpdir, limit_clause=limit_clause)
     else:
         print(f"🚀 merge | tmpdir={tmpdir}")
-        merge_shards(tmpdir)
+        merge_game_shards(PERSONAL_DB, tmpdir, threads=THREADS, memory_limit=MEMORY_LIMIT)
 
 
 if __name__ == "__main__":

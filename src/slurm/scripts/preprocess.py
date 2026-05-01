@@ -1,10 +1,17 @@
 """
 Preprocess Lichess data for move-time analysis.
 Includes selection of games, extraction of moves, and feature engineering.
+
+Contract (do not subvert with optional alternate temp paths):
+    DuckDB ``temp_directory`` always equals the directory named by ``work_dir`` or ``staging_dir``.
+    Shard parquet outputs go under ``staging_dir``. Merge reads ``staging_dir`` only.
+
+Defaults are module constants below; override ``threads`` / ``memory_limit`` only via explicit arguments.
 """
 
+from __future__ import annotations
+
 import os
-import time
 
 import duckdb
 from tqdm import tqdm
@@ -14,47 +21,49 @@ from _bootstrap import ensure_src
 ensure_src()
 
 DEFAULT_MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
+DEFAULT_THREADS = 40
+DEFAULT_MEMORY_LIMIT = "64GB"
 
 
-def conn_kwargs(**kwargs) -> dict:
-    """DuckDB connect config; omit keys rather than passing None (avoids INT cast errors)."""
-    threads = kwargs.get("threads")
-    if threads is None:
-        threads = kwargs.get("n_threads")
-    if threads is None:
-        threads = 40
-    memory_limit = kwargs.get("memory_limit") or "64GB"
-    tmpdir = kwargs.get("tmpdir") or os.getcwd()
-    tmpdir = os.path.abspath(tmpdir)
-    os.makedirs(tmpdir, exist_ok=True)
+def duckdb_connect_config(work_dir: str, threads: int, memory_limit: str) -> dict:
+    """DuckDB ``connect`` config: spill/sort temp files live in ``work_dir``."""
+    work_dir = os.path.abspath(work_dir)
+    os.makedirs(work_dir, exist_ok=True)
     return {
         "threads": int(threads),
         "memory_limit": str(memory_limit),
-        "temp_directory": tmpdir,
+        "temp_directory": work_dir,
     }
+
 
 def _sql_str(s: str) -> str:
     """Single-quoted SQL literal fragment."""
     return s.replace("'", "''")
 
-def get_games(
-        output_db: str,
-        lichess_db: str,
-        start_date: str,
-        end_date: str,
-        initial_clock=600,
-        clock_increment=0,
-        min_elo=2000,
-        **kwargs
-    ):
-    """
-    Build table ``games`` in ``output_db`` from ``core.games`` using fixed selection filters.
 
-    Each row includes ``partition``, ``segment`` (from ``gid``), ``initial_clock``, and
-    ``clock_increment`` for ``filter_games`` (berserk / grant-more-time on shard reads).
+def get_games(
+    personal_db: str,
+    lichess_db: str,
+    start_date: str,
+    end_date: str,
+    work_dir: str,
+    initial_clock: int = 600,
+    clock_increment: int = 0,
+    min_elo: int = 2000,
+    threads: int = DEFAULT_THREADS,
+    memory_limit: str = DEFAULT_MEMORY_LIMIT,
+):
     """
-    print(f"Fetching games and saving to database:\n\t{lichess_db} --> \n\t{output_db}")
-    conn = duckdb.connect(database=output_db, read_only=False, config=conn_kwargs(**kwargs))
+    Build table ``games`` in ``personal_db`` from ``core.games`` using fixed selection filters.
+
+    DuckDB temporary files use ``work_dir`` (same constraint as :func:`preprocess_game_shard`).
+    """
+    print(f"Fetching games and saving to database:\n\t{lichess_db} --> \n\t{personal_db}")
+    conn = duckdb.connect(
+        database=personal_db,
+        read_only=False,
+        config=duckdb_connect_config(work_dir, threads, memory_limit),
+    )
     conn.sql(f"""ATTACH '{lichess_db}' AS core (READ_ONLY);""")
 
     s_start = _sql_str(start_date)
@@ -94,29 +103,32 @@ def get_games(
     )
 
 
-def filter_games(
-        personal_db: str,
-        job_id: int,
-        total_jobs: int,
-        moves_root: str = DEFAULT_MOVES_ROOT,
-        **kwargs,
-    ):
+def preprocess_game_shard(
+    personal_db: str,
+    job_id: int,
+    total_jobs: int,
+    staging_dir: str,
+    moves_root: str = DEFAULT_MOVES_ROOT,
+    threads: int = DEFAULT_THREADS,
+    memory_limit: str = DEFAULT_MEMORY_LIMIT,
+):
     """
-    Shard moves parquet by ``(partition, segment)``, join ``games``, then drop:
+    Shard moves parquet by ``(partition, segment)``, join ``games``, then drop bad games.
 
-    - whole games with any negative ``move_time``,
-    - berserk games (ply 3–4 clock ≈ ``initial_clock / 2``, same tolerances as ``preprocess_data``),
-    - grant-more-time games on increment-0 time controls (clock rises vs previous ply same color).
-
-    Requires ``games.initial_clock`` and ``games.clock_increment`` (see ``get_games``).
+    Writes ``selected_moves_<partition>_<segment>.parquet`` under ``staging_dir``.
+    DuckDB spill uses ``staging_dir`` (same folder). Pass that same path to :func:`merge_game_shards`.
     """
     if total_jobs < 1 or job_id < 0:
         raise ValueError("need total_jobs >= 1 and job_id >= 0")
 
-    tmpdir = os.path.abspath(kwargs.get("tmpdir") or os.getcwd())
-    os.makedirs(tmpdir, exist_ok=True)
+    staging_dir = os.path.abspath(staging_dir)
+    os.makedirs(staging_dir, exist_ok=True)
 
-    conn = duckdb.connect(database=personal_db, read_only=True, config=conn_kwargs(**kwargs))
+    conn = duckdb.connect(
+        database=personal_db,
+        read_only=True,
+        config=duckdb_connect_config(staging_dir, threads, memory_limit),
+    )
 
     pairs = conn.execute(
         """
@@ -128,14 +140,14 @@ def filter_games(
 
     assigned = [
         (str(p), str(s))
-        for p, s, in pairs[job_id::total_jobs]
+        for p, s in pairs[job_id::total_jobs]
     ]
-    print(f"filter_games job={job_id}/{total_jobs} | shard_pairs={len(pairs)} | assigned={len(assigned)}")
+    print(f"preprocess_game_shard job={job_id}/{total_jobs} | shard_pairs={len(pairs)} | assigned={len(assigned)}")
 
     for partition, segment in tqdm(assigned, desc=f"moves {job_id}"):
         pq_path = os.path.join(moves_root, f"partition={partition}", f"{segment}-moves.parquet")
         assert os.path.isfile(pq_path), f"missing: {pq_path}"
-        out = os.path.join(tmpdir, f"selected_moves_{partition}_{segment}.parquet")
+        out = os.path.join(staging_dir, f"selected_moves_{partition}_{segment}.parquet")
         conn.execute(
             f"""
             COPY (
@@ -193,21 +205,73 @@ def filter_games(
     conn.close()
 
 
+def merge_game_shards(
+    personal_db: str,
+    staging_dir: str,
+    threads: int = DEFAULT_THREADS,
+    memory_limit: str = DEFAULT_MEMORY_LIMIT,
+):
+    """
+    Load ``selected_moves_*.parquet`` from ``staging_dir`` into table ``moves``.
+
+    DuckDB spill uses ``staging_dir`` (same folder as the parquet glob).
+    """
+    staging_dir = os.path.abspath(staging_dir)
+    os.makedirs(staging_dir, exist_ok=True)
+    pattern = os.path.join(staging_dir, "selected_moves_*.parquet")
+
+    print(f"merge_game_shards: read_parquet('{pattern}') → {personal_db}.moves")
+    conn = duckdb.connect(
+        database=personal_db,
+        read_only=False,
+        config=duckdb_connect_config(staging_dir, threads, memory_limit),
+    )
+    pat = _sql_str(pattern)
+    conn.execute(
+        f"""
+        CREATE OR REPLACE TABLE moves AS
+        SELECT * FROM read_parquet('{pat}')
+        """
+    )
+    n = conn.execute("SELECT count(*) FROM moves").fetchone()[0]
+    conn.close()
+    print(f"✅ merge_game_shards finished — table moves replaced ({n:,} rows).")
+
+
 if __name__ == "__main__":
+    args = argparse.ArgumentParser().parse_args()
     tmpdir = "/scratch/gpfs/GRIFFITHS/hl4291/tmp/"
     personal_db = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
     lichess_db = "/scratch/gpfs/GRIFFITHS/chess-db/lichess.db"
-    
-    # get the games from the lichess database and save to the personal database
-    get_games(
-        output_db = personal_db, 
-        lichess_db = lichess_db,
-        n_threads = 40,
-        start_date = "2023-10-01",
-        end_date = "2024-01-01", #exclusive upper bound
-        initial_clock = 600,
-        clock_increment = 0,
-        min_elo = 2000,
-        memory_limit = "64GB", 
-        tmpdir = tmpdir
-    )
+
+    if args.runtype == "get_games":
+        get_games(
+            personal_db=personal_db,
+            lichess_db=lichess_db,
+            work_dir=tmpdir,
+            start_date="2023-10-01",
+            end_date="2024-01-01",  # exclusive upper bound
+            initial_clock=600,
+            clock_increment=0,
+            min_elo=2000,
+            threads=DEFAULT_THREADS,
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+        )
+    elif args.runtype == "shard":
+        preprocess_game_shard(
+            personal_db=personal_db,
+            job_id=args.job_id,
+            total_jobs=args.total_shards,
+            staging_dir=args.staging_dir,
+            threads=DEFAULT_THREADS,
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+        )
+    elif args.runtype == "merge":
+        merge_game_shards(
+            personal_db=personal_db,
+            staging_dir=args.staging_dir,
+            threads=DEFAULT_THREADS,
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+        )
+    else:
+        raise ValueError(f"unknown runtype: {args.runtype}")
