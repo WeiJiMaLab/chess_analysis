@@ -228,15 +228,18 @@ def identify_grant_more_time(tmpdir=DEFAULT_TMPDIR):
     print(f"🔍 Identifying 'grant more time' games in {PERSONAL_DB}...")
     conn.execute(
         """
+        CREATE OR REPLACE TABLE grant_more_time_games AS
         SELECT DISTINCT gid
         FROM (
-            SELECT m.gid, player_clock_time, 
-                   lag(player_clock_time) OVER (PARTITION BY m.gid, player_white ORDER BY move_ply) as prev_clock
+            SELECT m.gid, player_clock_time,
+                   lag(player_clock_time) OVER (
+                       PARTITION BY m.gid, player_white ORDER BY move_ply
+                   ) AS prev_clock
             FROM selected_moves m
             JOIN core.games g ON m.gid = g.gid
             WHERE g.clock_increment = 0
         )
-        WHERE prev_clock IS NOT NULL 
+        WHERE prev_clock IS NOT NULL
           AND player_clock_time > prev_clock
         """
     )

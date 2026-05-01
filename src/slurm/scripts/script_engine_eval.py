@@ -12,7 +12,21 @@ from _bootstrap import ensure_src
 ensure_src()
 
 from utils.helpers import get_lc0_engine, get_stockfish_engine
-from utils.features import row_to_fen
+
+
+def row_to_fen(row):
+    """FEN for engines: board placement, side to move, castling, en passant (four-field prefix)."""
+    turn = "w" if row["player_white"] else "b"
+    try:
+        cr = row["castling_rights"] if row["castling_rights"] is not None else "-"
+    except (KeyError, ValueError, TypeError):
+        cr = "-"
+    try:
+        ep = row["en_passant_targets"] if row["en_passant_targets"] is not None else "-"
+    except (KeyError, ValueError, TypeError):
+        ep = "-"
+    return f"{row['board_position']} {turn} {cr} {ep}"
+
 
 # Global engine variable per worker process
 _worker_engine = None

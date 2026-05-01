@@ -23,8 +23,6 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
 | **Ply vs instant-move probability** | `python src/ply_premove.py` |
 | **Engine eval (cluster)** | `bash src/slurm/engine_eval.sh` (or `--merge-only` when parquets exist) |
-| **Build `selected_moves_with_engine`** | `python src/slurm/scripts/build_selected_moves_with_engine.py` (after eval tables exist) |
-| **VOC / parquet feature pipeline** | `python src/slurm/scripts/script_process_data.py` |
 | **Merge eval shards only (legacy)** | `python src/slurm/scripts/script_merge_evals.py --engine stockfish` |
 | **Slidev deck (CMC overview)** | `cd src/presentations/cmc-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
@@ -41,14 +39,14 @@ Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) ar
 ```text
 chess_analysis/
 ├── .venv/
-├── data/                         # Staging parquets, processed outputs (e.g. VOC)
+├── data/                         # Optional staging (parquets, scratch outputs)
 ├── README.md                     # Workspace / lmcos overview
 └── src/
     ├── README.md                 # This file
     ├── figures/                  # Matplotlib outputs from dashboards and exploratory scripts
     ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=src
     ├── presentations/             # Slidev deck (`cmc-overview/`) + shared SVG assets
-    ├── utils/                    # Library: Analyzer, plots, helpers, features (no pipeline CLIs)
+    ├── utils/                    # Library: Analyzer, plots, helpers (no pipeline CLIs)
     ├── slurm/
     │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
     │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
@@ -65,7 +63,7 @@ chess_analysis/
 | :--- | :--- |
 | **`src/slurm/scripts/`** | New **ETL / engine / join** entry points. Start with `ensure_src()` from `_bootstrap.py` so `import utils` works when run as `python src/slurm/scripts/...` from repo root. |
 | **`src/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` and write figures. |
-| **`src/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`, feature helpers—**not** one-shot pipeline drivers. |
+| **`src/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
 | **`src/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
 | **`src/presentations/`** | Slidev decks (`cmc-overview/`) and presentation assets only—not Python pipeline code. |
 
@@ -113,9 +111,8 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 
 1. `python src/slurm/scripts/preprocess_data.py select_games`
 2. `bash src/slurm/_preprocess.sh`
-3. **Optional:** `python src/slurm/scripts/script_process_data.py` (parquet VOC path; not required for core DuckDB dashboards)
-4. **Optional:** `bash src/slurm/engine_eval.sh` → `python src/slurm/scripts/build_selected_moves_with_engine.py`
-5. **Figures:** `bash src/slurm/script_analysis.sh` or individual `src/*.py` tools in §1.
+3. **Optional:** `bash src/slurm/engine_eval.sh` → `python src/slurm/scripts/build_selected_moves_with_engine.py`
+4. **Figures:** `bash src/slurm/script_analysis.sh` or individual `src/*.py` tools in §1.
 
 ---
 

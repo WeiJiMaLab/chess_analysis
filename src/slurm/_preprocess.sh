@@ -33,6 +33,7 @@ sbatch --wait --export=ALL "${PROJECT_DIR}/src/slurm/preprocess_shard.sbatch"
 echo "Merge job on $(hostname) at $(date)"
 python3 src/slurm/scripts/preprocess_data.py merge --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
 python3 src/slurm/scripts/preprocess_data.py berserk --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
+python3 src/slurm/scripts/preprocess_data.py grant_more_time --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 64GB
 
 echo "Preprocess job on $(hostname) at $(date)"
 python3 src/slurm/scripts/preprocess_data.py preprocess --tmpdir "${LOAD_MOVES_TMPDIR}" --threads 40 --memory 128GB

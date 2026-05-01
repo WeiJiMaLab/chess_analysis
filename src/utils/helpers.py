@@ -11,7 +11,6 @@ import chess.engine
 import chess.svg
 import duckdb
 import matplotlib.pyplot as plt
-import numpy as np
 import dask.dataframe as dd
 from IPython.display import SVG, display
 
@@ -131,37 +130,4 @@ def get_db_connection(
         **kwargs,
     }
     return duckdb.connect(database=database, config=config)
-
-def calculate_ols(conn, table, x, y):
-    """
-    Calculate global OLS slope and intercept using SQL-native functions.
-    Returns (slope, intercept).
-    """
-    return conn.execute(f"""
-        SELECT 
-            regr_slope({y}, {x}) as slope,
-            regr_intercept({y}, {x}) as intercept
-        FROM {table}
-    """).fetchone()
-
-def calculate_plywise_betas(conn, table, x, y, ply_col='move_ply', min_n=30):
-    """
-    Calculate per-ply OLS slopes and SE using SQL-native functions.
-    Returns a DataFrame with [ply_col, beta, beta_se, n].
-    """
-    return conn.execute(f"""
-        SELECT 
-            {ply_col},
-            regr_slope({y}, {x}) as beta,
-            sqrt(
-                (regr_syy({y}, {x}) - pow(regr_slope({y}, {x}), 2) * regr_sxx({y}, {x})) / 
-                (NULLIF(CAST(regr_count({y}, {x}) AS BIGINT) - 2, 0)) / 
-                NULLIF(regr_sxx({y}, {x}), 0)
-            ) as beta_se,
-            count(*) as n
-        FROM {table}
-        GROUP BY {ply_col}
-        HAVING n > {min_n}
-    """).df()
-
 

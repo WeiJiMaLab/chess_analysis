@@ -1,3 +1,11 @@
+"""Matplotlib helpers for chess_analysis dashboards.
+
+Plots assume aggregates already computed (often SQL-side via ``Analyzer``): mean curves with
+normal approximated bands (``1.96 * SEM``), quantile-bin panels, and heatmaps with frequency-aware alpha.
+
+Uses poster typography/grid defaults via ``helpers.apply_poster_style()`` unless noted otherwise.
+"""
+
 import os
 
 import matplotlib.colors as mcolors
@@ -27,6 +35,10 @@ def plot_raw_trend(
     *,
     ci_legend_label="95% CI",
 ):
+    """Mean ``y_col`` vs discrete ``x_col`` with a normal-based CI band (``1.96 * std/sqrt(n)``).
+
+    Rows below ``min_n`` are dropped; used for raw-bin aggregates (e.g. integer ply or clock buckets).
+    """
     apply_poster_style()
     df = df[df[n_col] >= min_n].copy()
     df = df.sort_values(x_col)
@@ -63,6 +75,11 @@ def plot_qbin_stats(
     *,
     ci_legend_label="95% CI",
 ):
+    """Mean and CI band over quantile-bin aggregates (same SEM recipe as ``plot_raw_trend``).
+
+    If ``normalized`` is True, x positions are replaced by ranks ``1..K`` scaled to ``(0, 1]``
+    for a quantile-rank axis (default x-axis label: "Quantile Rank").
+    """
     apply_poster_style()
     df = df.sort_values(x_col).copy()
     sem = df[std_col] / np.sqrt(df[n_col])
@@ -89,6 +106,7 @@ def plot_qbin_stats(
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_se', max_ply=150, title=None):
+    """Per-ply OLS slopes (e.g. SQL ``regr_slope``) with ``1.96 * se`` ribbon and a zero reference line."""
     apply_poster_style()
     df = df[df[ply_col] <= max_ply].copy()
     ci_beta = 1.96 * df[se_col]
@@ -101,6 +119,7 @@ def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_s
         ax.set_title(title, fontsize=FONT_SIZE_LABEL)
 
 def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=10000, color=MAIN_COLOR, alpha=0.1, s=10):
+    """Scatter at most ``n`` rows (deterministic ``random_state=42``) for large DuckDB pulls."""
     apply_poster_style()
     if len(df) > n:
         df_sub = df.sample(n=n, random_state=42)
@@ -113,6 +132,7 @@ def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
 
 def plot_histogram_from_bins(ax, df_bins, left_col="bin_left", right_col="bin_right", count_col="n", x_label=None, y_label="Count", color=MAIN_COLOR):
+    """Aligned-edge bar histogram from SQL histogram tables (bin left edges + widths). No-op if ``df_bins`` is empty."""
     apply_poster_style()
     if df_bins.empty:
         return
@@ -125,9 +145,9 @@ def plot_histogram_from_bins(ax, df_bins, left_col="bin_left", right_col="bin_ri
 
 
 def get_isoluminant_cmap(name="isoluminant_azure", h1=0.58, h2=None, s1=0.0, s2=0.85, lightness=0.6, saturation=None):
-    """
-    Generate an isoluminant colormap with constant HSL lightness.
-    Supports either Hue transitions or Saturation (Gray-to-Color) transitions.
+    """Matplotlib ``ListedColormap`` at fixed HSL lightness.
+
+    Varies hue from ``h1`` to ``h2`` and saturation from ``s1`` to ``s2`` (``saturation`` pins both).
     """
     import colorsys
     from matplotlib.colors import ListedColormap
@@ -155,10 +175,12 @@ def plot_heatmap_with_alpha(
     value_label="Mean Y",
     imshow_aspect="auto",
 ):
-    """
-    Heatmap: cell color encodes ``pivot_values``; alpha encodes ``pivot_counts`` (frequency).
-    ``alpha_mode`` is ``\"log\"`` (``log1p`` normalized) or ``\"linear\"``.
-    ``imshow_aspect``: passed to ``imshow`` (``\"equal\"`` gives square cells on quantile×quantile grids).
+    """Heatmap: facecolor from ``pivot_values``, per-cell alpha from ``pivot_counts``.
+
+    ``alpha_mode``: ``"log"`` uses ``log1p`` normalization vs max count; ``"linear"`` uses raw fractions.
+    ``imshow_aspect`` is forwarded to ``imshow`` (use ``"equal"`` for square quantile×quantile cells).
+
+    Returns the ``ScalarMappable`` used for the colorbar.
     """
     from matplotlib.cm import ScalarMappable
 

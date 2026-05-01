@@ -8,7 +8,7 @@ This home directory is the working root for a research thread that combines **la
 | :--- | :--- |
 | `chess_analysis/` | DuckDB, figures; Slidev deck lives under `src/presentations/` |
 | `chess_analysis/src/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, VOC parquet, joins) |
+| `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |

@@ -162,7 +162,7 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
 3. **Blank line.**
 4. **Third-party** (alphabetical by package: `chess`, `dask`, `duckdb`, `matplotlib`, `numpy`, `pandas`, `seaborn`, `statsmodels`, `tqdm`).
 5. **Blank line.**
-6. **Local project** (`from features import …`, `from utils import …`).
+6. **Local project** (`from utils import …`, `from _bootstrap import …` in `slurm/scripts/`).
 
 ## Formatting and structure
 
@@ -171,4 +171,4 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
 
 ## Summary
 
-The codebase favors **readable, modular analysis code**—clear separation of utilities, features, and scripts, consistent import layout, and explicit domain naming. **Visual excellence** is a primary requirement for all generated analysis figures.
+The codebase favors **readable, modular analysis code**—clear separation of utilities (`utils/`) and scripts, consistent import layout, and explicit domain naming. **Visual excellence** is a primary requirement for all generated analysis figures.
