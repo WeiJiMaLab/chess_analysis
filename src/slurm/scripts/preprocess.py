@@ -1,0 +1,213 @@
+"""
+Preprocess Lichess data for move-time analysis.
+Includes selection of games, extraction of moves, and feature engineering.
+"""
+
+import os
+import time
+
+import duckdb
+from tqdm import tqdm
+
+from _bootstrap import ensure_src
+
+ensure_src()
+
+DEFAULT_MOVES_ROOT = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
+
+
+def conn_kwargs(**kwargs) -> dict:
+    """DuckDB connect config; omit keys rather than passing None (avoids INT cast errors)."""
+    threads = kwargs.get("threads")
+    if threads is None:
+        threads = kwargs.get("n_threads")
+    if threads is None:
+        threads = 40
+    memory_limit = kwargs.get("memory_limit") or "64GB"
+    tmpdir = kwargs.get("tmpdir") or os.getcwd()
+    tmpdir = os.path.abspath(tmpdir)
+    os.makedirs(tmpdir, exist_ok=True)
+    return {
+        "threads": int(threads),
+        "memory_limit": str(memory_limit),
+        "temp_directory": tmpdir,
+    }
+
+def _sql_str(s: str) -> str:
+    """Single-quoted SQL literal fragment."""
+    return s.replace("'", "''")
+
+def get_games(
+        output_db: str,
+        lichess_db: str,
+        start_date: str,
+        end_date: str,
+        initial_clock=600,
+        clock_increment=0,
+        min_elo=2000,
+        **kwargs
+    ):
+    """
+    Build table ``games`` in ``output_db`` from ``core.games`` using fixed selection filters.
+
+    Each row includes ``partition``, ``segment`` (from ``gid``), ``initial_clock``, and
+    ``clock_increment`` for ``filter_games`` (berserk / grant-more-time on shard reads).
+    """
+    print(f"Fetching games and saving to database:\n\t{lichess_db} --> \n\t{output_db}")
+    conn = duckdb.connect(database=output_db, read_only=False, config=conn_kwargs(**kwargs))
+    conn.sql(f"""ATTACH '{lichess_db}' AS core (READ_ONLY);""")
+
+    s_start = _sql_str(start_date)
+    s_end = _sql_str(end_date)
+
+    start_yyyymm = int(start_date.replace("-", "")[:6])
+    end_yyyymm = int(end_date.replace("-", "")[:6]) + 1
+    gid_bounds = f"AND gid >= {start_yyyymm}000000000 AND gid < {end_yyyymm}000000000"
+
+    conn.execute(
+        f"""
+        CREATE OR REPLACE TABLE games AS
+        SELECT
+            gid,
+            utc_datetime,
+            substr(cast(gid AS VARCHAR), 1, 6) AS partition,
+            substr(cast(gid AS VARCHAR), 7, 3) AS segment,
+            initial_clock,
+            clock_increment
+        FROM core.games
+        WHERE utc_datetime >= TIMESTAMP '{s_start}'
+          AND utc_datetime < TIMESTAMP '{s_end}'
+          {gid_bounds}
+          AND initial_clock = {int(initial_clock)}
+          AND clock_increment = {int(clock_increment)}
+          AND white_elo >= {int(min_elo)}
+          AND black_elo >= {int(min_elo)}
+        """
+    )
+
+    count = conn.execute("SELECT count(*) FROM games").fetchone()[0]
+    conn.close()
+    print(
+        "✅ games rebuilt | "
+        f"window=[{start_date}, {end_date}) | tc={initial_clock}+{clock_increment} | "
+        f"min_elo={min_elo} | n={count:,}"
+    )
+
+
+def filter_games(
+        personal_db: str,
+        job_id: int,
+        total_jobs: int,
+        moves_root: str = DEFAULT_MOVES_ROOT,
+        **kwargs,
+    ):
+    """
+    Shard moves parquet by ``(partition, segment)``, join ``games``, then drop:
+
+    - whole games with any negative ``move_time``,
+    - berserk games (ply 3–4 clock ≈ ``initial_clock / 2``, same tolerances as ``preprocess_data``),
+    - grant-more-time games on increment-0 time controls (clock rises vs previous ply same color).
+
+    Requires ``games.initial_clock`` and ``games.clock_increment`` (see ``get_games``).
+    """
+    if total_jobs < 1 or job_id < 0:
+        raise ValueError("need total_jobs >= 1 and job_id >= 0")
+
+    tmpdir = os.path.abspath(kwargs.get("tmpdir") or os.getcwd())
+    os.makedirs(tmpdir, exist_ok=True)
+
+    conn = duckdb.connect(database=personal_db, read_only=True, config=conn_kwargs(**kwargs))
+
+    pairs = conn.execute(
+        """
+        SELECT DISTINCT partition, segment
+        FROM games
+        ORDER BY partition, segment
+        """
+    ).fetchall()
+
+    assigned = [
+        (str(p), str(s))
+        for p, s, in pairs[job_id::total_jobs]
+    ]
+    print(f"filter_games job={job_id}/{total_jobs} | shard_pairs={len(pairs)} | assigned={len(assigned)}")
+
+    for partition, segment in tqdm(assigned, desc=f"moves {job_id}"):
+        pq_path = os.path.join(moves_root, f"partition={partition}", f"{segment}-moves.parquet")
+        assert os.path.isfile(pq_path), f"missing: {pq_path}"
+        out = os.path.join(tmpdir, f"selected_moves_{partition}_{segment}.parquet")
+        conn.execute(
+            f"""
+            COPY (
+                WITH joined AS (
+                    SELECT
+                        pq.*,
+                        CAST(g.initial_clock AS DOUBLE) AS initial_clock,
+                        CAST(g.clock_increment AS BIGINT) AS clock_increment
+                    FROM read_parquet('{_sql_str(pq_path)}') pq
+                    INNER JOIN games g ON pq.gid = g.gid
+                    WHERE g.partition = '{_sql_str(partition)}' AND g.segment = '{_sql_str(segment)}'
+                ),
+                -- Drop entire games if any move has negative move_time.
+                exclude_neg_gid AS (
+                    SELECT DISTINCT gid
+                    FROM joined
+                    WHERE move_time < 0
+                ),
+                -- Drop entire games if the player chooses to berserk (half the clock time for points)
+                exclude_berserk_gid AS (
+                    SELECT DISTINCT gid
+                    FROM joined
+                    -- First full-move window where halved clock shows after berserk (see preprocess_data.identify_berserk).
+                    WHERE move_ply BETWEEN 3 AND 4
+                      AND player_clock_time >= (initial_clock / 2.0) - 5.0
+                      AND player_clock_time <= (initial_clock / 2.0) + 0.1
+                ),
+                -- Drop entire games if player chooses to grant more time to the opponent (only valid in increment-0 time controls)
+                exclude_grant_more_time_gid AS (
+                    SELECT DISTINCT gid
+                    FROM (
+                        SELECT
+                            gid,
+                            player_clock_time,
+                            clock_increment,
+                            lag(player_clock_time) OVER (
+                                PARTITION BY gid, player_white ORDER BY move_ply
+                            ) AS prev_clock
+                        FROM joined
+                    )
+                    WHERE clock_increment = 0
+                      AND prev_clock IS NOT NULL
+                      AND player_clock_time > prev_clock
+                )
+                SELECT j.* EXCLUDE (initial_clock, clock_increment)
+                FROM joined j
+                WHERE j.gid NOT IN (SELECT gid FROM exclude_neg_gid)
+                  AND j.gid NOT IN (SELECT gid FROM exclude_berserk_gid)
+                  AND j.gid NOT IN (SELECT gid FROM exclude_grant_more_time_gid)
+            ) TO '{_sql_str(out)}' (FORMAT PARQUET)
+            """
+        )
+        nm = conn.execute(f"SELECT count(*) FROM read_parquet('{_sql_str(out)}')").fetchone()[0]
+        print(f"\t{partition}/{segment} | {nm:,} moves | → {out}")
+    conn.close()
+
+
+if __name__ == "__main__":
+    tmpdir = "/scratch/gpfs/GRIFFITHS/hl4291/tmp/"
+    personal_db = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+    lichess_db = "/scratch/gpfs/GRIFFITHS/chess-db/lichess.db"
+    
+    # get the games from the lichess database and save to the personal database
+    get_games(
+        output_db = personal_db, 
+        lichess_db = lichess_db,
+        n_threads = 40,
+        start_date = "2023-10-01",
+        end_date = "2024-01-01", #exclusive upper bound
+        initial_clock = 600,
+        clock_increment = 0,
+        min_elo = 2000,
+        memory_limit = "64GB", 
+        tmpdir = tmpdir
+    )
