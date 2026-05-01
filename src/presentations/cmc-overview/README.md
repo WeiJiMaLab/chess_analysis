@@ -39,7 +39,7 @@ Technical deep-dive into the CMC architecture and training pipeline.
 - **Economy of Thought**: Defining the optimal inflection point $k^*$ on the "Thinking Curve."
 
 ### **Part 3: Behavioral Validation (Human Data)**
-Human move timing as an existence proof and target distribution for efficient search (histograms, ply arc, clock pressure, branching, 3D clock×ply surface).
+Human move timing as an existence proof and target distribution for efficient search (histograms, ply arc, clock pressure, branching, material, quantile heatmaps from the shared `Analyzer` path).
 
 ---
 
@@ -47,11 +47,8 @@ Human move timing as an existence proof and target distribution for efficient se
 
 This deck uses a custom **premium design system** defined in `style.css` with a focus on dark-mode aesthetics and typography (Inter & Space Grotesk).
 
-### **Custom Interactive Components** (`/components`)
-- `<ChessBackground />`: Animated Three.js background with floating chess pieces.
-- `<GnnTwoSweeps />`: Interactive diagram showing the bidirectional GNN message passing.
-- `<PolicyPretrainDiagram />`: Tree-based visualization of the DP Oracle logic.
-- `<MetaControllerZoom />`: Mechanistic readout of the root hidden state.
+### **Custom Interactive Components** (`components/`)
+Used on-slide (see `slides.md`): `<ChessBackground />`, `<PaperSketch />`, `<LeelaSearchLoop />`, `<MetaControllerZoom />`, `<GnnTwoSweeps />`, `<GnnPretrainDiagram />`, `<ChildWdlDiagram />`, `<PolicyPretrainDiagram />`, `<DpOracleDiagram />`.
 
 ### **Formatting Rules** (Slidev Gotchas)
 Do **not** insert a blank line between the slide divider `---` and the frontmatter block.
@@ -68,7 +65,7 @@ layout: two-cols
 
 Figures are served from the core `chess_analysis/src/figures` directory via a symlink in `public/figures`. 
 
-To update the figures, run the analysis scripts from the repository root (after `selected_moves` is loaded, e.g. via `src/slurm/script_load_moves.sh` and `load_data.py`).
+To update the figures, run the analysis scripts from the repository root after the DuckDB pipeline has built `_selected_moves` / `_selected_moves_nonzero_T` (see `src/slurm/_preprocess.sh` and `src/slurm/scripts/preprocess_data.py`).
 
 **Move-time histograms** (both variants): deliberation-only vs including premoves:
 ```bash
@@ -78,12 +75,7 @@ python src/move_time_summary.py --include_zeroT
 
 **Dashboards** (`movetime_analysis.py`; all use `_selected_moves_nonzero_T` → one PNG per analysis):
 ```bash
-python src/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc ply
+python src/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc self_pieces_exc ply
 ```
 
-**3D slide data** (`SurfPlot3D`): written next to the deck:
-```bash
-python src/exploratory/heatmap_clock_ply.py
-```
-
-The symlink `public/figures` → `src/figures` serves `move_time_summary/{combined.png,combined_include_zeroT.png}`, `ply_movetime/combined.png`, `clock_movetime/{combined.png,combined_opp.png,...}`, `npossiblemoves_movetime/`, `n_pieces_exc_pawns_movetime/`, plus companion `*_quantile_heatmap.png` files where `movetime_analysis` requests them, and optional `exploratory/heatmap_clock_ply_*.png`. CSVs live in `public/data/heatmap_*.csv`.
+The symlink `public/figures` → `../../../src/figures` (from this directory) serves `move_time_summary/{combined.png,combined_include_zeroT.png}`, `ply_movetime/combined.png`, `clock_movetime/{combined.png,combined_opp.png,...}`, `npossiblemoves_movetime/`, `n_pieces_exc_pawns_movetime/`, `n_self_pieces_exc_pawns_movetime/`, plus companion `*_quantile_heatmap.png` files where `movetime_analysis` requests them. Literature PNG/SVG under `figures/lit/` are checked into `src/figures` with the analysis repo.

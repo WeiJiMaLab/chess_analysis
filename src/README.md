@@ -20,15 +20,19 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | **Extract / merge / preprocess moves** | `bash src/slurm/_preprocess.sh` |
 | **Regenerate standard figures** | `bash src/slurm/script_analysis.sh` |
 | **Move-time histograms** | `python src/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc ply …`) |
+| **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
 | **Ply vs instant-move probability** | `python src/ply_premove.py` |
 | **Engine eval (cluster)** | `bash src/slurm/engine_eval.sh` (or `--merge-only` when parquets exist) |
 | **Build `selected_moves_with_engine`** | `python src/slurm/scripts/build_selected_moves_with_engine.py` (after eval tables exist) |
 | **VOC / parquet feature pipeline** | `python src/slurm/scripts/script_process_data.py` |
 | **Merge eval shards only (legacy)** | `python src/slurm/scripts/script_merge_evals.py --engine stockfish` |
-| **Search-tree expansion (Graphviz)** | `python src/performance/visualize_tree_expansion.py` (needs `torch`, `graphviz`, `chess`) |
+| **Slidev deck (CMC overview)** | `cd src/presentations/cmc-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
+
+Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash src/slurm/script_analysis.sh`** (see repo-root paths there).
 
 **Outputs:** analysis scripts write figures under **`src/figures/`**.
+
+**Search-tree / lmcos visuals:** Graphviz rendering of tensorized trees lives in **`lmcos/demos/`** (e.g. `helper_tensorization.py`, `helper_gnn.py`), not as a standalone script under `src/`.
 
 ---
 
@@ -41,15 +45,15 @@ chess_analysis/
 ├── README.md                     # Workspace / lmcos overview
 └── src/
     ├── README.md                 # This file
-    ├── figures/                  # Matplotlib posters, exploratory, performance SVGs
-    ├── performance/              # e.g. visualize_tree_expansion.py (lmcos-adjacent)
-    ├── exploratory/              # Ad hoc analyses; add src/ to path, then `import utils`
+    ├── figures/                  # Matplotlib outputs from dashboards and exploratory scripts
+    ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=src
+    ├── presentations/             # Slidev deck (`cmc-overview/`) + shared SVG assets
     ├── utils/                    # Library: Analyzer, plots, helpers, features (no pipeline CLIs)
     ├── slurm/
     │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
     │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
-    │   └── logs/
-    ├── movetime_analysis.py
+    │   └── logs/                 # Job logs (cluster-specific; usually gitignored)
+    ├── movetime_analysis.py      # DuckDB move-time dashboards (see DEFAULT_ANALYSES)
     ├── move_time_summary.py
     ├── ply_premove.py
     └── ...
@@ -63,6 +67,7 @@ chess_analysis/
 | **`src/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` and write figures. |
 | **`src/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`, feature helpers—**not** one-shot pipeline drivers. |
 | **`src/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
+| **`src/presentations/`** | Slidev decks (`cmc-overview/`) and presentation assets only—not Python pipeline code. |
 
 ---
 
@@ -129,7 +134,7 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 - All runnable entry logic under **`if __name__ == "__main__":`**.
 - **Bivariate DuckDB plots:** **`Analyzer`** + **`Variable`** (`utils.analysis`); keep aggregations in **SQL** when possible; sample large pulls before plotting.
 - **Matplotlib “poster” figures:** call **`apply_poster_style()`** (`utils.helpers`); no top/right spines; use project font sizes.
-- **Graphviz / non-matplotlib:** no `apply_poster_style()`; still anchor output paths; prefer `src/figures/performance/` for tree exports.
+- **Graphviz / non-matplotlib:** no `apply_poster_style()`; anchor output paths under `src/figures/` or keep visuals inside **`lmcos/demos/`** helpers.
 
 ### Statistics
 
@@ -146,16 +151,11 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 
 ---
 
-## 7. Search-tree expansion (`lmcos`-adjacent)
+## 7. Search-tree visuals (`lmcos`)
 
-**Script:** `src/performance/visualize_tree_expansion.py`  
-Loads a **single** `.pt` (legacy `PretrainExample` or **`cts_raw_pretrain_example_v1`** dict), rebuilds `SearchTree` (`lmcos/tree.py`), writes **Graphviz** `.svg`/`.gv` under a chosen output dir (default under `src/figures/performance/`).
+There is **no** standalone `src/performance/visualize_tree_expansion.py` in this repo. Tutorial notebooks under **`lmcos/demos/`** import helpers such as **`helper_tensorization.py`** and **`helper_gnn.py`**, which build **Graphviz** `Digraph`s from packed examples / `SearchTree` (`lmcos/tree.py`).
 
-**Deps:** `torch`, Python `graphviz`, system `dot`, `python-chess`. Example: `pip install torch graphviz chess`.
-
-```bash
-python src/performance/visualize_tree_expansion.py --pt-path /path/to/example.pt --name myrun --steps 5
-```
+**Typical deps:** `torch`, Python package `graphviz`, system `dot`, `chess`.
 
 ---
 

@@ -286,7 +286,7 @@ math: katex
   
   <div class="takeaway border-accent bg-accent-soft text-sm py-4">
     <b class="text-accent uppercase tracking-wider text-xs">clock × ply</b><br><br>
-    Same idea as the static surfaces in <code>exploratory/heatmap_clock_ply.py</code>, but emitted from the shared <code>Analyzer</code> path as §4.
+    Same idea as optional standalone clock×ply heatmaps in <code>exploratory/</code>, but emitted from the shared <code>Analyzer</code> path as §4.
   </div>
 </div>
 
@@ -425,6 +425,36 @@ math: katex
   <div class="takeaway border-sky-500 bg-sky-50/90 text-sm py-4">
     <b class="text-sky-700 uppercase tracking-wider text-xs">material × ply</b><br><br>
     Endgame-rich counts vs opening ply, analogous to §10 after conditioning on width in §9.
+  </div>
+</div>
+
+---
+
+# 13. Material (self): own non-pawn pieces vs. think time — dashboard
+
+<div class="text-xs opacity-60 mb-2 -mt-2">x = <code>n_self_pieces_exc_pawns</code> (moving player's non-pawn count from FEN case + <code>player_white</code>); y = <code>ln(move_time + ε)</code>. <code>movetime_analysis.py --only self_pieces_exc</code>.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain" src="/figures/n_self_pieces_exc_pawns_movetime/combined.png" />
+
+  <div class="takeaway border-amber-500 bg-amber-50/90 text-sm py-4">
+    <b class="text-amber-900 uppercase tracking-wider text-xs">n_self_pieces_exc_pawns_movetime</b><br><br>
+    Same layout as §11, but predictor is <b>your</b> remaining officers (not both sides total). Contrasts total material in §11–12.
+  </div>
+</div>
+
+---
+
+# 14. Material (self): own non-pawn pieces vs. think time — quantile heatmap
+
+<div class="text-xs opacity-60 mb-2 -mt-2">Joint <code>ntile</code> bins of own non-pawn count × move ply; same encoding as §12.</div>
+
+<div class="grid grid-cols-[65fr_35fr] gap-10 mt-4 items-start">
+  <img class="w-full object-contain max-h-[340px]" src="/figures/n_self_pieces_exc_pawns_movetime/combined_quantile_heatmap.png" />
+
+  <div class="takeaway border-amber-500 bg-amber-50/90 text-sm py-4">
+    <b class="text-amber-900 uppercase tracking-wider text-xs">own material × ply</b><br><br>
+    Stage-conditioned view of how “how much of my army is left” relates to think time (cf. total board count in §12).
   </div>
 </div>
 

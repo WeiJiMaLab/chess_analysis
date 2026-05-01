@@ -6,14 +6,14 @@ This home directory is the working root for a research thread that combines **la
 
 | Path | Role |
 | :--- | :--- |
-| `chess_analysis/` | DuckDB, figures, presentations |
+| `chess_analysis/` | DuckDB, figures; Slidev deck lives under `src/presentations/` |
 | `chess_analysis/src/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
 | `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, VOC parquet, joins) |
 | `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
-| `chess_analysis/presentations/cmc-overview/` | Slidev deck: motivation, method, human validation |
+| `chess_analysis/src/presentations/cmc-overview/` | Slidev deck: motivation, method, human validation |
 
 For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/src/README.md`. The latter documents **code layout** (`src/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
@@ -41,7 +41,7 @@ A future layer is a **full planning head** (which node to expand, etc.) on the s
 
 ## 2. Human behavioral track (context for “broad implications”)
 
-Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `presentations/cmc-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
+Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `src/presentations/cmc-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
 The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
@@ -163,7 +163,7 @@ These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers an
 | `04_pretrain_tutorial.ipynb` | Supervised pretraining and losses |
 | `05_meta_controller_tutorial.ipynb` | Halt/continue and economy of thought |
 | `lmcos/demos/understanding.md` | GNN wiring, slot encodings, dense recursive WDL head |
-| `presentations/cmc-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+| `src/presentations/cmc-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
 
 Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
 
@@ -190,8 +190,8 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/src/README.md`** (pipeline CLIs under **`src/slurm/scripts/`**); for meta-controller and tree visualization, see **`src/performance/visualize_tree_expansion.py`** and **`lmcos/`**.
+For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/src/README.md`** (pipeline CLIs under **`src/slurm/scripts/`**); for meta-controller code and tutorial-style **Graphviz** tree diagrams, see **`lmcos/`** (for example **`lmcos/demos/helper_tensorization.py`** and the demo notebooks).
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md` and demos through 2026-04-14 (budgeted oracle and packing v2).*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `src/` layout (analysis under DuckDB dashboards + Slurm CLIs), and demos through 2026-04-14.*

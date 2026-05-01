@@ -4,7 +4,6 @@ Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engin
 
 from __future__ import annotations
 
-from collections import defaultdict
 import os
 
 import chess
@@ -132,80 +131,6 @@ def get_db_connection(
         **kwargs,
     }
     return duckdb.connect(database=database, config=config)
-
-def bootstrapped_ci(data, n_bootstraps=1000):
-    if len(data) <= 1:
-        return (np.nan, np.nan)
-    bootstrap_means = []
-    data = np.array(data)
-    for _ in range(n_bootstraps):
-        bootstrap_sample = np.random.choice(data, size=len(data), replace=True)
-        bootstrap_means.append(np.mean(bootstrap_sample))
-    return np.percentile(bootstrap_means, [2.5, 97.5])
-
-def compute_metrics_by_bin(data):
-    metrics = defaultdict(list)
-    for x in sorted(data["bin"].unique()):
-        bin_data = data[data["bin"] == x]["move_time"]
-        n = len(bin_data)
-        if n > 1:
-            mean = bin_data.mean()
-            ci = bootstrapped_ci(bin_data)
-        elif n == 1:
-            mean = bin_data.iloc[0]
-            ci = (mean, mean)
-        else:
-            continue
-        metrics["x"].append(x)
-        metrics["y"].append(mean)
-        metrics["ci_lower"].append(ci[0])
-        metrics["ci_upper"].append(ci[1])
-    return metrics
-
-def compute_metrics_by_qbin(data, qbin_edges):
-    metrics = defaultdict(list)
-    n_bins = len(qbin_edges) - 1
-    for q in range(n_bins):
-        bin_data = data[data["qbins"] == q]["move_time"]
-        n = len(bin_data)
-        if n > 1:
-            mean = bin_data.mean()
-            ci = bootstrapped_ci(bin_data)
-        elif n == 1:
-            mean = bin_data.iloc[0]
-            ci = (mean, mean)
-        else:
-            continue
-        left_edge = qbin_edges[q]
-        right_edge = qbin_edges[q + 1]
-        bin_mid = (left_edge + right_edge) / 2
-        metrics["x"].append(bin_mid)
-        metrics["y"].append(mean)
-        metrics["ci_lower"].append(ci[0])
-        metrics["ci_upper"].append(ci[1])
-    return metrics
-
-def plot_metrics(metrics, color=MAIN_COLOR, ax=None):
-    if ax is None:
-        ax = plt.gca()
-    # Markers so low-variance x (few qcut bins) still shows visible means, not a degenerate line.
-    ax.plot(
-        metrics["x"],
-        metrics["y"],
-        label="mean",
-        color=color,
-        marker="o",
-        markersize=9,
-        linestyle="-",
-    )
-    ax.fill_between(
-        metrics["x"],
-        metrics["ci_lower"],
-        metrics["ci_upper"],
-        color=color,
-        alpha=0.2,
-        label="95% CI",
-    )
 
 def calculate_ols(conn, table, x, y):
     """
