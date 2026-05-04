@@ -4,7 +4,7 @@
 # Engine-backed workflows (e.g. selected_moves_with_engine) are not run here.
 #
 # Usage:
-#   bash /home/hl4291/chess_analysis/src/slurm/script_analysis.sh
+#   bash src/slurm/analysis.sh
 
 set -euo pipefail
 

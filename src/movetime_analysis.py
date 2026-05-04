@@ -14,7 +14,7 @@ import duckdb
 from utils import Variable, Analyzer
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 
-# Default run order (matches slurm script_analysis.sh where applicable).
+# Default run order (matches slurm analysis.sh where applicable).
 DEFAULT_ANALYSES = (
     "clock",
     "clock_opp",

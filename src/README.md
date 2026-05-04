@@ -16,8 +16,8 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | Task | Command |
 | :--- | :--- |
 | **Activate env** | `source .venv/bin/activate` |
-| **Moves ETL (games → shards → merge)** | `bash src/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` separately) |
-| **Regenerate standard figures** | `bash src/slurm/script_analysis.sh` |
+| **Moves ETL (games → shards → merge → `process_moves`)** | `bash src/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
+| **Regenerate standard figures** | `bash src/slurm/analysis.sh` |
 | **Move-time histograms** | `python src/move_time_summary.py` |
 | **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
 | **Ply vs instant-move probability** | `python src/ply_premove.py` |
@@ -25,7 +25,7 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | **Merge eval shards only (legacy)** | `python src/slurm/scripts/script_merge_evals.py --engine stockfish` |
 | **Slidev deck (LMCOS overview)** | `cd src/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
-Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash src/slurm/script_analysis.sh`** (see repo-root paths there).
+Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash src/slurm/analysis.sh`** (see repo-root paths there).
 
 **Outputs:** analysis scripts write figures under **`src/figures/`**.
 
@@ -49,7 +49,7 @@ chess_analysis/
     ├── slurm/
     │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
     │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
-    │   └── logs/                 # Job logs (cluster-specific; usually gitignored)
+    │   └── logs/                 # `ld-moves_*.out/.err`, optional `preprocess_driver.log`, `eval_*`
     ├── movetime_analysis.py      # DuckDB move-time dashboards (see DEFAULT_ANALYSES)
     ├── move_time_summary.py
     ├── ply_premove.py
@@ -96,9 +96,17 @@ For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults
 2. **`preprocess.py shard`** (Slurm array) → `selected_moves_*.parquet` under **`staging_dir`**; filters match legacy shard+berserk+grant policy.
 3. **`preprocess.py merge`** → **`moves`** (from parquets); **`preprocess.py process_moves`** → **`processed_moves`** (features + `fen` + `ply_tertiles`) and **`processed_moves_nonzero`** (`move_time > 0`). **`preprocess.sh`** runs both after shards.
 
-**Orchestration:** `bash src/slurm/preprocess.sh` (staging hygiene + Slurm array + merge).
+**Orchestration:** `bash src/slurm/preprocess.sh`:
 
-Typical filters (see `preprocess.py` `main()` `config`): Oct 2023–Jan 2024 window, **10+0**, both Elos **≥ 2000**.
+- Clears **`staging_dir`** and prior **`ld-moves_*`** logs in **`src/slurm/logs/`** (does not remove **`eval_*`**).
+- **`get_games`** (login-node DuckDB settings) → **`games`**.
+- Submits a **Slurm array** of **`preprocess.py shard`** tasks; prints periodic **`squeue`** status (`PREPROCESS_SHARD_POLL_SEC`, default 30s).
+- **`merge`** then **`process_moves`** on the login node, using **`DUCKDB_MERGE_THREADS`** / **`DUCKDB_MERGE_MEMORY_LIMIT`** (separate from shard task memory).
+
+**Long / fragile SSH sessions:** run the driver detached so merge continues after disconnect, e.g.  
+`nohup bash src/slurm/preprocess.sh >> src/slurm/logs/preprocess_driver.log 2>&1 &`
+
+Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial clock, increment, min Elo).
 
 ### `preprocess.py` — DuckDB + staging layout
 
@@ -116,7 +124,7 @@ Typical filters (see `preprocess.py` `main()` `config`): Oct 2023–Jan 2024 win
 ### Engine evaluation
 
 - **Worker:** `src/slurm/scripts/script_engine_eval.py` → shard parquets.
-- **Merge:** same module **`merge`** subcommand (or legacy `script_merge_evals.py`) → `{stockfish,lc0}_evaluations` in `personal.db`.
+- **Eval parquet merge:** `script_engine_eval.py` **`merge`** (or legacy `script_merge_evals.py`) → `{stockfish,lc0}_evaluations` in `personal.db`.
 - **Join to moves:** `build_selected_moves_with_engine.py` joins **`processed_moves`** to `{stockfish,lc0}_evaluations` on **`fen`** → **`selected_moves_with_engine`**.
 
 Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, logs under **`src/slurm/logs/`**.
@@ -125,7 +133,7 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 
 1. `bash src/slurm/preprocess.sh` (or equivalent `preprocess.py` steps).
 2. **Optional:** `bash src/slurm/engine_eval.sh` → `python src/slurm/scripts/build_selected_moves_with_engine.py`
-3. **Figures:** `bash src/slurm/script_analysis.sh` or individual `src/*.py` tools in §1.
+3. **Figures:** `bash src/slurm/analysis.sh` or individual `src/*.py` tools in §1.
 
 ---
 
