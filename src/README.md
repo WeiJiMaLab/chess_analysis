@@ -94,7 +94,7 @@ For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults
 
 1. **`preprocess.py get_games`** → table **`games`** (same role as legacy `selected_games`).
 2. **`preprocess.py shard`** (Slurm array) → `selected_moves_*.parquet` under **`staging_dir`**; filters match legacy shard+berserk+grant policy.
-3. **`preprocess.py merge`** → **`moves`**, then rebuilds **`processed_moves`** (features + `fen` + `ply_tertiles`) and **`processed_moves_nonzero`** (`move_time > 0`).
+3. **`preprocess.py merge`** → **`moves`** (from parquets); **`preprocess.py process_moves`** → **`processed_moves`** (features + `fen` + `ply_tertiles`) and **`processed_moves_nonzero`** (`move_time > 0`). **`preprocess.sh`** runs both after shards.
 
 **Orchestration:** `bash src/slurm/preprocess.sh` (staging hygiene + Slurm array + merge).
 
@@ -106,9 +106,10 @@ Typical filters (see `preprocess.py` `main()` `config`): Oct 2023–Jan 2024 win
 | :--- | :--- | :--- |
 | **`get_games`** | **`work_dir`** | DuckDB `temp_directory` while building **`games`** |
 | **`preprocess_game_shard`** | **`staging_dir`** | DuckDB `temp_directory` **and** `selected_moves_<partition>_<segment>.parquet` |
-| **`merge_game_shards`** | **`staging_dir`** | DuckDB `temp_directory` **and** glob `selected_moves_*.parquet` → **`moves`**, then **`processed_moves`** / **`processed_moves_nonzero`** |
+| **`merge_game_shards`** | **`staging_dir`** | DuckDB `temp_directory` **and** glob `selected_moves_*.parquet` → **`moves`** |
+| **`run_process_moves`** | **`work_dir`** | Opens **`personal.db`**; spill under **`work_dir`**; builds **`processed_moves`** / **`processed_moves_nonzero`** (`process_moves` in `preprocess.py`) |
 
-**Thread / memory:** `DUCKDB_THREADS`, `DUCKDB_MEMORY_LIMIT`; array jobs set `PREPROCESS_TOTAL_SHARDS` to match Slurm task count.
+**Thread / memory:** `preprocess.sh`: **`get_games`** uses `DUCKDB_THREADS` / `DUCKDB_MEMORY_LIMIT` (defaults 40 / 64GB); **`merge`** and **`process_moves`** use **`DUCKDB_MERGE_THREADS`** / **`DUCKDB_MERGE_MEMORY_LIMIT`** (defaults **64** / **200GB**). Shards use Slurm CPUs and `DUCKDB_SHARD_MEM`. Array jobs set `PREPROCESS_TOTAL_SHARDS` to match the Slurm task count.
 
 **Hygiene:** clear **`staging_dir`** before a new shard run (`preprocess.sh` does this); stale `selected_moves_*.parquet` would pollute the merge glob.
 

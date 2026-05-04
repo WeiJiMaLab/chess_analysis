@@ -5,8 +5,8 @@ Includes selection of games, extraction of moves, and feature engineering.
 Contract (do not subvert with optional alternate temp paths):
     DuckDB ``temp_directory`` always equals the directory named by ``work_dir`` or ``staging_dir``.
     Shard parquet outputs go under ``staging_dir``. Merge reads ``staging_dir`` only and replaces
-    ``moves``, then rebuilds ``processed_moves`` and ``processed_moves_nonzero`` for analysis
-    (see :func:`rebuild_processed_moves_tables`).
+    ``moves``. :func:`process_moves` builds ``processed_moves`` and ``processed_moves_nonzero`` from ``moves``;
+    ``preprocess.sh`` runs merge then ``process_moves``.
 
 Each function carries its own default ``threads`` / ``memory_limit`` / ``moves_root`` in its signature;
 the CLI builds a local ``config`` dict (paths, ``staging_dir``, ``threads``, ``memory_limit``, ``total_shards``).
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import datetime
 
 import duckdb
 from tqdm import tqdm
@@ -207,7 +208,7 @@ def preprocess_game_shard(
     conn.close()
 
 
-def rebuild_processed_moves_tables(conn: duckdb.DuckDBPyConnection) -> None:
+def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
     """
     Build ``processed_moves`` (board/fen/ply_tertiles features) and ``processed_moves_nonzero`` (``move_time > 0``).
 
@@ -266,16 +267,18 @@ def merge_game_shards(
     memory_limit: str = "64GB",
 ):
     """
-    Load ``selected_moves_*.parquet`` from ``staging_dir`` into ``moves``,
-    then rebuild ``processed_moves`` and ``processed_moves_nonzero`` for analysis / engine join.
+    Load ``selected_moves_*.parquet`` from ``staging_dir`` into ``moves``.
 
     DuckDB spill uses ``staging_dir`` (same folder as the parquet glob).
+    Run :func:`process_moves` afterward to build ``processed_moves`` / ``processed_moves_nonzero``.
     """
     staging_dir = os.path.abspath(staging_dir)
     os.makedirs(staging_dir, exist_ok=True)
     pattern = os.path.join(staging_dir, "selected_moves_*.parquet")
 
-    print(f"merge_game_shards: read_parquet('{pattern}') → {personal_db}.moves")
+    ts = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    print(f"\n{'=' * 72}\n merge_game_shards started {ts}\n read_parquet → {personal_db}.moves\n{'=' * 72}\n", flush=True)
+    print(f"merge_game_shards: read_parquet('{pattern}') → {personal_db}.moves", flush=True)
     conn = duckdb.connect(
         database=personal_db,
         read_only=False,
@@ -290,7 +293,26 @@ def merge_game_shards(
     )
     n = conn.execute("SELECT count(*) FROM moves").fetchone()[0]
     print(f"✅ merge_game_shards finished — table moves replaced ({n:,} rows).")
-    rebuild_processed_moves_tables(conn)
+    conn.close()
+
+
+def run_process_moves(
+    personal_db: str,
+    work_dir: str,
+    threads: int = 40,
+    memory_limit: str = "64GB",
+) -> None:
+    """Open ``personal_db``, run :func:`process_moves` (expects table ``moves``). Spill in ``work_dir``."""
+    work_dir = os.path.abspath(work_dir)
+    os.makedirs(work_dir, exist_ok=True)
+    ts = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    print(f"\n{'=' * 72}\n process_moves started {ts}\n {personal_db} (spill: {work_dir})\n{'=' * 72}\n", flush=True)
+    conn = duckdb.connect(
+        database=personal_db,
+        read_only=False,
+        config=duckdb_connect_config(work_dir, threads, memory_limit),
+    )
+    process_moves(conn)
     conn.close()
 
 
@@ -300,7 +322,11 @@ def main() -> None:
 
     sub.add_parser("get_games", help="Build games table from Lichess core DB.")
     sub.add_parser("shard", help="One array stride; uses config staging_dir, SLURM_ARRAY_TASK_ID, PREPROCESS_TOTAL_SHARDS.")
-    sub.add_parser("merge", help="Parquet shards → moves; rebuild processed_moves and processed_moves_nonzero.")
+    sub.add_parser("merge", help="Parquet shards → table moves only.")
+    sub.add_parser(
+        "process_moves",
+        help="From table moves → processed_moves and processed_moves_nonzero (feature SQL).",
+    )
 
     args = parser.parse_args()
     # end_date is exclusive
@@ -350,6 +376,13 @@ def main() -> None:
         merge_game_shards(
             personal_db=config["personal_db"],
             staging_dir=config["staging_dir"],
+            threads=config["threads"],
+            memory_limit=config["memory_limit"],
+        )
+    elif args.cmd == "process_moves":
+        run_process_moves(
+            personal_db=config["personal_db"],
+            work_dir=config["work_dir"],
             threads=config["threads"],
             memory_limit=config["memory_limit"],
         )

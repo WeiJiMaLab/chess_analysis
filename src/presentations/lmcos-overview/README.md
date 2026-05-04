@@ -65,7 +65,7 @@ layout: two-cols
 
 Figures are served from the core `chess_analysis/src/figures` directory via a symlink in `public/figures`. 
 
-To update the figures, run the analysis scripts from the repository root after `preprocess.py merge` has built `processed_moves` / `processed_moves_nonzero` (see `src/slurm/preprocess.sh` and `utils/selected_db.py`).
+To update the figures, run the analysis scripts from the repository root after `preprocess.sh` has run `merge` and `process_moves` (building `processed_moves` / `processed_moves_nonzero`; see `utils/selected_db.py`).
 
 **Move-time histograms** (both variants): deliberation-only vs including premoves:
 ```bash

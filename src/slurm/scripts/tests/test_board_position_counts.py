@@ -1,7 +1,7 @@
 """
 Tests for DuckDB expressions that count pieces from FEN placement.
 
-Must stay in sync with :func:`preprocess.rebuild_processed_moves_tables` column definitions:
+Must stay in sync with :func:`preprocess.process_moves` column definitions:
     n_pieces_on_board_inc_pawns, n_pieces_on_board_exc_pawns
 """
 
