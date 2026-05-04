@@ -6,13 +6,11 @@ Note: This analysis includes moves with 0 move time.
 import os
 import duckdb
 from utils import Variable, Analyzer
-
-# Constants
-PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES
 
 def main():
     src_dir = os.path.dirname(os.path.abspath(__file__))
-    conn = duckdb.connect(database=PERSONAL_DB, read_only=True)
+    conn = duckdb.connect(database=SELECTED_DB_DEFAULT, read_only=True)
     
     # Configure Variables
     # Y is the indicator function for an "instant move" (T=0)
@@ -24,10 +22,9 @@ def main():
     )
     
     # Run Analysis
-    # We use _selected_moves to include T=0 moves
     analyzer = Analyzer(
-        db_conn=conn, 
-        table_name="_selected_moves", 
+        db_conn=conn,
+        table_name=TABLE_PROCESSED_MOVES,
         x_var=x_var, 
         y_var=y_var, 
         filter_query="move_ply <= 150",

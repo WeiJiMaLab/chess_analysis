@@ -16,15 +16,14 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/`)
 | Task | Command |
 | :--- | :--- |
 | **Activate env** | `source .venv/bin/activate` |
-| **Select games** | `python src/slurm/scripts/preprocess_data.py select_games` |
-| **Extract / merge / preprocess moves** | `bash src/slurm/_preprocess.sh` |
+| **Moves ETL (games → shards → merge)** | `bash src/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` separately) |
 | **Regenerate standard figures** | `bash src/slurm/script_analysis.sh` |
 | **Move-time histograms** | `python src/move_time_summary.py` |
 | **Move-time dashboards** (clock, branching, material, ply) | `python src/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
 | **Ply vs instant-move probability** | `python src/ply_premove.py` |
 | **Engine eval (cluster)** | `bash src/slurm/engine_eval.sh` (or `--merge-only` when parquets exist) |
 | **Merge eval shards only (legacy)** | `python src/slurm/scripts/script_merge_evals.py --engine stockfish` |
-| **Slidev deck (CMC overview)** | `cd src/presentations/cmc-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
+| **Slidev deck (LMCOS overview)** | `cd src/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
 Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash src/slurm/script_analysis.sh`** (see repo-root paths there).
 
@@ -45,8 +44,8 @@ chess_analysis/
     ├── README.md                 # This file
     ├── figures/                  # Matplotlib outputs from dashboards and exploratory scripts
     ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=src
-    ├── presentations/             # Slidev deck (`cmc-overview/`) + shared SVG assets
-    ├── utils/                    # Library: Analyzer, plots, helpers (no pipeline CLIs)
+    ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
+    ├── utils/                    # Library: Analyzer, plots, helpers, selected_db (table names)
     ├── slurm/
     │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
     │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
@@ -62,10 +61,10 @@ chess_analysis/
 | Location | Put here |
 | :--- | :--- |
 | **`src/slurm/scripts/`** | New **ETL / engine / join** entry points. Start with `ensure_src()` from `_bootstrap.py` so `import utils` works when run as `python src/slurm/scripts/...` from repo root. |
-| **`src/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` and write figures. |
+| **`src/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` (see `utils/selected_db.py`) and write figures. |
 | **`src/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
 | **`src/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
-| **`src/presentations/`** | Slidev decks (`cmc-overview/`) and presentation assets only—not Python pipeline code. |
+| **`src/presentations/`** | Slidev decks (`lmcos-overview/`) and presentation assets only—not Python pipeline code. |
 
 ---
 
@@ -80,7 +79,7 @@ chess_analysis/
 | **VOC (value of computation)** | Engine-defined gain from deep vs shallow search relates to think time; often discussed vs **ply** “arc” (midgame peak ~40–50). |
 | **Scale** | Core DuckDB pipelines target on the order of **~10⁸ moves**; always prefer **SQL-side** aggregation and sampling. |
 
-For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults to **2×2**: global raw trend and quantile bins on the top row, the same pair **by `ply_tertiles`** (global ply tertiles from preprocess; overlaid) on the bottom. Pass **`include_quantile_heatmap=True`** (and **`quantile_heatmap_row='move_ply'`** on construction) to also write a **standalone** quantile×quantile heatmap PNG (default path: same stem as the dashboard plus `_quantile_heatmap` before the extension; override with ``heatmap_output_path``). Use **`layout="1x3"`** for raw | quantile | scatter, or **`layout="1x2"`** for raw | quantile only (see `movetime_analysis.ply_movetime`).
+For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults to **2×2**: global raw trend and quantile bins on the top row, the same pair **by `ply_tertiles`** (global ply tertiles from `processed_moves` / `processed_moves_nonzero`; overlaid) on the bottom. Pass **`include_quantile_heatmap=True`** (and **`quantile_heatmap_row='move_ply'`** on construction) to also write a **standalone** quantile×quantile heatmap PNG (default path: same stem as the dashboard plus `_quantile_heatmap` before the extension; override with ``heatmap_output_path``). Use **`layout="1x3"`** for raw | quantile | scatter, or **`layout="1x2"`** for raw | quantile only (see `movetime_analysis.ply_movetime`).
 
 ---
 
@@ -89,44 +88,43 @@ For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults
 ### Databases
 
 - **`core` / `lichess.db`:** read-only Lichess mirror (multi‑TB).
-- **`personal.db`:** project workspace; `selected_games`, move tables, engine eval tables, etc. Path is often cluster-specific; scripts default to a scratch path—check each CLI.
+- **`personal.db`:** project workspace; **`games`**, **`moves`**, **`processed_moves`**, **`processed_moves_nonzero`**, engine eval tables, etc. Default path: **`utils.selected_db.SELECTED_DB_DEFAULT`** (cluster scratch).
 
-### Sharded extraction
+### Human moves ETL
 
-1. **`preprocess_data.py select_games`** → `selected_games` in `personal.db`.
-2. **`bash src/slurm/_preprocess.sh`** → Slurm **`preprocess_shard.sbatch`** (`process_shard`), then local **merge / berserk / preprocess** into analysis-ready tables.
-3. **QC:** exclude games with **any negative** `move_time` where policy requires clean clocks.
+1. **`preprocess.py get_games`** → table **`games`** (same role as legacy `selected_games`).
+2. **`preprocess.py shard`** (Slurm array) → `selected_moves_*.parquet` under **`staging_dir`**; filters match legacy shard+berserk+grant policy.
+3. **`preprocess.py merge`** → **`moves`**, then rebuilds **`processed_moves`** (features + `fen` + `ply_tertiles`) and **`processed_moves_nonzero`** (`move_time > 0`).
 
-Typical filters for `selected_games` (verify in `preprocess_data.py` defaults): Nov–Dec 2023 window, **10+0**, both Elos **≥ 2000**.
+**Orchestration:** `bash src/slurm/preprocess.sh` (staging hygiene + Slurm array + merge).
 
-### `preprocess.py` — explicit DuckDB + staging layout
+Typical filters (see `preprocess.py` `main()` `config`): Oct 2023–Jan 2024 window, **10+0**, both Elos **≥ 2000**.
 
-Use **`src/slurm/scripts/preprocess.py`** for **`games` → shard parquets → table `moves`**. Behavior is intentionally rigid:
+### `preprocess.py` — DuckDB + staging layout
 
 | Step | Argument | Same directory holds |
 | :--- | :--- | :--- |
 | **`get_games`** | **`work_dir`** | DuckDB `temp_directory` while building **`games`** |
 | **`preprocess_game_shard`** | **`staging_dir`** | DuckDB `temp_directory` **and** `selected_moves_<partition>_<segment>.parquet` |
-| **`merge_game_shards`** | **`staging_dir`** | DuckDB `temp_directory` **and** glob `selected_moves_*.parquet` → **`moves`** |
+| **`merge_game_shards`** | **`staging_dir`** | DuckDB `temp_directory` **and** glob `selected_moves_*.parquet` → **`moves`**, then **`processed_moves`** / **`processed_moves_nonzero`** |
 
-**Defaults:** `DEFAULT_THREADS`, `DEFAULT_MEMORY_LIMIT`, `DEFAULT_MOVES_ROOT` at top of that module. Adjust load only via explicit **`threads=`** / **`memory_limit=`** arguments at call sites (cluster wrappers may set env for `preprocess_data.py`, which forwards numeric limits into `merge_game_shards`).
+**Thread / memory:** `DUCKDB_THREADS`, `DUCKDB_MEMORY_LIMIT`; array jobs set `PREPROCESS_TOTAL_SHARDS` to match Slurm task count.
 
-**Hygiene:** start each merge batch from an empty **`staging_dir`** or delete old `selected_moves_*.parquet` first; the merge glob otherwise pulls in stale shards.
+**Hygiene:** clear **`staging_dir`** before a new shard run (`preprocess.sh` does this); stale `selected_moves_*.parquet` would pollute the merge glob.
 
 ### Engine evaluation
 
 - **Worker:** `src/slurm/scripts/script_engine_eval.py` → shard parquets.
 - **Merge:** same module **`merge`** subcommand (or legacy `script_merge_evals.py`) → `{stockfish,lc0}_evaluations` in `personal.db`.
-- **Join to moves:** `build_selected_moves_with_engine.py` → **`selected_moves_with_engine`** (not created by merge alone).
+- **Join to moves:** `build_selected_moves_with_engine.py` joins **`processed_moves`** to `{stockfish,lc0}_evaluations` on **`fen`** → **`selected_moves_with_engine`**.
 
 Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, logs under **`src/slurm/logs/`**.
 
 ### Pipeline vs analysis — ordered workflow
 
-1. `python src/slurm/scripts/preprocess_data.py select_games`
-2. `bash src/slurm/_preprocess.sh`
-3. **Optional:** `bash src/slurm/engine_eval.sh` → `python src/slurm/scripts/build_selected_moves_with_engine.py`
-4. **Figures:** `bash src/slurm/script_analysis.sh` or individual `src/*.py` tools in §1.
+1. `bash src/slurm/preprocess.sh` (or equivalent `preprocess.py` steps).
+2. **Optional:** `bash src/slurm/engine_eval.sh` → `python src/slurm/scripts/build_selected_moves_with_engine.py`
+3. **Figures:** `bash src/slurm/script_analysis.sh` or individual `src/*.py` tools in §1.
 
 ---
 

@@ -12,6 +12,7 @@ from _bootstrap import ensure_src
 ensure_src()
 
 from utils.helpers import get_lc0_engine, get_stockfish_engine
+from utils.selected_db import TABLE_PROCESSED_MOVES
 
 
 def row_to_fen(row):
@@ -193,22 +194,22 @@ def run_merge(args):
             e.e_win_move_taken,
             e.n_repeats,
             abs(e.e_win_best - e.e_win_second_best) AS top2_wdl_diff
-        FROM _selected_moves m
+        FROM {TABLE_PROCESSED_MOVES} m
         INNER JOIN {table_name} e ON m.fen = e.fen
     """)
     n = conn.execute("SELECT count(*) FROM selected_moves_with_engine").fetchone()[0]
-    n_base = conn.execute("SELECT count(*) FROM _selected_moves").fetchone()[0]
+    n_base = conn.execute(f"SELECT count(*) FROM {TABLE_PROCESSED_MOVES}").fetchone()[0]
     n_missing = conn.execute(f"""
         SELECT count(*)
-        FROM _selected_moves s
+        FROM {TABLE_PROCESSED_MOVES} s
         LEFT JOIN {table_name} e ON s.fen = e.fen
         WHERE e.fen IS NULL
     """).fetchone()[0]
     
     conn.close()
 
-    print(f"✅ selected_moves_with_engine: {n:,} rows (joining _selected_moves to {table_name})")
-    print(f"   _selected_moves: {n_base:,} rows; moves with no engine row: {n_missing:,}")
+    print(f"✅ selected_moves_with_engine: {n:,} rows (joining {TABLE_PROCESSED_MOVES} to {table_name})")
+    print(f"   {TABLE_PROCESSED_MOVES}: {n_base:,} rows; moves with no engine row: {n_missing:,}")
 
 def main():
     parser = argparse.ArgumentParser(description="Distributed Engine evaluation pipeline.")

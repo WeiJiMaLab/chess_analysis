@@ -10,9 +10,7 @@ import matplotlib.pyplot as plt
 
 from utils import apply_poster_style, FONT_SIZE_LABEL, EPSILON
 from utils.plots import plot_histogram_from_bins
-
-# Constants
-PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES, TABLE_PROCESSED_MOVES_NONZERO
 LIMIT_N = None  # Use None for full dataset
 N_BINS = 60
 
@@ -59,15 +57,15 @@ def create_histogram_bins(conn, table_name, value_col, out_table, n_bins=N_BINS)
 def main():
     # 1. Setup
     src_dir = os.path.dirname(os.path.abspath(__file__))
-    print(f"Connecting to {PERSONAL_DB}...")
-    conn = duckdb.connect(database=PERSONAL_DB, read_only=False)
+    print(f"Connecting to {SELECTED_DB_DEFAULT}...")
+    conn = duckdb.connect(database=SELECTED_DB_DEFAULT, read_only=False)
 
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--include_zeroT', action='store_true', help='Include zero move time moves (premoves)')
     args = parser.parse_args()
 
-    base_table = "_selected_moves" if args.include_zeroT else "_selected_moves_nonzero_T"
+    base_table = TABLE_PROCESSED_MOVES if args.include_zeroT else TABLE_PROCESSED_MOVES_NONZERO
 
     # 3. Get Counts from processed table
     print("Getting processed dataset counts...")

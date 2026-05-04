@@ -65,8 +65,8 @@ class Analyzer:
     Standard analyzer for the relationship between two variables (X and Y).
     Runs SQL-native aggregations in DuckDB.
 
-    Segmentation by **ply tertiles** uses ``ply_tertiles`` from preprocess:
-    ``ntile(3) OVER (ORDER BY move_ply)`` globally on the move table (values 1–3).
+    Segmentation by **ply tertiles** uses ``ply_tertiles`` from ``processed_moves`` /
+    ``processed_moves_nonzero`` (``ntile(3) OVER (ORDER BY move_ply)`` globally; values 1–3).
     ``raw_trend_tertile_df`` and ``quantile_tertile_df`` hold per-tertile aggregates;
     quantile bins use ``ntile`` **partitioned by** ``ply_tertiles`` so ranks are recomputed
     within each tertile. Legend labels use observed ``move_ply`` ranges per tertile (min/max

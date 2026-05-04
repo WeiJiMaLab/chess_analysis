@@ -6,12 +6,18 @@ import argparse
 
 import duckdb
 
-PERSONAL_DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+from _bootstrap import ensure_src
+
+ensure_src()
+
+from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES
 
 
 def main():
-    p = argparse.ArgumentParser(description="Create selected_moves_with_engine from _selected_moves and engine evals")
-    p.add_argument("--db", default=PERSONAL_DB_DEFAULT, help="Path to personal.db")
+    p = argparse.ArgumentParser(
+        description=f"Create selected_moves_with_engine from {TABLE_PROCESSED_MOVES} and engine evals"
+    )
+    p.add_argument("--db", default=SELECTED_DB_DEFAULT, help="Path to personal.db")
     p.add_argument(
         "--engine",
         choices=("stockfish", "lc0"),
@@ -34,16 +40,16 @@ def main():
                 e.e_win_move_taken,
                 e.n_repeats,
                 abs(e.e_win_best - e.e_win_second_best) AS top2_wdl_diff
-            FROM _selected_moves m
+            FROM {TABLE_PROCESSED_MOVES} m
             INNER JOIN {table_eval} e ON m.fen = e.fen
             """
         )
         n = conn.execute("SELECT count(*) FROM selected_moves_with_engine").fetchone()[0]
-        n_base = conn.execute("SELECT count(*) FROM _selected_moves").fetchone()[0]
+        n_base = conn.execute(f"SELECT count(*) FROM {TABLE_PROCESSED_MOVES}").fetchone()[0]
         n_missing = conn.execute(
             f"""
             SELECT count(*)
-            FROM _selected_moves s
+            FROM {TABLE_PROCESSED_MOVES} s
             LEFT JOIN {table_eval} e ON s.fen = e.fen
             WHERE e.fen IS NULL
             """
@@ -51,8 +57,8 @@ def main():
     finally:
         conn.close()
 
-    print(f"✅ selected_moves_with_engine: {n:,} rows (joining _selected_moves to {table_eval})")
-    print(f"   _selected_moves: {n_base:,} rows; moves with no engine row: {n_missing:,}")
+    print(f"✅ selected_moves_with_engine: {n:,} rows (joining {TABLE_PROCESSED_MOVES} to {table_eval})")
+    print(f"   {TABLE_PROCESSED_MOVES}: {n_base:,} rows; moves with no engine row: {n_missing:,}")
 
 
 if __name__ == "__main__":

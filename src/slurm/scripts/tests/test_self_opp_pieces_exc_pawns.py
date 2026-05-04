@@ -1,5 +1,5 @@
 """
-Tests for n_self_pieces_exc_pawns / n_opp_pieces_exc_pawns SQL (preprocess_data).
+Tests for n_self_pieces_exc_pawns / n_opp_pieces_exc_pawns SQL (processed_moves in preprocess.py).
 """
 
 from __future__ import annotations

@@ -1,21 +1,20 @@
 import duckdb
 import pandas as pd
 
-PERSONAL_DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES
 
 def main():
-    conn = duckdb.connect(database=PERSONAL_DB, read_only=True)
+    conn = duckdb.connect(database=SELECTED_DB_DEFAULT, read_only=True)
     
     print("Calculating early ply statistics (1-20)...")
-    # We use _selected_moves to include T=0
-    df = conn.execute("""
+    df = conn.execute(f"""
         SELECT 
             move_ply,
             avg(move_time) as avg_time,
             median(move_time) as median_time,
             avg(CASE WHEN move_time = 0 THEN 1 ELSE 0 END) as instant_prob,
             count(*) as n
-        FROM _selected_moves
+        FROM {TABLE_PROCESSED_MOVES}
         WHERE move_ply <= 20
         GROUP BY move_ply
         ORDER BY move_ply

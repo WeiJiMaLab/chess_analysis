@@ -3,10 +3,10 @@
 #   1) Slurm array over shards (one parquet per task)  →  engine_eval_shard.sbatch
 #   2) Merge all shard parquets into personal.db and join to move rows → script_engine_eval.py merge
 #
-# Wait: same as _preprocess.sh / preprocess flows — `sbatch --wait` until the array finishes.
+# Wait: `sbatch --wait` until the array finishes (same pattern as preprocess.sh).
 # Logs: src/slurm/logs/eval_*.out (see engine_eval_shard.sbatch)
 #
-# Usage (same PROJECT_DIR convention as _preprocess.sh):
+# Usage (same PROJECT_DIR convention as preprocess.sh):
 #   bash /home/hl4291/chess_analysis/src/slurm/engine_eval.sh
 #   ENGINE=lc0 bash src/slurm/engine_eval.sh
 #   bash src/slurm/engine_eval.sh --merge-only
@@ -45,7 +45,7 @@ Usage: $0 [options]
   --no-wait                 submit the shard array only; exit immediately (re-run with --merge-only when done)
   -h, --help
 
-Default wait: sbatch --wait (same pattern as _preprocess.sh calling preprocess_shard.sbatch).
+Default wait: sbatch --wait (same pattern as preprocess.sh for shard arrays).
 
 Env: ENGINE, LIMIT, DB, INPUT_DIR (same meaning as options where applicable).
 EOF

@@ -205,13 +205,13 @@ math: katex
 
 <div class="mt-4 text-sm leading-relaxed max-w-3xl space-y-3">
   <p>
-    Every timing slide uses the <b>same</b> human move pool in DuckDB. Code: <code>src/slurm/scripts/preprocess_data.py</code>; end-to-end orchestration: <code>src/slurm/_preprocess.sh</code> (<code>select_games</code> → Slurm <code>process_shard</code> → <code>merge</code> → <code>berserk</code> → <code>preprocess</code>).
+    Every timing slide uses the <b>same</b> human move pool in DuckDB. Code and merge: <code>src/slurm/scripts/preprocess.py</code> (<code>get_games</code> → Slurm <code>shard</code> → <code>merge</code>); orchestration: <code>src/slurm/preprocess.sh</code>. Bad-game filtering (negative <code>move_time</code>, berserk, grant-more-time) is applied during <code>shard</code>; <code>merge</code> builds <code>moves</code>, <code>processed_moves</code>, and <code>processed_moves_nonzero</code>.
   </p>
   <ul class="list-disc pl-5 space-y-2">
-    <li><b>Which games</b> — Strong rapid by default: <b>10+0</b>, <b>both players 2000+ Elo</b>, <b>Oct–Dec 2023</b> (filters in <code>preprocess_data.py select_games</code>).</li>
-    <li><b>Extract &amp; merge</b> — Array job <code>preprocess_shard.sbatch</code> runs <code>preprocess_data.py process_shard</code> on Lichess parquet, restricted to <code>selected_games</code>; shards load into <code>selected_moves</code>. By default, drop a whole game if <i>any</i> move has negative <code>move_time</code>.</li>
-    <li><b>Feature tables</b> — <code>preprocess_data.py preprocess</code> writes <code>_selected_moves</code> and <code>_selected_moves_nonzero_T</code> (e.g. <code>ply_tertiles</code>, clocks, <code>n_possible_moves</code>, board counts <code>n_pieces_on_board_exc_pawns</code> / <code>n_pieces_on_board_inc_pawns</code>, side-relative <code>n_self_pieces_exc_pawns</code> / <code>n_opp_pieces_exc_pawns</code> for the moving player vs opponent, raw <code>move_time</code>), excluding berserk / grant-more-time games per the SQL in that step.</li>
-    <li><b>Plots</b> — Unless noted, positive think time only (no premoves; same sample as <code>movetime_analysis.py</code> on <code>_selected_moves_nonzero_T</code>). Histograms / dashboards (<code>move_time_summary.py</code>, <code>movetime_analysis.py</code>, …) add ln&nbsp;<i>T</i>, <code>ntile</code> bins, and heatmaps in analysis SQL—not as extra columns frozen at ingest.</li>
+    <li><b>Which games</b> — Strong rapid by default: <b>10+0</b>, <b>both players 2000+ Elo</b>, <b>Oct 2023–Jan 2024</b> (filters in <code>preprocess.py</code> <code>config</code>).</li>
+    <li><b>Extract &amp; merge</b> — Slurm array runs <code>preprocess.py shard</code> on Lichess parquet joined to table <code>games</code>; <code>merge</code> loads <code>moves</code>. Whole games with any negative <code>move_time</code> (or berserk / grant-more-time under the shard SQL) are dropped.</li>
+    <li><b>Feature tables</b> — After merge, <code>processed_moves</code> and <code>processed_moves_nonzero</code> add <code>ply_tertiles</code>, board counts (<code>n_pieces_on_board_*</code>, <code>n_self_pieces_exc_pawns</code>, <code>n_opp_pieces_exc_pawns</code>), partial <code>fen</code>, and raw <code>move_time</code> (same feature set as legacy <code>_selected_moves</code> / <code>_selected_moves_nonzero_T</code>).</li>
+    <li><b>Plots</b> — Unless noted, positive think time only (no premoves; same sample as <code>movetime_analysis.py</code> on <code>processed_moves_nonzero</code>, via <code>utils.selected_db.TABLE_PROCESSED_MOVES_NONZERO</code>). Histograms / dashboards add ln&nbsp;<i>T</i>, <code>ntile</code> bins, and heatmaps in analysis SQL—not as extra columns frozen at ingest.</li>
   </ul>
 </div>
 

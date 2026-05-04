@@ -65,7 +65,7 @@ layout: two-cols
 
 Figures are served from the core `chess_analysis/src/figures` directory via a symlink in `public/figures`. 
 
-To update the figures, run the analysis scripts from the repository root after the DuckDB pipeline has built `_selected_moves` / `_selected_moves_nonzero_T` (see `src/slurm/_preprocess.sh` and `src/slurm/scripts/preprocess_data.py`).
+To update the figures, run the analysis scripts from the repository root after `preprocess.py merge` has built `processed_moves` / `processed_moves_nonzero` (see `src/slurm/preprocess.sh` and `utils/selected_db.py`).
 
 **Move-time histograms** (both variants): deliberation-only vs including premoves:
 ```bash
@@ -73,7 +73,7 @@ python src/move_time_summary.py
 python src/move_time_summary.py --include_zeroT
 ```
 
-**Dashboards** (`movetime_analysis.py`; all use `_selected_moves_nonzero_T` → one PNG per analysis):
+**Dashboards** (`movetime_analysis.py`; default table `processed_moves_nonzero` → one PNG per analysis):
 ```bash
 python src/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc self_pieces_exc ply
 ```

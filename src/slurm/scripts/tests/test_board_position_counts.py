@@ -1,7 +1,7 @@
 """
 Tests for DuckDB expressions that count pieces from FEN placement.
 
-Must stay in sync with preprocess_data.preprocess() column definitions:
+Must stay in sync with :func:`preprocess.rebuild_processed_moves_tables` column definitions:
     n_pieces_on_board_inc_pawns, n_pieces_on_board_exc_pawns
 """
 
@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover
 
 
 def _counts_from_placement(con: duckdb.DuckDBPyConnection, placement: str) -> tuple[int, int]:
-    """Return (n_pieces_on_board_inc_pawns, n_pieces_on_board_exc_pawns) like preprocess_data."""
+    """Return (n_pieces_on_board_inc_pawns, n_pieces_on_board_exc_pawns) like ``processed_moves``."""
     row = con.execute(
         """
         SELECT

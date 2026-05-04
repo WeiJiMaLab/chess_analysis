@@ -13,7 +13,7 @@ This home directory is the working root for a research thread that combines **la
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
-| `chess_analysis/src/presentations/cmc-overview/` | Slidev deck: motivation, method, human validation |
+| `chess_analysis/src/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
 For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/src/README.md`. The latter documents **code layout** (`src/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
@@ -43,7 +43,7 @@ A future layer is a **full planning head** (which node to expand, etc.) on the s
 
 ## 2. Human behavioral track (context for “broad implications”)
 
-Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `src/presentations/cmc-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
+Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `src/presentations/lmcos-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
 The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
@@ -165,7 +165,7 @@ These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers an
 | `04_pretrain_tutorial.ipynb` | Supervised pretraining and losses |
 | `05_meta_controller_tutorial.ipynb` | Halt/continue and economy of thought |
 | `lmcos/demos/understanding.md` | GNN wiring, slot encodings, dense recursive WDL head |
-| `src/presentations/cmc-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+| `src/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
 
 Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
 

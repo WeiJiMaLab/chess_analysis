@@ -12,8 +12,7 @@ import os
 import duckdb
 
 from utils import Variable, Analyzer
-
-PERSONAL_DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 
 # Default run order (matches slurm script_analysis.sh where applicable).
 DEFAULT_ANALYSES = (
@@ -37,7 +36,7 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
     y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
-        table_name="_selected_moves_nonzero_T",
+        table_name=TABLE_PROCESSED_MOVES_NONZERO,
         x_var=x_var,
         y_var=y_var,
         filter_query="n_possible_moves < 50",
@@ -60,7 +59,7 @@ def pieces_exc_pawns_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | No
     y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
-        table_name="_selected_moves_nonzero_T",
+        table_name=TABLE_PROCESSED_MOVES_NONZERO,
         x_var=x_var,
         y_var=y_var,
         filter_query="n_pieces_on_board_exc_pawns IS NOT NULL",
@@ -83,7 +82,7 @@ def self_pieces_exc_pawns_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str
     y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
-        table_name="_selected_moves_nonzero_T",
+        table_name=TABLE_PROCESSED_MOVES_NONZERO,
         x_var=x_var,
         y_var=y_var,
         filter_query="n_self_pieces_exc_pawns IS NOT NULL",
@@ -102,7 +101,7 @@ def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) ->
     y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
-        table_name="_selected_moves_nonzero_T",
+        table_name=TABLE_PROCESSED_MOVES_NONZERO,
         x_var=x_var,
         y_var=y_var,
         filter_query="move_ply <= 150",
@@ -126,7 +125,7 @@ def clock_movetime(
     y_var = Variable(column="move_time", is_log=True, name="T")
     analyzer = Analyzer(
         db_conn=conn,
-        table_name="_selected_moves_nonzero_T",
+        table_name=TABLE_PROCESSED_MOVES_NONZERO,
         x_var=x_var,
         y_var=y_var,
         filter_query=f"{clock_col} < 600",
@@ -164,8 +163,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Unified move-time analysis dashboards")
     parser.add_argument(
         "--db",
-        default=PERSONAL_DB_DEFAULT,
-        help="Path to personal.db (uses table _selected_moves_nonzero_T)",
+        default=SELECTED_DB_DEFAULT,
+        help=f"Path to analysis DuckDB (default table: {TABLE_PROCESSED_MOVES_NONZERO})",
     )
     parser.add_argument(
         "--only",
