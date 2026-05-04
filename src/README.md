@@ -164,6 +164,13 @@ Details: **`bash src/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, lo
 
 ## 6. Quality control (do not regress)
 
+### Legacy vs new ETL (smoke)
+
+- **Script:** `src/slurm/scripts/tests/compare_legacy_new_pipeline_smoke.py` — builds **two** isolated DuckDB trees under a scratch root (default **`/scratch/gpfs/GRIFFITHS/hl4291/tmp/pipeline_smoke`**): **legacy** mirrors deleted `preprocess_data.py` (shard = neg-time filter only; berserk + grant on merged `moves`; then `_selected_moves` / `_nonzero_T`), **new** uses current `preprocess.py` (shard applies neg + berserk + grant; `merge` → `process_moves`).
+- **What to expect:** `moves` **row counts** usually **differ** (legacy keeps bad games until feature SQL; new drops them earlier), but **`COUNT(DISTINCT gid)` on the positive-time feature table** should **match** for the same `[start, end)` window when `lichess.db` / parquets are unchanged.
+- **Example:** `PYTHONPATH=src python3 src/slurm/scripts/tests/compare_legacy_new_pipeline_smoke.py --clean --start-date 2023-10-01 --end-date 2023-10-05`
+- **Automated (optional):** `RUN_PIPELINE_COMPARE=1 PYTHONPATH=src python3 -m unittest discover -s src/slurm/scripts/tests -p 'test_pipeline_compare_smoke.py' -v` (slow; short window).
+
 - **Negative move times:** exclude affected games when building analysis tables (pipeline enforces this for core paths).
 - **Berserk:** dedicated detection; do not mix berserk games into clock analyses without an explicit policy.
 - **Grant more time (GMT):** windowed detection on zero-increment games; tables like `grant_more_time_games` feed joins.
