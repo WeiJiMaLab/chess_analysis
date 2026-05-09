@@ -1,5 +1,5 @@
 node_modules/
-core* 
+# core* removed - too broad 
 *.parquet
 
 # Jupyter
