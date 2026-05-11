@@ -15,7 +15,7 @@ history and accumulated edge stats, it:
 from __future__ import annotations
 
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from metacontrol.core.tree import SearchTree
 from metacontrol.core.schemas import SearchNode, EdgeStats, SearchSnapshot
