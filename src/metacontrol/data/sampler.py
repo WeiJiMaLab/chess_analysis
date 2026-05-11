@@ -12,6 +12,29 @@ DEFAULT_CORE_DB = "/scratch/gpfs/GRIFFITHS/chess-db/lichess.db"
 DEFAULT_RAW_DATA = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
 DEFAULT_OUT_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol/roots"
 
+
+def compose_full_fen(
+    board_position: str,
+    player_white: bool,
+    castling_rights: str,
+    en_passant_targets: str,
+    halfmove_clock: int,
+    fullmove_number: int,
+) -> str:
+    """Build a full FEN string matching the DuckDB sampling query.
+
+    ``castling_rights`` / ``en_passant_targets`` use ``'-'`` for empty, as in
+    Lichess parquet exports.
+    """
+    side = "w" if player_white else "b"
+    cr = castling_rights if castling_rights else "-"
+    ep = en_passant_targets if en_passant_targets else "-"
+    return (
+        f"{board_position} {side} {cr} {ep} "
+        f"{int(halfmove_clock)} {int(fullmove_number)}"
+    )
+
+
 class ChessSampler:
     def __init__(
         self,
@@ -106,10 +129,8 @@ class ChessSampler:
             partition = row["partition"]
             gids_str = ",".join(map(str, row["gid"]))
             parquet_glob = f"{self.raw_data_dir}/partition={partition}/*-moves.parquet"
-            
-            # The original script used a specific segment-moves.parquet. 
-            # We'll use a glob to be safer if segments vary.
-            
+
+            # ``full_fen`` expression below must stay aligned with :func:`compose_full_fen`.
             self.conn.sql(f"""
             INSERT INTO candidate_positions
             SELECT

@@ -13,8 +13,11 @@ def test_single_leaf_tensorization():
     batch = tensorizer.tensorize(tree)
     assert batch.num_nodes == 1
     assert batch.num_edges == 0
-    assert batch.node_features.shape == (1, 4)
-    assert torch.allclose(batch.node_features[0], torch.tensor([0.5, 0.1, 0.8, 0.1]))
+    assert batch.node_features.shape == (1, 5)
+    assert torch.allclose(
+        batch.node_features[0],
+        torch.tensor([0.5, 0.1, 0.8, 0.1, 0.0]),
+    )
 
 def test_tensorization_different_sized_trees():
     schema = ChessFeatureSchema()

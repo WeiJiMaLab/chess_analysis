@@ -1,41 +1,35 @@
-# Metacontrol Data Generation Pipeline: Stage 2 & Beyond
+# Metacontrol data generation pipeline — Phase 1 plan
 
-This document outlines the remaining steps for the `metacontrol` pipeline following the successful implementation and modularization of the core tree and target derivation logic.
+## 1. Current state (completed)
 
-## 1. Current State (Completed)
-- [x] **Modular Architecture**: Established `core/` for schemas and data structures, and `data/` for pipeline logic.
-- [x] **Core Tree**: Implemented `SearchNode` and `SearchTree` with ASCII rendering.
-- [x] **Tree Growth**: Implemented `TreeSearch` (formerly `SearchGenerator`) with PUCT selection and backpropagation.
-- [x] **Target Derivation**: Implemented deterministic DP for meta-control advantages (`targets_mc.py`) and GNN target consolidation (`targets_gnn.py`).
-- [x] **Tensorization**: Integrated `TreeTensorizer` for batching trees into GNN-compatible formats.
-- [x] **Engine Integration**: Connected to real `lc0` and `stockfish` binaries, fixed perspective bugs, and added dynamic MultiPV capping for stability.
-- [x] **Validation**: 100% pass rate on 67 integration and unit tests, including rule-based terminal logic, deep tactical searches (mate-in-1, mate-in-2), and legacy parity comparisons.
+- [x] Modular `core/` + `data/` layout (`TreeSearch`, providers, `targets_mc`, `targets_gnn`, `TreeTensorizer`).
+- [x] **PUCT expansion timeline:** `SearchTree.search_expansion_history` records one entry per successful `expand_leaf` (expanded leaf). Meta-control snapshots in `targets_mc` use this timeline so snapshot count stays **O(num expansions)**, not O(number of child nodes created). Legacy hand-built trees still use `expansion_history` (one entry per `add_node`).
+- [x] **Root sampling:** `data/sampler.py` (`ChessSampler`) + DuckDB integration tests (`test_sampler.py`, marked `integration`).
+- [x] **Fast sampler tests:** `compose_full_fen` and related checks in `test_sampler_unit.py` (no DB).
+- [x] **Single-tree end-to-end export:** `data/tree_pack.pack_single_tree_like_legacy_shard` and `TreeTensorizer.pack_training_shard` produce `metacontrol_single_tree_v1` dicts saved via `scripts/generate_and_profile.py` to `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/` (default `example_tree_00001.pt`). Example FEN CSV: `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv`.
+- [x] **Profiling:** `cProfile` + `.pstats` from `generate_and_profile.py`; documented bottlenecks in `numba_speedup_plan.md`.
 
----
+## 2. Profiling summary (2026-05-11, one FEN)
 
-## 2. Upcoming Stage: Root Selection & Dataset Generation
+On a representative row from `metacontrol_example.csv` with `max_nodes=64`, LC0 `nodes=64`, total wall time is **~3–4 s** per tree (well under the 120 s smoke budget).
 
-### Stage 2.5: Root Sampling Logic
-- **Objective**: Create a script to sample root FENs from the Lichess database mirror (`lichess.db`) matching original research criteria.
-- **Implementation**:
-    - Build a DuckDB-based sampler in `src/metacontrol/data/sampler.py`.
-    - Apply filters: 
-        - ELO [1800, 2600]
-        - Ply [8, 120]
-        - Legal Moves [2, 60]
-        - Piece Count [8, 32]
-- **Parameters (Faithful to Original)**:
-    - `max_nodes`: **64** (Teacher search budget)
-    - `min_nodes`: **5** (Minimum snapshot size)
-    - `max_depth`: **10**
-    - `search_budget`: **64** (Engine sims per expansion)
+| Stage | Approx. wall share |
+|-------|---------------------|
+| Engine UCI (`readline` / `go nodes`) | **~70–75%** |
+| `python-chess` board/FEN/outcome | **~10–15%** |
+| Target pack (`tree_pack` + MC/GNN) | **~5–8%** after timeline fix |
+| `torch.save` + teardown | **small** |
 
----
+## 3. Stage 2.5 — Root selection (done)
 
-## 3. Stage 5: Large-Scale Production Pipeline
-- **Objective**: Parallelize the generation of millions of snapshots across the cluster.
-- **Tasks**:
-- [x] **Engine Integration**: Connected the pipeline to `lc0` and `stockfish` via the generalized `UciExpansionProvider`.
-- [x] **Visualization & Debugging**: Created `plotting.py` for Graphviz tree rendering and advantage landscape analysis.
-- [ ] **Sharding**: Implement logic to save trees in packed shards (`.pt` files) for high-throughput training.
-- [ ] **Slurm Orchestration**: Develop job templates for distributed generation.
+Criteria documented earlier (Elo, ply, legal moves, piece count, one FEN per game) are implemented in `ChessSampler.sample_positions`.
+
+## 4. Stage 5 — Large-scale production (next)
+
+- [ ] **Sharding:** append many trees into packed shards compatible with training loaders (either extend `metacontrol_single_tree_v1` into multi-episode tensors or match a chosen legacy layout more closely).
+- [ ] **Slurm:** job array over FEN CSV chunks calling a thin CLI wrapper around `TreeSearch` + `tree_pack`.
+- [ ] **Engine workers:** long-lived LC0 processes per worker to remove startup overhead (see `numba_speedup_plan.md`).
+
+## 5. Next optimization goal — Numba / native kernels
+
+See **`numba_speedup_plan.md`**: Numba is **not** the first lever (UCI dominates). Milestone: after worker pooling, re-profile; if MC/GNN packing exceeds ~20% wall, consider Numba on a numpy snapshot representation or native board updates.

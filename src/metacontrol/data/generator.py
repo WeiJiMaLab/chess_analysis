@@ -148,6 +148,7 @@ class TreeSearch:
             self.edge_stats[(leaf.node_id, child.node_id)] = EdgeStats()
             self._next_id += 1
 
+        self.tree.search_expansion_history.append(leaf)
         self.num_expansions += 1
         self.backpropagate(path, leaf)
         return True

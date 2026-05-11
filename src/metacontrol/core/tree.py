@@ -8,6 +8,10 @@ class SearchTree:
         self.root = root
         self.nodes_by_id: Dict[int, SearchNode] = {root.node_id: root}
         self.expansion_history: List[SearchNode] = []
+        #: One entry per successful PUCT expand_leaf (the expanded leaf). Used
+        #: for meta-control snapshots; falls back to :attr:`expansion_history`
+        #: for hand-built trees in unit tests.
+        self.search_expansion_history: List[SearchNode] = []
 
     def add_node(self, parent_id: int, move: str, child_node: SearchNode):
         parent = self.nodes_by_id[parent_id]

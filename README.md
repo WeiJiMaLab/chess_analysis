@@ -137,6 +137,12 @@ The project has been refactored into a modular structure under `src/metacontrol/
 
 The new `TreeSearch` class in `generator.py` provides a clean, method-based API for tree growth, while `targets_mc.py` and `targets_gnn.py` separate the derivation of training targets for the controller and the GNN respectively.
 
+**Root sampling and single-tree export (2026-05):**
+
+- **Lichess roots:** `src/metacontrol/data/sampler.py` (`ChessSampler`) writes filtered FEN rows; an example row is kept at `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv` when integration tests run.
+- **One-tree pipeline:** `src/metacontrol/scripts/generate_and_profile.py` reads that CSV (or `--csv`), runs `TreeSearch` + targets + `TreeTensorizer`, and saves `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/example_tree_00001.pt` by default. Use `--no-profile` for wall time only; otherwise it prints cumulative `cProfile` stats and writes `generate_and_profile.pstats` alongside the shard.
+- **`.pt` layout vs `ysagiv`:** Legacy controller shards on the cluster use `format="cts_budgeted_controller_episode_shard_v4"` with RL replay pointer tensors (`trajectory_node_ptr`, `episode_step_ptr`, …) and flattened `target_advantages` across many trajectories. Metacontrol’s Phase~1 export uses `format="metacontrol_single_tree_v1"`, the same five-wide `node_features` (`value`, WDL, `wdl_var` pad), `edge_child` as `int32`, and **omits** trajectory pointers. It adds explicit tensors `mc_halt_rewards`, `mc_dp_values`, `edge_wdl_targets`, and per-snapshot `target_advantages`; `oracle_values` here are **per-node** GNN consolidated values (not the legacy per-episode oracle scalars). See `src/metacontrol/migration.md` and `src/metacontrol/numba_speedup_plan.md`.
+
 ### 4.5 Engine Providers and Abstraction (`core/providers.py`)
 
 The pipeline now features a generalized engine provider system that supports both **LC0** and **Stockfish** (and any other UCI-compatible engine). 
@@ -155,7 +161,7 @@ This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, al
 
 ### 4.6 Testing and Validation
 
-The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers 67 specific unit and integration scenarios:
+The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers unit, engine, and integration scenarios (run `pytest src/metacontrol/tests -m "not integration"` for a fast slice; include `test_sampler.py` for DuckDB smoke tests):
 - **Core Logic & Target Derivation**:
   - `test_targets_mc.py` verifies the DP algorithm, including a simulation demonstrating that when a tree expansion discovers a mate-in-2, the backward DP properly assigns a massive positive "continue advantage" to earlier snapshots.
   - `test_targets_gnn.py` ensures target consolidation is accurate, validating that terminal checkmate states correctly map to a WDL of `(1.0, 0.0, 0.0)` from the parent's perspective.
@@ -246,4 +252,4 @@ For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `src/` layout (analysis under DuckDB dashboards + Slurm CLIs), and demos through 2026-04-14.*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `src/` layout (analysis under DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*

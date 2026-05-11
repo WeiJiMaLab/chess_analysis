@@ -91,5 +91,7 @@ The meta-controller should be trained on DP-derived targets.
 2. [x] Define the `SearchSnapshot` data format for Phase 1.
 3. [x] Create `src/metacontrol/core/` and move the baseline tree logic.
 4. [x] Harden engine providers (LC0, Stockfish), fix perspective bugs, and establish engine-invariant tests.
-5. [ ] Implement `src/metacontrol/data/sampler.py` for root FEN extraction from Lichess DB.
-6. [ ] Implement SLURM job orchestration for clustered data generation.
+5. [x] Implement `src/metacontrol/data/sampler.py` for root FEN extraction from Lichess DB (`ChessSampler`), plus fast `compose_full_fen` unit tests (`pytest -m "not integration"`).
+6. [x] **Single-tree export:** `data/tree_pack.py` + `scripts/generate_and_profile.py` write `metacontrol_single_tree_v1` shards under `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/`, aligned where possible with `ysagiv` tensor keys (see main `README.md` §4.4). RL trajectory columns from legacy `cts_budgeted_controller_episode_shard_v4` shards are intentionally omitted for Phase~1 supervised data.
+7. [ ] Implement SLURM job orchestration for clustered data generation at scale.
+8. [ ] Optional: Numba or native kernels for snapshot/target loops if profiling shows they dominate again (`numba_speedup_plan.md`).

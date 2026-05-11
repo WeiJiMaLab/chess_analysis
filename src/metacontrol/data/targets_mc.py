@@ -21,6 +21,43 @@ from metacontrol.core.tree import SearchTree
 from metacontrol.core.schemas import SearchNode, EdgeStats, SearchSnapshot
 
 
+# ---------------------------------------------------------------------------
+# Expansion timeline (PUCT vs hand-built trees)
+# ---------------------------------------------------------------------------
+
+def _expansion_timeline(tree: SearchTree) -> List[SearchNode]:
+    """Nodes that index meta-control snapshots.
+
+    After :class:`TreeSearch` runs, this is :attr:`SearchTree.search_expansion_history`
+    (one expanded leaf per PUCT expansion). Legacy unit tests use
+    :attr:`SearchTree.expansion_history` (one entry per ``add_node`` child).
+    """
+    if getattr(tree, "search_expansion_history", None):
+        return tree.search_expansion_history
+    return tree.expansion_history
+
+
+def _present_ids_after_expansions(tree: SearchTree, timeline: List[SearchNode], k: int) -> set:
+    """Node ids that exist after the first *k* timeline steps."""
+    present: set = {tree.root.node_id}
+    if not timeline:
+        return present
+    # PUCT timeline: each step is an expanded *leaf*; include its new children.
+    if timeline is tree.search_expansion_history:
+        for j in range(k):
+            node = timeline[j]
+            present.add(node.node_id)
+            for ch in node.children.values():
+                present.add(ch.node_id)
+        return present
+    # Legacy: timeline lists each *child* as it was added; mirror old sibling rule.
+    for node in timeline[:k]:
+        present.add(node.node_id)
+        if node.parent is not None:
+            for sibling in node.parent.children.values():
+                present.add(sibling.node_id)
+    return present
+
 
 # ---------------------------------------------------------------------------
 # Halt-reward computation
@@ -65,17 +102,8 @@ def _replay_edge_stats_at_prefix(
     from whatever edges are present in the prefix, using the accumulated
     stats (which is a deterministic function of the expansion history).
     """
-    # Nodes present after `expansion_count` expansions:
-    #   - root (always present, id=0)
-    #   - children added in the first `expansion_count` expansion steps
-    history = tree.expansion_history[:expansion_count]
-    present_ids = {tree.root.node_id}
-    for node in history:
-        present_ids.add(node.node_id)
-        # Also include all siblings (children of the same parent)
-        if node.parent is not None:
-            for sibling in node.parent.children.values():
-                present_ids.add(sibling.node_id)
+    timeline = _expansion_timeline(tree)
+    present_ids = _present_ids_after_expansions(tree, timeline, expansion_count)
 
     prefix_stats: Dict[Tuple[int, int], EdgeStats] = {}
     for (p, c), stats in edge_stats.items():
@@ -91,9 +119,10 @@ def compute_halt_rewards(
     """Compute the halt reward at each expansion step [0 .. N].
 
     Index i corresponds to the state of the tree after i expansions.
-    The list has length ``len(tree.expansion_history) + 1``.
+    The list has length ``len(_expansion_timeline(tree)) + 1``.
     """
-    n = len(tree.expansion_history)
+    timeline = _expansion_timeline(tree)
+    n = len(timeline)
     halt_rewards: List[float] = []
 
     for i in range(n + 1):
@@ -102,12 +131,7 @@ def compute_halt_rewards(
         root = tree.root
         root_children_present: Dict[str, SearchNode] = {}
         if i > 0:
-            present_ids = {root.node_id}
-            for node in tree.expansion_history[:i]:
-                present_ids.add(node.node_id)
-                if node.parent is not None:
-                    for sibling in node.parent.children.values():
-                        present_ids.add(sibling.node_id)
+            present_ids = _present_ids_after_expansions(tree, timeline, i)
             for move, child in root.children.items():
                 if child.node_id in present_ids:
                     root_children_present[move] = child
@@ -174,7 +198,8 @@ def derive_snapshots(
     - continue_value: optimal future value under the stop/continue cost
     - advantage: continue_value − halt_reward (positive → should continue)
 
-    Returns a list of SearchSnapshot of length ``len(expansion_history) + 1``.
+    Returns a list of SearchSnapshot of length ``len(_expansion_timeline(tree)) + 1``
+    (one halt/continue decision per search prefix, plus the terminal prefix).
     The last snapshot always has advantage ≤ 0 (forced halt).
     """
     halt_rewards = compute_halt_rewards(tree, edge_stats)

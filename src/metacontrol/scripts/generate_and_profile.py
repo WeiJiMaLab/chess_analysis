@@ -1,129 +1,112 @@
+"""Generate one search tree from a CSV FEN row, pack tensors, profile."""
+
 from __future__ import annotations
 
 import argparse
 import cProfile
+import os
 import pstats
 import time
 from pathlib import Path
+
 import pandas as pd
 import torch
-import sys
 
-from metacontrol.core.providers import UciExpansionProvider, StockfishExpansionProvider
-from metacontrol.data.generator import TreeSearch, UcbNodeSelection, FullExpansion
-from metacontrol.data.targets_mc import compute_mc_targets
-from metacontrol.data.targets_gnn import compute_gnn_targets
-from metacontrol.core.schemas import ChessFeatureSchema
-from metacontrol.core.tensorizer import TreeTensorizer
+from metacontrol.core.providers import LC0ExpansionProvider, StockfishExpansionProvider
+from metacontrol.core.schemas import GeneratorConfig
+from metacontrol.data.generator import TreeSearch
+from metacontrol.data.tree_pack import pack_single_tree_like_legacy_shard
 
 
-def generate_and_save_tree(fen: str, out_path: Path):
-    print(f"Generating tree for FEN: {fen}")
-    
-    # 1. Initialize Engine
-    # Using StockfishExpansionProvider for stockfish directly since it's the simplest
-    # We will just use the default path "stockfish" 
-    expansion_strategy = StockfishExpansionProvider("stockfish", nodes=64)
-    selection_strategy = UcbNodeSelection()
-    
-    tree_search = TreeSearch(
-        expansion_strategy=expansion_strategy,
-        selection_strategy=selection_strategy,
-        max_nodes=64,
-        max_depth=10
-    )
-    
-    # 2. Grow Tree
-    t0 = time.time()
-    tree = tree_search.search(fen)
-    t_grow = time.time() - t0
-    print(f"Tree grown to {len(tree.nodes_by_id)} nodes in {t_grow:.2f}s")
-    
-    # 3. Calculate Targets
-    t1 = time.time()
-    mc_targets = compute_mc_targets(tree)
-    gnn_targets = compute_gnn_targets(tree, mc_targets.edge_stats)
-    t_targets = time.time() - t1
-    print(f"Calculated MC and GNN targets in {t_targets:.2f}s")
-    
-    # 4. Tensorize
-    t2 = time.time()
-    schema = ChessFeatureSchema()
-    tensorizer = TreeTensorizer(schema)
-    batch = tensorizer.tensorize(tree)
-    t_tensorize = time.time() - t2
-    print(f"Tensorized tree in {t_tensorize:.2f}s")
-    
-    # 5. Pack matching ysagiv style
-    t3 = time.time()
-    
-    # Extract arrays
-    node_features = batch.node_features
-    parent_index = batch.parent_index
-    edge_child = batch.edge_child
-    edge_slot = batch.edge_slot
-    depth = batch.depth
-    
-    # Map targets
-    num_nodes = len(tree.nodes_by_id)
-    target_advantages = torch.zeros(num_nodes, dtype=torch.float32)
-    oracle_values = torch.zeros(num_nodes, dtype=torch.float32)
-    
-    for node_id, stats in mc_targets.node_stats.items():
-        if node_id < num_nodes:
-            target_advantages[node_id] = stats.advantage
-            
-    for node_id, value in gnn_targets.node_values.items():
-        if node_id < num_nodes:
-            oracle_values[node_id] = value
-    
-    packed_data = {
-        'format': 'metacontrol_v1',
-        'num_trajectories': 0, # Omitted RL trajectory tracking
-        'num_episodes': 0,
-        'feature_names': ['turn', 'white_kingside_castle', 'white_queenside_castle', 'black_kingside_castle', 'black_queenside_castle'],
-        'reward_scale': 1.0,
-        'node_features': node_features,
-        'parent_index': parent_index,
-        'edge_child': edge_child,
-        'edge_slot': edge_slot,
-        'depth': depth,
-        'target_advantages': target_advantages,
-        'oracle_values': oracle_values,
-        # Following omitted or mocked because they are not needed for supervised trees:
-        # trajectory_node_ptr, trajectory_step_ptr, episode_step_ptr, etc.
-    }
-    
+DEFAULT_LC0 = "/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0"
+DEFAULT_WEIGHTS = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz"
+DEFAULT_CSV = "/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv"
+DEFAULT_OUT = "/scratch/gpfs/GRIFFITHS/hl4291/data/trees/example_tree_00001.pt"
+DEFAULT_PROFILE = "/scratch/gpfs/GRIFFITHS/hl4291/data/trees/generate_and_profile.pstats"
+
+
+def _make_provider(args: argparse.Namespace):
+    if args.engine == "lc0":
+        if not os.path.isfile(args.lc0_bin):
+            raise FileNotFoundError(f"lc0 not found: {args.lc0_bin}")
+        if not os.path.isfile(args.weights):
+            raise FileNotFoundError(f"weights not found: {args.weights}")
+        return LC0ExpansionProvider(args.lc0_bin, args.weights, nodes=args.nodes)
+    if not os.path.isfile(args.stockfish_bin):
+        raise FileNotFoundError(f"stockfish not found: {args.stockfish_bin}")
+    return StockfishExpansionProvider(args.stockfish_bin, nodes=args.nodes)
+
+
+def generate_pack_profile(args: argparse.Namespace) -> None:
+    out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(packed_data, out_path)
-    t_pack = time.time() - t3
-    print(f"Packed and saved to {out_path} in {t_pack:.2f}s")
-    print(f"Total time: {time.time() - t0:.2f}s")
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", default="/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv")
-    parser.add_argument("--out", default="/scratch/gpfs/GRIFFITHS/hl4291/data/trees/shard_00001.pt")
-    args = parser.parse_args()
 
     df = pd.read_csv(args.csv)
     if df.empty:
-        print("CSV is empty!")
+        raise SystemExit("CSV is empty")
+    fen = str(df.iloc[0]["full_fen"])
+
+    provider = _make_provider(args)
+    config = GeneratorConfig(max_nodes=args.max_nodes, max_depth=args.max_depth, c_puct=args.c_puct)
+    search = TreeSearch(provider, config)
+
+    t_wall0 = time.perf_counter()
+    result = search.generate(fen)
+    t_grow = time.perf_counter() - t_wall0
+
+    t_pack0 = time.perf_counter()
+    packed = pack_single_tree_like_legacy_shard(result, continue_cost=args.continue_cost)
+    torch.save(packed, out_path)
+    t_pack = time.perf_counter() - t_pack0
+
+    total = time.perf_counter() - t_wall0
+    print(
+        f"FEN row 0: nodes={packed['num_nodes']} edges={packed['num_edges']} "
+        f"snapshots={packed['num_snapshots']} expansions={result.num_expansions}"
+    )
+    print(f"Wall: grow={t_grow:.3f}s pack+save={t_pack:.3f}s total={total:.3f}s → {out_path}")
+    if total > args.max_wall_seconds:
+        print(f"WARNING: total wall time {total:.1f}s exceeds budget {args.max_wall_seconds}s")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--csv", default=DEFAULT_CSV)
+    parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--engine", choices=("lc0", "stockfish"), default="lc0")
+    parser.add_argument("--lc0-bin", default=os.environ.get("LC0_BIN", DEFAULT_LC0))
+    parser.add_argument(
+        "--weights",
+        default=os.environ.get("LC0_WEIGHTS", DEFAULT_WEIGHTS),
+    )
+    parser.add_argument("--stockfish-bin", default=os.environ.get("STOCKFISH_BIN", "stockfish"))
+    parser.add_argument("--nodes", type=int, default=64, help="Per-expansion engine node budget")
+    parser.add_argument("--max-nodes", type=int, default=64, help="PUCT expansion budget")
+    parser.add_argument("--max-depth", type=int, default=10)
+    parser.add_argument("--c-puct", type=float, default=1.25)
+    parser.add_argument("--continue-cost", type=float, default=1e-3)
+    parser.add_argument("--max-wall-seconds", type=float, default=120.0)
+    parser.add_argument("--profile-out", default=DEFAULT_PROFILE)
+    parser.add_argument("--no-profile", action="store_true")
+    args = parser.parse_args()
+
+    if args.no_profile:
+        generate_pack_profile(args)
         return
 
-    fen = df.iloc[0]["full_fen"]
-    
     profiler = cProfile.Profile()
     profiler.enable()
-    
     try:
-        generate_and_save_tree(fen, Path(args.out))
+        generate_pack_profile(args)
     finally:
         profiler.disable()
-        stats = pstats.Stats(profiler).sort_stats('cumtime')
-        print("\n--- Top 20 Bottlenecks ---")
-        stats.print_stats(20)
+        stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.CUMULATIVE)
+        print("\n--- Top 25 by cumulative time ---")
+        stats.print_stats(25)
+        pout = Path(args.profile_out)
+        pout.parent.mkdir(parents=True, exist_ok=True)
+        profiler.dump_stats(str(pout))
+        print(f"\nWrote pstats: {pout}")
 
 
 if __name__ == "__main__":

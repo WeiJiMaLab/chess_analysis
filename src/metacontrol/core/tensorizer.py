@@ -1,8 +1,12 @@
 import torch
-from typing import List, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from metacontrol.core.tree import SearchTree
-from metacontrol.core.schemas import ChessFeatureSchema, SearchNode, TreeBatch
+from metacontrol.core.schemas import ChessFeatureSchema, TreeBatch
+
+if TYPE_CHECKING:
+    from metacontrol.core.schemas import GeneratorResult
+
 
 class TreeTensorizer:
     def __init__(self, schema: ChessFeatureSchema):
@@ -60,4 +64,17 @@ class TreeTensorizer:
             num_nodes=len(node_features),
             num_edges=len(edge_parent),
             batch_size=len(trees)
+        )
+
+    def pack_training_shard(
+        self,
+        result: "GeneratorResult",
+        *,
+        continue_cost: float = 1e-3,
+    ) -> Dict[str, Any]:
+        """Tensorize *result.tree* and attach MC/GNN targets (see :mod:`tree_pack`)."""
+        from metacontrol.data.tree_pack import pack_single_tree_like_legacy_shard
+
+        return pack_single_tree_like_legacy_shard(
+            result, continue_cost=continue_cost, schema=self.schema
         )

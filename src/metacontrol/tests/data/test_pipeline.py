@@ -39,7 +39,8 @@ def test_pipeline_fen_to_snapshots(provider):
     assert len(result.tree.nodes_by_id) > 1
     
     snapshots = derive_snapshots(result.tree, result.edge_stats, continue_cost=0.05)
-    assert len(snapshots) == len(result.tree.expansion_history) + 1
+    assert len(snapshots) == len(result.tree.search_expansion_history) + 1
+    assert len(result.tree.search_expansion_history) == result.num_expansions
     assert all(snap.expansion_index == i for i, snap in enumerate(snapshots))
 
     for snap in snapshots:

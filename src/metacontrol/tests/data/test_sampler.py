@@ -1,7 +1,10 @@
 import pytest
 import pandas as pd
 from pathlib import Path
-from src.metacontrol.data.sampler import ChessSampler
+
+from metacontrol.data.sampler import ChessSampler
+
+pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="module")
 def sampler():
