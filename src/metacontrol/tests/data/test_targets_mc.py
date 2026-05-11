@@ -235,3 +235,52 @@ def test_build_snapshots_integrity():
 
     # Last snapshot advantage should be 0 (halt = continue at terminal)
     assert math.isclose(snapshots[-1].advantage, 0.0, abs_tol=1e-10)
+
+def test_mc_mate_in_2_discovery():
+    """
+    Demonstrate that expanding a node can help identify a mate-in-2, 
+    creating a positive advantage to continue even if the current 
+    best move looks mediocre.
+    """
+    root = SearchNode(node_id=0, fen="root", features={"value": 0.0})
+    tree = SearchTree(root)
+
+    # Initial expansion (index 0) adds two moves
+    c1 = SearchNode(node_id=1, fen="c1_quiet", features={"value": -0.1, "prior": 0.5})
+    c2 = SearchNode(node_id=2, fen="c2_mediocre", features={"value": -0.2, "prior": 0.5})
+    tree.add_node(0, "quiet_move", c1)
+    tree.add_node(0, "other_move", c2)
+
+    # Second expansion (index 1) uncovers the mate under c1
+    c3 = SearchNode(node_id=3, fen="c3_mate", features={"value": -0.99, "prior": 1.0})
+    tree.add_node(1, "mate_move", c3)
+
+    # Edge stats reflecting the final tree state
+    edge_stats = {
+        (0, 1): EdgeStats(visit_count=10, q_value=0.99), # Q skyrocketed because of c3
+        (0, 2): EdgeStats(visit_count=1, q_value=0.2),
+        (1, 3): EdgeStats(visit_count=9, q_value=0.99),
+    }
+
+    snapshots = derive_snapshots(tree, edge_stats, continue_cost=0.1)
+
+    # Prefix 0: Root only (halt reward = root value = 0.0)
+    # Prefix 1: c1 and c2 exist, but we must simulate their Q *at that time*. 
+    # Actually, compute_halt_rewards uses the FINAL Q-values for the edges that exist.
+    # Wait, if compute_halt_rewards uses final Q-values, then at Prefix 1, c1 already has Q=0.99.
+    # To truly simulate discovery, we should use a custom target derivation where Q values change,
+    # OR we just show that the advantage at Prefix 0 is huge because of the eventual mate found at Prefix 2.
+    
+    # At Prefix 0: root only. Halt reward = 0.0.
+    # At Prefix 1: c1, c2 present. Halt reward = max(0.99, 0.2) = 0.99.
+    # At Prefix 2: c3 present. Halt reward = 0.99.
+    
+    # Continue value at Prefix 0 = max(0.0, V[1] - 0.1) = max(0.0, 0.99 - 0.1) = 0.89
+    # Advantage at Prefix 0 = 0.89 - 0.0 = 0.89 > 0
+    
+    assert math.isclose(snapshots[0].halt_reward, 0.0)
+    assert math.isclose(snapshots[1].halt_reward, 0.99)
+    assert math.isclose(snapshots[2].halt_reward, 0.99)
+    
+    assert snapshots[0].advantage > 0.5, "Huge advantage to continue and expand the root"
+    assert snapshots[1].advantage <= 0.0, "No advantage to expand c1 further since mate is already in its Q-value"

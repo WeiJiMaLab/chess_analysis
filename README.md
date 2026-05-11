@@ -157,23 +157,21 @@ This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, al
 
 The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers:
 - **Core Logic**: Tree construction, tensorization, and target derivation.
-- **Provider Accuracy**: Mock-based parsing tests for LC0 and Stockfish.
-- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (Scholar's Mate, Mate-in-1 endgames) and prioritizes them in the search budget.
-- **Divergence Analysis**: Documented evidence (`test_search_divergence_analysis.py`) proving that the fixed pipeline is structurally superior to the legacy system, which previously avoided winning moves due to a sign-inversion bug.
+- **Provider Accuracy**: Engine-invariant tests for both **LC0** and **Stockfish**.
+- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (**Scholar's Mate**, **Back Rank Mate**, **Arabian Mate**, **Damiano's Mate**, **Morphy's Puzzle**, **Philidor's Smothered Sequence**).
+- **Divergence Analysis**: Documented evidence proving that the fixed pipeline is structurally superior to the legacy system, which previously avoided winning moves due to a sign-inversion bug.
 
-### 4.7 Search Efficacy: Scholar's Mate and Didactic Validation
+### 4.7 Hardening and Engine Stability
 
-To ensure the meta-control pipeline is functionally correct beyond simple parity, we use **didactic tactical positions** as "smoke tests" for search quality:
-- **Scholar's Mate**: Confirms the search hammering the `f3f7#` mate-in-1 line once discovered.
-- **Endgame Mates**: Validates basic Queen+King and Rook+King patterns.
+The pipeline has been "hardened" for production-scale data generation:
+- **Perspective Parity**: Confirmed via `test_legacy_mates.py` that the pipeline correctly implements `ChildPerspective = -ParentQ`, fixing the "search blindness" of the legacy code.
+- **Engine Robustness**: Implemented dynamic `MultiPV` capping and explicit UCI flushing to prevent engine segmentation faults (notably in Stockfish 15) and ensure stable communication.
+- **Engine-Invariant Testing**: Both LC0 and Stockfish are verified through the same parameterized test suites for both terminal states and deep tactical searches.
 
-The search quality suite is run using:
+Run the full validation suite:
 ```bash
-pytest src/metacontrol/tests/data/test_search_quality.py
+pytest src/metacontrol/tests/core/test_providers.py src/metacontrol/tests/data/test_search_quality.py src/metacontrol/tests/data/test_pipeline.py src/metacontrol/tests/data/test_generator.py
 ```
-This suite requires a configured LC0 binary path in `test_search_quality.py` and is skipped if the engine is not found.
-- **Chess Rules**: Verification of castling, en passant, and terminal states (checkmate/stalemate).
-- **Integration**: Live tests against actual cluster binaries to ensure production readiness.
 
 ---
 

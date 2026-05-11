@@ -51,6 +51,7 @@ class UciExpansionProvider(TreeExpansionProvider):
     def _send(self, proc: subprocess.Popen, cmd: str):
         if proc.stdin:
             proc.stdin.write(f"{cmd}\n")
+            proc.stdin.flush()
 
     def _wait_for(self, proc: subprocess.Popen, target: str) -> List[str]:
         lines = []
@@ -107,13 +108,15 @@ class LC0ExpansionProvider(UciExpansionProvider):
     WDL_RE = re.compile(r"wdl\s+(?P<win>\d+)\s+(?P<draw>\d+)\s+(?P<loss>\d+)", re.I)
     WL_D_RE = re.compile(r"\(WL:\s*(?P<wl>[\d.-]+)\).*?\(D:\s*(?P<d>[\d.-]+)\)", re.I)
 
-    def __init__(self, engine_path: str, weights_path: str, nodes: int = 64):
-        super().__init__(engine_path, nodes=nodes, options={
+    def __init__(self, engine_path: str, weights_path: str, nodes: int = 64, options: Optional[Dict[str, str]] = None):
+        merged_options = {
             "WeightsFile": weights_path, 
             "MultiPV": "8", 
             "VerboseMoveStats": "true",
             "UCI_ShowWDL": "true"
-        })
+        }
+        if options: merged_options.update(options)
+        super().__init__(engine_path, nodes=nodes, options=merged_options)
 
     def evaluate_root(self, fen: str) -> Tuple[float, Optional[Tuple[float, float, float]]]:
         board = chess.Board(fen)
@@ -175,12 +178,18 @@ class StockfishExpansionProvider(UciExpansionProvider):
     
     INFO_RE = re.compile(r"multipv (?P<rank>\d+).*?wdl (?P<win>\d+) (?P<draw>\d+) (?P<loss>\d+).*?pv (?P<move>\w+)", re.I)
 
-    def __init__(self, engine_path: str, nodes: int = 1000):
-        super().__init__(engine_path, nodes=nodes, options={"MultiPV": "8", "UCI_ShowWDL": "true"})
+    def __init__(self, engine_path: str, nodes: int = 1000, options: Optional[Dict[str, str]] = None):
+        merged_options = {"MultiPV": "8", "UCI_ShowWDL": "true"}
+        if options: merged_options.update(options)
+        super().__init__(engine_path, nodes=nodes, options=merged_options)
 
     def expand(self, fen: str, depth: int) -> List[ChildInfo]:
         board, children = chess.Board(fen), {}
-        if board.is_game_over(): return []
+        num_moves = len(list(board.legal_moves))
+        if num_moves == 0: return []
+        
+        # Cap MultiPV to avoid engine segfaults (SF15)
+        self._send(self._process, f"setoption name MultiPV value {min(32, num_moves)}")
 
         for line in self._get_analysis(fen):
             if m := self.INFO_RE.search(line):

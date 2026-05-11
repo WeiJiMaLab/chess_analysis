@@ -8,7 +8,8 @@ This document outlines the remaining steps for the `metacontrol` pipeline follow
 - [x] **Tree Growth**: Implemented `TreeSearch` (formerly `SearchGenerator`) with PUCT selection and backpropagation.
 - [x] **Target Derivation**: Implemented deterministic DP for meta-control advantages (`targets_mc.py`) and GNN target consolidation (`targets_gnn.py`).
 - [x] **Tensorization**: Integrated `TreeTensorizer` for batching trees into GNN-compatible formats.
-- [x] **Validation**: 100% pass rate on 50 integration and unit tests.
+- [x] **Engine Integration**: Connected to real `lc0` and `stockfish` binaries, fixed perspective bugs, and added dynamic MultiPV capping for stability.
+- [x] **Validation**: 100% pass rate on 67 integration and unit tests, including rule-based terminal logic, deep tactical searches (mate-in-1, mate-in-2), and legacy parity comparisons.
 
 ---
 

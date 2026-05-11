@@ -98,3 +98,40 @@ def test_compute_gnn_targets_missing_wdl():
 
     targets = compute_gnn_targets(tree, edge_stats)
     assert (0, 1) not in targets.edge_wdls
+
+def test_compute_gnn_targets_checkmate():
+    # If a move leads to checkmate, it should have a WDL of (1.0, 0.0, 0.0) from the parent's perspective.
+    # We test that the GNN target pulls this exactly.
+    root = SearchNode(node_id=0, fen="root", features={"value": 0.0})
+    tree = SearchTree(root)
+
+    # c1 is a node where the opponent is checkmated. 
+    # Its features represent its state (which would be terminal, so value=-1.0 from child perspective).
+    c1 = SearchNode(
+        node_id=1, 
+        fen="c1", 
+        features={"value": -1.0, "wdl_win": 0.0, "wdl_draw": 0.0, "wdl_loss": 1.0}
+    )
+    tree.add_node(0, "mate_move", c1)
+
+    # Edge stats reflect a fully explored mate node
+    edge_stats = {
+        (0, 1): EdgeStats(visit_count=10, mean_wdl=(1.0, 0.0, 0.0), q_value=1.0)
+    }
+
+    targets = compute_gnn_targets(tree, edge_stats)
+
+    w, d, l = targets.edge_wdls[(0, 1)]
+    assert math.isclose(w, 1.0)
+    assert math.isclose(d, 0.0)
+    assert math.isclose(l, 0.0)
+
+    # Also check the fallback if visit_count was 0
+    edge_stats_zero = {
+        (0, 1): EdgeStats(visit_count=0)
+    }
+    targets_zero = compute_gnn_targets(tree, edge_stats_zero)
+    w0, d0, l0 = targets_zero.edge_wdls[(0, 1)]
+    assert math.isclose(w0, 1.0) # Flipped static WDL
+    assert math.isclose(d0, 0.0)
+    assert math.isclose(l0, 0.0)

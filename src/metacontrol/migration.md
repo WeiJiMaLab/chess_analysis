@@ -87,6 +87,9 @@ The meta-controller should be trained on DP-derived targets.
 - **Readability**: Log metrics in a consistent format. Remove complex "trace_callback" logic if simple logging suffices.
 
 ## 4. Immediate Next Steps
-1. [ ] Audit `cts_pretrain.py` to strip out legacy tree-building modes.
-2. [ ] Define the `SearchSnapshot` data format for Phase 1.
-3. [ ] Create `src/metacontrol/core/` and move the baseline tree logic.
+1. [x] Audit `cts_pretrain.py` to strip out legacy tree-building modes.
+2. [x] Define the `SearchSnapshot` data format for Phase 1.
+3. [x] Create `src/metacontrol/core/` and move the baseline tree logic.
+4. [x] Harden engine providers (LC0, Stockfish), fix perspective bugs, and establish engine-invariant tests.
+5. [ ] Implement `src/metacontrol/data/sampler.py` for root FEN extraction from Lichess DB.
+6. [ ] Implement SLURM job orchestration for clustered data generation.
