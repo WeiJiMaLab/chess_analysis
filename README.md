@@ -132,6 +132,7 @@ The project has been refactored into a modular structure under `src/metacontrol/
 
 - **`core/`**: Fundamental data structures (`tree.py`, `tensorizer.py`) and schemas (`schemas.py`).
 - **`data/`**: Pipeline logic for tree generation (`generator.py`), meta-control DP derivation (`targets_mc.py`), and GNN target computation (`targets_gnn.py`).
+- **`tutorials/`**: Didactic notebooks and generation scripts demonstrating the full pipeline.
 - **`tests/`**: Comprehensive integration and unit tests for the pipeline.
 
 The new `TreeSearch` class in `generator.py` provides a clean, method-based API for tree growth, while `targets_mc.py` and `targets_gnn.py` separate the derivation of training targets for the controller and the GNN respectively.
@@ -144,12 +145,33 @@ The pipeline now features a generalized engine provider system that supports bot
 - **`StockfishExpansionProvider`**: Handles standard UCI info and uses `multipv` rank-based priors.
 
 This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, allowing research to focus on the search dynamics rather than engine-specific parsing.
+ 
+- **Mathematical Parity and Perspective Correctness**: 
+  The pipeline enforces strict sign and perspective consistency. Historical discrepancies in teacher targets (where winning positions were sometimes recorded with negative values) have been resolved.
+  - **Expansion**: Engine Q-values (reported from parent perspective) are flipped (`-Q`) when stored in child nodes to maintain local consistency.
+  - **Backpropagation**: Values are flipped again during path traversal, restoring the original engine intent at the parent edge.
+  - **WDL Targets**: Normalized WDL probabilities are flipped (`win <-> loss`) at each level to ensure they always reflect the side-to-move.
+  - **Parity Tests**: A dedicated suite (`test_legacy_parity.py`) ensures that new generation logic matches the mathematical core of the legacy system while correcting its sign conventions.
 
 ### 4.6 Testing and Validation
 
 The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers:
 - **Core Logic**: Tree construction, tensorization, and target derivation.
 - **Provider Accuracy**: Mock-based parsing tests for LC0 and Stockfish.
+- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (Scholar's Mate, Mate-in-1 endgames) and prioritizes them in the search budget.
+- **Divergence Analysis**: Documented evidence (`test_search_divergence_analysis.py`) proving that the fixed pipeline is structurally superior to the legacy system, which previously avoided winning moves due to a sign-inversion bug.
+
+### 4.7 Search Efficacy: Scholar's Mate and Didactic Validation
+
+To ensure the meta-control pipeline is functionally correct beyond simple parity, we use **didactic tactical positions** as "smoke tests" for search quality:
+- **Scholar's Mate**: Confirms the search hammering the `f3f7#` mate-in-1 line once discovered.
+- **Endgame Mates**: Validates basic Queen+King and Rook+King patterns.
+
+The search quality suite is run using:
+```bash
+pytest src/metacontrol/tests/data/test_search_quality.py
+```
+This suite requires a configured LC0 binary path in `test_search_quality.py` and is skipped if the engine is not found.
 - **Chess Rules**: Verification of castling, en passant, and terminal states (checkmate/stalemate).
 - **Integration**: Live tests against actual cluster binaries to ensure production readiness.
 

@@ -79,9 +79,9 @@ We'll use a fixed midgame FEN that allows for clear branching.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
-# A complex midgame position: Sicilian Defense, Richter-Rauzer
-root_fen = "r1bq1rk1/pp2bppp/2nppn2/8/3NP3/2N1BP2/PPP3PP/R2QKB1R w KQ - 1 9"
-print(f"Starting Position: {root_fen}")
+# Scholar's Mate: White to move, Qf7# is winning
+root_fen = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4"
+print(f"Starting Position (Scholar's Mate): {root_fen}")
 board = chess.Board(root_fen)
 display(board)
 """))
@@ -89,20 +89,20 @@ display(board)
 # --- Markdown Cell: Search ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 4. Tree Search (PUCT)
-We perform a very shallow search (2 expansions) to keep the visualization clean.
+We perform a search with 16 expansions. In this didactic example, we expect the engine to quickly identify `f3f7#` as the winning move and focus its budget there.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
-# Configure search: 2 expansions
-config = GeneratorConfig(max_nodes=2, max_depth=2, c_puct=2.0)
+# Configure search: 16 expansions to see the mate prioritization
+config = GeneratorConfig(max_nodes=16, max_depth=4, c_puct=1.5)
 search = TreeSearch(provider, config)
 
 print("Growing search tree...")
 result = search.generate(root_fen)
 print(f"Tree grown with {len(result.tree.nodes_by_id)} nodes.")
 
-# Visualize the tree with actual engine values
-display(render_tree(result.tree, result.edge_stats, title="LC0 Search Tree (2 Expansions)"))
+# Visualize the tree
+display(render_tree(result.tree, result.edge_stats, title="Scholar's Mate Search Tree"))
 """))
 
 # --- Markdown Cell: Meta-Control ---
