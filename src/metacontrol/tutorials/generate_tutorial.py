@@ -12,19 +12,32 @@ This notebook demonstrates the modular pipeline for generating chess search tree
 1. **GNN Pretraining**: Supervised learning of value and WDL heads.
 2. **Meta-Control (Planning Head)**: RL-based advantage regression for search termination.
 
-We use the **actual LC0 engine** to provide realistic search statistics.
+We use the **actual LC0 engine** to provide realistic search statistics, ensuring that our pipeline correctly handles the intricacies of UCI output and perspective-taking.
+"""))
+
+# --- Markdown Cell: Perspective Didactic ---
+nb['cells'].append(nbf.v4.new_markdown_cell("""
+## Core Concept: The Perspective Shift
+
+In a chess search tree, every level flips the "side to move". This creates a challenge for data consistency:
+- **Engine Perspective**: LC0 reports Q-values from the perspective of the **Parent** (the side that just moved).
+- **Node Perspective**: We store features from the perspective of the **Child** (the side whose turn it is in that state).
+
+**Our Rule**: `Node_Value = -Engine_Q`. 
+This ensures that if White moves to a winning position, the Black child node reflects a negative value (losing), and vice-versa. 
+
+During **Backpropagation**, we flip the value again at each parent level, restoring the original engine intent for the edges while maintaining local perspective consistency for the nodes.
 """))
 
 # --- Markdown Cell: Imports ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 1. Environment Setup and Imports
-We import the core components from the `metacontrol` package. Note the separation between `core` (data structures), `data` (generation logic), and `utils` (visualization).
+We import the core components from the `metacontrol` package.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
 import sys
 import os
-import duckdb
 import chess
 import random
 import torch
@@ -46,10 +59,8 @@ from metacontrol.utils.plotting import render_tree, render_gnn_view, plot_advant
 # --- Markdown Cell: Engine ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 2. The Engine Provider
-The `TreeExpansionProvider` is an abstraction that allows us to swap between different engines (LC0, Stockfish, or even Mocks). 
-Here we instantiate the `LC0ExpansionProvider` using production distilled weights. 
-
-We set `nodes=64` to get a meaningful but fast evaluation for each expansion.
+The `LC0ExpansionProvider` is configured to use the production distilled weights. 
+We set `nodes=128` to get a stable signal.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
@@ -57,81 +68,68 @@ LC0_BIN = "/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0"
 LC0_WEIGHTS = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz"
 
 # Initialize provider
-provider = LC0ExpansionProvider(LC0_BIN, LC0_WEIGHTS, nodes=64)
+provider = LC0ExpansionProvider(LC0_BIN, LC0_WEIGHTS, nodes=128)
 print("LC0 Provider initialized successfully.")
 """))
 
 # --- Markdown Cell: Root Selection ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 3. Root Selection
-In production, we sample roots from a Lichess database based on ELO, piece count, and game phase. 
-For this tutorial, we'll use a fixed midgame FEN.
+We'll use a fixed midgame FEN that allows for clear branching.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
-# A complex midgame position
+# A complex midgame position: Sicilian Defense, Richter-Rauzer
 root_fen = "r1bq1rk1/pp2bppp/2nppn2/8/3NP3/2N1BP2/PPP3PP/R2QKB1R w KQ - 1 9"
 print(f"Starting Position: {root_fen}")
+board = chess.Board(root_fen)
+display(board)
 """))
 
 # --- Markdown Cell: Search ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 4. Tree Search (PUCT)
-The `TreeSearch` class implements the iterative **Select → Expand → Backpropagate** loop. 
-- **Select**: Uses the PUCT formula to find an unexpanded leaf.
-- **Expand**: Queries LC0 for child priors (P) and values (Q).
-- **Backpropagate**: Updates path statistics (N, Q, WDL), flipping the perspective at each level.
-
-**Note on Perspective**: Engine scores (Q, WDL) are reported from the perspective of the side whose turn it is. In our tree, we ensure that each node's features and its outgoing edge statistics are perspective-correct.
+We perform a very shallow search (2 expansions) to keep the visualization clean.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
-# Configure search: very small tree for clear visualization
-config = GeneratorConfig(max_nodes=2, max_depth=2, c_puct=1.5)
+# Configure search: 2 expansions
+config = GeneratorConfig(max_nodes=2, max_depth=2, c_puct=2.0)
 search = TreeSearch(provider, config)
 
-print("Growing search tree (2 expansions)...")
+print("Growing search tree...")
 result = search.generate(root_fen)
 print(f"Tree grown with {len(result.tree.nodes_by_id)} nodes.")
 
-# Visualize the tree
-display(render_tree(result.tree, result.edge_stats, title="LC0 Search Tree (2 Nodes)"))
+# Visualize the tree with actual engine values
+display(render_tree(result.tree, result.edge_stats, title="LC0 Search Tree (2 Expansions)"))
 """))
 
 # --- Markdown Cell: Meta-Control ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 5. Meta-Control Advantage (DP)
-We derive training targets for the meta-controller (the planning head). 
-This uses Dynamic Programming to calculate the "True" value of continuing search vs. halting, 
-factoring in a `continue_cost`.
-
-The **Advantage** is defined as: `Continue_Value - Halt_Reward`. 
-A positive advantage suggests the search should continue.
+The **Advantage** tells us how much better the final search result is compared to the root's initial estimate, minus the search cost.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
-continue_cost = 0.05
+continue_cost = 0.02
 snapshots = derive_snapshots(result.tree, result.edge_stats, continue_cost=continue_cost)
 
-# Plot the advantage landscape
+# Plot the advantage landscape across search time (expansion count)
 plt = plot_advantage_landscape(snapshots, continue_cost=continue_cost)
 plt.show()
-
-print(f"Derived {len(snapshots)} snapshots for meta-control training.")
 """))
 
 # --- Markdown Cell: GNN ---
 nb['cells'].append(nbf.v4.new_markdown_cell("""
 ## 6. GNN Targets
-Finally, we compute the targets for the GNN value and WDL heads. 
-These are visit-weighted averages from the final search tree, representing the "wisdom of the search" 
-that the neural network should learn to emulate.
+The GNN heads learn to predict the final search outcomes.
 """))
 
 nb['cells'].append(nbf.v4.new_code_cell("""
 gnn_targets = compute_gnn_targets(result.tree, result.edge_stats)
 
-# Visualize the GNN target view
+# Visualize the GNN target view (showing WDL distributions)
 display(render_gnn_view(result.tree, gnn_targets, title="GNN Supervised Targets"))
 """))
 
@@ -141,4 +139,3 @@ with open(output_path, "w") as f:
     nbf.write(nb, f)
 
 print(f"Tutorial notebook generated at: {output_path}")
-print("You can now open it in the editor or run it via nbconvert.")

@@ -40,7 +40,10 @@ def test_perspective_taking_mock(mock_uci):
     """Verify that root and child values are flipped in mock."""
     mock_uci.stdout.readline.side_effect = [
         "uciok", "readyok",
+        # For evaluate_root
         "info depth 1 score cp 100 wdl 800 100 100 pv e2e4",
+        "bestmove e2e4",
+        # For expand
         "info string e2e4 (1) N: 10 (P: 10.0%) (WL: 0.700) (D: 0.100) (Q: 0.700) (V: 0.700)",
         "bestmove e2e4"
     ]
@@ -89,9 +92,9 @@ def test_real_lc0_opening_uninformative():
     assert abs(val) < 0.2
     assert wdl[1] > 0.3 # Non-trivial draw prob
 
-def test_hardcoded_terminal_states():
+def test_hardcoded_terminal_states(mock_uci):
     """Verify rule-based terminal states (no engine needed)."""
-    # Use any path, engine won't be called
+    # Use any path, engine won't be called for terminal FEN
     provider = StockfishExpansionProvider("dummy")
     
     # Fool's Mate (White is checkmated)
