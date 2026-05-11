@@ -11,9 +11,9 @@ from metacontrol.core.schemas import (
     GeneratorResult,
     SearchNode
 )
+from metacontrol.core.providers import TreeExpansionProvider
 from metacontrol.data.generator import (
     TreeSearch,
-    TreeExpansionProvider,
     normalize_priors,
 )
 from metacontrol.core.tree import SearchTree

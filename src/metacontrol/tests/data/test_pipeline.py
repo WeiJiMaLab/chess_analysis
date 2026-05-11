@@ -10,10 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from metacontrol.core.tree import SearchTree
 from metacontrol.core.schemas import ChessFeatureSchema, SearchNode, ChildInfo, GeneratorConfig
 from metacontrol.core.tensorizer import TreeTensorizer
-from metacontrol.data.generator import (
-    TreeSearch,
-    TreeExpansionProvider,
-)
+from metacontrol.core.providers import TreeExpansionProvider
+from metacontrol.data.generator import TreeSearch
 from metacontrol.data.targets_mc import derive_snapshots
 
 

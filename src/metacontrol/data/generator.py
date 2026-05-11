@@ -7,20 +7,9 @@ from abc import ABC, abstractmethod
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from metacontrol.core.providers import TreeExpansionProvider
 from metacontrol.core.tree import SearchTree
 from metacontrol.core.schemas import SearchNode, ChildInfo, GeneratorConfig, EdgeStats, GeneratorResult
-
-
-class TreeExpansionProvider(ABC):
-    """Abstraction over the chess engine."""
-
-    @abstractmethod
-    def evaluate_root(self, fen: str) -> Tuple[float, Optional[Tuple[float, float, float]]]:
-        """Return (value, optional_wdl) for the root position."""
-
-    @abstractmethod
-    def expand(self, fen: str, depth: int) -> List[ChildInfo]:
-        """Return child expansions for a position, sorted by prior descending."""
 
 
 

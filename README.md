@@ -136,6 +136,23 @@ The project has been refactored into a modular structure under `src/metacontrol/
 
 The new `TreeSearch` class in `generator.py` provides a clean, method-based API for tree growth, while `targets_mc.py` and `targets_gnn.py` separate the derivation of training targets for the controller and the GNN respectively.
 
+### 4.5 Engine Providers and Abstraction (`core/providers.py`)
+
+The pipeline now features a generalized engine provider system that supports both **LC0** and **Stockfish** (and any other UCI-compatible engine). 
+- **`UciExpansionProvider`**: Centralizes subprocess management and UCI communication.
+- **`LC0ExpansionProvider`**: Parses specialized statistics like `VerboseMoveStats` and WDL.
+- **`StockfishExpansionProvider`**: Handles standard UCI info and uses `multipv` rank-based priors.
+
+This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, allowing research to focus on the search dynamics rather than engine-specific parsing.
+
+### 4.6 Testing and Validation
+
+The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers:
+- **Core Logic**: Tree construction, tensorization, and target derivation.
+- **Provider Accuracy**: Mock-based parsing tests for LC0 and Stockfish.
+- **Chess Rules**: Verification of castling, en passant, and terminal states (checkmate/stalemate).
+- **Integration**: Live tests against actual cluster binaries to ensure production readiness.
+
 ---
 
 ## 5. Training protocols: controller

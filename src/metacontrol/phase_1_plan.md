@@ -34,30 +34,7 @@ This document outlines the remaining steps for the `metacontrol` pipeline follow
 ## 3. Stage 5: Large-Scale Production Pipeline
 - **Objective**: Parallelize the generation of millions of snapshots across the cluster.
 - **Tasks**:
-    - [ ] **Engine Integration**: Connect the pipeline to the `lc0` binary via a production-ready `TreeExpansionProvider`.
-    - [ ] **Sharding**: Implement logic to save trees in packed shards (`.pt` files) for high-throughput training.
-    - [ ] **Slurm Orchestration**: Develop job templates for distributed generation.
-
----
-
-## 4. Stage 6: Training Orchestration
-- **Objective**: Rebuild the training loops for the GNN and the Meta-Control head.
-- **Tasks**:
-    - [ ] **GNN Pretraining**: Supervised learning on `node_target_values` and `edge_wdl_targets`.
-    - [ ] **Controller Training**: Fitted-Q / Advantage regression using the Bellman-derived targets from `targets_mc.py`.
-    - [ ] **Evaluation Suite**: Measure oracle agreement and "economy of thought" metrics.
-
----
-
-## 5. Performance Goals
-| Optimization | Method | Purpose |
-| :--- | :--- | :--- |
-| **Vectorization** | PyTorch/NumPy | Optimized memory layout for tree batches. |
-| **I/O Efficiency** | Sharded Packing | Fast loading during GPU training. |
-| **Parallelism** | Slurm Job Arrays | Multi-node generation throughput. |
-
----
-
-## 6. Visualization & Debugging
-- **Tree Inspector**: Extend `SearchTree.render()` to include derived targets (advantages/WDLs).
-- **Trajectory Analysis**: Plot halt rewards vs. expansion steps to verify "value of computation" landscapes.
+- [x] **Engine Integration**: Connected the pipeline to `lc0` and `stockfish` via the generalized `UciExpansionProvider`.
+- [x] **Visualization & Debugging**: Created `plotting.py` for Graphviz tree rendering and advantage landscape analysis.
+- [ ] **Sharding**: Implement logic to save trees in packed shards (`.pt` files) for high-throughput training.
+- [ ] **Slurm Orchestration**: Develop job templates for distributed generation.
