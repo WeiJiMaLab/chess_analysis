@@ -8,10 +8,11 @@ This home directory is the working root for a research thread that combines **la
 | :--- | :--- |
 | `chess_analysis/` | DuckDB, figures; Slidev deck lives under `src/presentations/` |
 | `chess_analysis/src/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
+| `chess_analysis/src/metacontrol/` | **New Modular Pipeline** (Refactored from `lmcos/`) |
 | `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
-| `chess_analysis/lmcos/` | Tree encoder, offline controller training, Slurm job definitions |
-| `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
+| `chess_analysis/src/metacontrol/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
+| `chess_analysis/lmcos/` | Legacy tree encoder, offline controller training, Slurm job definitions |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
 | `chess_analysis/src/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
@@ -124,6 +125,16 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 ### 4.3 Packing and Slurm
 
 Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates live under `chess_analysis/lmcos/slurm/`.
+
+### 4.4 Modular Metacontrol Pipeline (`src/metacontrol/`)
+
+The project has been refactored into a modular structure under `src/metacontrol/` to enforce strict decoupling and didactic clarity:
+
+- **`core/`**: Fundamental data structures (`tree.py`, `tensorizer.py`) and schemas (`schemas.py`).
+- **`data/`**: Pipeline logic for tree generation (`generator.py`), meta-control DP derivation (`targets_mc.py`), and GNN target computation (`targets_gnn.py`).
+- **`tests/`**: Comprehensive integration and unit tests for the pipeline.
+
+The new `TreeSearch` class in `generator.py` provides a clean, method-based API for tree growth, while `targets_mc.py` and `targets_gnn.py` separate the derivation of training targets for the controller and the GNN respectively.
 
 ---
 

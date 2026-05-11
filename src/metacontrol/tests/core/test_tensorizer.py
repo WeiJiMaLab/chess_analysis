@@ -1,7 +1,7 @@
 import pytest
 import torch
-from metacontrol.core.tree import SearchNode, SearchTree
-from metacontrol.core.schema import ChessFeatureSchema
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import ChessFeatureSchema, SearchNode
 from metacontrol.core.tensorizer import TreeTensorizer
 
 def test_single_leaf_tensorization():

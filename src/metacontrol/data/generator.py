@@ -4,25 +4,11 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from metacontrol.core.tree import SearchNode, SearchTree
-
-
-# ---------------------------------------------------------------------------
-# Provider abstraction
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ChildInfo:
-    """Child expansion returned by a provider."""
-    move_uci: str
-    fen: str
-    value: float
-    prior: float
-    wdl: Optional[Tuple[float, float, float]] = None
-    is_terminal: bool = False
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import SearchNode, ChildInfo, GeneratorConfig, EdgeStats, GeneratorResult
 
 
 class TreeExpansionProvider(ABC):
@@ -36,38 +22,6 @@ class TreeExpansionProvider(ABC):
     def expand(self, fen: str, depth: int) -> List[ChildInfo]:
         """Return child expansions for a position, sorted by prior descending."""
 
-
-# ---------------------------------------------------------------------------
-# Config & data
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class GeneratorConfig:
-    max_nodes: int
-    max_depth: int
-    c_puct: float = 1.0
-
-    def __post_init__(self) -> None:
-        assert self.max_nodes > 0, "max_nodes must be positive"
-        assert self.max_depth >= 0, "max_depth must be non-negative"
-        assert self.c_puct >= 0.0, "c_puct must be non-negative"
-
-
-@dataclass
-class EdgeStats:
-    """Running statistics for a parent→child edge during search."""
-    visit_count: int = 0
-    total_value: float = 0.0
-    q_value: float = 0.0
-    total_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    mean_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-
-
-@dataclass
-class GeneratorResult:
-    tree: SearchTree
-    edge_stats: Dict[Tuple[int, int], EdgeStats]
-    num_expansions: int
 
 
 # ---------------------------------------------------------------------------

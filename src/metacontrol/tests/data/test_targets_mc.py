@@ -4,16 +4,13 @@ import math
 import pytest
 from typing import Dict, List, Tuple
 
-from metacontrol.core.tree import SearchNode, SearchTree
-from metacontrol.data.generator import EdgeStats
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import SearchNode, EdgeStats, SearchSnapshot
 from metacontrol.data.targets_mc import (
-    SearchSnapshot,
     calculate_dp_values,
     compute_halt_rewards,
     derive_snapshots,
 )
-
-
 # ---------------------------------------------------------------------------
 # Helpers — build small hand-crafted trees
 # ---------------------------------------------------------------------------

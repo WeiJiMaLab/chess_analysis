@@ -80,25 +80,27 @@ We will simplify the `SearchTree` to be a pure data structure without search log
 
 We will consolidate the disparate tree-building logic into a single class.
 
+### Configuration (Faithful to Original)
+To maintain parity with the original research, we use the following standard parameters:
+- `max_nodes`: **64** (Maximum tree size for the teacher search)
+- `min_nodes`: **5** (Minimum tree size for a valid snapshot)
+- `max_depth`: **10** (Maximum search depth)
+- `search_budget`: **64** (Engine-specific simulation budget per expansion)
+
 ### API
 ```python
 @dataclass
 class GeneratorConfig:
-    max_nodes: int
-    max_depth: int
-    c_puct: float
+    max_nodes: int = 64
+    max_depth: int = 10
+    c_puct: float = 1.0
+    search_budget: int = 64
 
-class SearchGenerator:
+class TreeSearch:
     """Unified generator that grows a tree and maintains search stats."""
     def __init__(self, provider: TreeExpansionProvider, config: GeneratorConfig):
         self.provider = provider
         self.config = config
-
-    def generate(self, root_fen: str) -> SearchTree:
-        """
-        Grows a tree up to max_nodes using PUCT selection.
-        Updates edge_stats (Q-values and WDLs) during backpropagation.
-        """
 ```
 
 ### Proposed Tests
@@ -112,6 +114,15 @@ class SearchGenerator:
 - **`test_Q_leaf_is_V`**
 - **`test_convergence`**: Assert that with a very high budget, the tree approximates minimax values.
 - **`test_invariants`**: Assert `node_count <= max_nodes` and `depth <= max_depth`.
+
+## 5.5. Stage 2.5: Root Selection Criteria
+To ensure our dataset is representative of the original study, root FENs will be sampled using the following criteria:
+- **ELO Range**: Both players must be between **1800** and **2600**.
+- **Game Length**: At least **20 half-moves** played in the source game.
+- **Ply Range**: Selected position must be between ply **8** and **120**.
+- **Legal Moves**: The position must have between **2** and **60** legal moves.
+- **Piece Count**: Between **8** and **32** pieces on the board.
+- **Diversity**: Sample exactly **one** random eligible position per game to avoid autocorrelation.
 
 ## 6. Stage 3: Target Logic (`data/targets_gnn.py` & `data/targets_mc.py`)
 

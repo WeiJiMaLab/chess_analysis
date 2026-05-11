@@ -1,5 +1,6 @@
 import pytest
-from metacontrol.core.tree import SearchNode, SearchTree
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import SearchNode
 
 def test_single_leaf():
     root = SearchNode(node_id=0, fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")

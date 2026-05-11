@@ -14,33 +14,12 @@ history and accumulated edge stats, it:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+
 from typing import Dict, List, Optional, Tuple
 
-from metacontrol.core.tree import SearchNode, SearchTree
-from metacontrol.data.generator import EdgeStats
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import SearchNode, EdgeStats, SearchSnapshot
 
-
-# ---------------------------------------------------------------------------
-# Public data structures
-# ---------------------------------------------------------------------------
-
-@dataclass
-class SearchSnapshot:
-    """One observation in the meta-controller's decision trajectory.
-
-    Each snapshot corresponds to a prefix of the full search tree after
-    a certain number of expansions.
-    """
-    expansion_index: int
-    halt_reward: float
-    continue_value: float
-    advantage: float
-
-    # Reference to the tree prefix (optional — only populated when needed
-    # for tensorization downstream; kept as None to avoid expensive copies
-    # during DP computation).
-    tree_prefix: Optional[SearchTree] = None
 
 
 # ---------------------------------------------------------------------------

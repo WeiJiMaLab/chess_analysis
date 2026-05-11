@@ -7,19 +7,12 @@ This module computes the supervised learning targets for the GNN:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+
 from typing import Dict, Tuple
 
 from metacontrol.core.tree import SearchTree
-from metacontrol.data.generator import EdgeStats, node_wdl, flip_wdl
-
-
-@dataclass
-class GNNTargets:
-    """Supervised targets for training the GNN on a generated search tree."""
-    node_values: Dict[int, float]
-    edge_wdls: Dict[Tuple[int, int], Tuple[float, float, float]]
-
+from metacontrol.core.schemas import GNNTargets, EdgeStats
+from metacontrol.data.generator import node_wdl, flip_wdl
 
 def normalize_wdl(wdl: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Ensure WDL sums to 1.0."""

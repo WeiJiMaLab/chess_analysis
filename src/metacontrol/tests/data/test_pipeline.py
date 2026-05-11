@@ -7,12 +7,10 @@ import math
 import pytest
 from typing import Dict, List, Optional, Tuple
 
-from metacontrol.core.tree import SearchNode, SearchTree
-from metacontrol.core.schema import ChessFeatureSchema
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import ChessFeatureSchema, SearchNode, ChildInfo, GeneratorConfig
 from metacontrol.core.tensorizer import TreeTensorizer
 from metacontrol.data.generator import (
-    ChildInfo,
-    GeneratorConfig,
     TreeSearch,
     TreeExpansionProvider,
 )

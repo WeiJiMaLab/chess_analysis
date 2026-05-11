@@ -1,39 +1,7 @@
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
 
-@dataclass
-class SearchNode:
-    node_id: int
-    fen: str
-    parent: Optional['SearchNode'] = None
-    children: Dict[str, 'SearchNode'] = field(default_factory=dict)
-    visit_count: int = 0
-    total_value: float = 0.0
-    q_value: float = 0.0
-    depth: int = 0
-    is_terminal: bool = False
-    features: Dict[str, float] = field(default_factory=lambda: {
-        "value": 0.0,
-        "wdl_win": 0.0,
-        "wdl_draw": 0.0,
-        "wdl_loss": 0.0
-    })
 
-    def __repr__(self) -> str:
-        return f"SearchNode(id={self.node_id}, depth={self.depth}, visits={self.visit_count}, q={self.q_value:.3f})"
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node_id": self.node_id,
-            "fen": self.fen,
-            "visit_count": self.visit_count,
-            "total_value": self.total_value,
-            "q_value": self.q_value,
-            "depth": self.depth,
-            "is_terminal": self.is_terminal,
-            "features": self.features,
-            "children": {move: child.node_id for move, child in self.children.items()}
-        }
+from metacontrol.core.schemas import SearchNode
 
 class SearchTree:
     def __init__(self, root: SearchNode):

@@ -1,22 +1,8 @@
 import torch
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
-from metacontrol.core.tree import SearchTree, SearchNode
-from metacontrol.core.schema import ChessFeatureSchema
 
-@dataclass
-class TreeBatch:
-    node_features: torch.Tensor
-    parent_index: torch.Tensor
-    edge_parent: torch.Tensor
-    edge_child: torch.Tensor
-    edge_slot: torch.Tensor
-    depth: torch.Tensor
-    root_index: torch.Tensor
-    tree_index: torch.Tensor
-    num_nodes: int
-    num_edges: int
-    batch_size: int
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import ChessFeatureSchema, SearchNode, TreeBatch
 
 class TreeTensorizer:
     def __init__(self, schema: ChessFeatureSchema):

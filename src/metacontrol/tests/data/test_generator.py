@@ -4,16 +4,19 @@ import math
 import pytest
 from typing import Dict, List, Optional, Tuple
 
-from metacontrol.data.generator import (
+from metacontrol.core.schemas import (
     ChildInfo,
     EdgeStats,
     GeneratorConfig,
     GeneratorResult,
+    SearchNode
+)
+from metacontrol.data.generator import (
     TreeSearch,
     TreeExpansionProvider,
     normalize_priors,
 )
-from metacontrol.core.tree import SearchNode, SearchTree
+from metacontrol.core.tree import SearchTree
 
 
 # ---------------------------------------------------------------------------

@@ -4,8 +4,8 @@ import math
 import pytest
 from typing import Dict, Tuple
 
-from metacontrol.core.tree import SearchNode, SearchTree
-from metacontrol.data.generator import EdgeStats
+from metacontrol.core.tree import SearchTree
+from metacontrol.core.schemas import SearchNode, EdgeStats
 from metacontrol.data.targets_gnn import (
     compute_gnn_targets,
     normalize_wdl,
