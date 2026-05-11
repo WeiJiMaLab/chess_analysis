@@ -155,10 +155,12 @@ This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, al
 
 ### 4.6 Testing and Validation
 
-The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers:
-- **Core Logic**: Tree construction, tensorization, and target derivation.
-- **Provider Accuracy**: Engine-invariant tests for both **LC0** and **Stockfish**.
-- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (**Scholar's Mate**, **Back Rank Mate**, **Arabian Mate**, **Damiano's Mate**, **Morphy's Puzzle**, **Philidor's Smothered Sequence**).
+The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers 67 specific unit and integration scenarios:
+- **Core Logic & Target Derivation**:
+  - `test_targets_mc.py` verifies the DP algorithm, including a simulation demonstrating that when a tree expansion discovers a mate-in-2, the backward DP properly assigns a massive positive "continue advantage" to earlier snapshots.
+  - `test_targets_gnn.py` ensures target consolidation is accurate, validating that terminal checkmate states correctly map to a WDL of `(1.0, 0.0, 0.0)` from the parent's perspective.
+- **Provider Accuracy (`test_providers.py`)**: Engine-invariant tests for both **LC0** and **Stockfish**. These confirm that terminal states (like Fool's Mate or Stalemate) yield strictly consistent WDL evaluations regardless of which side is checkmated, validating the local `ChildPerspective` invariant.
+- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (**Scholar's Mate**, **Back Rank Mate**, **Arabian Mate**, **Damiano's Mate**, **Morphy's Puzzle**, **Philidor's Smothered Sequence**). It explicitly tests the PUCT exploration mechanics, for instance showing that a quiet mate-in-2 might be overlooked with a low `c_puct` but is confidently surfaced when `c_puct` is raised.
 - **Divergence Analysis**: Documented evidence proving that the fixed pipeline is structurally superior to the legacy system, which previously avoided winning moves due to a sign-inversion bug.
 
 ### 4.7 Hardening and Engine Stability
