@@ -13,7 +13,7 @@ Modular **search tree → targets → tensors** pipeline for meta-control resear
 
 ## Root Sampling
 
-`python -m metacontrol.scripts.sample` is the root-FEN acquisition step. By default it walks each day of `--year 2023`, samples `--n 100` positions per day using deterministic `ORDER BY hash(...)`, shows a `tqdm` progress bar, and writes one combined CSV. For a non-leap year with enough eligible games, that is **36,500 rows**.
+`python -m metacontrol.scripts.sample` is the root-FEN acquisition step. By default it walks each day of `--year 2023`, samples `--n 100` positions per day using deterministic `ORDER BY hash(...)`, shows a `tqdm` progress bar, and writes one combined parquet file under `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol/positions/`. For a non-leap year with enough eligible games, that is **36,500 rows**.
 
 ## Single FEN → `tree.pt` latency (profiled)
 

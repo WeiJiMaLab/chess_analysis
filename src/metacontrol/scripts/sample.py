@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 DEFAULT_CORE_DB = "/scratch/gpfs/GRIFFITHS/chess-db/lichess.db"
 DEFAULT_RAW_DATA = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata"
-DEFAULT_OUT_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol/roots"
+DEFAULT_OUT_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol/positions"
 
 
 def compose_full_fen(
@@ -114,7 +114,8 @@ class ChessSampler:
             return pd.DataFrame()
 
         sampled_games_df["partition"] = sampled_games_df["gid"].astype(str).str[:6]
-        file_groups = sampled_games_df.groupby("partition")["gid"].apply(list).reset_index()
+        sampled_games_df["segment"] = sampled_games_df["gid"].astype(str).str[6:9]
+        file_groups = sampled_games_df.groupby(["partition", "segment"])["gid"].apply(list).reset_index()
 
         if verbose:
             print(
@@ -134,8 +135,9 @@ class ChessSampler:
 
         for _, row in file_groups.iterrows():
             partition = row["partition"]
+            segment = row["segment"]
             gids_str = ",".join(map(str, row["gid"]))
-            parquet_glob = f"{self.raw_data_dir}/partition={partition}/*-moves.parquet"
+            parquet_path = f"{self.raw_data_dir}/partition={partition}/{segment}-moves.parquet"
 
             # ``full_fen`` expression below must stay aligned with
             # :func:`compose_full_fen`.
@@ -155,7 +157,7 @@ class ChessSampler:
                 n_pieces,
                 n_possible_moves
             FROM
-                read_parquet('{parquet_glob}')
+                read_parquet('{parquet_path}')
             WHERE
                 gid IN ({gids_str})
                 AND board_position IS NOT NULL
@@ -200,7 +202,7 @@ class ChessSampler:
 
 
 def _default_out(year: int, seed: int, n_fens: int) -> Path:
-    return Path(DEFAULT_OUT_DIR) / f"sampled_fens_{year}_daily_seed{seed}_n{n_fens}.csv"
+    return Path(DEFAULT_OUT_DIR) / f"sampled_fens_{year}_daily_seed{seed}_n{n_fens}.parquet"
 
 
 def _daily_windows(year: int, start_date: Optional[str], end_date: Optional[str]) -> list[tuple[str, str]]:
@@ -213,6 +215,17 @@ def _daily_windows(year: int, start_date: Optional[str], end_date: Optional[str]
         (day.date().isoformat(), (day + pd.Timedelta(days=1)).date().isoformat())
         for day in days
     ]
+
+
+def _write_dataframe(df: pd.DataFrame, out_path: Path) -> None:
+    if out_path.suffix == ".parquet":
+        escaped = str(out_path).replace("'", "''")
+        conn = duckdb.connect(database=":memory:")
+        conn.register("sampled_positions", df)
+        conn.sql(f"COPY sampled_positions TO '{escaped}' (FORMAT PARQUET);")
+        conn.close()
+    else:
+        df.to_csv(out_path, index=False)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -285,10 +298,7 @@ def main() -> None:
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.suffix == ".parquet":
-        df.to_parquet(out_path)
-    else:
-        df.to_csv(out_path, index=False)
+    _write_dataframe(df, out_path)
 
     expected = len(windows) * args.n_fens
     print(f"Sampled {len(df)} positions (expected {expected}) -> {out_path}")
