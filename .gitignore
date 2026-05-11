@@ -4,3 +4,10 @@ __pycache__/
 analysis_outputs/
 logs/
 weights/
+
+# Agent / IDE config — never committed
+.claude/
+.codex/
+.cursor/
+AGENTS.md
+temp_disabled_agents.md
