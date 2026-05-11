@@ -13,9 +13,6 @@ UCI_MOVE_PATTERN = r"[a-h][1-8][a-h][1-8][qrbn]?"
 SCORE_LINE_RE = re.compile(
     rf"info .*score (?P<kind>cp|mate) (?P<score>-?\d+).*(?: pv (?P<move>{UCI_MOVE_PATTERN}))?"
 )
-MULTIPV_RE = re.compile(
-    rf"info .*multipv (?P<multipv>\d+).*score (?P<kind>cp|mate) (?P<score>-?\d+).* pv (?P<move>{UCI_MOVE_PATTERN})"
-)
 MOVE_STATS_RE = re.compile(
     rf"(?P<move>{UCI_MOVE_PATTERN}).*?\bP[:=]\s*(?P<prior>-?\d+(?:\.\d+)?%?).*?\bQ[:=]\s*(?P<q>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,

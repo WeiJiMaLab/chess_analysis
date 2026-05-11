@@ -19,26 +19,32 @@ OUTPUT_CHECKPOINT="${OUTPUT_CHECKPOINT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS
 
 DEVICE="${DEVICE:-cuda}"
 SEED="${SEED:-0}"
-K="${K:-2}"
+K="${K:-1}"
 NODE_EMBED_HIDDEN="${NODE_EMBED_HIDDEN:-128}"
 D_EMBED="${D_EMBED:-128}"
 D_MESSAGE="${D_MESSAGE:-128}"
 N_HEADS="${N_HEADS:-4}"
 D_ATT="${D_ATT:-32}"
-Q_HIDDEN="${Q_HIDDEN:-128}"
+Q_HIDDEN="${Q_HIDDEN:-256}"
+Q_HIDDEN_LAYERS="${Q_HIDDEN_LAYERS:-3}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 EPISODE_BATCH_SIZE="${EPISODE_BATCH_SIZE:-8}"
 EPOCHS="${EPOCHS:-20}"
 LEARNING_RATE="${LEARNING_RATE:-1e-3}"
+MIN_LR="${MIN_LR:-0.0}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
+SIGN_LOSS_WEIGHT="${SIGN_LOSS_WEIGHT:-1.0}"
+NONTRIVIAL_LOSS_WEIGHT="${NONTRIVIAL_LOSS_WEIGHT:-1.0}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
-NUM_WORKERS="${NUM_WORKERS:-0}"
-LOG_INTERVAL="${LOG_INTERVAL:-10}"
+NUM_WORKERS="${SLURM_CPUS_PER_TASK:-1}"
+LOG_INTERVAL="${LOG_INTERVAL:-10000}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-1}"
-GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-1}"
+GREEDY_EVAL_INTERVAL="${GREEDY_EVAL_INTERVAL:-10}"
 OUTPUT_DIAGNOSTICS="${OUTPUT_DIAGNOSTICS:-${OUTPUT_CHECKPOINT%.pt}_diagnostics.jsonl}"
 UNFREEZE_ENCODER="${UNFREEZE_ENCODER:-0}"
-MAINTENANCE_SCALE="${MAINTENANCE_SCALE:-0.01}"
+SEPARATE_SIGN_HEAD="${SEPARATE_SIGN_HEAD:-0}"
+INVERSE_FREQ_WEIGHTS="${INVERSE_FREQ_WEIGHTS:-0}"
+MAINTENANCE_SCALE="${MAINTENANCE_SCALE:-0.0}"
 MAINTENANCE_REF_NODES="${MAINTENANCE_REF_NODES:-30.0}"
 MAINTENANCE_EXPONENT="${MAINTENANCE_EXPONENT:-1.1}"
 TIME_LAMBDA="${TIME_LAMBDA:-18.537}"
@@ -78,9 +84,24 @@ echo "hostname=$(hostname)"
 nvidia-smi -L || true
 date
 
+MATERIALIZED_TRAIN_CACHE="${MATERIALIZED_TRAIN_CACHE:-}"
+MATERIALIZED_VALIDATION_CACHE="${MATERIALIZED_VALIDATION_CACHE:-}"
+
 EXTRA_ARGS=()
 if [[ "${UNFREEZE_ENCODER}" == "1" ]]; then
   EXTRA_ARGS+=(--unfreeze-encoder)
+fi
+if [[ "${SEPARATE_SIGN_HEAD}" == "1" ]]; then
+  EXTRA_ARGS+=(--separate-sign-head)
+fi
+if [[ "${INVERSE_FREQ_WEIGHTS}" == "1" ]]; then
+  EXTRA_ARGS+=(--inverse-freq-weights)
+fi
+if [[ -n "${MATERIALIZED_TRAIN_CACHE}" ]]; then
+  EXTRA_ARGS+=(--materialized-train-cache "${MATERIALIZED_TRAIN_CACHE}")
+fi
+if [[ -n "${MATERIALIZED_VALIDATION_CACHE}" ]]; then
+  EXTRA_ARGS+=(--materialized-validation-cache "${MATERIALIZED_VALIDATION_CACHE}")
 fi
 
 python3 scripts/train_fitted_q_controller.py \
@@ -97,11 +118,15 @@ python3 scripts/train_fitted_q_controller.py \
   --n-heads "${N_HEADS}" \
   --d-att "${D_ATT}" \
   --q-hidden "${Q_HIDDEN}" \
+  --q-hidden-layers "${Q_HIDDEN_LAYERS}" \
   --batch-size "${BATCH_SIZE}" \
   --episode-batch-size "${EPISODE_BATCH_SIZE}" \
   --epochs "${EPOCHS}" \
   --learning-rate "${LEARNING_RATE}" \
+  --min-lr "${MIN_LR}" \
   --weight-decay "${WEIGHT_DECAY}" \
+  --sign-loss-weight "${SIGN_LOSS_WEIGHT}" \
+  --nontrivial-loss-weight "${NONTRIVIAL_LOSS_WEIGHT}" \
   --max-grad-norm "${MAX_GRAD_NORM}" \
   --num-workers "${NUM_WORKERS}" \
   --log-interval "${LOG_INTERVAL}" \

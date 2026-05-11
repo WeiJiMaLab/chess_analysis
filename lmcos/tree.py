@@ -132,19 +132,6 @@ class SearchTree:
             raise ValueError("Tree has no root node.")
         return self.children(self.root_id)
 
-    def best_root_child(self, value_feature: str = "value") -> int:
-        root_children = self.root_children()
-        if not root_children:
-            raise ValueError("Root has no children to choose from.")
-
-        def child_value(child_id: int) -> float:
-            node = self.get_node(child_id)
-            if value_feature not in node.scalar_features:
-                raise KeyError(f"Child node {child_id} is missing feature '{value_feature}'.")
-            return node.scalar_features[value_feature]
-
-        return max(root_children, key=child_value)
-
     def num_nodes(self) -> int:
         return len(self._nodes)
 

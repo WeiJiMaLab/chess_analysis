@@ -10,6 +10,69 @@ The main representation pipeline is neural encoding of search trees. A TreeNN-st
 
 Later, the same tree representation is meant to support a full planning head whose action space includes concrete planning operations (which node to expand, which to evaluate, etc.), still inside the same overall loop sketched above. The lab notebook records experiments along that path—encoders, packing, fitted-Q controller training, diagnostics, and evaluation—not incidental refactors.
 
+### Pipeline stages
+
+The full data-to-model pipeline has six stages. Each stage's output feeds directly into the next.
+
+#### 1. FEN sampling
+
+Starting positions are sampled from a Lichess game database via SQL (DuckDB). The query selects ~200k games from 2023 with both players rated 1800–2600 and at least 20 half-moves. From each sampled game, one board position is drawn uniformly at random (subject to ply 8–120, 2–60 legal moves, 8–32 pieces). A final reservoir sample reduces the set to ~100k FENs. The output is a flat text file of FEN strings and an accompanying Parquet table with game metadata (ELO, time control, opening, piece counts). See `sql/download_FENs.py`.
+
+#### 2. FEN filtering
+
+Not all positions produce informative search trees. A PUCT-based stability filter runs a short tree search (default 16 nodes, same PUCT logic used for full tree generation) on each FEN and records the best root move at 1 expansion, at a midpoint (~5 expansions), and at the full budget. A FEN is kept only if the best move at 1 expansion differs from the best move at the full budget **and** the best move at the midpoint also differs from the full-budget best move. This selects positions where search materially changes the chosen action, so the resulting trees will have nontrivial stopping structure for the controller. This step is embarrassingly parallel and is submitted as sharded Slurm jobs. See `scripts/filter_fens_by_puct_stability.py` and `scripts/submit_puct_filter_shards.py`.
+
+#### 3. Tree generation
+
+Each filtered FEN becomes a PUCT search tree. The expansion loop starts from the root position and repeatedly selects a leaf via the PUCT formula (`Q(s,a) + c_puct * P(a|s) * sqrt(N(s)) / (1 + N(s,a))`), expands it by querying an lc0 engine for child priors, values, and WDL vectors, then backpropagates the leaf's value up the selection path (negating at each ply for alternating perspective). WDL vectors are backpropagated alongside scalar values. Expansion continues until a node budget is reached (currently fixed at 96 nodes).
+
+During expansion, an oracle trace is recorded: after every expansion step, the current best root move and Q-values for all root children are saved. This trace allows later stages to reconstruct any prefix of the search trajectory without re-running the engine.
+
+After expansion completes, teacher targets are extracted. Node value targets are visit-weighted averages of child Q-values. Edge WDL targets are visit-weighted averages of the WDL vectors accumulated during backpropagation, perspective-flipped to the parent's viewpoint. These targets, together with the tree structure, per-node scalar features (value, WDL, prior), and the oracle trace, are saved as a serialized `PretrainExample`.
+
+Variable-size trees can also be derived from a full 96-node tree by sampling a prefix node count from a log-uniform distribution and recomputing targets on the truncated tree, avoiding additional engine calls. See `cts_pretrain.py` (core logic) and `supervised_branch_cli.py` (CLI entry points).
+
+#### 4. Encoder pretraining
+
+The tree encoder is a GNN (class `TreeNN` in `GNN.py`) that operates on variable-size trees packed into a single flat batch. Each node starts with a 5-dimensional feature vector (value, WDL win/draw/loss, WDL variance) embedded through a two-layer MLP into a `d_embed`-dimensional state. The encoder then runs `k` rounds of alternating upward (children→parent) and downward (parent→children) message passing. In the upward pass, each parent aggregates its children's states via a multi-head attention layer (`TreeAttMsgLayer`) conditioned on sinusoidal slot embeddings that encode each child's position among its siblings (sorted by UCI move string). In the downward pass, each child receives a linear projection of its parent's state. Both directions update node states through a shared GRU cell.
+
+Two propagation modes exist. In **synchronous** mode, all nodes update simultaneously from the previous round's states, giving a receptive field of `k` hops. In **asynchronous** (sequential) mode, the upward pass processes nodes from leaves to root in depth order and the downward pass from root to leaves, so each node sees already-updated neighbors. With `k = 1` in asynchronous mode, every node's receptive field covers the entire tree regardless of depth. The current encoder uses asynchronous mode with `k = 1`.
+
+The encoder output is the set of all node states plus the root state for each tree in the batch. Trees are batched by flattening all nodes into a single tensor with a CSR (compressed sparse row) child-pointer structure and a tree-index vector that maps each node back to its source tree.
+
+Pretraining uses the **child-WDL objective**: a slot-conditioned decoder MLP takes the concatenation of a parent node's state and a sinusoidal slot embedding and predicts a 3-way softmax over win/draw/loss for each parent→child edge. The loss is cross-entropy against the search-consolidated edge WDL targets from tree generation. The pretraining loop iterates over packed tensorized shards with Adam, tracking loss gap (cross-entropy minus target entropy) as the primary validation metric. The best encoder checkpoint (by validation loss) is saved and used as the frozen backbone for controller training. See `GNN.py`, `cts_pretrain.py` (class `ChildWdlPretrainer`), and `supervised_branch_cli.py` (`pretrain-child-wdl-encoder` subcommand).
+
+#### 5. Controller episode packing
+
+Raw `PretrainExample` trees are converted into budget-augmented controller episodes for offline training. This is a multi-step process.
+
+First, each source tree's oracle trace is used to reconstruct a trimmed **snapshot episode**: a sequence of tree snapshots at each expansion step, together with the best root move and its Q-value at each snapshot. The episode is trimmed to start at the first expansion where the root has at least one child (i.e., the first real decision point). The **halt reward** at each snapshot is the full-tree Q-value of the root move that is best at that snapshot—measuring what you would get if you stopped searching there and committed to that move, evaluated under the complete search.
+
+Second, each source tree is replicated across synthetic **starting budgets**. Five budget buckets span the range from scramble (1–3 time steps) to very-large (61–120 time steps), with 2 deterministic samples per bucket (seeded by a hash of the source path). For each sampled starting budget, the budgeted oracle computes the optimal stopping policy via backward induction:
+
+- At each planning step `t`, **halt value** = halt reward at step `t`.
+- **Continue value** = −`c_continue(N_t, T_t)` + `V*(t+1)`, where `c_continue` is the sum of a maintenance cost (proportional to `(N_t / 30)^1.1`, currently scaled to 0) and a time cost (a decreasing-marginal function of remaining budget `T_t`, parameterized by `λ`, `p`, `τ`).
+- The oracle halts at step `t` iff halt value ≥ continue value; otherwise it continues.
+- The **target advantage** at each step is `continue_value − halt_value`. Positive means "continue is better"; negative means "halt is better."
+
+If the starting budget expires before the episode ends, a large negative timeout value (−1) is used as the continuation value.
+
+Before packing, source trees are filtered: trees whose halt-reward range across the episode falls below a threshold (default 0.10) are discarded, and trees exhibiting `X*AB*A` root-move churn patterns (where the best move oscillates back to a previously abandoned move) can be excluded. An optional hierarchical `dj` stratification rebalances the training set across stop-depth-excess bins (how deep the oracle searches on average) and budget-action-variance bins (how much the oracle's halt/continue decisions vary across budgets), to reduce overrepresentation of trivially easy trees.
+
+The output is packed tensorized shards: each shard stores per-step node features, parent/child indices, depth, edge slots, halt rewards, target advantages, tree sizes, time budgets, oracle stop steps, and starting budgets for a batch of episodes. See `scripts/pack_controller_episodes.py`, `budgeted_controller_oracle.py`, and `cts_episode_envs.py`.
+
+#### 6. Controller training
+
+The controller predicts the **compute advantage** `A(s) = Q_continue(s) − Q_halt(s)` at each planning step and halts when `A(s) ≤ 0`. The model (class `ComputeAdvantageTreeSearchModel` in `scripts/train_fitted_q_controller.py`) consists of the pretrained TreeNN encoder (typically frozen) plus an MLP advantage head. The encoder processes each step's tree snapshot and produces a root embedding; this is concatenated with two scalar state features (current tree size `N_t` and remaining time budget `T_t`) to form the advantage head's input. The MLP head (configurable width and depth; default 3 layers of 256 units) outputs a scalar predicted advantage. An optional separate sign head shares the MLP backbone but has its own final projection for a binary continue/halt logit.
+
+Training minimizes a weighted combination of advantage MSE and sign BCE (binary cross-entropy on the sign of the advantage). The sign loss directly targets the decision boundary rather than relying on squared-error alone, which can be insensitive to small wrong-sign predictions near zero.
+
+To avoid repeated frozen-encoder forward passes, the training script supports **materialization**: on the first run for a given packed dataset and encoder checkpoint, all per-step root embeddings are computed once and cached to disk alongside the scalar features and targets. Subsequent runs load these cached tensors directly and train only the advantage head on a flat `TensorDataset`.
+
+**Greedy evaluation** runs the trained model's stopping rule on validation episodes: starting from the first planning step, it predicts advantages and halts at the first step where `A(s) ≤ 0` (or at the episode's last step). The resulting stop step determines the achieved return (halt reward minus accumulated continue costs), which is compared to the oracle's optimal return. Reported metrics include exact stop-step accuracy, first-action accuracy, average return, average oracle value, average regret, and average number of expansions used. Per-episode diagnostics (predicted advantages, oracle/predicted stop steps, difficulty scalars, regret decomposition) can be written to JSONL for offline analysis.
+
+See `scripts/train_fitted_q_controller.py` for the full training loop, and `scripts/analyze_budgeted_controller_run.py` for post-hoc analysis of trained controllers.
+
 This file is the running experimental record for the project.
 
 What belongs here:
@@ -959,3 +1022,1578 @@ Conclusion:
   1. re-pack with raw-range pre-filter + budget augmentation
   2. train directly on the repacked manifests
   3. reuse cached frozen-encoder features on subsequent controller runs
+
+## 2026-04-15
+
+### First budget-aware async controller run: poor final metacontrol despite low regression loss
+
+Run:
+- Packed budget-aware controller data with the original maintenance scale `0.01`.
+- Trained the async frozen-encoder controller with the default small MLP head.
+
+Final greedy metrics on the validation run (`8480` episodes):
+- `average_return = -0.075`
+- `average_oracle_value = 0.080`
+- `average_regret = 0.155`
+- `average_expansions = 2.293`
+
+Immediate interpretation:
+- The run is not failing because the model cannot detect imminent timeout; rather, regret is coming mostly from medium-to-large budget regimes where the controller continues too long.
+- The regression objective plateaus early while greedy metacontrol remains poor, so low advantage MSE by itself is not a sufficient success criterion.
+
+### Saved analysis scripts for budget-aware runs
+
+Meaningful change:
+- Added `scripts/plot_advantage_loss_from_log.py`
+  - parses a training `.out` log and plots train / validation `advantage_mse` over epochs
+- Added `scripts/analyze_budgeted_controller_run.py`
+  - consumes only the diagnostics JSONL and the training `.out`
+  - writes a full report directory with plots and `summary.json`
+  - includes:
+    - loss curves
+    - greedy metrics over epochs
+    - regret by starting-budget bucket
+    - stop error by budget bucket
+    - regret by oracle stop step
+    - regret by stop-step error (`predicted_stop_step - oracle_stop_step`)
+    - sign accuracy by current `T_t`
+    - target-advantage distribution by current `T_t`
+    - predicted vs target advantage
+    - false-continue / false-halt rates by `T_t`
+    - regret by initial tree size
+    - `T_t × N_t` partial-dependence heatmaps
+    - same-tree different-budget consistency
+    - oracle stop distribution
+    - calibration by predicted-advantage magnitude
+    - trivial baseline sweep
+
+Key findings from the diagnostics-only report:
+- Best greedy epoch occurs earlier than the final epoch; continuing training increases average expansions and worsens regret.
+- Regret is small in the `scramble` bucket and substantially larger in `medium-large`, `large`, and `very-large`.
+- Over-search is the dominant failure mode in those larger-budget buckets.
+- Sign accuracy is strongest at very low `T_t`; the bad run is not primarily a “cannot detect low time” problem.
+
+### Regret decomposition: halt-reward term vs maintenance vs time
+
+Meaningful change:
+- Extended `scripts/analyze_budgeted_controller_run.py` with an exact episode-level decomposition:
+  - `oracle_value - predicted_value`
+  - `= (halt_reward@oracle - halt_reward@predicted) + (predicted maintenance paid - oracle maintenance paid) + (predicted time paid - oracle time paid)`
+- Added plots and JSON summaries for that decomposition.
+
+Main result:
+- In large-budget over-search episodes, regret is almost entirely **not** coming from time cost.
+- Example: for `large`, `delta = +6` (`predicted_stop_step - oracle_stop_step = 6`), mean regret is about `0.50`, with roughly:
+  - halt-reward term `≈ 0.21`
+  - maintenance term `≈ 0.28`
+  - time term `≈ 0.008`
+
+Conclusion:
+- Large-budget regret is dominated by two things:
+  1. extra maintenance burden from carrying a larger tree for extra steps
+  2. halting later at a root move whose final-tree score is worse than the oracle-stop move
+- The explicit time-cost term is negligible in those regimes.
+
+### Oracle-stop factor analysis
+
+Meaningful change:
+- Added an oracle-decision-factor decomposition to `scripts/analyze_budgeted_controller_run.py`:
+  - `target_advantage = future_value_gain - maintenance_cost - time_cost`
+  - `future_value_gain = oracle_next_value - halt_reward_now`
+- At the oracle stop step, the report now classifies whether halting is driven by:
+  - `future_already_worse`
+  - `maintenance_dominated`
+  - `time_dominated`
+
+Main result:
+- In the `large` bucket, oracle halting is almost never driven by time cost:
+  - `future_already_worse`: about `97%`
+  - `maintenance_dominated`: about `3%`
+  - `time_dominated`: essentially `0%`
+
+Interpretation:
+- In large-budget regimes, the oracle typically halts because continuing is already worse in value terms before explicit time cost matters.
+- So the metacontroller’s failure there is not just “missing the time term.”
+
+### Move-switch analysis for `future_already_worse`
+
+Meaningful change:
+- Added `scripts/analyze_future_worse_move_switch.py`
+  - reconstructs the trimmed decision episode from each `source_path`
+  - compares the oracle-stop root move to the predicted-stop root move
+  - splits `future_already_worse` episodes into:
+    - `same_move`
+    - `move_switch`
+
+Main result:
+- `same_move` cases:
+  - mean regret `≈ 0.069`
+  - halt-reward term exactly `0`
+  - regret comes almost entirely from maintenance/time cost
+- `move_switch` cases:
+  - mean regret `≈ 0.409`
+  - halt-reward term `≈ 0.346`
+  - maintenance term much smaller than the halt-reward penalty
+
+Large-budget interpretation:
+- If over-search keeps the same root move, regret is basically just extra maintenance cost.
+- The really large regrets come from over-search episodes where the root move changes to one that the final finite-tree evaluation scores worse.
+
+Open concern:
+- This exposes a non-monotonicity in the halt-reward construction: immediate halting can outperform intermediate search, while later search may recover.
+- The current reward target therefore mixes “value of computation” with transient root-action churn along the finite search trajectory.
+
+### Architecture/cost changes queued for the next overnight run
+
+Meaningful change:
+- Strengthened the controller head in `scripts/train_fitted_q_controller.py` and the train Slurm wrappers:
+  - hidden width `256`
+  - `3` hidden layers
+- Reduced the default budgeted maintenance scale by a factor of `4`:
+  - from `0.01` to `0.0025`
+  - updated in:
+    - `budgeted_controller_oracle.py`
+    - `scripts/pack_controller_episodes.py`
+    - `scripts/train_fitted_q_controller.py`
+    - `slurm/pack_controller_episodes_della.slurm`
+    - `slurm/train_fitted_q_controller_della.slurm`
+    - `slurm/train_compute_advantage_della.slurm`
+
+Intent:
+- Lower maintenance burden should reduce the strong immediate-halt bias and make the oracle less dominated by “tree upkeep” penalties.
+- The deeper MLP is a straightforward capacity increase for reading out budget-sensitive controller structure from `concat(z_t, N_t, T_t)`.
+
+## 2026-04-16
+
+### Oracle-aligned controller data path and churn analysis
+
+Intent:
+- Make the controller supervision semantically consistent with the intended oracle: snapshots should be prefixes of the original generated search, and halt rewards should be derived from the full source-tree oracle rather than from fresh teacher re-search on each prefix.
+
+Meaningful changes:
+- `cts_pretrain.py` now stores oracle trajectory data in generated raw examples:
+  - expansion counts after each original search expansion
+  - root-Q trace over the original search
+  - best-move trace over the original search
+  - final full-source-tree root Q-values
+- `cts_episode_envs.py` now consumes those stored oracle traces when building controller episodes, falling back to the older re-search path only for legacy examples that do not have the new fields.
+- The budgeted-controller path now defaults `maintenance_scale = 0.0`:
+  - `budgeted_controller_oracle.py`
+  - `scripts/pack_controller_episodes.py`
+  - `scripts/train_fitted_q_controller.py`
+  - `slurm/pack_controller_episodes_della.slurm`
+  - `slurm/train_fitted_q_controller_della.slurm`
+  - `slurm/train_compute_advantage_della.slurm`
+- `scripts/analyze_budgeted_controller_run.py` now supports source-path rewrites and root-action churn summaries anchored on the ultimately chosen move:
+  - top-level motif classes `A`, `X*A`, `X*AB*A`
+  - compressed-length and unique-move distributions
+  - first appearance and stabilization of the final move
+  - oracle stop phase relative to first appearance / stabilization
+  - lucky early halts
+
+Result:
+- The code path is now ready for a clean regeneration of the raw `generated_trees` corpus under the oracle-aligned semantics.
+- Existing raw examples remain loadable, but only regenerated examples carry the stored oracle traces and therefore avoid prefix re-search.
+
+Conclusion:
+- Future budgeted-controller experiments should use regenerated raw source trees, then rebuild the split manifests and packed controller data from that new corpus before training.
+
+## 2026-04-19
+
+### Time-only budgeted controller run on oracle-aligned, `X*AB*A`-filtered data
+
+Intent:
+- Evaluate the fitted-Q metacontroller in the cleaner regime where:
+  - controller supervision comes from stored oracle traces on the regenerated oracle-aligned source trees
+  - maintenance cost is removed (`maintenance_scale = 0.0`)
+  - unstable `X*AB*A` source trajectories are excluded at pack time
+
+Meaningful run setup:
+- Packed validation episodes:
+  - `30630`
+- Buckets balanced:
+  - `6126` each for `scramble`, `medium-small`, `medium-large`, `large`, `very-large`
+- Oracle metadata recovered from the run log:
+  - `maintenance_scale = 0.0`
+  - `time_lambda = 18.537`
+  - `time_p = 2.8`
+  - `time_tau = 2.5`
+  - `samples_per_bucket = 2`
+  - async encoder checkpoint with `k = 1`
+
+Main result:
+- Final greedy metrics (epoch `20`):
+  - average oracle value `0.353`
+  - average return `0.304`
+  - average regret `0.049`
+  - exact stop-step accuracy `0.444`
+  - first-action accuracy `0.916`
+  - average expansions `19.347`
+- Best behavioral epoch was earlier than the final checkpoint:
+  - best greedy return epoch `10`
+  - best greedy regret epoch `10`
+  - best validation-MSE epoch `5`
+
+Interpretation:
+- The controller learns the coarse halt/continue direction well (`first_action_accuracy` high), but stop timing remains weak, especially in the larger-budget buckets.
+- The dominant failure mode is **oversearch**, not undersearch:
+  - `medium-large`: oversearch `~0.64`
+  - `large`: oversearch `~0.84`
+  - `very-large`: oversearch `~0.97`
+
+### Regret decomposition under `maintenance_scale = 0.0`
+
+Meaningful analysis result:
+- The report explicitly decomposes regret as:
+  - `oracle_value - predicted_value`
+  - `= (halt_reward@oracle - halt_reward@predicted) + maintenance_term + time_term`
+- With `maintenance_scale = 0.0`, maintenance contributions were exactly zero in the analysis outputs.
+- Oversearch regret is therefore almost entirely **time cost**, not maintenance and only weakly halt-reward deterioration:
+  - overall oversearch mean regret `~0.076`
+  - overall mean time term `~0.073`
+  - overall mean halt-reward term `~0.003`
+
+Conclusion:
+- In the time-only regime, the controller’s remaining error is mainly “continuing too long and paying extra time cost.”
+
+### Near-threshold sign failure identified
+
+Meaningful analysis result:
+- The fitted-Q scalar looks reasonable under MSE/correlation summaries, but sign behavior near the decision boundary is very poor.
+- Margin-calibration summary:
+  - for `|target_advantage| < 0.05`, sign accuracy is only `~0.29`
+  - those low-margin states account for about `70%` of all analyzed states
+- Structure of the low-margin regime:
+  - concentrated in higher-budget states, not scramble / medium-small
+  - within-bucket low-margin rates:
+    - `medium-large`: `~48%`
+    - `large`: `~73%`
+    - `very-large`: `~81%`
+  - by current time budget, low-margin rates are already extreme around `T_t = 11..25`
+- Crucially, those low-margin states are overwhelmingly slightly **negative**:
+  - negative low-margin targets vastly outnumber positive ones
+  - model errors there are overwhelmingly `false_continue`, not `false_halt`
+
+Interpretation:
+- The controller is not merely noisy near zero; it has a strong **positive bias** in the high-budget, near-threshold regime.
+- This explains why MSE can stabilize while metacontrol remains poor in the large-budget buckets:
+  - MSE only weakly penalizes small wrong-sign predictions
+  - control behavior is driven by the sign of the advantage, not just its squared error
+
+Conclusion:
+- The main remaining problem is now clearly a **decision-boundary calibration problem**, not gross regression failure.
+- Next experiments should focus on losses/model-selection criteria that care directly about the halt/continue sign near zero, rather than only scalar MSE.
+
+## 2026-04-20
+
+### Entropy-sampled controller dataset scheme
+
+Intent:
+- Make the packed controller dataset less dominated by trees whose oracle stop behavior is nearly constant across sampled budgets, without hard-coding a minimum stop step or discarding all easy trees.
+
+Implemented scheme:
+- `scripts/pack_controller_episodes.py` now supports `--sample-trees-by-stop-entropy`.
+- For each source tree:
+  - generate the usual kept budgeted episodes after the existing filters
+  - collect oracle stop steps across those sampled budgets
+  - bin stop steps into:
+    - `0-1`
+    - `2-5`
+    - `6-9`
+    - `10-12`
+    - `13+`
+  - compute normalized entropy `H` of that 5-bin stop-step distribution
+  - keep the whole tree with deterministic probability `p_keep = H`
+- Keep/drop uses a deterministic hash of `(source_path, seed)` so repacks are reproducible.
+
+Why this scheme:
+- preserves full within-tree budget structure for retained trees
+- does not impose any claim that later stop steps are intrinsically better
+- still keeps some trees with only `0/1` mass
+- smoothly favors trees whose stopping behavior actually varies with budget
+
+Operational note:
+- the packer now reports entropy-filtered tree counts explicitly in progress logs and manifests, so retention can be measured after one pass instead of guessed in advance.
+
+### Loss logging now matches the actual optimized objective
+
+Intent:
+- The fitted-Q trainer was optimizing `MSE + sign_loss_weight * BCE`, but logs and plots were still only surfacing the MSE term. That was hiding the actual optimization signal during sign-loss sweeps.
+
+Implemented change:
+- `scripts/train_fitted_q_controller.py` now logs:
+  - `train_total_loss`
+  - `train_advantage_mse`
+  - `train_sign_bce`
+  - and the corresponding validation metrics
+- Both analysis scripts were updated to parse both old and new log formats:
+  - `scripts/analyze_compute_advantage_training_log.py`
+  - `scripts/analyze_budgeted_controller_run.py`
+- Training/validation plots now expose total loss and the two components separately rather than only the MSE curve.
+
+Conclusion:
+- Future sweeps over sign-loss weight, learning rate, and model size can now be analyzed against the true training objective while using a dataset intervention that prefers cross-budget stop diversity without enforcing a hand-designed monotonic interpretation.
+
+### Entropy-sampled dataset sweep result: not useful
+
+Intent:
+- Test whether a tree-level entropy-biased packed dataset improves the controller problem by favoring source trees whose oracle stop step varies across sampled budgets.
+
+Sweep setup:
+- Dataset:
+  - entropy-sampled packed controller corpus with:
+    - stop-step bins `0-1`, `2-5`, `6-9`, `10-12`, `13+`
+    - normalized entropy `H`
+    - keep probability `0.1 + 0.9 * H`
+    - `X*AB*A` exclusion still enabled
+- Hyperparameters:
+  - sign loss weight: `0.1`, `0.25`, `0.5`
+  - learning rate: `1e-4`, `3e-4`, `1e-3`
+  - controller head width: `256`, `512`
+
+Main result:
+- The entropy-sampled dataset underperformed the earlier sign-loss run on the standard filtered dataset.
+- Most important difference:
+  - entropy-sampled sweep runs had `average_oracle_value ≈ 0.063`
+  - previous successful sign-loss run had `average_oracle_value ≈ 0.353`
+- So this intervention did not produce a “harder but informative” dataset. It produced a much flatter one.
+
+Observed behavior:
+- The balanced-dataset sweep still had a strongly near-threshold state distribution:
+  - about `63%` of states had `|target_advantage| < 0.05`
+  - about `96%` of those low-margin states were negative
+- Best-regret config in the sweep:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 3e-4`
+  - `q_hidden = 512`
+  - best greedy regret `≈ 0.044`
+- Best overall tradeoff:
+  - `sign_loss_weight = 0.25`
+  - `learning_rate = 1e-3`
+  - `q_hidden = 256`
+  - best greedy regret `≈ 0.046`
+  - best exact stop `≈ 0.523`
+  - same-tree budget monotonicity `≈ 0.93`
+- Higher sign-loss weight (`0.5`) improved exact stop accuracy but did not improve regret.
+
+Interpretation:
+- Stop-step entropy by itself is the wrong dataset criterion.
+- It prefers trees whose stopping behavior moves across budgets, but does not guarantee that those episodes have meaningful oracle value scale or margin structure.
+- In practice it selected many flat, low-value episodes and did not resolve the near-threshold negative-dominance problem.
+
+Conclusion:
+- Do not use the entropy-sampled dataset as the main training distribution.
+- Keep the original `no_xaba` packed dataset as the default.
+- If future dataset filtering is revisited, it should target informativeness/value scale directly, not stop-step entropy alone.
+
+## 2026-04-22
+
+### Hierarchical `dj` tree stratification for controller packing
+
+Intent:
+- Replace the failed entropy-only tree filter with a dataset intervention that directly attacks the overrepresentation of trivial early-stop trees while preserving whole-tree budget structure.
+
+Implemented scheme:
+- `scripts/pack_controller_episodes.py` now supports tree-stratified sampling via:
+  - `--sample-trees-by-tree-strata`
+  - `--tree-stratification-mode {d,j,dj}`
+- Per source tree, after the usual filters, compute:
+  - `D = stop_depth_excess`
+    - mean oracle stop depth beyond step `1` across sampled budgets
+    - trees that always stop at `0` or `1` have `D = 0`
+  - `J = budget_action_variance`
+    - mean variance across budgets of the oracle continue/halt sign over valid planning steps
+- The final `dj` mode is hierarchical rather than full-grid equalization:
+  - first rebalance across `D` bins with a `50/50` mixture of natural mass and equalized-bin mass
+  - then, within each `D` bin, mildly tilt toward larger `J` with multipliers `1.0`, `1.25`, `1.5`
+  - renormalize within each `D` bin so the top-level `D` retained mass is unchanged
+
+Dry-run result on the oracle96 trace corpus:
+- Accepted source trees after the standard filters:
+  - `57,683`
+- `d`-only and hierarchical `dj` both retained about:
+  - `17.6k` trees
+  - `175.6k` budgeted episodes
+- `j`-only was essentially useless and kept almost the whole dataset.
+- Full joint `D x J` equalization was discarded because sparse cells collapsed the dataset to almost nothing.
+- The final hierarchical `dj` scheme behaved sensibly:
+  - within `d0`, keep probability increased from about `0.188` to `0.282` as `J` rose
+  - within `d2`, keep probability increased from about `0.247` to `0.370`
+  - the middle `d1` bin remained fully kept
+
+Interpretation:
+- The main imbalance lives on the stop-depth axis, not on budget sensitivity alone.
+- A hierarchical `D -> J` scheme is stable and gives the intended bias:
+  - fewer trivial early-stop trees
+  - mild preference for trees where budget actually changes the oracle action
+- This intervention is appropriate as a training-data bias, but not as a replacement for natural validation.
+
+### `dj`-balanced controller run and sweep
+
+Intent:
+- Test whether training on the hierarchical `dj`-balanced packed dataset improves learned metacontrol relative to the plain `no_xaba` dataset.
+
+Single-run result:
+- The first `dj` run (`sign_loss_weight = 0.25`, `learning_rate = 3e-4`, `q_hidden = 256`) did not beat the earlier `sign_loss_run0` baseline.
+- Final greedy metrics on the `dj` validation set:
+  - oracle value `0.275`
+  - return `0.233`
+  - regret `0.042`
+  - exact stop accuracy `0.511`
+  - expansions `4.996`
+- Compared with the earlier sign-loss run on the standard dataset:
+  - lower oracle-normalized performance (`0.233 / 0.275 ≈ 0.847` vs `0.319 / 0.353 ≈ 0.904`)
+  - higher normalized regret (`0.042 / 0.275 ≈ 0.153` vs `0.035 / 0.353 ≈ 0.099`)
+- One quantity did improve:
+  - same-tree predicted stop monotonicity rose from about `0.81` to about `0.87`
+- But the overall control policy was still worse, especially through large-budget oversearch.
+
+Sweep result on the `dj` dataset:
+- Hyperparameters:
+  - sign loss weight: `0.1`, `0.25`, `0.5`
+  - learning rate: `1e-4`, `3e-4`, `1e-3`
+  - head width: `256`, `512`
+- Best config by regret:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 1e-4`
+  - `q_hidden = 512`
+  - best greedy regret `0.040`
+  - best return `0.235`
+- Main trend:
+  - weaker sign loss helped on this harder dataset
+  - larger sign loss increased exact stop-step accuracy but hurt regret and return
+- Effect sizes were modest rather than dramatic.
+
+Conclusion:
+- The `dj` dataset is harder in the intended sense, but the current controller does not yet exploit it well enough to outperform the plain `no_xaba` recipe.
+- For this corpus, the best current setting is roughly:
+  - `sign_loss_weight = 0.1`
+  - `learning_rate = 1e-4`
+  - `q_hidden = 512`
+- Going forward:
+  - training-data filtering should apply only to the training split
+  - natural validation should remain representative of the unfiltered corpus
+  - a separate bespoke metacontrol challenge set is likely needed for paper-quality evaluation
+
+## 2026-04-23
+
+### Hyperparameter sweep on the standard no_xaba dataset
+
+Intent:
+- Sweep sign_loss_weight, weight_decay, and head depth around the cosine LR scheduler baseline to find the best frozen-encoder controller configuration.
+
+Setup:
+- Base config: cosine LR schedule (`min_lr = 1e-5`), `learning_rate = 1e-3`, `q_hidden = 256`, 3 hidden layers, 20 epochs.
+- Five runs varying one or two axes from baseline:
+  - `slw01`: `sign_loss_weight = 0.1`
+  - `slw05`: `sign_loss_weight = 0.5`
+  - `wd4`: `weight_decay = 1e-4`
+  - `slw05wd4`: `sign_loss_weight = 0.5`, `weight_decay = 1e-4`
+  - `deep5`: `q_hidden_layers = 5`
+- All trained on `controller_packed_combined_nomaint_no_xaba` with the `tree_encoder_child_wdl_async_k1` encoder.
+
+Result:
+- `slw01` was the best run by regret: `0.035` (vs `0.037` for the scheduler baseline).
+- `slw01` also had the best return (`0.312`) and lowest MSE (`0.012`).
+- Weight decay and deeper heads reduced oversearch (fewer expansions, ~3.7) but increased undersearch regret, netting worse overall regret (`0.049`).
+- Higher sign loss weight improved exact stop accuracy but not regret.
+
+Conclusion:
+- `sign_loss_weight = 0.1` with cosine LR schedule became the new best configuration.
+- Weight decay and depth act as regularizers that make the model halt too early.
+
+### PUCT-filtered data augmentation
+
+Intent:
+- Augment the training corpus with positions specifically selected because search changes the best move, hypothesizing that these would produce more informative controller episodes.
+
+Setup:
+- Ran a PUCT stability filter on ~100k FENs: kept only positions where the best move at 1 expansion differs from the best move at full budget, and the midpoint best move also differs.
+- Generated 96-node trees from the filtered FENs (25 shards, ~2250 FENs each).
+- Combined with the existing tree corpus, repacked, and trained.
+
+Result:
+- `puct_run0` (combined v2 dataset, `sign_loss_weight = 0.1`, cosine LR): regret `0.043` on the v2 validation set.
+- Cross-evaluation on the same v2 validation set: `slw01` (trained on v1 only) achieved regret `0.044`.
+- Nearly identical — the PUCT-filtered trees did not meaningfully improve the controller.
+- A 100-epoch run showed no improvement beyond epoch 20.
+
+Conclusion:
+- PUCT-filtered data augmentation was not useful. The trivial-episode proportion only dropped from ~80% to ~73%, suggesting the filter was not selective enough.
+
+## 2026-04-24
+
+### Trivial episode downsampling
+
+Intent:
+- The training distribution is ~80% trivial episodes (oracle_stop_step <= 1). Rather than augmenting with filtered data, directly downsample trivial episodes to shift the training distribution toward non-trivial cases.
+
+Setup:
+- Added `--downsample-trivial` to `scripts/pack_controller_episodes.py`.
+- Deterministic per-episode hash decides keep/drop for trivial episodes.
+- Applied only to training split; validation remains unfiltered.
+- Used `keep_prob = 0.167` on trivials, targeting a 40/60 (trivial/non-trivial) training distribution.
+
+Result:
+- `subsample_hard_trees_run0`: regret `0.057`, average expansions `11.9`.
+- Compared to `puct_run0` baseline: regret `0.043`, expansions `8.1`.
+- The model massively oversearched: it learned a "continue" bias from the non-trivial-heavy training set and applied it broadly.
+- Training metrics were also worse: MSE `0.020` vs `0.014`, sign_accuracy `0.761` vs `0.835`.
+
+Conclusion:
+- Downsampling trivial episodes backfired. The 80/20 trivial/non-trivial ratio reflects the true distribution. The model needs to see trivial examples to calibrate its stopping decisions.
+
+### Flat loss reweighting (nontrivial_loss_weight = 4.0)
+
+Intent:
+- Instead of changing the data distribution (which removes calibration examples), upweight the loss on non-trivial episodes. This preserves all data while amplifying the gradient signal on harder cases.
+
+Setup:
+- Added `--nontrivial-loss-weight` to `scripts/train_fitted_q_controller.py`.
+- Materialized cache now stores per-snapshot `oracle_stop_steps` to enable per-snapshot weighting.
+- Loss functions (`_advantage_loss_components`, `_sign_auxiliary_loss`) accept optional per-snapshot weights; weighted loss uses `(loss * weights).sum() / weights.sum()`.
+- Training run: `nontrivial_loss_weight = 4.0`, `sign_loss_weight = 0.1`, cosine LR, 20 epochs on `controller_packed_combined_nomaint_no_xaba`.
+
+Result (evaluated on the same 30,630-episode validation set as slw01):
+- Overall regret `0.029` (vs slw01 `0.029`). Identical.
+- Exact stop accuracy `0.613` (vs slw01 `0.564`). Higher.
+- Per-bin comparison revealed a clear pattern:
+  - Bins 0-1: reweighting improved exact stop (0.814/0.681 vs 0.830/0.595) and regret on bin 1 (0.009 vs 0.011).
+  - Bins 2+: slw01 had lower regret on every bin. The reweighting regressed on bins 4-7 (0.139 vs 0.122) and 8-15 (0.196 vs 0.164).
+- The improvements on bin 1 (60% of episodes) exactly offset the regressions on the tail bins, netting the same overall regret.
+
+Conclusion:
+- Flat reweighting improved the dominant bins but hurt the rare bins — the ones it was supposed to help. A flat weight treats bin-2 and bin-15 identically despite very different difficulty and frequency.
+
+### Inverse frequency loss reweighting
+
+Intent:
+- Replace flat reweighting with a principled scheme: weight each snapshot inversely proportional to the frequency of its oracle halt-step bin. This automatically gives higher weight to rarer (deeper) episodes.
+
+Setup:
+- Added `--inverse-freq-weights` flag to `scripts/train_fitted_q_controller.py`.
+- Before training, the script scans cache shards and computes bin frequencies across 7 bins (0, 1, 2, 3, 4-7, 8-15, 16+).
+- Per-bin weight = `total / (num_bins * bin_count)`, normalized so expected weight per snapshot is ~1.
+- Training run: `inverse_freq_weights = True`, `sign_loss_weight = 0.1`, cosine LR, 20 epochs on `controller_packed_combined_nomaint_no_xaba`.
+
+Result (same 30,630-episode validation set):
+- Overall regret `0.029`. Same as slw01 and flat reweighting.
+- Exact stop accuracy `0.628` (highest of all three).
+- Per-bin exact stop improved on bins 1 (0.705 vs 0.595) and 3 (0.100 vs 0.088) relative to slw01.
+- Per-bin regret: slw01 still won on every bin except bin 1. The pattern was the same as flat reweighting — gains on the dominant bins offset by losses on the tail.
+
+Conclusion:
+- All three approaches (slw01, flat reweight, inverse frequency) converge to the same ~0.029 regret.
+- Loss reweighting can improve exact stop accuracy on bins 0-1 but cannot improve regret on bins 2+.
+- Exact stop accuracy on bins 2+ remained stuck at 5-12% across all interventions.
+- The bottleneck is likely in the frozen encoder features, not the loss function or data distribution. The encoder representations do not carry enough information to distinguish "stop at step 4" from "stop at step 8."
+
+### Summary of the data/loss intervention sequence
+
+All runs below use the async frozen encoder (`tree_encoder_child_wdl_async_k1`), cosine LR schedule, 20 epochs. Regret and exact stop evaluated on the same 30,630-episode validation set except where noted.
+
+| Run | Intervention | Regret | Exact stop | Avg expansions |
+|-----|-------------|--------|------------|----------------|
+| slw01 | sign_loss_weight=0.1 (baseline) | 0.029 | 0.564 | 6.9 |
+| puct_run0 | + PUCT-filtered data | 0.030* | 0.500* | 8.1* |
+| subsample | downsample trivials (keep 0.167) | 0.057* | 0.377* | 11.9* |
+| reweight_w4 | nontrivial_loss_weight=4.0 | 0.029 | 0.613 | 5.5 |
+| inv_freq | inverse frequency weights | 0.029 | 0.628 | 5.5 |
+
+(*) Evaluated on 52,350-episode v2 validation set, not directly comparable.
+
+The main remaining lever is unfreezing the encoder, which would allow the representation to adapt to the stopping task but invalidates the materialized cache and is substantially more expensive to train.
+
+## 2026-04-25
+
+### Affine calibration controller variant
+
+Intent:
+- Test whether learning a separate affine transform `alpha * advantage + beta` for the halt/continue sign logit improves metacontrol, decoupling the magnitude regression (advantage_head) from the halt decision boundary.
+
+Meaningful change:
+- Extended `scripts/train_fitted_q_controller.py` on the `affine-calibration` branch:
+  - `ComputeAdvantageTreeSearchModel` gains `--affine-calibration` flag.
+  - When enabled, adds learnable `affine_alpha_raw` and `affine_beta` parameters. The sign logit becomes `softplus(alpha_raw) * advantage + beta`, ensuring positive scale.
+  - `_predict_stop_step()` now returns `(stop_step, raw_advantages, sign_logits)` — the halt decision uses sign_logits, not raw advantages.
+  - Diagnostics JSONL now logs both `predicted_advantages` (raw MLP output) and `sign_logits` (affine-transformed halt decision values).
+- Also added `--regret-weighted-bce` flag: weights the sign BCE loss by `|target_advantage| / mean(|target_advantage|)`, clamped to `[0.25, 10.0]`. This upweights high-regret snapshots in the sign loss without changing the MSE term.
+- Code lives in `~/chess/cts/affine` on cluster (local worktree at `worktrees/affine-calibration`).
+
+Run configurations (all on `controller_packed_combined_nomaint_no_xaba`, `sign_loss_weight=0.1`, 20 epochs):
+
+**affine_run0 / affine_run1** (jobs 7345567 / 7345908):
+- `AFFINE_CALIBRATION=1`
+- Two identical runs to check stability. Results were effectively identical.
+
+**affine_regretweighted_run0** (job 7348396):
+- `AFFINE_CALIBRATION=1, REGRET_WEIGHTED_BCE=1`
+
+Result (30,630-episode validation set):
+
+| Run | Regret | Return | Oracle | Exact stop | Expansions |
+|-----|--------|--------|--------|------------|------------|
+| affine | 0.055 | 0.299 | 0.354 | 0.789 | 2.68 |
+| affine+rw | 0.034 | 0.320 | 0.354 | 0.679 | 3.87 |
+| slw01 (baseline) | 0.029 | 0.325 | 0.354 | 0.564 | 7.90 |
+
+Interpretation:
+- Plain affine calibration dramatically undersearches: 2.68 expansions vs slw01's 7.90. Exact stop accuracy is highest (0.789) because most episodes have oracle_stop <= 1 and the model correctly halts early — but it halts too eagerly on the non-trivial episodes, producing 0.055 regret.
+- Regret-weighted BCE partially corrects this: the regret weighting amplifies the gradient signal on episodes where incorrect halting is costly, pushing the model to search more (3.87 expansions) and reducing regret to 0.034.
+- Neither affine variant matches slw01 on regret. The affine transform decouples scale from the decision boundary, but the underlying problem is that the advantage head's magnitude near zero doesn't carry enough information — rescaling it doesn't help.
+
+### Five candidate models for the paper
+
+Intent:
+- Consolidate the five controller variants that will be compared in the paper. All use the same frozen encoder (`tree_encoder_child_wdl_async_k1`), same packed data (`controller_packed_combined_nomaint_no_xaba`), same `sign_loss_weight=0.1`, 20 epochs.
+
+Summary table (30,630-episode validation set, same oracle config):
+
+| Model | Intervention | Regret | Return | Oracle | Exact stop | Expansions |
+|-------|-------------|--------|--------|--------|------------|------------|
+| slw01 | baseline | 0.029 | 0.325 | 0.354 | 0.564 | 7.90 |
+| reweight_w4 | nontrivial_loss_weight=4.0 | 0.030 | 0.324 | 0.354 | 0.613 | 6.55 |
+| inv_freq | inverse frequency weights | 0.029 | 0.324 | 0.354 | 0.628 | 5.52 |
+| affine | affine calibration | 0.055 | 0.299 | 0.354 | 0.789 | 2.68 |
+| affine+rw | affine + regret-weighted BCE | 0.034 | 0.320 | 0.354 | 0.679 | 3.87 |
+
+Diagnostics JSONL paths (local):
+- `analysis_outputs/slw01_reweight_comp/slw01_on_current_val_diagnostics.jsonl`
+- `analysis_outputs/slw01_reweight_comp/reweight_w4_on_current_val_diagnostics.jsonl`
+- `analysis_outputs/inv_rew_loss_run0/fittedq_invfreq_run0_diagnostics.jsonl`
+- `analysis_outputs/affine_run1/fittedq_affine_cal_diagnostics.jsonl`
+- `analysis_outputs/affine_regretweighted_run0/fittedq_affine_cal_regret_wt_diagnostics.jsonl`
+
+Conclusion:
+- The top three models (slw01, reweight_w4, inv_freq) all converge to ~0.029 regret despite different loss interventions. Loss reweighting improves exact stop accuracy on trivial bins but cannot improve regret on non-trivial bins.
+- The affine variants show that decoupling magnitude from sign is insufficient; the bottleneck is representational.
+- All five are included in the paper to demonstrate the robustness of the near-optimal result and to show the effect of different loss calibration strategies.
+
+## 2026-04-26
+
+### Paper structure and figure plan
+
+The paper has three main result sections (Section 2, human comparison, is on hold pending collaborator data):
+
+**Section 1: The model learns near-optimal metacontrol.**
+Compare all five candidate models against meaningful baselines.
+
+Figures planned:
+- **Fig 1a: Model vs baselines Pareto curve.** x = avg expansions, y = avg regret. Four baseline families: always halt, never halt, constant probability (sweep p), value gap threshold (sweep threshold). Each model as a starred point. Baselines computed from diagnostics + raw examples.
+- **Fig 1b: Budget-conditioned behavior.** 2x3 subplots showing 6 representative trees. For each tree: x = starting budget, y = stop step. Overlay all five models' predicted stop steps plus oracle.
+- **Fig 1c: Regret decomposition by budget bucket.** Grouped bar chart: 5 budget buckets x 5 models, stacked halt-reward + time-cost components.
+- **Fig 1d: Return distribution.** Overlaid CDFs of predicted_value per model, plus oracle CDF.
+
+**Section 3: What does the controller compute?**
+Test whether the controller implements VOC using children's WDL information decoded from the root embedding.
+
+Figures planned:
+- **Fig 3a: Controller output vs decoded VOC.** Scatter plot of predicted advantage vs VOC for each model. VOC = E[max_c V_c] - max_c E[V_c] computed via Monte Carlo from decoded child WDLs.
+- **Fig 3b: WDL subspace ablation.** SVD of decoder readout directions in z_root space. Sweep k = 1..128: keep-only or ablate top-k directions. Measure sign accuracy of advantage_head on ablated features.
+- **Fig 3c: Layer-by-layer VOC correlation.** Forward hooks on each ReLU in advantage_head. Canonical correlation of activations with VOC at each layer.
+- **Fig 3d: Residual analysis beyond VOC.** Regress predicted advantage on VOC, correlate residuals with T_t and other predictors.
+- **Fig 3e: T_t gating.** Partial correlation of individual neurons with T_t controlling for VOC.
+- **Fig 3f: Example episodes.** Multi-axis subplots showing target_adv, per-model predicted_adv, decoded VOC, and T_t over step index for selected episodes.
+
+**Dependency chain:**
+The child-WDL decoder is needed for all Section 3 analyses. The original decoder was discarded at encoder checkpoint time. Two paths:
+1. The rerun encoder pretraining now saves the decoder alongside the encoder (preferred).
+2. Fallback: `scripts/retrain_child_wdl_decoder.py` retrains a fresh decoder on frozen encoder outputs.
+
+Scripts created:
+- `scripts/paper_section1_figures.py`
+- `scripts/paper_section3_figures.py`
+- `scripts/paper_figure_utils.py`
+- `scripts/retrain_child_wdl_decoder.py` (fallback)
+- Slurm wrappers for each.
+
+## 2026-04-28
+
+### Full pipeline rerun for paper reproducibility
+
+Intent:
+- Retrain the entire pipeline from scratch (encoder pretraining through controller training and diagnostics) to produce clean, reproducible quantities for the paper. All outputs suffixed `_rerun` to preserve original quantities for comparison.
+
+### Encoder pretraining rerun
+
+Motivation:
+- The original encoder was trained on variable-size prefix trees derived from the 96-node source trees. The rerun trains on the same 96-node trees used for controller training, ensuring semantic alignment. The original decoder weights were discarded at checkpoint time; the rerun saves both encoder and decoder.
+
+Technical changes:
+- `cts_pretrain.py`:
+  - `PackedTensorizedShardDataset` rewritten to preload all shards at init and flatten into individual examples (`.clone()` each). This avoids two failure modes on 96-node trees: (a) tensor slice views pinning entire ~600MB shard storages in memory under shuffled access, and (b) Python 3.14's forkserver default requiring dataset pickling for DataLoader workers.
+  - `ChildWdlPretrainer` now tracks `best_decoder_state` alongside `best_encoder_state`.
+  - Added `save_training_state()` / `load_training_state()` for mid-training resumption across Slurm jobs.
+  - `fit()` accepts `start_epoch` and `resume_path` for resume chaining.
+  - Added `save_best_decoder()` to persist the decoder checkpoint.
+- `supervised_branch_cli.py`:
+  - Auto-detects resume checkpoint (`*_resume.pt`) and resumes from last completed epoch.
+  - Saves decoder alongside encoder after training.
+
+Commands:
+- Initial submission (epochs 1-50, 1-hour Slurm limit):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=01:00:00 --constraint="" \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,K=1,EPOCHS=100,NUM_WORKERS=0,\
+  TRAIN_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/train_manifest.json,\
+  VALIDATION_DIR=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/validation_manifest.json,\
+  OUTPUT_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt \
+    slurm/pretrain_child_wdl_encoder_della.slurm
+  ```
+- `NUM_WORKERS=0` required because the preloaded flat dataset (~700MB, 35k examples) cannot be pickled to forkserver workers under Python 3.14.
+- `--constraint=""` and `--time=01:00:00` to avoid 7-8 hour queue waits from the 24h/nomig defaults.
+- Chained jobs via `--dependency=afterany:<job_id>` with increasing `EPOCHS` (100, 150, 200) to extend training across multiple 1-hour slots. Resume checkpoint stores last completed epoch; resubmission with higher EPOCHS continues seamlessly.
+
+Training speed:
+- ~1.1 minutes per epoch at batch_size=128 (slurm default) with NUM_WORKERS=0.
+
+Result:
+- Encoder pretraining completed through 200 epochs.
+- Outputs:
+  - Encoder: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt`
+  - Decoder: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun_decoder.pt`
+
+### Controller rerun: 5 variants
+
+Motivation:
+- Retrain all five candidate controller variants from the hyperparameter/loss sweep on the rerun encoder checkpoint. All share the same frozen encoder and packed controller data; they differ only in loss configuration.
+
+Commands (all submitted in parallel):
+- **slw01** (`sign_loss_weight=0.1`, baseline):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  PACKED_TRAIN_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json,\
+  PACKED_VALIDATION_DATA=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json,\
+  ENCODER_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt,\
+  OUTPUT_CHECKPOINT=/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_slw01_rerun.pt,\
+  SIGN_LOSS_WEIGHT=0.1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **reweight_w4** (`nontrivial_loss_weight=4.0`):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  ...,SIGN_LOSS_WEIGHT=0.1,NONTRIVIAL_LOSS_WEIGHT=4.0 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **inv_freq** (inverse frequency weights):
+  ```
+  cd ~/chess/cts/async_soph && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/async_soph,\
+  ...,SIGN_LOSS_WEIGHT=0.1,INVERSE_FREQ_WEIGHTS=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **affine** (affine calibration, from `~/chess/cts/affine`):
+  ```
+  cd ~/chess/cts/affine && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/affine,\
+  ...,SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- **affine+rw** (affine + regret-weighted BCE):
+  ```
+  cd ~/chess/cts/affine && sbatch --time=04:00:00 \
+    --export=ALL,PROJECT_DIR=$HOME/chess/cts/affine,\
+  ...,SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,REGRET_WEIGHTED_BCE=1 \
+    slurm/train_fitted_q_controller_della.slurm
+  ```
+- All use the same packed data (`controller_packed_combined_nomaint_no_xaba`) and rerun encoder checkpoint. Output checkpoints named `fittedq_{variant}_rerun.pt`.
+
+Infrastructure changes for rerun:
+- **Regret-based checkpointing**: Changed checkpoint selection from minimal validation MSE to minimal greedy regret. MSE can plateau while metacontrol stays poor; greedy regret is the actual metric of interest. Checkpointing now happens inside the greedy eval block.
+- **Materialized cache support**: Added `MATERIALIZED_TRAIN_CACHE` / `MATERIALIZED_VALIDATION_CACHE` env vars to the slurm script, enabling pre-computed encoder forward passes to skip re-materialization.
+- **Parallel materialization**: New `scripts/materialize_controller_cache.py` with `materialize` (per-worker) and `merge` subcommands. Splits episodes across workers by index range, each writing partial shards. Merge combines them via symlinks into a single cache. Reduced 72-min single-GPU materialization to ~24 min across 3 workers.
+- **Storage migration**: Scratch filesystem hit capacity mid-run. All new outputs redirected to `/tigress/ysagiv/chess/cts/`.
+
+Result (all checkpointed by minimal greedy regret):
+
+| Variant     | Regret (rerun) | Regret (original) | Return (rerun) | Stop acc (rerun) |
+|-------------|----------------|--------------------|----------------|------------------|
+| slw01       | 0.031          | 0.029              | —              | —                |
+| reweight_w4 | 0.034          | 0.030              | —              | —                |
+| inv_freq    | 0.047          | 0.029              | —              | —                |
+| affine      | 0.045          | 0.055              | —              | —                |
+| affine+rw   | 0.036          | 0.034              | —              | —                |
+
+- slw01, reweight_w4, affine+rw within ~0.005 of originals. affine improved (0.045 vs 0.055).
+- **inv_freq regressed significantly** (0.047 vs 0.029). Greedy eval log confirms epoch 10 was best (0.047, 6.7 expansions) and epoch 20 worse (0.054, 10.5 expansions). Checkpointing correctly selected epoch 10. The regression appears real—likely due to the rerun encoder (trained on 96-node trees vs original variable-size prefix trees) interacting differently with inverse-frequency loss weighting.
+
+Output paths:
+- Checkpoints: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun.pt`
+- Diagnostics: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_rerun_diagnostics.jsonl`
+- Materialized caches: `/tigress/ysagiv/chess/cts/train_cache_rerun.pt`, `validation_cache_rerun.pt`
+
+## 2026-04-29
+
+### Paper figures: first pass
+
+Motivation:
+- Generate all paper figures (Section 1: Figs 1a–1d, Section 3: Figs 3a–3f) using the five rerun controller variants. First complete pass to evaluate figure quality and identify issues.
+
+Technical details:
+- **VPI computation**: Replaced Monte Carlo sampling (1000 draws per snapshot) with closed-form VPI (Dearden). For children with WDL distributions $(w_c, d_c, l_c)$: $\text{VPI} = 1 - \prod_c(1-w_c) - \prod_c l_c - \max_c(w_c - l_c)$. Two products and a max, O(C) per snapshot. Derived from Dearden's VPI framework treating the decoded WDL as the belief distribution over child values on $\{+1, 0, -1\}$.
+- **Decoder**: Rerun encoder pretraining already saved the decoder in the right format (`decoder_state_dict` + `metadata`). No retraining step needed.
+- Section 1 ran without GPU (~minutes). Section 3 ran on 1 GPU, materialized 953,562 validation snapshots in ~8 minutes (3829 batches at episode_batch_size=8), total job ~12 minutes.
+- Figures output to `/tigress/ysagiv/chess/cts/paper_figures/section{1,3}/`.
+
+Results — Section 1:
+- **Fig 1a (Pareto)**: All 5 models well below constant-probability baseline curve. Models cluster at low regret (0.03–0.06) but spread horizontally: affine/affine+rw halt earliest (~2–4 expansions), slw01 at ~7, inv_freq at ~11. Value-gap baseline skipped (needs raw .pt loading).
+- **Fig 1b (Budget behavior)**: Models generally track oracle's increasing-with-budget pattern. inv_freq overshoots; affine halts too early. Oracle sometimes non-monotone, which no model captures.
+- **Fig 1c (Regret decomposition)**: affine has highest halt-reward regret (stops too early). inv_freq has large positive time-cost regret in medium+ buckets (oversearches). slw01 most balanced.
+- **Fig 1d (Return CDF)**: All models track oracle closely above return 0.5. More mass on negative returns than oracle. Models nearly indistinguishable from each other.
+
+Results — Section 3:
+- **Fig 3a (VPI correlation)**: Weak. Pearson r = 0.07–0.09, Spearman ρ = 0.16–0.34. VPI is one signal but far from dominant. affine+rw highest Spearman (0.34), inv_freq lowest (0.16).
+- **Fig 3b (WDL ablation)**: Most informative. Top 1–2 WDL principal components carry most useful signal; adding more WDL directions *decreases* sign accuracy. Ablating top-k causes modest drop (~88%→77%) then recovery. Controller uses both WDL and non-WDL directions.
+- **Fig 3c (Layer correlation)**: VOC correlation peaks at middle hidden layer then drops — network builds VPI-like representation internally before collapsing. slw01 strongest mid-layer VOC correlation (~0.17).
+- **Fig 3d (Residuals)**: All models show ~0.34 correlation between VOC-regression residuals and T_t. Remarkably consistent — after VPI, the dominant remaining signal is time budget.
+- **Fig 3e (T_t gating)**: Neuron n13 in top-10 T_t-gated neurons for 4/5 models. Clear linear T_t-activation relationships with bimodal structure.
+- **Fig 3f (Example episodes)**: Easy/medium/hard/high-regret episodes. Models correctly predict negative advantage for easy cases. High-regret case shows failure to track non-monotone target advantage.
+
+Key finding:
+- **The controller is NOT primarily computing VPI.** Pearson correlations with decoded VPI are 0.07–0.09 — barely above noise. The WDL subspace ablation shows the first few WDL principal components matter, but the controller also relies heavily on non-WDL features (T_t especially, r~0.34 with residuals after VPI regression). The controller appears to use a coarse WDL summary + time budget rather than computing the full VPI integral. Open question: can training be adjusted to encourage explicit VPI computation?
+
+### Mechanistic analysis of the advantage head
+
+Motivation:
+- The controller doesn't compute VPI. What does it compute instead? We want to understand how the advantage head MLP (Linear(130→256)→ReLU→Linear(256→256)→ReLU→Linear(256→256)→ReLU→Linear(256→1)) processes its inputs [z_root(128), N_t, T_t]. Script: `scripts/analyze_advantage_head.py`.
+
+Technical details:
+- **Weight decomposition**: For each model's first layer (256×130), partition columns into z_root (128) and scalars (N_t, T_t). Compute per-neuron weight norm fractions.
+- **WDL subspace alignment**: SVD the child-WDL decoder's first-layer root-readout submatrix (128×128). Project each first-layer advantage-head neuron's z_root weights onto the top-k decoder readout directions. Measure fraction of weight norm in that subspace. This is rotationally invariant (subspace overlap is a geometric quantity).
+- **Neuron classification**: Correlate each first-layer post-ReLU activation with VPI and T_t. Classify as T_t-dominated (|r_tt|>0.3, |r_vpi|<0.1), VPI-sensitive (|r_vpi|>0.1, |r_tt|<0.1), mixed, or dead (std < 1e-8).
+- **Output neuron profiles**: Rank penultimate-layer neurons by output contribution (|w_out| × std(activation)), report correlations with VPI, T_t, and target advantage.
+- **T_t sweep**: Hold 50 z_roots fixed (stratified across target range), sweep T_t from 0→120 in 100 steps. Plot predicted advantage and per-neuron activations.
+- **z_root progression**: For 12 episodes, encode each step's tree with frozen encoder, hold T_t fixed at {10, 40, 80}, run through advantage head. Plot predicted advantage and penultimate-layer activations.
+
+Ran on cluster: `salloc --gres=gpu:1 --mem=32G --cpus-per-task=4 -t 01:00:00`, interactive.
+
+Results:
+- **Weight decomposition**: z_root accounts for ~98% of first-layer weight norm across all 5 models. T_t fraction is 5–10%. By weight magnitude, the MLP devotes nearly all input capacity to reading z_root.
+- **WDL subspace alignment**: Only ~6% of z_root weight projects onto top-5 WDL decoder readout directions, ~11% onto top-10, ~22% onto top-20. Chance level for a 128-dim space would be ~15.6% (top-20). The advantage head reads mostly from z_root directions orthogonal to the child-WDL subspace — it is NOT extracting the information VPI would need from z_root.
+- **Neuron classification**: 55–60% of first-layer neurons are dead (never activate on validation set). Only 3–6 per model are T_t-dominated, 14–24 are VPI-sensitive (weak threshold), 4–8 mixed. The effective network is much smaller than the 256-neuron architectural capacity.
+- **Output neuron profiles**: Top-contribution penultimate neurons have strong r(target) (~0.8–0.9) but near-zero r(VPI) (~0.01). The network tracks the target accurately without using VPI. r(T_t) for top neurons ranges 0.2–0.5.
+- **T_t sweep**: Sharp nonlinear response. Predicted advantage ~-3.5 at T_t=0, rapid rise through T_t=10–20, asymptoting near 0 by T_t≥40. Individual z_root curves are tight at high T_t (network indifferent regardless of position) and fan out at low T_t (z_root determines how negative). Functional form: T_t sets the output scale; z_root modulates the threshold at low budgets.
+- **z_root progression**: Varying z_root along an episode (tree grows) does change the output, but changes are subtle at T_t=40/80 and only become large at T_t=10 where T_t gating amplifies z_root differences. All 5 models mostly agree with each other.
+
+Summary interpretation:
+- The controller is a **T_t-gated z_root reader**. T_t controls the output scale (ample budget → ~0, low budget → strongly negative). z_root provides a position-dependent modulation, but from directions largely orthogonal to child WDL — likely encoding tree-structural features (search topology, evaluation stability) rather than decision uncertainty. The heuristic is approximately "halt when budget is low, with a position-dependent threshold."
+- **Dead neurons**: 56% dead first-layer neurons is a known ReLU pathology (dying ReLU). Gradient is zero for neurons whose pre-activation is always negative, so they never recover. Potential fix: replace ReLU with LeakyReLU or GELU in the advantage head, giving gradient flow even when pre-activation is negative.
+- **What z_root directions does it read?** Unknown from current analysis. The ~78% of z_root weight orthogonal to the WDL subspace could encode tree depth, branching factor, evaluation volatility, etc. Probing experiments needed.
+- First-pass intervention figures only captured scalar output, not per-layer activations. Updated script to register forward hooks on each ReLU and capture per-neuron activation profiles during both T_t sweep and z_root progression.
+
+Activation hook results (rerun):
+- **T_t sweep, first hidden layer**: Two distinct neuron populations across all 5 models. (1) Linearly increasing with T_t: several neurons ramp ~0→40-50 as T_t goes 0→120 — direct T_t readers. (2) High at T_t≈0, decaying — encoding "budget nearly exhausted." Neuron n13 appears across all 5 models as a linearly T_t-responsive feature detector.
+- **T_t sweep, penultimate layer**: All neuron activations compressed to 0–2 for T_t > 20, with sharp spikes at T_t ≈ 0. The nonlinear elbow (T_t=10–20) in the scalar output is fully formed by this layer. slw01/reweight_w4 have more active neurons at high T_t than affine variants.
+- **z_root progression, penultimate layer** (slw01, 4 episodes × 3 T_t): Large transient at steps 0–3 (tree going from small to meaningful structure), then slow drift. Initial assessment dominates, but some neurons (e.g., n218 in ep 11298) continue ramping over 80 steps. Activation patterns are similar across T_t=10/40/80 for the same episode — z_root processing is largely T_t-invariant at penultimate depth.
+- **Key question**: For late-stopping episodes (oracle_stop > 20), does z_root drift drive the halting decision, or is T_t countdown sufficient? Scalar output at T_t=80 stays near 0 through entire episodes, suggesting T_t countdown is the primary mechanism. The z_root sets an initial "position complexity" threshold; T_t counts down to it.
+
+### SwiGLU advantage head experiment
+
+Motivation:
+- 56% of first-layer ReLU neurons are dead. SwiGLU (`(xW₁)·swish(xV)`) avoids dying neurons entirely (swish has nonzero gradient everywhere) and provides a learned gating mechanism that could help with T_t × z_root interaction.
+
+Technical details:
+- Added `SwiGLULayer` module to `train_fitted_q_controller.py`: two parallel `nn.Linear` projections, output is `linear(x) * F.silu(gate(x))`. Drop-in replacement for Linear+ReLU in `nn.Sequential`.
+- New `--activation` CLI arg (default `"relu"`, choices `["relu", "swiglu"]`).
+- Code lives in separate project directories on the cluster: `~/chess/cts/swiglu/` (copy of async_soph) and `~/chess/cts/affine_swiglu/` (copy of affine).
+- 5 variants submitted with same loss configurations as the rerun, same frozen encoder and materialized caches (`train_cache_rerun.pt`, `validation_cache_rerun.pt`), checkpoints to `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_swiglu.pt`.
+
+Commands:
+- slw01: `SIGN_LOSS_WEIGHT=0.1,ACTIVATION=swiglu`
+- reweight_w4: `SIGN_LOSS_WEIGHT=0.1,NONTRIVIAL_LOSS_WEIGHT=4.0,ACTIVATION=swiglu`
+- inv_freq: `SIGN_LOSS_WEIGHT=0.1,INVERSE_FREQ_WEIGHTS=1,ACTIVATION=swiglu`
+- affine: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,ACTIVATION=swiglu` (from affine_swiglu)
+- affine+rw: `SIGN_LOSS_WEIGHT=0.1,AFFINE_CALIBRATION=1,REGRET_WEIGHTED_BCE=1,ACTIVATION=swiglu` (from affine_swiglu)
+
+v1 result (default Kaiming init): All 3 non-affine variants exploded (loss 5e29), producing degenerate always-halt policies (regret 0.233, avg_expansions 1.44). Kaiming init on multiplicative projections causes variance blowup.
+
+v2 fixes: Xavier uniform with gain=1/√2 on both projections + zero biases, `nn.LayerNorm(input_dim)` before first SwiGLU layer, MAX_GRAD_NORM=2.0 (2× parameters → more generous clipping).
+
+v2 result (3 non-affine variants; affine variants pending):
+
+| Variant | ReLU regret | SwiGLU regret | Δ |
+|---------|------------|---------------|------|
+| slw01 | 0.031 | 0.033 | +0.002 |
+| reweight_w4 | 0.034 | 0.039 | +0.005 |
+| inv_freq | 0.047 | 0.051 | +0.004 |
+
+Learning curve instability: MSE oscillates wildly between epochs while sign accuracy improves steadily. Example (slw01): validation MSE ranges from 0.012 (stable epochs) to 52,174 (epoch 18), yet sign_accuracy stays 0.85–0.90 throughout. reweight_w4 has a catastrophic spike at epoch 19 (MSE=3.3e13) but recovers at epoch 20. Pattern is consistent across all 3 variants — intermittent epochs produce very large scalar predictions while the sign (halt/continue direction) remains correct.
+
+Interpretation: SwiGLU's multiplicative interaction amplifies outlier predictions when gate and linear projections align on extreme inputs. The sign head is unaffected because it only sees the direction, not the magnitude. The greedy evaluation (which only uses sign) improves steadily, but the MSE component of the loss is dominated by these spikes. This is a fundamental instability of the multiplicative architecture under L2 loss — the model finds good sign decisions but hasn't learned to regularize scalar magnitude.
+
+Conclusion: SwiGLU does not improve over ReLU. The dead neuron problem (56% first-layer) is apparently not a bottleneck — the live neurons carry enough capacity. The T_t-gated z_root reading strategy works fine with sparse activation. Pursuing activation function changes further is unlikely to be productive.
+
+### GeLU activation ablation
+
+Motivation: Isolate whether dead neurons matter, without SwiGLU's multiplicative instability. GeLU is a drop-in replacement for ReLU — same parameter count, same architecture, no dead neurons, no magnitude blowup.
+
+Technical details: Added `--activation gelu` option (Linear+GELU instead of Linear+ReLU). Same training setup as SwiGLU runs, from `~/chess/cts/swiglu/`. Checkpoints to `/tigress/ysagiv/chess/cts/checkpoints/fittedq_{variant}_gelu.pt`.
+
+Result:
+
+| Variant | ReLU regret | GeLU regret |
+|---------|------------|-------------|
+| slw01 | 0.031 | 0.031 |
+| reweight_w4 | 0.034 | 0.033 |
+| inv_freq | 0.047 | 0.047 (best at ep10; 0.055 at ep20) |
+
+GeLU matches ReLU exactly. Learning curves are completely stable (validation MSE steady at 0.011–0.014, no spikes). Confirms: (1) SwiGLU's problem was the multiplicative interaction, not the activation shape; (2) dead neurons are neither helping nor hurting — they're irrelevant; (3) activation function is not the bottleneck.
+
+### WDL subspace ablation (activation-space causal test)
+
+Motivation: The weight-space analysis showed ~78% of advantage head z_root weights are orthogonal to the decoder's WDL readout directions. But that's a weight-level observation — does the controller actually depend on WDL information in the data? Two hypotheses: (A) the controller genuinely ignores child WDL, reading non-WDL tree structure from z_root; (B) the controller uses WDL information through different linear directions than the decoder, so weight-space alignment underestimates WDL dependence.
+
+Technical details: For each model, take the materialized validation cache (953K snapshots × 130 features). SVD the decoder's root-readout matrix to get the WDL readout basis Vt [128×128]. For k=1..128:
+- **Keep-only**: replace z_root with its projection onto top-k WDL directions. Run advantage head, measure sign accuracy and MSE.
+- **Ablate**: remove top-k WDL directions from z_root (keep the orthogonal complement). Run advantage head, measure sign accuracy and MSE.
+Script: `analyze_advantage_head.py`, function `wdl_subspace_ablation()`.
+
+Sign accuracy results (selected k values):
+
+| Model | Baseline | Keep k=5 | Ablate k=5 | Ablate k=128 (scalars only) |
+|-------|----------|----------|------------|----------------------------|
+| slw01 | 0.871 | 0.835 | **0.896** | 0.871 |
+| reweight_w4 | 0.812 | 0.681 | 0.812 | 0.820 |
+| inv_freq | 0.852 | 0.751 | 0.853 | 0.822 |
+| affine | 0.733 | 0.671 | **0.786** | **0.829** |
+| affine+rw | 0.713 | 0.776 | 0.769 | **0.841** |
+
+MSE results:
+
+| Model | Baseline MSE | Ablate k=128 MSE |
+|-------|-------------|-----------------|
+| slw01 | 0.012 | 0.281 |
+| reweight_w4 | 0.012 | 0.318 |
+| inv_freq | 0.017 | 0.284 |
+| affine | 0.012 | 0.284 |
+| affine+rw | 0.013 | 0.289 |
+
+Key findings:
+1. **Ablating WDL directions does not hurt sign accuracy — it often helps.** For slw01, removing the 8 most WDL-informative directions gives the best sign accuracy (0.903 vs 0.871 baseline). The WDL subspace injects noise into the controller's halt/continue decision.
+2. **Zeroing ALL z_root (k=128 ablation) barely changes sign accuracy for slw01** (0.871 → 0.871). For affine/affine+rw, removing z_root *improves* sign accuracy by 10–13 points. The halt/continue decision is almost entirely determined by T_t (and N_t).
+3. **z_root matters for magnitude, not sign.** MSE jumps 23× when z_root is zeroed (0.012 → 0.28), confirming z_root does affect the output value. But it rarely flips the sign. Most snapshots have T_t far from the transition band (T_t=10–20) where z_root could change the sign.
+4. **Keep-only is non-monotonic.** Performance drops as more WDL directions are included (dip at k=30–80), recovering only at k=128 (full z_root). The intermediate WDL directions actively interfere.
+5. **Explanation A confirmed**: the controller genuinely ignores child WDL for the halt/continue decision. It's not reading WDL through alternative directions.
+
+Interpretation: The greedy controller policy (threshold at advantage=0) is effectively a T_t countdown rule. z_root modulates the advantage magnitude (how confident the decision is) but almost never changes which side of zero the prediction falls on. The GNN representation, trained to encode child WDL, contributes to calibration of the advantage prediction but not to the binary halt/continue decision that determines regret. Open question: does z_root's magnitude contribution matter for regret at marginal decisions? Sign accuracy averages over all snapshots including trivially easy ones; the regret-critical snapshots are exactly those near the sign boundary where z_root might matter. Need greedy evaluation with zeroed z_root to measure actual regret impact.
+
+### T_t-only baseline trained from scratch (decisive z_root ablation)
+
+Motivation:
+- The Apr 29 inference-time z_root ablation suggested z_root contributes magnitude but rarely flips the binary halt/continue decision (sign accuracy invariant under z_root zeroing on slw01). That measurement is on a head whose weights were *shaped during training* by z_root information; zeroing at inference removes only the per-snapshot deviations around an already-z_root-informed threshold. The decisive test is to train a head from scratch that never sees z_root and ask whether it can match slw01.
+- λ_m = 0 in the controller oracle config, so N_t is dynamically inert. The only non-z_root scalar that matters is T_t. The baseline is therefore: input = T_t alone, no encoder, no caches, no tree work.
+
+Technical changes:
+- Added `--t-only-baseline` to `scripts/train_fitted_q_controller.py`.
+- Added `TOnlyAdvantageModel` (MLP on a single scalar T_t; matches q_hidden / q_hidden_layers / separate_sign_head with the regular controller).
+- Added `_extract_t_only_tensors`, which walks packed shards once and reads only the scalar arrays (`target_advantages`, `starting_budgets`, `step_node_cutoffs`, `oracle_stop_steps`, `oracle_values`) to produce flat per-snapshot `(T_t, target_advantage)` tensors plus per-episode metadata. No tree node/edge reconstruction, no encoder forward passes, no `DataLoader`, no collator.
+- Added matching `_train_t_only_epoch`, `evaluate_t_only_predictions`, `evaluate_t_only_greedy_policy`. Same loss components as the regular path: weighted advantage MSE + `sign_loss_weight` × sign BCE. Greedy eval runs the model on flat tensors in batches and slices per episode for stop-step and regret.
+- Added `slurm/train_fitted_q_t_only_della.slurm` (separate from the SwiGLU-using `train_fitted_q_controller_della.slurm`, which passes a `--activation` flag the trainer here doesn't accept).
+- Added 7 unit tests: model slices T_t correctly, ignores z_root and N_t columns, has no-op `freeze_encoder`; extractor flattens episodes correctly; train epoch updates parameters; greedy eval finds the right stop-step on a synthetic threshold-based head.
+
+Run configuration (job 7481459):
+- Project dir: `~/chess/cts/t_only` (copy of async_soph with the T_t-only changes).
+- Train manifest: `controller_packed_combined_nomaint_no_xaba/train_manifest.json` (576830 episodes, 17924009 snapshots).
+- Validation manifest: same dataset (30630 episodes, 953562 snapshots).
+- Encoder checkpoint: `tree_encoder_child_wdl_async_k1_rerun.pt` — argparse-required but never opened under `--t-only-baseline`.
+- `SIGN_LOSS_WEIGHT = 0.1` (matches slw01_rerun for an apples-to-apples comparison).
+- Default architecture: `q_hidden = 256`, `q_hidden_layers = 3`, single advantage head (`separate_sign_head = 0`). Matches slw01 except for input dimensionality.
+- 20 epochs. Wall time ~13 minutes total (extraction + 20 epochs of MLP-on-scalar). Greedy eval at epoch 10 and 20.
+
+Greedy validation metrics:
+
+| | T_t-only (best, ep 10) | slw01_rerun |
+|---|---|---|
+| `average_regret` | **0.218** | **0.031** |
+| `average_return` | 0.136 | ≈0.323 (implied: oracle 0.354 − regret 0.031) |
+| `average_oracle_value` | 0.354 | 0.354 |
+| `exact_stop_step_accuracy` | 0.199 | — |
+| `first_action_accuracy` | 0.663 | — |
+| `average_expansions` | 20.79 | — |
+| validation `sign_accuracy` (best across 20 ep) | 0.457 | ≈0.871 (Apr 29 ablation baseline) |
+| validation `advantage_mse` (final) | 0.046 | ≈0.012 (Apr 29 ablation baseline) |
+
+Training curve detail:
+- `train_advantage_mse` and `train_sign_bce` plateau in epoch 1 and never move (epoch 1: 0.055/0.666; epoch 20: 0.045/0.666).
+- `train_sign_accuracy` stays at ≈0.43 throughout — close to the marginal continue rate. The optimizer is at the information-theoretic ceiling for a 1-D function of T_t.
+
+Interpretation:
+- z_root closes ~85% of the regret-to-oracle gap that survives a T_t-only controller: `(0.218 − 0.031) / 0.218 ≈ 0.86`. The GNN representation is doing real work.
+- Sign accuracy stuck at ≈0.43 is mechanistic, not optimization failure. The same T_t value appears with both halt-optimal and continue-optimal labels in the training distribution depending on z_root; a 1-D head cannot discriminate them and correctly settles at the marginal rate.
+- This reconciles with the Apr 29 inference-time ablation. Zeroing z_root on the *trained slw01 head* preserves the head's z_root-shaped threshold; only per-snapshot deviations around that threshold are removed, and those deviations move the sign on a small fraction of regret-critical snapshots invisible in averaged sign accuracy. Training from scratch without z_root removes the threshold-shaping itself, and regret blows up 7×.
+- The "controller is not computing VPI" finding from the WDL subspace ablation stands. The new framing pairs it with: z_root contributes substantially to regret through directions ~78% orthogonal to the child-WDL subspace. What those directions encode is now the load-bearing open question for Section 3.
+
+Conclusion:
+- The tree representation is regret-critical, not decorative. Section 3 needs to identify the non-WDL features in z_root that drive the regret reduction. Candidates: tree depth, branching factor, root-move churn, value variance across children, evaluation volatility along the principal variation. Stratifying T_t-only regret by budget bucket (and by the slw01-vs-T_t-only regret delta per episode) will localize where z_root buys what.
+
+Output paths:
+- Training log: `analysis_outputs/t_only/cts-fittedq-tonly_7481459.out`
+- Best checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_t_only_baseline_rerun.pt` (selected by min validation greedy regret = 0.21752, epoch 10).
+- Diagnostics JSONL: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_t_only_baseline_rerun_diagnostics.jsonl` (30630 episodes; regret_mean=0.2175, regret_std=0.2979, regret_max=1.9868).
+
+### (N_t, T_t) baseline — disambiguating step-within-episode info from genuine z_root signal
+
+Motivation:
+- The T_t-only baseline conflated two ablations: it removed both z_root *and* N_t. With λ_m = 0 the oracle's continue cost doesn't depend on N_t, so N_t was assumed dynamically inert. But N_t still enters the model's input, and N_t = first-decision-tree-size + step is a near-step counter modulated by an initial-instability offset. Because starting budgets span 1–120 across episodes, T_t alone cannot tell the head where it is in an episode (T_t = 10 could be step 0 of a budget-10 or step 90 of a budget-100 episode); N_t disambiguates that.
+- This baseline isolates the contribution of N_t alone: train a head whose input is `[N_t, T_t]` (no z_root), same loss/architecture/data as slw01.
+
+Technical changes:
+- Generalized `TOnlyAdvantageModel` with `input_dim` parameter (1 → T_t only, 2 → [N_t, T_t]).
+- Added `tree_sizes: torch.Tensor | None` to `TOnlyTensors`.
+- `_extract_t_only_tensors(..., include_n_t=True)` walks the same packed shards once and additionally pulls per-snapshot tree sizes (`step_node_cutoffs`) into a flat tensor; no tree node/edge reconstruction.
+- Train/eval/greedy helpers stack `[N_t, T_t]` per snapshot when `tensors.tree_sizes is not None`.
+- New CLI flag `--include-n-t` (only valid with `--t-only-baseline`).
+
+Run configuration (job 7484042):
+- Same project dir, same packed manifest, same encoder checkpoint as the T_t-only run (encoder argparse-required but never opened).
+- `SIGN_LOSS_WEIGHT = 0.1` (matches slw01_rerun).
+- 20 epochs. Wall time ~13 min.
+
+Greedy validation metrics (best @ epoch 20):
+
+| Model | Inputs | `average_regret` | `average_return` | `sign_accuracy` (best) | `first_action_accuracy` | `average_expansions` |
+|---|---|---|---|---|---|---|
+| oracle | — | 0.000 | 0.354 | 1.000 | 1.000 | — |
+| slw01 (rerun) | z_root, N_t, T_t | **0.031** | ≈0.323 | ≈0.871 | — | ≈7 (Pareto) |
+| **(N_t, T_t)** | N_t, T_t | **0.056** | 0.297 | 0.628 | 0.832 | 14.20 |
+| T_t-only | T_t | 0.218 | 0.136 | 0.457 | 0.663 | 20.79 |
+
+Decomposition of the regret-reduction beyond T_t-only (gap = 0.218 − 0.031 = 0.187):
+
+- **N_t alone** (T_t-only → (N_t, T_t)): closes 0.162 = **86.6%** of the gap.
+- **z_root** ((N_t, T_t) → slw01): closes 0.025 = **13.4%** of the gap.
+
+Equivalently, z_root cuts residual regret beyond (N_t, T_t) by 0.025 / 0.056 ≈ 45% — a meaningful but small absolute amount.
+
+Interpretation:
+- The Apr 29 inference-time WDL/z_root ablation was correctly reporting that z_root specifically contributes little to the binary halt/continue decision. It was not OOD-fooling us. The "z_root closes 86% of the regret gap" claim from the prior T_t-only entry conflated z_root with N_t; the corrected attribution is that **N_t** closes ~87% of that gap and z_root closes the remaining ~13%.
+- Mechanistically: with λ_m = 0 in the oracle's continue cost, N_t doesn't enter the *cost*, but the model uses it as a step-within-episode counter to disambiguate where on the budget trajectory each snapshot sits. Combined with T_t, the pair encodes (starting_budget, step) up to the small initial-instability offset. That pair is approximately sufficient for the optimal stopping decision under this oracle/data distribution.
+- z_root's residual ~13% contribution is meaningful in regret terms (it nearly halves residual regret) but is a marginal calibration signal, not a dominant computation. The "metacontroller computes VOC from the tree" framing as currently written is not supported.
+
+Implications for the paper:
+- Section 3 cannot claim the controller's good metacontrol is driven by tree-structural reasoning; the dominant signal is a budget-and-step heuristic.
+- The decisive remaining experiment is the symmetric ablation: train slw01/rw4/inv_freq with `--exclude-n-t` (input becomes [z_root, T_t], no N_t available). Three outcomes:
+  - Regret ≈ 0.056 (matches the (N_t, T_t) baseline): z_root *can* substitute for N_t when the shortcut is removed; the original training simply took the easier path. The paper reframes around training-time interventions that force tree-representation use.
+  - Regret in (0.056, 0.218): z_root partially compensates; smaller story.
+  - Regret ≈ 0.218 (matches T_t-only): z_root cannot encode step-within-episode information; its only contribution is the 0.025 marginal calibration. The paper's premise is dead.
+
+Output paths:
+- Training log: `analysis_outputs/tn_only/cts-fittedq-tonly_7484042.out`
+- Best checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_n_t_t_t_baseline_rerun.pt` (selected by min validation greedy regret = 0.05645, epoch 20).
+- Diagnostics JSONL: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_n_t_t_t_baseline_rerun_diagnostics.jsonl` (30630 episodes; regret_mean=0.0565, regret_std=0.1339, regret_max=1.4445).
+
+### Canonical [z_root, T_t]-only setup and intervention sweep (no_n_runs / no_n_v2 / no_n_v3)
+
+Reframing:
+- N_t was being silently used as a step-counter shortcut (per the (N_t, T_t) baseline above, which closes 87% of the regret-vs-T_t-only gap on its own). Continuing to train on N_t was a conceptual bug given λ_m = 0 in the canonical oracle: N_t doesn't enter the cost function but does enter the model input, where it acts as a near-perfect step-within-episode signal that the head leans on.
+- Going forward the canonical model is `[z_root, T_t]`-only. Previous slw01 / reweight_w4 / inv_freq runs that consumed N_t are scaffolding-contaminated reference points (not the real evaluation grid).
+- The new reference is the T_t-only floor at regret 0.218: the best a model with no z_root and no N_t can do.
+
+Implementation note:
+- Added `--exclude-n-t` to `scripts/train_fitted_q_controller.py`. Slices the N_t column out at `predict_from_features` time, leaving the head with input `[z_root, T_t]`. Materialized caches built with N_t are reused unchanged; only the head's input dimensionality changes.
+
+#### Run 1: exclude-N_t v1 (LR=1e-3, 20 epochs, greedy_eval_interval=10)
+
+Three loss configs (slw01, reweight_w4, inv_freq) with `--exclude-n-t`. All three regret oscillated wildly across epochs and converged at a poor floor:
+
+| Loss config | Best regret (v1) |
+|---|---|
+| slw01 | 0.291 |
+| reweight_w4 | 0.245 |
+| inv_freq | 0.239 |
+| (T_t-only reference) | 0.218 |
+
+Notable: all three are *worse* than T_t-only. A model with strictly more input information than T_t-only doesn't even match T_t-only's floor — z_root acts as distractor noise the optimizer latches onto.
+
+Logs: `analysis_outputs/no_n_runs/cts-fittedq_748484{8,9,0}.out`.
+
+#### Run 2: exclude-N_t v2 (LR=1e-4 cosine→1e-5, 60 epochs, greedy_eval_interval=5)
+
+Same three loss configs, smaller LR with cosine schedule, more epochs, finer greedy eval. Hypothesis: oscillation in v1 was high-LR overshoot.
+
+| Loss config | Best regret (v2) |
+|---|---|
+| slw01 | **0.238** |
+| reweight_w4 | **0.233** |
+| inv_freq | 0.250 |
+
+LR fix slightly improved slw01 / reweight_w4 but did not change the qualitative picture. Last 30 epochs of trajectories oscillate in a bounded band (slw01: 0.24–0.26) — converged at a poor floor, not unconverged. All three still worse than T_t-only (0.218).
+
+Logs: `analysis_outputs/no_n_v2/cts-fittedq_748644{7,8,9}.out`.
+
+#### Diagnosis: MSE/BCE loss tension as a candidate mechanism
+
+The unified head (slw01) computes `total_loss = advantage_mse + sign_loss_weight * sign_bce` over the same scalar prediction. The two losses have non-coincident optima:
+- MSE wants `pred ≈ target_advantage`, with target magnitudes O(0.01–0.1).
+- Sign BCE wants `pred → ±∞` (saturated logits in the correct direction).
+
+When MSE residual is small (slw01 with N_t: validation MSE ≈ 0.012), the two gradients balance at a stable point. With N_t removed, MSE residual stays large (~0.029) — its gradient remains substantial throughout training. The BCE gradient is bounded but persistent, pushing predictions outward; MSE pulls them back. At LR 1e-3 this oscillates; at LR 1e-4 it converges to a worse-than-T_t-only point.
+
+This led to two interventions: (a) **MSE cooling** — fade the MSE term over training so BCE eventually wins cleanly; (b) **regret weighting** — weight per-snapshot loss by `|target_advantage|` (clamped at 1e-3), upweighting the continue-optimal class which has larger absolute advantages, countering BCE's drift toward the marginal halt class on under-determined inputs.
+
+Implementation:
+- Added `--mse-loss-weight-{schedule,initial,final}` to the trainer (constant / linear / cosine schedules). Default is `constant=1.0` so existing runs are unaffected.
+- Added `--regret-weight-loss` flag. Per-snapshot weight is `|target_advantage|.clamp(min=1e-3)`. Composes multiplicatively with `--inverse-freq-weights` and `--nontrivial-loss-weight` if set. Cache training path only.
+
+#### Run 3: aggressive cooling (slw01, BCE-primary, MSE→0)
+
+Cooling with `SIGN_LOSS_WEIGHT=1.0` (vs canonical 0.1) and MSE cosine→0. Early intermediate at epoch 25:
+- regret 0.374 (vs v2's 0.283 at the same epoch)
+- average_expansions 3.79 (vs v2's ≈ 9.78)
+- average_return = -0.026 (negative — losing value vs halting at step 0)
+- validation sign_accuracy 0.884 — high because the model halts everywhere; majority-class predictor
+
+Killed early — making BCE 10× stronger from the start let BCE's degenerate optimum (saturate at the marginal halt class) take over.
+
+#### Run 4: conservative cooling (slw01, canonical SIGN_LOSS_WEIGHT=0.1, MSE→0)
+
+Same loss-weight ratio as v2 at epoch 1, MSE fades to 0 by epoch 60. Greedy regret trajectory:
+
+| Epoch | 5 | 10 | **15** | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.349 | 0.313 | **0.252** | 0.308 | 0.308 | 0.317 | 0.329 | 0.340 | 0.358 | 0.358 | 0.383 | 0.399 |
+| expansions | 7.6 | 8.5 | 11.5 | 7.5 | 7.1 | 6.8 | 5.8 | 4.7 | 4.2 | 4.3 | 2.8 | 2.7 |
+
+Best regret 0.252 at epoch 15. After that, regret drifts upward and `average_expansions` collapses from 11.5 → 2.7 — same BCE-saturation failure as the aggressive run, just slower because BCE weight stayed at 0.1. As MSE fades, BCE wins, model halts everywhere. **Cooling is destructive regardless of BCE weight.** The loss-tension hypothesis as a productive intervention is dead.
+
+Log: `analysis_outputs/no_n_v3/cts-fittedq_7490082.out`.
+
+#### Run 5: regret weighting (slw01, no cooling, no filter)
+
+Stable across all 60 epochs:
+
+| Epoch | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | **45** | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.274 | 0.257 | 0.271 | 0.239 | 0.243 | 0.251 | 0.252 | 0.252 | **0.234** | 0.246 | 0.245 | 0.248 |
+| first_action_acc | 0.815 | 0.819 | 0.830 | 0.826 | 0.836 | 0.836 | 0.834 | 0.842 | 0.835 | 0.835 | 0.835 | 0.841 |
+| expansions | 26.1 | 25.9 | 25.8 | 25.2 | 25.1 | 25.1 | 25.4 | 25.1 | 24.9 | 25.0 | 25.3 | 25.3 |
+
+Best regret 0.234 at epoch 45. Regret oscillates in a tight band 0.234–0.274 with no drift — qualitatively different from every other [z_root, T_t] training. `first_action_accuracy` is the highest of any run at 0.84 (model correctly continues at step 0), and `average_expansions ≈ 25` (model continues for too long). Regret weighting did exactly what it was designed to do: prevent BCE saturation toward halt by upweighting continue-optimal snapshots.
+
+But: best regret 0.234 is still 0.016 *worse* than the T_t-only floor (0.218). Stable training of `[z_root, T_t]` does not surface usable z_root signal beyond what T_t alone provides. Adding z_root to the input is, at best, neutral.
+
+Log: `analysis_outputs/no_n_v3/cts-fittedq_7490237.out`.
+
+#### Interpretation across runs 1–5
+
+The mechanism behind the v1/v2 oscillation looks like loss tension (consistent with the cooling/regret-weighting interventions producing the predicted opposite-direction failures and stabilization). But fixing the dynamics doesn't recover usable z_root signal — the best stable training of `[z_root, T_t]` (regret-weighted, 0.234) still loses to `T_t` alone (0.218).
+
+Two remaining hypotheses for why z_root contributes nothing exploitable:
+1. **Data redundancy.** The dataset has so many snapshots where T_t alone determines the answer that z_root's gradient signal is drowned out by T_t-only-determined cases. Filtering to T_t-sensitive snapshots (per-tree, per-step, where the oracle's action varies across budgets) might surface the signal.
+2. **Encoder bottleneck.** The encoder, pretrained for child-WDL reconstruction, simply doesn't carry the position-specific value-of-computation features that VOC-style metacontrol would need. No training-side intervention can recover what isn't there.
+
+Implementation for (1): added `--t-sensitive-filter hard` to the trainer. Walks packed shards once to compute per-`(source_path, step)` flags (T_t-sensitive iff the oracle's halt/continue action varies across the budgets that reach this step). Aligns the flag tensor to the materialized cache row order via `torch.randperm` with the cache build's seed. Saves a sidecar at `<train_cache_path>.t_sensitive_mask.pt` for free reuse on subsequent runs. (Initial implementation walked the full DataLoader to align — too slow because the collator tensorizes trees per batch. Fast version uses a direct shard walk; ~10–20 min total mask compute vs >60 min before.)
+
+In flight as of this entry:
+- **Filter run** (slw01_no_n_t + `T_SENSITIVE_FILTER=hard`, otherwise v2 hyperparameters): tests hypothesis (1) — does training on T_t-sensitive snapshots only let z_root contribute?
+- **Kitchen sink run** (filter + cosine MSE cooling + regret weighting, dependent on filter completing to reuse the mask sidecar): if filter alone helps, do the stabilizing interventions stack on top?
+
+If both still float around 0.218–0.24, hypothesis (1) is dead and the encoder is the bottleneck — outside the scope of this week's deadline.
+
+#### Run 6: filter alone (slw01_no_n_t + T_SENSITIVE_FILTER=hard, no cooling, no regret-weighting)
+
+T_t-sensitivity statistics from the filter computation:
+- T_t-sensitive positions: 678596 / 5295803 = **12.8%** of (source, step) pairs.
+- Snapshots kept: 3546306 / 17924009 = **19.8%** of total snapshots.
+
+So 80% of training snapshots are T_t-determined (the oracle's action is the same regardless of starting budget for that source-step). The dataset is heavily redundant; only one snapshot in five carries information that requires z_root for the optimal action.
+
+Greedy regret trajectory (60 epochs, eval every 5):
+
+| Epoch | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | **45** | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.240 | 0.274 | 0.295 | 0.248 | 0.301 | 0.275 | 0.267 | 0.279 | **0.229** | 0.250 | 0.251 | 0.253 |
+| first_action_acc | 0.650 | 0.597 | 0.588 | 0.647 | 0.593 | 0.631 | 0.646 | 0.620 | 0.691 | 0.677 | 0.661 | 0.655 |
+| expansions | 17.4 | 13.4 | 11.9 | 14.8 | 9.7 | 11.3 | 10.9 | 10.2 | 12.7 | 11.5 | 10.7 | 10.6 |
+
+Best regret 0.229 at epoch 45 — slightly better than regret-weighted (0.234) and v2 (0.238). Still worse than T_t-only floor (0.218). Trajectory oscillates 0.229–0.301 across all 60 epochs (range 0.07) — filter alone does not stabilize training the way regret weighting does.
+
+Wall time: ~12.5 min total (mask compute + 60 epochs at ~1/5 the data volume). Mask sidecar saved to `/tigress/ysagiv/chess/cts/train_cache_rerun.pt.t_sensitive_mask.pt` for reuse.
+
+Log: `analysis_outputs/no_n_v3/cts-fittedq_7493984.out`.
+
+Interpretation:
+- The data redundancy hypothesis (hypothesis 1) gets weak partial support: filtering to the T_t-sensitive 20% of snapshots gives a 0.009 regret improvement over v2 (0.238 → 0.229). Real but small.
+- The improvement is *not* large enough to break below T_t-only's 0.218 floor. Even when we restrict training to the snapshots where z_root **must** contribute under the oracle, the head's regret on the full validation set is still worse than the input-z_root-blind T_t-only baseline.
+- This is increasingly consistent with hypothesis (2): the encoder genuinely doesn't carry exploitable VOC signal. The encoder was pretrained on child-WDL reconstruction; the WDL information is well-preserved (KL ≈ 0.02) but it's not the right signal for the metacontroller's stopping decision under this oracle.
+
+Updated reference grid:
+
+| Model | Inputs | Regret | Notes |
+|---|---|---|---|
+| oracle | — | 0.000 | |
+| **T_t-only floor** | **T_t** | **0.218** | canonical reference for [z_root, T_t] models |
+| Filter | z_root, T_t | 0.229 | oscillating |
+| Regret-weighted | z_root, T_t | 0.234 (stable) | only stable trajectory of single-intervention runs |
+| v2 (no interv.) | z_root, T_t | 0.238 | converged-poor floor |
+| Conservative cooling | z_root, T_t | 0.252 → 0.399 | drifts to halt-saturation |
+| **Kitchen sink (filter + cooling + regret-weight)** | **z_root, T_t** | **0.187** | **first run to break below T_t-only**; still descending at ep 60 |
+| Bigger-capacity regret-weighted | z_root, T_t | (queued) | Q_HIDDEN=512, Q_HIDDEN_LAYERS=5 |
+
+#### Run 7: kitchen sink (filter + MSE cosine cooling + regret-weighted) — breaks below T_t-only
+
+Configuration: slw01 + EXCLUDE_N_T + T_SENSITIVE_FILTER=hard + REGRET_WEIGHT_LOSS=1 + MSE_LOSS_WEIGHT_INITIAL=1.0, FINAL=0.0, SCHEDULE=cosine. v2 hyperparameters otherwise (LR 1e-4 cosine to 1e-5, 60 epochs, GREEDY_EVAL_INTERVAL=5).
+
+Greedy regret trajectory:
+
+| Epoch | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | **60** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.324 | 0.306 | 0.304 | 0.281 | 0.278 | 0.271 | 0.269 | 0.259 | 0.250 | 0.229 | 0.199 | **0.187** |
+| first_action_acc | 0.816 | 0.807 | 0.816 | 0.814 | 0.818 | 0.819 | 0.819 | 0.817 | 0.816 | 0.812 | 0.788 | 0.759 |
+| expansions | 26.9 | 26.8 | 26.7 | 26.3 | 26.3 | 26.1 | 26.1 | 25.9 | 25.7 | 25.2 | 24.2 | 22.7 |
+
+Best regret **0.187** at epoch 60 — monotone descent, no oscillation, no collapse. **Trajectory is still falling at the final epoch** (0.199 → 0.187 in the last 5 epochs); the run is not converged. More training would likely push regret further down.
+
+For the first time, a `[z_root, T_t]`-only controller breaks below the T_t-only floor (0.218 → 0.187, an absolute regret reduction of 0.031).
+
+Why each intervention is load-bearing:
+- **Filter alone** (run 6, regret 0.229): some help, but oscillating; doesn't break the T_t-only floor.
+- **Regret weighting alone** (run 5, regret 0.234, stable): prevents BCE drift toward halt-saturation; without it, cooling collapses (run 4: 0.252 → 0.399).
+- **Cooling alone** (run 4): destructive without regret weighting — BCE saturates at halt class.
+- **Combined**: filter narrows training to z_root-relevant snapshots; regret weighting holds the continue class properly weighted while MSE provides scale anchor; cooling fades MSE so BCE drives final sign decisions on a class-balanced objective. The combination achieves stable monotone improvement.
+
+The diagnostic implication: the loss-tension hypothesis (run-3-and-4 cooling failures suggested) and the data-redundancy hypothesis (run 6 filter weakly supported) and the class-imbalance hypothesis (run 5 regret-weighted fixed) were each correct about *part* of the picture. None individually fixed regret below T_t-only because each addressed only one bottleneck. Stacking them addresses all three simultaneously and the model can finally extract usable z_root signal.
+
+Implications for the paper: the previous "tree representation appears decorative" framing is now wrong. The encoder *does* carry exploitable VOC signal; it just needs the right training-time setup to surface it. The contribution becomes about identifying the diagnostic methodology and the intervention stack that turns naive offline fitted-Q into a controller that actually uses the tree representation.
+
+Log: `analysis_outputs/no_n_v3/cts-fittedq_7493985.out`. Diagnostics: `regret_mean=0.1872, regret_std=0.2365, regret_max=1.9286`. Output checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_slw01_no_n_t_kitchen_sink_rerun.pt`.
+
+Immediate next move: run kitchen sink for more epochs (e.g., 150 or 200) to see where the trajectory actually converges.
+
+#### Run 8: bigger-capacity regret-weighted (Q_HIDDEN=512, Q_HIDDEN_LAYERS=5 + regret weighting, no filter, no cooling)
+
+Configuration: slw01 + EXCLUDE_N_T + REGRET_WEIGHT_LOSS=1 + Q_HIDDEN=512 + Q_HIDDEN_LAYERS=5. v2 hyperparameters otherwise. Roughly 4× total parameters in the head.
+
+Greedy regret trajectory:
+
+| Epoch | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | **45** | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.259 | 0.237 | 0.233 | 0.229 | 0.230 | 0.229 | 0.229 | 0.233 | **0.226** | 0.241 | 0.240 | 0.237 |
+| first_action_acc | 0.825 | 0.841 | 0.844 | 0.848 | 0.854 | 0.856 | 0.856 | 0.863 | 0.855 | 0.862 | 0.860 | 0.857 |
+| expansions | 25.7 | 24.8 | 24.3 | 24.9 | 23.9 | 23.1 | 22.9 | 22.3 | 22.4 | 22.4 | 22.2 | 22.1 |
+
+Best regret **0.226** at epoch 45. Trajectory is monotone through epoch 30 (0.259 → 0.229) then converges to a 0.226–0.241 band. `first_action_accuracy = 0.86` is the highest of any [z_root, T_t]-only run; `average_expansions ≈ 22` (still over-continuing, slightly less than the 256-wide regret-weighted's 25).
+
+Improvement over the original-capacity regret-weighted (0.234) is **0.008**. Still does not break below the T_t-only floor (0.218).
+
+Compared with the kitchen sink (0.187, run 7):
+- Capacity bump on regret-weighted gives a 0.008 regret reduction.
+- Filter + cooling stacked on regret-weighted (= kitchen sink) gives a 0.047 regret reduction and is still descending.
+
+So capacity is contributing roughly 6× less per-intervention than the filter + cooling stack. Consistent with the encoder + data structure being the dominant bottleneck, and head capacity being a marginal-but-real second-order improvement. The combination kitchen-sink + capacity + more epochs is the natural next experiment.
+
+Log: `analysis_outputs/no_n_v3/cts-fittedq_7494698.out`. Output checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_slw01_no_n_t_regretw_bigger_rerun.pt`.
+
+#### Run 9: kitchen sink + bigger capacity, 100 epochs
+
+Configuration: kitchen sink (filter + cooling + regret-weighting + EXCLUDE_N_T, slw01) + Q_HIDDEN=512 + Q_HIDDEN_LAYERS=5 + EPOCHS=100. Cosine cooling and cosine LR schedule both stretch over 100 epochs instead of 60.
+
+Greedy regret trajectory:
+
+| Epoch | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | **55** | 60 | 65 | 70 | 75 | 80 | 85 | 90 | 95 | 100 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| regret | 0.304 | 0.275 | 0.274 | 0.267 | 0.242 | 0.240 | 0.232 | 0.225 | 0.234 | 0.234 | **0.198** | 0.225 | 0.212 | 0.204 | 0.198 | 0.199 | 0.198 | 0.198 | 0.202 | 0.201 |
+| expansions | 26.8 | 26.4 | 26.1 | 26.0 | 25.3 | 25.0 | 24.8 | 24.6 | 24.3 | 24.2 | 22.7 | 23.3 | 22.1 | 21.6 | 21.1 | 20.3 | 20.1 | 19.3 | 19.3 | 18.3 |
+
+Best regret 0.198 at epoch 55 (rounded — actual saved-best 0.1977). Wall time: 22 min. Plateau at 0.198–0.212 through epochs 55–100; trajectory does not improve further.
+
+Comparison with run 7 (kitchen sink, canonical 256-wide × 3-layer head, 60 epochs):
+- Run 7 best: **0.187** at epoch 60, *still descending*.
+- Run 9 best: **0.198** at epoch 55, plateaus.
+
+Bigger capacity is *worse* in absolute terms by 0.011, despite running 40 more epochs. **Capacity bumps appear to harm rather than help when stacked on the kitchen sink.** This kills the capacity-as-bottleneck hypothesis cleanly: with the right loss + data interventions in place, the canonical 256-wide × 3-layer head outperforms a 4× larger head.
+
+Caveat for fair comparison: the cosine cooling schedule shape stretches over the run length, so at epoch 55 the run-9 MSE weight was ≈ 0.42 (cosine midway) while at run-7 epoch 55 it was ≈ 0.015 (near the end). Different cooling state at the same epoch number. To know definitively whether the small head beats the big head at full cooling, the canonical kitchen sink needs to run for 100 epochs (same schedule as run 9).
+
+Log: `analysis_outputs/no_n_ks/cts-fittedq_7496598.out`. Output checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_slw01_no_n_t_kitchen_sink_bigger_rerun.pt`. Diagnostics: `regret_mean=0.2013, regret_std=0.3315, regret_max=1.9868`.
+
+Immediate next move: re-run the canonical kitchen sink (256-wide × 3-layer) for 100 epochs to give an apples-to-apples comparison at full cooling. If it lands below 0.187, the small head genuinely beats the big head and capacity is harmful. If it lands at ~0.20, both heads converge similarly and run 7's 0.187 was a still-descending intermediate.
+
+#### Run 10: canonical kitchen sink, 100 epochs
+
+Configuration: kitchen sink (run 7) settings exactly, but `EPOCHS=100` instead of 60. Default Q_HIDDEN=256 and Q_HIDDEN_LAYERS=3.
+
+Greedy regret trajectory:
+
+| Epoch | 5 | 20 | 40 | 60 | 80 | 90 | 95 | **100** |
+|---|---|---|---|---|---|---|---|---|
+| regret | 0.325 | 0.283 | 0.271 | 0.252 | 0.223 | 0.190 | 0.183 | **0.180** |
+| expansions | 26.9 | 26.4 | 26.1 | 25.7 | 24.8 | 23.6 | 23.0 | 22.3 |
+
+Best regret **0.180** at epoch 100 — *still descending* in the final stretches (0.190 → 0.183 → 0.180 across the last three evals). Wall time: 21 min.
+
+Two findings:
+
+1. **Canonical capacity beats bigger capacity decisively at the same training schedule.** Run 9 (bigger, 100 ep): 0.198 plateau. Run 10 (canonical, 100 ep): 0.180 still descending. The 0.018 gap is real, and the run-10 trajectory is going lower while run-9 is flat. Capacity bumps are *net-harmful* when stacked on the kitchen sink, not just unhelpful.
+
+2. **Trajectory is not converged at 100 epochs.** The final 5 epochs improve regret at roughly 0.005/epoch even though the cosine MSE schedule is fully cooled (MSE weight ≈ 0 by epoch 100) and the cosine LR is at the minimum (1e-5). Improvement is purely BCE-driven at small LR — slow but steady. 200 epochs should push regret further; hard to predict exactly where, but at the current rate the asymptote is likely well below 0.180.
+
+Updated reference grid:
+
+| Model | Inputs | Regret | Notes |
+|---|---|---|---|
+| oracle | — | 0.000 | |
+| **Kitchen sink, canonical, 100 epochs (this run)** | **z_root, T_t** | **0.180** | still descending; new best |
+| Kitchen sink, canonical, 60 ep (run 7) | z_root, T_t | 0.187 | still descending at ep 60 |
+| Kitchen sink, bigger capacity, 100 ep (run 9) | z_root, T_t | 0.198 | plateau |
+| **T_t-only floor** | **T_t** | **0.218** | |
+| Bigger-capacity regret-weighted (run 8) | z_root, T_t | 0.226 | |
+| Filter alone (run 6) | z_root, T_t | 0.229 | |
+| Regret-weighted (run 5) | z_root, T_t | 0.234 | |
+| v2 (run 2, slw01) | z_root, T_t | 0.238 | |
+
+Log: `analysis_outputs/no_n_ks/cts-fittedq_7498352.out`. Output checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_slw01_no_n_t_kitchen_sink_100ep_rerun.pt`. Diagnostics: `regret_mean=0.1796, regret_std=0.2343, regret_max=1.9286`.
+
+Immediate next move: extend kitchen sink to 200 epochs at canonical capacity to find where the trajectory actually converges.
+
+#### Run 11 (in flight): canonical kitchen sink, 200 epochs
+
+Configuration: kitchen sink, canonical capacity, EPOCHS=200. Cosine MSE cooling and cosine LR schedule both stretch over 200 epochs.
+
+Intermediate trajectory at epoch 170 (run still in flight):
+
+| Epoch | 60 | 90 | 100 | 130 | 150 | 165 | **170** |
+|---|---|---|---|---|---|---|---|
+| regret | 0.267 | 0.239 | 0.229 | 0.221 | 0.209 | 0.198 | **0.195** |
+| expansions | 25.9 | 25.1 | 24.6 | 24.4 | 23.8 | 23.4 | 23.3 |
+
+The 200-epoch schedule is *not* apples-to-apples with the 100-epoch run 10 at the same epoch number (cosine cooling stretches), so the relevant comparison is at matched schedule progress:
+
+- Run 10 (100 ep) at schedule progress 0.85 (= ep 85): regret ≈ 0.21 (interpolated from ep 80 = 0.223, ep 90 = 0.190).
+- Run 11 (200 ep) at schedule progress 0.85 (= ep 170): regret 0.195.
+
+So stretching the schedule appears to gain ~0.015 in regret at matched progress. The trajectory is still descending — recent rate ~0.005–0.01 per 5 epochs. Final regret at ep 200 is plausibly in the 0.17–0.18 range if the recent rate continues through the steep-descent phase that the 100-epoch run saw in its final 20%.
+
+Will update with the final result when the run completes (~10–15 min more cluster time).
+
+#### Run 11 final: canonical kitchen sink, 200 epochs
+
+Run completed in 41 min wall.
+
+Final trajectory tail:
+
+| Epoch | 170 | 175 | 180 | 185 | 190 | **195** | 200 |
+|---|---|---|---|---|---|---|---|
+| regret | 0.195 | 0.194 | 0.186 | 0.182 | 0.178 | **0.176** | 0.176 |
+| expansions | 23.3 | 23.1 | 22.6 | 22.5 | 22.1 | 21.7 | 21.4 |
+
+Best regret **0.176** at epoch 195; the last 5 epochs are flat — trajectory has converged. Wall time 41 min.
+
+Comparison with the 100-epoch run (run 10): 100 more epochs bought a 0.004 additional regret reduction and confirmed the floor. The 200-epoch run is the converged version of run 10.
+
+Diagnostics: `regret_mean=0.1762, regret_std=0.2522, regret_max=1.9391`.
+
+Output checkpoint: `/tigress/ysagiv/chess/cts/checkpoints/fittedq_slw01_no_n_t_kitchen_sink_200ep_rerun.pt`. Log: `analysis_outputs/no_n_ks/cts-fittedq_7499179.out`.
+
+#### Final reference grid
+
+| Model | Inputs | Regret | Notes |
+|---|---|---|---|
+| oracle | — | 0.000 | |
+| **Kitchen sink, canonical capacity, 200 ep** | **z_root, T_t** | **0.176** | converged; new best |
+| Kitchen sink, canonical, 100 ep | z_root, T_t | 0.180 | still descending |
+| Kitchen sink, canonical, 60 ep | z_root, T_t | 0.187 | still descending |
+| Kitchen sink, bigger capacity, 100 ep | z_root, T_t | 0.198 | plateau; capacity bump hurt |
+| **T_t-only floor** | **T_t** | **0.218** | |
+| Bigger-capacity regret-weighted | z_root, T_t | 0.226 | |
+| Filter alone | z_root, T_t | 0.229 | oscillating |
+| Regret-weighted alone | z_root, T_t | 0.234 | stable but capped |
+| v2 (slw01_no_n_t, no interventions) | z_root, T_t | 0.238 | worse than T_t-only |
+
+#### Headline result
+
+- Naive `[z_root, T_t]` training (regret 0.238) is *worse* than `T_t`-only (0.218). The encoder's tree representation acts as a distractor under standard fitted-Q training: the optimizer finds spurious z_root patterns that hurt the decision quality more than they help.
+- With three stacked training-time interventions — T_t-sensitive snapshot filter + per-snapshot regret weighting + MSE cosine cooling — `[z_root, T_t]` achieves regret **0.176**.
+- That's a **19% absolute regret reduction below the T_t-only floor (0.218 → 0.176)** and a **26% reduction below the naive baseline (0.238 → 0.176)**.
+- Each intervention individually is either small (filter: 0.229, regret-weighted: 0.234) or destructive (cooling alone: drifts to 0.399). Only the stack works.
+- Capacity bumps on top of the kitchen sink are net-harmful (0.198 vs 0.176). The encoder + intervention stack is the load-bearing thing, not head capacity.
+
+#### Paper framing
+
+- The contribution is the identification of a training pathology in offline fitted-Q metacontrol — naive training with the canonical loss + standard hyperparameters under-uses the tree representation in a way that is *worse than ignoring it* — and a diagnostic intervention stack that recovers usable VOC signal from the same encoder, same data, same model.
+- The slw01_rerun result (regret 0.031 with z_root + N_t + T_t) was scaffolding-contaminated: most of that good performance was driven by N_t acting as a step-counter shortcut, not by genuine tree-representation use. The clean evaluation grid is the canonical `[z_root, T_t]`-only setup, where the kitchen sink at 200 epochs is the new best at 0.176.
+
+## 2026-04-30
+
+### Lambda=5 oracle re-pack and intervention sweep
+
+Motivation:
+- Under the canonical lambda=18.5 oracle, kitchen-sink-with-interventions on `[z_root, T_t]` achieves regret 0.176 vs T_t-only 0.218 — a 0.042 gap. Hypothesis was that lambda was set high enough that time pressure dominates the optimal stopping decision, so T_t alone gets most of the way to the oracle. Lowering lambda should reduce time pressure and force the oracle's decision to depend more on per-position value of computation, where z_root could contribute.
+- Re-pack the controller episodes with `time_lambda=5` (vs canonical 18.537) keeping all other oracle parameters fixed. Re-train the canonical reference grid on the new oracle.
+
+Pipeline (deadline-relevant timing):
+- Re-pack: ~minutes (no tree regen, just oracle backward induction over existing PretrainExample files).
+- Re-materialize encoder cache: 3 parallel workers, ~24 min wall.
+- Merge cache shards: seconds on login node.
+- Training: T_t-only ~13 min, naive [z_root, T_t] ~30 min, kitchen sink 200ep ~50 min.
+
+Important data note: the re-pack was done on `pretrain_split_oracle96_trace_filtered_rerun` (the split the rerun encoder was actually pretrained on). This is **different** from the original `controller_packed_combined_nomaint_no_xaba` data which used a "combined" split with both rerun and PUCT-filtered trees. The lambda=5 dataset is a strict subset of trees compared to the original. Results are therefore confounded with a dataset change as well as the oracle change — we cannot cleanly attribute a difference to lambda alone.
+
+#### Run 12: T_t-only baseline on lambda=5
+
+Configuration: `--t-only-baseline`, no encoder, just packed shards + T_t scalar. 20 epochs (default for T_t-only).
+
+Final result: **regret 0.150** at epoch 20. `average_return = 0.213`, `average_oracle_value = 0.363`, `first_action_accuracy = 0.775`, `average_expansions = 26.3`, `regret_mean = 0.1499`.
+
+For comparison, T_t-only on the lambda=18.5 / combined data was regret 0.218. The floor *dropped* under lambda=5 — opposite of my prediction that lower time pressure would make T_t alone less informative.
+
+Log: `analysis_outputs/no_n_kms/cts-fittedq-tonly_7504140.out`. Output checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_t_only_baseline_lambda5.pt`.
+
+#### Run 13: naive [z_root, T_t] on lambda=5
+
+Configuration: slw01 + EXCLUDE_N_T + lambda=5, no interventions, v2 hyperparameters (LR 1e-4 cosine to 1e-5, 60 epochs).
+
+Final result: **regret 0.192** at epoch 60 (best 0.155 earlier in training). `regret_mean = 0.1918`, `average_expansions = 16.5`.
+
+Compared to lambda=18.5 v2 naive (regret 0.238), the lambda=5 naive run is similar quality on relative terms. Both are *worse* than the corresponding T_t-only floor (0.150 here, 0.218 there). Same pattern: naive z_root inclusion hurts versus pure T_t.
+
+Log: `analysis_outputs/no_n_kms/cts-fittedq_7504153.out`.
+
+#### Run 14: kitchen sink, canonical capacity, 200 epochs on lambda=5 (headline run)
+
+Configuration: kitchen sink (filter + cooling + regret-weighted) + EXCLUDE_N_T + 200 epochs + canonical capacity (Q_HIDDEN=256, Q_HIDDEN_LAYERS=3) + v2 hyperparameters + lambda=5.
+
+Final result tail:
+
+| Epoch | 190 | 195 | 200 |
+|---|---|---|---|
+| regret | 0.132 | 0.134 | **0.132** |
+| first_action_acc | 0.844 | 0.847 | 0.843 |
+| expansions | 25.8 | 25.9 | 25.7 |
+
+Best **regret 0.132** at epoch 190 — 0.018 lower than T_t-only floor. Stable plateau across epochs 190–200. `regret_mean = 0.1325`. `average_return = 0.230`, `average_oracle_value = 0.363`, `capture rate = 63.4%`.
+
+Log: `analysis_outputs/no_n_kms/cts-fittedq_7504154.out`. Output checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_slw01_no_n_t_kitchen_sink_lambda5.pt`.
+
+#### Comparison across oracles
+
+| Oracle / Dataset | Model | Regret | Capture % | KS-vs-Floor gap |
+|---|---|---|---|---|
+| lambda=18.5 / combined trees | T_t-only floor | 0.218 | 38.4% | — |
+| lambda=18.5 / combined trees | naive [z_root, T_t] | 0.238 | 32.8% | -0.020 |
+| lambda=18.5 / combined trees | **Kitchen sink** | **0.176** | **52.8%** | **0.042** |
+| **lambda=5 / rerun trees** | T_t-only floor | **0.150** | 58.7% | — |
+| **lambda=5 / rerun trees** | naive [z_root, T_t] | 0.192 | 47.1% | -0.042 |
+| **lambda=5 / rerun trees** | **Kitchen sink** | **0.132** | **63.4%** | **0.018** |
+
+Interpretation:
+
+The hypothesis was: lower lambda → less time pressure → VOC matters more → T_t-only floor *increases* and kitchen-sink-vs-floor gap *widens*. The data shows the opposite: T_t-only floor *decreased* (0.218 → 0.150) and the kitchen-sink gap *shrunk* (0.042 → 0.018).
+
+Mechanistic read: under low time pressure, the oracle's optimal stopping rule converges to "wait until search has effectively converged." That convergence happens at roughly the same step count regardless of position (the planner reaches steady state at similar depths), and step count is approximately T_t-up-to-budget-offset. So T_t alone is a *better* approximation under low time pressure, not a worse one. The high-time-pressure regime (lambda=18.5) is actually where time-vs-position trade-offs are most heterogeneous — and even there, the kitchen-sink-gap was modest.
+
+Caveats:
+- Confounded with dataset change (rerun-only trees vs combined trees). Cannot cleanly attribute the floor change to lambda alone. To deconfound would require re-packing the combined-trees split with lambda=5.
+- The 12% relative regret reduction (kitchen sink vs T_t-only) on the cleanest aligned setup is real but small.
+
+Implication for the paper:
+
+Lowering lambda did not surface a regime where the GNN representation contributes substantially. The clean (encoder-aligned, lambda=5) result is **kitchen sink at regret 0.132 vs T_t-only at 0.150** — a 0.018 absolute improvement. The previous lambda=18.5 number (0.176 vs 0.218 = 0.042) actually showed a larger absolute z_root contribution.
+
+The paper claim "tree representation enables better offline metacontrol" stands, but the magnitude of the contribution is modest (0.018–0.042 in absolute regret, 12–20% in relative regret reduction). The intervention stack (filter + cooling + regret-weighted) is necessary to extract any z_root signal at all; without it, the GNN actively hurts compared to T_t alone in both oracle regimes.
+
+#### Where things stand at the end of this run
+
+- The strongest evidence is on the clean aligned setup at lambda=5: kitchen sink achieves 0.132 vs T_t-only's 0.150. A 12% relative regret reduction.
+- The intervention stack is empirically necessary: naive training is consistently worse than T_t-only; only filter + regret-weighting + MSE cooling yields a controller that exceeds the floor.
+- The paper's contribution is the diagnostic methodology and intervention stack; the absolute regret reduction is real but smaller than the lambda=18.5 numbers initially suggested.
+
+### VPI auxiliary loss: does explicit VPI supervision help?
+
+Motivation:
+- The kitchen sink at lambda=5 hits 0.132 regret vs T_t-only's 0.150. The 0.018 gap is real but small. Hypothesis: maybe the head extracts z_root signal that's *related to* but not actually VOC. Adding an explicit auxiliary loss that forces an intermediate (or final) layer of the advantage MLP to predict closed-form Dearden VPI from ground-truth child WDLs would surface VPI computation if z_root carries that signal — and either (a) further reduce regret if VPI is the right computation, or (b) leave regret unchanged if VPI isn't what the controller actually needs.
+
+Implementation:
+- New `--vpi-aux-layer` (int) and `--vpi-aux-weight` (float) CLI flags. Auxiliary head taps the activation after the k-th Linear+ReLU stage of the advantage MLP and projects to a scalar VPI prediction.
+- Refactored `_build_advantage_head` to return an `AdvantageHead` (subclass of `nn.Sequential` with `forward_with_aux(x, aux_layer)`) so intermediate activations can be captured cleanly.
+- VPI targets pre-computed once per packed dataset by walking shards and applying the Dearden formula `1 - prod(1-w_c) - prod(l_c) - max_c(w_c - l_c)` to root children's WDL features. Stored as a sidecar at `<train_cache>.vpi_targets.pt` aligned to the cache's shuffled row order via `torch.randperm` with the cache build seed (same pattern as the T_t-sensitive mask sidecar).
+- Restricted to the unified-head architecture (incompatible with `--separate-sign-head` and `--t-only-baseline`).
+
+#### Run 15: kitchen sink + VPI aux at the end (layer 3, parallel to advantage projection)
+
+Configuration: kitchen sink (filter + regret-weighted + MSE cooling) + lambda=5 + VPI_AUX_LAYER=3 + VPI_AUX_WEIGHT=1.0 + 200 epochs + canonical capacity. Target stats logged at startup: mean=0.0117, std=0.0599.
+
+Final result: **regret 0.132** at epoch 200. Identical to kitchen sink without VPI aux (run 14: also 0.132).
+
+Log: `analysis_outputs/vpi_au/cts-fittedq_7506006.out`.
+
+#### Run 16: kitchen sink + VPI aux at intermediate layer 2
+
+Configuration: same as run 15 but VPI_AUX_LAYER=2.
+
+Final result: **regret 0.131** (best 0.130) at epoch 200. Within noise of the no-VPI baseline.
+
+Log: `analysis_outputs/vpi_au/cts-fittedq_7506020.out`.
+
+Interpretation:
+- Explicit VPI supervision does not change the controller's regret, regardless of whether the aux head taps an intermediate layer or sits in parallel at the end of the head. This is a clean negative result for the "the controller would compute VOC if you forced it to predict VPI" framing.
+- VPI is neither necessary (the kitchen sink already reaches 0.132 without it) nor sufficient (adding it doesn't break below that floor) for the metacontrol task under this oracle.
+
+Implementation oversight to note: per-batch training logs include `vpi_mse` but the per-epoch summary line does not expose it. With VPI_AUX_WEIGHT=1.0 and target variance ≈ 0.0036 (std ≈ 0.06), a constant-mean predictor would yield aux MSE ≈ 0.0036 contributing ≈ 0.0036 to total loss — plausibly invisible against the dominant sign BCE / advantage MSE early in training, and indistinguishable from a head that genuinely fitted per-snapshot VPI. Since we only observe `train_total_loss = 0.010` at convergence, we cannot disambiguate "aux head fitted VPI" from "aux head short-circuited to predicting the mean." Either way, the regret outcome is the same: explicit VPI supervision doesn't change metacontrol quality.
+
+A clean follow-up if we want to disambiguate decodability from utility: train a frozen-controller probe (instantiate the kitchen-sink head, freeze it, attach a fresh VPI aux head and train only that on the VPI target). If the probe MSE drops well below 0.0036, z_root's representation does carry VPI in principle, and the run-15/16 negative-regret result means VPI just isn't the right computation for this oracle. If the probe MSE stays at ≈0.0036, the encoder doesn't carry VPI at all and Section 3's "controller doesn't compute VPI" finding stands at the representation level.
+
+Updated reference grid (lambda=5 / rerun-aligned data):
+
+| Model | Inputs | Regret | Notes |
+|---|---|---|---|
+| oracle | — | 0.000 | |
+| Kitchen sink + VPI aux at layer 2 | z_root, T_t | 0.131 | |
+| **Kitchen sink, canonical, 200 ep** | **z_root, T_t** | **0.132** | best stable |
+| Kitchen sink + VPI aux at layer 3 | z_root, T_t | 0.132 | |
+| **T_t-only floor** | **T_t** | **0.150** | |
+| Naive [z_root, T_t] | z_root, T_t | 0.192 | |
+
+#### Updated reference grid
+
+| Model | Inputs | Regret | Notes |
+|---|---|---|---|
+| oracle | — | 0.000 | |
+| slw01_rerun (full) | z_root, N_t, T_t | 0.031 | scaffolding-contaminated; uses N_t step counter |
+| (N_t, T_t)-only | N_t, T_t | 0.056 | shows N_t alone closes 87% of the regret-vs-T_t-only gap |
+| **T_t-only floor** | **T_t** | **0.218** | canonical reference for [z_root, T_t] models |
+| exclude-N_t v1 (slw01) | z_root, T_t | 0.291 | LR=1e-3, oscillation |
+| exclude-N_t v1 (reweight_w4) | z_root, T_t | 0.245 | |
+| exclude-N_t v1 (inv_freq) | z_root, T_t | 0.239 | |
+| exclude-N_t v2 (slw01) | z_root, T_t | 0.238 | LR=1e-4 cosine; converged at poor floor |
+| exclude-N_t v2 (reweight_w4) | z_root, T_t | 0.233 | |
+| exclude-N_t v2 (inv_freq) | z_root, T_t | 0.250 | |
+| Aggressive cooling | z_root, T_t | 0.374 → killed | BCE saturation at halt class |
+| Conservative cooling | z_root, T_t | 0.252 (ep 15) → 0.399 (ep 60) | drifts to halt-saturation |
+| **Regret-weighted** | **z_root, T_t** | **0.234** (stable) | first stable [z_root, T_t] training; still > T_t-only |
+| Filter | z_root, T_t | (in flight) | |
+| Kitchen sink (filter + cooling + regret-weight) | z_root, T_t | (queued) | |
+
+### Encoder finetuning: training-loop optimizations and architectural cleanup
+
+Context:
+- Encoder finetuning (unfrozen TreeNN + advantage head, differential LR encoder=1e-5 / head=1e-3, warm-started from `fittedq_sweep_slw01.pt`) was running at ~2.2 h/epoch on a single A100. At 20 epochs that's a 44 h job, well past della's 24 h wall — the previous run timed out after 11 epochs.
+- Goal of this session: make a 20-epoch finetuning run feasible in one job, and clean up an architectural confound in the controller input.
+
+Meaningful changes (committed on `finetune-treenn`):
+
+1. **Mixed precision (bf16) and level-local sequential attention** (`362e105`).
+   - Added `--mixed-precision {bf16,fp16}` to `scripts/train_fitted_q_controller.py`, defaulting to bf16. All training/eval forward sites are wrapped in `torch.amp.autocast`; fp16 path uses `GradScaler`, bf16 does not.
+   - In `GNN.py::_forward_sequential`, restructured the per-depth-level attention to (a) precompute `W_q(node_states)` once per upward sweep instead of redundantly at every depth level, and (b) call a new `TreeAttMsgLayer.forward_level` that runs `W_k`/`W_v`/scatter-softmax/`W_o` only on the parent nodes at each level rather than the full `[N_total, ...]` tensor. Output verified bitwise-identical to the prior python-loop reference on a synthetic tree, gradients verified non-zero for all parameters.
+   - Combined wall-clock impact: ~2.2 h/epoch → ~1 h/epoch on a single A100 with `EPISODE_BATCH_SIZE=16`. The level-local optimization is the bigger lever; bf16 alone gave ~10% improvement.
+
+2. **DDP support** (`b73cf46`).
+   - Added `_setup_distributed()` that detects `torchrun` env vars; falls through silently in single-GPU mode. Sets the CUDA device *before* `init_process_group("nccl")` so each rank lands on its own GPU. Wraps the model in `DDP` when `world_size > 1`. Uses `DistributedSampler` on the packed-episode loader with `set_epoch` each epoch. All logging, validation, greedy eval, and checkpoint saves are gated on `rank == 0`. `_save_checkpoint` strips the DDP wrapper before serializing.
+   - Slurm script (`slurm/train_finetune_controller_della.slurm`) now counts `CUDA_VISIBLE_DEVICES` to pick `NUM_GPUS` (slurm doesn't reliably set `SLURM_GPUS_ON_NODE` on della) and launches via `torchrun --standalone --nproc_per_node="${NUM_GPUS}"`.
+
+3. **N_t removed from controller input** (`b73cf46`).
+   - The advantage head now operates on `[z_t, T_t]` only. `encode_with_state_features` keeps `tree_sizes` in its signature for caller compatibility but ignores it; `input_dim = d_embed + 1`; `controller_inputs` metadata reflects `["z_t", "T_t"]`.
+   - Rationale: even with `lambda_m = 0`, `N_t` is not a spurious variable — it is a near-perfect step counter, and as the lambda=18.5 reference grid shows ((N_t, T_t)-only achieves regret 0.056, closing 87% of the gap to slw01_rerun's 0.031 vs T_t-only's 0.218), a controller with `N_t` available can ignore `z_t` entirely and recover most of the oracle decision. Removing `N_t` forces the controller to depend on the encoder representation rather than the scaffolding signal.
+   - Old warm-start checkpoints are no longer load-compatible: the first head layer changed shape from `[q_hidden, d_embed+2]` to `[q_hidden, d_embed+1]`. Finetuning runs starting now must train the head from scratch.
+
+DDP investigation outcome (recorded for future reference, not pursued further this session):
+
+- 4-GPU DDP gave only ~10% per-epoch wall-time speedup over single-GPU (~72 min vs ~78 min/epoch). Diagnostic timing instrumented around the data fetch / forward / backward phases showed `compute_ms ≈ 37 ms` while total per-batch was ~480 ms. The signature finding was an inverse correlation between `data_ms` and `backward_ms`: when rank 0's data fetch was fast, it sat at the gradient `all_reduce` waiting for the slowest rank; when rank 0's data fetch was slow, other ranks were already waiting on it.
+- Diagnosis: **DDP load imbalance from variable-length episodes.** Different ranks get batches of episodes with very different total snapshot counts, so per-rank forward/backward times diverge and the synchronization gates the slowest rank every step. The model is also small for an A100 (128-d, ~96-node trees, kernels under-occupy SMs), so even per-rank work doesn't saturate.
+- Real fix would be a length-aware `BatchSampler` (bin episodes by total snapshot count, snake-distribute across ranks per step). Estimated 2–3 h to implement and test. Not worth blocking the experiment on — left as a follow-up if multi-GPU scaling becomes important.
+
+Pending run:
+
+- 4-GPU DDP, N_t removed, no warm-start, 20 epochs, `--time=24:00:00 --mem=128G --cpus-per-task=8 NUM_WORKERS=2 SIGN_LOSS_WEIGHT=0.25 WARM_START_CHECKPOINT=`. Output checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/finetune_controller.pt`. At ~66 min/epoch in DDP (without diagnostic instrumentation), 20 epochs ≈ 22 h — fits in the wall budget. Result to be logged once the run completes.

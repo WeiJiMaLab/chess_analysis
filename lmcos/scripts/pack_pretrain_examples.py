@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from schema import NodeFeatureSchema, require_tree_encoder_scalar_features, tree_encoder_feature_schema
-from tensorizer import tensorize_tree_with_targets
+from schema import NodeFeatureSchema, tree_encoder_feature_schema
+from cts_pretrain import RawPretrainExampleRecord
 
 
 def _read_manifest(path: Path) -> list[Path]:
@@ -32,26 +32,25 @@ def _feature_schema() -> NodeFeatureSchema:
     return tree_encoder_feature_schema()
 
 
-def _validate_tree_encoder_example_features(example, *, context: str) -> None:
-    for node in example.tree.iter_nodes():
-        require_tree_encoder_scalar_features(
-            node.scalar_features,
-            context=f"{context} node_id={node.node_id} fen={node.fen!r}",
-        )
+def _validate_tree_encoder_record_features(record: RawPretrainExampleRecord, *, context: str) -> None:
+    feature_index = {name: index for index, name in enumerate(record.feature_names)}
+    for required_feature in tree_encoder_feature_schema().feature_names:
+        if required_feature not in feature_index:
+            raise ValueError(f"{context} is missing required tree encoder feature {required_feature!r}.")
+        column = record.node_features[:, feature_index[required_feature]]
+        if torch.isnan(column).any():
+            bad_node = int(torch.nonzero(torch.isnan(column), as_tuple=False)[0].item())
+            raise ValueError(
+                f"{context} node_id={bad_node} is missing required tree encoder feature {required_feature!r}."
+            )
 
 
 def _tensorize_example_path(task: tuple[str, tuple[str, ...]]) -> object:
     path_str, feature_names = task
     schema = NodeFeatureSchema(feature_names)
-    example = torch.load(path_str, weights_only=False)
-    _validate_tree_encoder_example_features(example, context=str(path_str))
-    return tensorize_tree_with_targets(
-        example.tree,
-        example.node_target_values,
-        schema=schema,
-        device="cpu",
-        edge_wdl_targets=getattr(example, "edge_wdl_targets", None),
-    )
+    record = RawPretrainExampleRecord.load(path_str)
+    _validate_tree_encoder_record_features(record, context=str(path_str))
+    return record.to_tensorized_tree_example(schema)
 
 
 def _load_tensorized_examples(
@@ -83,14 +82,30 @@ def _load_tensorized_examples(
                     flush=True,
                 )
         return results
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = {
-            executor.submit(_tensorize_example_path, task): index
-            for index, task in enumerate(tasks)
-        }
-        results = [None] * len(tasks)
-        for completed_in_shard, future in enumerate(as_completed(futures), start=1):
-            results[futures[future]] = future.result()
+    try:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(_tensorize_example_path, task): index
+                for index, task in enumerate(tasks)
+            }
+            results = [None] * len(tasks)
+            for completed_in_shard, future in enumerate(as_completed(futures), start=1):
+                results[futures[future]] = future.result()
+                if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
+                    elapsed = time.time() - start_time
+                    completed_total = total_examples_before_shard + completed_in_shard
+                    print(
+                        f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                        f"shard_examples={completed_in_shard}/{len(tasks)} "
+                        f"packed_examples={completed_total}/{total_examples_in_split} "
+                        f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
+                        flush=True,
+                    )
+            return results
+    except (PermissionError, OSError):
+        results = []
+        for completed_in_shard, task in enumerate(tasks, start=1):
+            results.append(_tensorize_example_path(task))
             if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
                 elapsed = time.time() - start_time
                 completed_total = total_examples_before_shard + completed_in_shard

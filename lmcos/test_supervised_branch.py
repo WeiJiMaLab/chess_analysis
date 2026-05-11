@@ -7,55 +7,46 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
 import torch
 
-from GNN import ChildWdlModel, NodeValueModel, PolicyValueTreeSearchModel
+from GNN import ChildWdlModel
 from schema import tree_encoder_feature_schema
-from supervised_branch import (
-    ChildWdlPretrainConfig,
-    ChildWdlPretrainer,
-    EdgeStats,
-    FrozenEncoderControllerTrainer,
-    GeneratedTree,
-    GeneratedTreeHaltEnv,
-    NodeBudgetDistribution,
-    PPOConfig,
-    PretrainExample,
-    PretrainExampleDirectoryDataset,
-    ReinforceConfig,
-    ReinforceControllerTrainer,
-    ReinforceEpisodeTransition,
-    RolloutTransition,
-    TreeObservationSnapshot,
-    SnapshotEpisodeCache,
+from cts_episode_envs import (
     build_snapshot_episode,
     build_snapshot_episode_metadata,
     build_trimmed_decision_episode,
     build_trimmed_decision_episode_with_halt_rewards,
     trim_episode_to_first_root_decision,
-    load_pretrain_example_dataset,
-    load_raw_pretrain_example_paths,
-    SupervisedPretrainConfig,
-    SupervisedPretrainer,
+)
+from cts_pretrain import (
+    ChildWdlPretrainConfig,
+    ChildWdlPretrainer,
+    EdgeStats,
+    GeneratedTree,
+    NodeBudgetDistribution,
+    PretrainExample,
+    PretrainExampleDirectoryDataset,
+    RawPretrainExampleRecord,
     TeacherSearchConfig,
-    ToyHaltEnv,
     TreeExpansionProvider,
+    _backup_target_from_child_q,
     _backup_target_from_child_wdl,
     build_pretrain_example,
     build_tree_from_provider,
-    consolidate_generated_tree,
     compute_teacher_targets,
+    consolidate_generated_tree,
     derive_prefix_pretrain_example,
-    evaluate_controller,
     generate_partial_tree_from_provider,
     load_encoder_checkpoint,
+    load_pretrain_example,
+    load_pretrain_example_dataset,
+    load_raw_pretrain_example_paths,
     normalize_prior_scores,
     prefix_expansion_count_schedule,
-    _backup_target_from_child_q,
+    save_pretrain_example,
 )
 from tensorizer import TreeTensorizer, tensorize_tree_with_targets
 from tree import ExpansionChild, SearchTree
@@ -108,28 +99,6 @@ def make_config():
         target_normalization_version="v1",
         search_config_id="dummy-config",
     )
-
-
-def make_episode_snapshot(best_value):
-    tree = SearchTree()
-    root_id = tree.create_root("episode-root", {"value": 0.0, "prior": 1.0})
-    tree.add_children(
-        root_id,
-        [
-            ExpansionChild("best", f"best-{best_value}", {"value": best_value, "prior": 0.7}),
-            ExpansionChild("other", f"other-{best_value}", {"value": 0.1, "prior": 0.3}),
-        ],
-    )
-    return tree
-
-
-def make_toy_env():
-    snapshots = [
-        make_episode_snapshot(0.2),
-        make_episode_snapshot(0.5),
-        make_episode_snapshot(0.9),
-    ]
-    return ToyHaltEnv(snapshots, continue_cost=0.05)
 
 
 def make_wdl_features(win: float, draw: float, loss: float, prior: float = 1.0) -> dict[str, float]:
@@ -389,7 +358,7 @@ class SupervisedBranchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
             for index, example in enumerate(examples):
-                torch.save(example, os.path.join(input_dir, f"{index:06d}.pt"))
+                save_pretrain_example(os.path.join(input_dir, f"{index:06d}.pt"), example)
 
             result = subprocess.run(
                 [
@@ -438,7 +407,7 @@ class SupervisedBranchTests(unittest.TestCase):
             raw_paths = []
             for index, example in enumerate(examples):
                 raw_path = os.path.join(raw_dir, f"{index:06d}.pt")
-                torch.save(example, raw_path)
+                save_pretrain_example(raw_path, example)
                 raw_paths.append(raw_path)
 
             train_manifest = Path(split_root) / "train_manifest.txt"
@@ -479,9 +448,9 @@ class SupervisedBranchTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             for index, example in enumerate(examples):
-                torch.save(example, os.path.join(tmpdir, f"{index:06d}.pt"))
+                save_pretrain_example(os.path.join(tmpdir, f"{index:06d}.pt"), example)
 
-            with patch("supervised_branch.torch.load", wraps=torch.load) as mocked_load:
+            with patch("cts_pretrain.torch.load", wraps=torch.load) as mocked_load:
                 dataset = PretrainExampleDirectoryDataset(tmpdir)
                 self.assertEqual(len(dataset), 2)
                 self.assertEqual(mocked_load.call_count, 0)
@@ -509,8 +478,8 @@ class SupervisedBranchTests(unittest.TestCase):
             shard_b = os.path.join(tmpdir, "shard_00001")
             os.makedirs(shard_a, exist_ok=True)
             os.makedirs(shard_b, exist_ok=True)
-            torch.save(examples[0], os.path.join(shard_a, "000000_root.pt"))
-            torch.save(examples[1], os.path.join(shard_b, "000001_root.pt"))
+            save_pretrain_example(os.path.join(shard_a, "000000_root.pt"), examples[0])
+            save_pretrain_example(os.path.join(shard_b, "000001_root.pt"), examples[1])
 
             paths = load_raw_pretrain_example_paths(tmpdir)
 
@@ -527,7 +496,7 @@ class SupervisedBranchTests(unittest.TestCase):
             paths = []
             for index, example in enumerate(examples):
                 path = os.path.join(tmpdir, f"{index:06d}.pt")
-                torch.save(example, path)
+                save_pretrain_example(path, example)
                 paths.append(path)
 
             manifest_path = os.path.join(tmpdir, "train_manifest.txt")
@@ -535,7 +504,7 @@ class SupervisedBranchTests(unittest.TestCase):
                 for path in paths:
                     handle.write(f"{path}\n")
 
-            with patch("supervised_branch.torch.load", wraps=torch.load) as mocked_load:
+            with patch("cts_pretrain.torch.load", wraps=torch.load) as mocked_load:
                 dataset = load_pretrain_example_dataset(manifest_path)
                 self.assertEqual(len(dataset), 2)
                 self.assertEqual(mocked_load.call_count, 0)
@@ -544,35 +513,14 @@ class SupervisedBranchTests(unittest.TestCase):
                 self.assertEqual(mocked_load.call_count, 1)
                 self.assertEqual(loaded.metadata["root_position_id"], "p0")
 
-    def test_packed_pretrain_manifest_loads_examples_lazily(self):
-        examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
-        ]
+    def test_load_pretrain_example_dataset_rejects_obsolete_packed_raw_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            shard_path = os.path.join(tmpdir, "shard_00000.pt")
-            torch.save(
-                {
-                    "format": "cts_pretrain_packed_shard_v1",
-                    "num_examples": len(examples),
-                    "examples": examples,
-                },
-                shard_path,
-            )
             manifest_path = os.path.join(tmpdir, "train_manifest.json")
             with open(manifest_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    '{"format":"cts_pretrain_packed_manifest_v1","entries":[{"path":"%s","num_examples":2}]}' % shard_path
-                )
+                handle.write('{"format":"cts_pretrain_packed_manifest_v1","entries":[]}')
 
-            with patch("supervised_branch.torch.load", wraps=torch.load) as mocked_load:
-                dataset = load_pretrain_example_dataset(manifest_path)
-                self.assertEqual(len(dataset), 2)
-                self.assertEqual(mocked_load.call_count, 0)
-
-                loaded = dataset[1]
-                self.assertEqual(mocked_load.call_count, 1)
-                self.assertEqual(loaded.metadata["root_position_id"], "p1")
+            with self.assertRaises(ValueError):
+                load_pretrain_example_dataset(manifest_path)
 
     def test_child_wdl_pretrainer_uses_precomputed_edge_targets_from_packed_tensorized_data(self):
         tree = build_slot_test_tree()
@@ -647,64 +595,6 @@ class SupervisedBranchTests(unittest.TestCase):
             self.assertTrue(math.isfinite(metrics.total_loss))
             self.assertEqual(metrics.num_supervised_edges, 2)
 
-    def test_supervised_pretraining_reduces_validation_loss_and_checkpoint_restores_encoder(self):
-        train_examples = [
-            build_pretrain_example("root", self.provider, self.config),
-            build_pretrain_example("root_alt", self.provider, self.config),
-        ]
-        model = NodeValueModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=16,
-            d_embed=12,
-            d_message=8,
-            n_heads=1,
-            d_att=4,
-            value_hidden=8,
-        )
-        trainer = SupervisedPretrainer(
-            model=model,
-            tensorizer=self.tensorizer,
-            train_examples=train_examples,
-            validation_examples=train_examples,
-            config=SupervisedPretrainConfig(
-                batch_size=2,
-                learning_rate=0.05,
-                root_loss_weight=2.0,
-                epochs=8,
-                shuffle=False,
-            ),
-        )
-
-        initial_validation = trainer.validate().total_loss
-        history = trainer.fit()
-        final_validation = trainer.validate().total_loss
-
-        self.assertTrue(history)
-        self.assertLess(final_validation, initial_validation)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = os.path.join(temp_dir, "encoder.pt")
-            trainer.save_best_encoder(checkpoint_path, metadata={"tag": "pretrain"})
-
-            loaded_model = NodeValueModel(
-                k=1,
-                node_feat=self.node_feat,
-                device="cpu",
-                node_embed_hidden=16,
-                d_embed=12,
-                d_message=8,
-                n_heads=1,
-                d_att=4,
-                value_hidden=8,
-            )
-            metadata = load_encoder_checkpoint(checkpoint_path, loaded_model.encoder)
-            self.assertEqual(metadata["tag"], "pretrain")
-
-            for key, value in trainer.model.encoder.state_dict().items():
-                self.assertTrue(torch.equal(value, loaded_model.encoder.state_dict()[key]))
-
     def test_child_wdl_pretraining_reduces_validation_loss_and_checkpoint_restores_encoder(self):
         train_examples = [
             build_pretrain_example("root", self.provider, self.config),
@@ -767,567 +657,6 @@ class SupervisedBranchTests(unittest.TestCase):
             for key, value in trainer.model.encoder.state_dict().items():
                 self.assertTrue(torch.equal(value, loaded_model.encoder.state_dict()[key]))
 
-    def test_frozen_encoder_rl_update_keeps_encoder_fixed_and_updates_heads(self):
-        example = build_pretrain_example("root", self.provider, self.config)
-        pretrain_model = NodeValueModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=16,
-            d_embed=10,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            value_hidden=8,
-        )
-        pretrainer = SupervisedPretrainer(
-            model=pretrain_model,
-            tensorizer=self.tensorizer,
-            train_examples=[example],
-            validation_examples=[example],
-            config=SupervisedPretrainConfig(
-                batch_size=1,
-                learning_rate=0.05,
-                root_loss_weight=1.0,
-                epochs=2,
-                shuffle=False,
-            ),
-        )
-        pretrainer.fit()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = os.path.join(temp_dir, "encoder.pt")
-            pretrainer.save_best_encoder(checkpoint_path)
-
-            rl_model = PolicyValueTreeSearchModel(
-                k=1,
-                node_feat=self.node_feat,
-                device="cpu",
-                node_embed_hidden=16,
-                d_embed=10,
-                d_message=6,
-                n_heads=1,
-                d_att=4,
-                controller_hidden=8,
-                value_hidden=8,
-            )
-            trainer = FrozenEncoderControllerTrainer(
-                model=rl_model,
-                tensorizer=self.tensorizer,
-                envs=[make_toy_env()],
-                config=PPOConfig(
-                    rollout_steps=12,
-                    learning_rate=0.05,
-                    ppo_epochs=2,
-                    minibatch_size=4,
-                ),
-                encoder_checkpoint_path=checkpoint_path,
-            )
-
-            encoder_before = {
-                key: value.detach().clone()
-                for key, value in rl_model.encoder.state_dict().items()
-            }
-            trainable_before = {
-                name: parameter.detach().clone()
-                for name, parameter in rl_model.named_parameters()
-                if parameter.requires_grad
-            }
-
-            metrics = trainer.train_update()
-
-            self.assertTrue(math.isfinite(metrics.policy_loss))
-            self.assertTrue(math.isfinite(metrics.value_loss))
-            self.assertTrue(math.isfinite(metrics.entropy))
-
-            for key, value in rl_model.encoder.state_dict().items():
-                self.assertTrue(torch.equal(value, encoder_before[key]))
-
-            changed = False
-            for name, parameter in rl_model.named_parameters():
-                if parameter.requires_grad and not torch.equal(parameter.detach(), trainable_before[name]):
-                    changed = True
-                    break
-            self.assertTrue(changed)
-
-    def test_collect_rollout_steps_all_envs_each_rollout_step(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        envs = [make_toy_env(), make_toy_env()]
-        trainer = FrozenEncoderControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=envs,
-            config=PPOConfig(
-                rollout_steps=4,
-                learning_rate=0.01,
-                ppo_epochs=1,
-                minibatch_size=4,
-            ),
-        )
-
-        rollout, _ = trainer._collect_rollout()
-
-        self.assertEqual(len(rollout), 8)
-        counts = Counter(transition.env_id for transition in rollout)
-        self.assertEqual(counts, Counter({0: 4, 1: 4}))
-
-    def test_collect_rollout_uses_action_override_for_diagnostic_rollouts(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = FrozenEncoderControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env(), make_toy_env()],
-            config=PPOConfig(
-                rollout_steps=4,
-                learning_rate=0.01,
-                ppo_epochs=1,
-                minibatch_size=4,
-            ),
-            rollout_action_override=lambda observation, env_id, rollout_step: 1,
-        )
-
-        rollout, completed = trainer._collect_rollout()
-
-        self.assertEqual(len(rollout), 8)
-        self.assertTrue(all(transition.action == 1 for transition in rollout))
-        self.assertTrue(all(transition.done for transition in rollout))
-        self.assertEqual(len(completed), 8)
-
-    def test_collect_rollout_snapshots_are_isolated_from_live_env_state(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = FrozenEncoderControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env()],
-            config=PPOConfig(
-                rollout_steps=1,
-                learning_rate=0.01,
-                ppo_epochs=1,
-                minibatch_size=1,
-            ),
-        )
-
-        rollout, _ = trainer._collect_rollout()
-
-        self.assertIsInstance(rollout[0].observation, TreeObservationSnapshot)
-        self.assertIsNotNone(rollout[0].observation.tensorized)
-        observed_tree = rollout[0].observation.tree
-        observed_value = observed_tree.get_node(observed_tree.root_id).scalar_features["value"]
-        trainer.current_trees[0].get_node(trainer.current_trees[0].root_id).scalar_features["value"] = 7.0
-
-        self.assertEqual(observed_tree.get_node(observed_tree.root_id).scalar_features["value"], observed_value)
-
-    def test_ppo_update_increases_halt_log_prob_for_consistent_positive_signal(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = FrozenEncoderControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env()],
-            config=PPOConfig(
-                rollout_steps=1,
-                learning_rate=0.05,
-                ppo_epochs=1,
-                minibatch_size=2,
-                entropy_coef=0.0,
-                value_loss_coef=0.0,
-            ),
-            freeze_encoder=False,
-        )
-
-        observation = make_toy_env().reset()
-        before_distribution, _ = trainer._predict_single(observation)
-        before_halt_log_prob = float(before_distribution.log_prob(torch.tensor(1.0)).item())
-
-        rollout = [
-            RolloutTransition(
-                observation=copy.deepcopy(observation),
-                env_id=0,
-                action=1,
-                reward=0.0,
-                done=True,
-                old_log_prob=before_halt_log_prob,
-                value=0.0,
-                advantage=1.0,
-                return_value=0.0,
-            ),
-            RolloutTransition(
-                observation=copy.deepcopy(observation),
-                env_id=0,
-                action=0,
-                reward=0.0,
-                done=True,
-                old_log_prob=float(before_distribution.log_prob(torch.tensor(0.0)).item()),
-                value=0.0,
-                advantage=-1.0,
-                return_value=0.0,
-            ),
-        ]
-
-        trainer._update_policy(rollout)
-
-        after_distribution, _ = trainer._predict_single(observation)
-        after_halt_log_prob = float(after_distribution.log_prob(torch.tensor(1.0)).item())
-        self.assertGreater(after_halt_log_prob, before_halt_log_prob)
-
-    def test_ppo_update_reaches_encoder_when_unfrozen(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = FrozenEncoderControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env()],
-            config=PPOConfig(
-                rollout_steps=1,
-                learning_rate=0.05,
-                ppo_epochs=1,
-                minibatch_size=2,
-                entropy_coef=0.0,
-                value_loss_coef=0.0,
-            ),
-            freeze_encoder=False,
-        )
-
-        observation = make_toy_env().reset()
-        distribution, _ = trainer._predict_single(observation)
-        encoder_before = {
-            key: value.detach().clone()
-            for key, value in rl_model.encoder.state_dict().items()
-        }
-        rollout = [
-            RolloutTransition(
-                observation=copy.deepcopy(observation),
-                env_id=0,
-                action=1,
-                reward=0.0,
-                done=True,
-                old_log_prob=float(distribution.log_prob(torch.tensor(1.0)).item()),
-                value=0.0,
-                advantage=1.0,
-                return_value=0.0,
-            ),
-            RolloutTransition(
-                observation=copy.deepcopy(observation),
-                env_id=0,
-                action=0,
-                reward=0.0,
-                done=True,
-                old_log_prob=float(distribution.log_prob(torch.tensor(0.0)).item()),
-                value=0.0,
-                advantage=-1.0,
-                return_value=0.0,
-            ),
-        ]
-
-        trainer._update_policy(rollout)
-
-        changed = any(
-            not torch.equal(parameter.detach(), encoder_before[name])
-            for name, parameter in rl_model.encoder.state_dict().items()
-        )
-        self.assertTrue(changed)
-        self.assertTrue(any(parameter.grad is not None for parameter in rl_model.encoder.parameters()))
-
-    def test_reinforce_positive_return_increases_halt_log_prob(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = ReinforceControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env()],
-            config=ReinforceConfig(
-                learning_rate=0.05,
-                max_grad_norm=1.0,
-                batch_episodes=1,
-                entropy_coef=0.0,
-                use_return_normalization=False,
-            ),
-            freeze_encoder=False,
-        )
-
-        observation = make_toy_env().reset()
-        before_distribution = trainer._predict_single(observation)
-        before_halt_log_prob = float(before_distribution.log_prob(torch.tensor(1.0)).item())
-
-        trainer._update_policy(
-            [[ReinforceEpisodeTransition(observation=copy.deepcopy(observation), action=1, reward=1.0, done=True)]]
-        )
-
-        after_distribution = trainer._predict_single(observation)
-        after_halt_log_prob = float(after_distribution.log_prob(torch.tensor(1.0)).item())
-        self.assertGreater(after_halt_log_prob, before_halt_log_prob)
-
-    def test_reinforce_update_reaches_encoder_but_not_value_head(self):
-        rl_model = PolicyValueTreeSearchModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            controller_hidden=8,
-            value_hidden=8,
-        )
-        trainer = ReinforceControllerTrainer(
-            model=rl_model,
-            tensorizer=self.tensorizer,
-            envs=[make_toy_env()],
-            config=ReinforceConfig(
-                learning_rate=0.05,
-                max_grad_norm=1.0,
-                batch_episodes=1,
-                entropy_coef=0.0,
-                use_return_normalization=False,
-            ),
-            freeze_encoder=False,
-        )
-
-        observation = make_toy_env().reset()
-        encoder_before = {
-            key: value.detach().clone()
-            for key, value in rl_model.encoder.state_dict().items()
-        }
-        value_head_before = {
-            key: value.detach().clone()
-            for key, value in rl_model.value_head.state_dict().items()
-        }
-
-        trainer._update_policy(
-            [[ReinforceEpisodeTransition(observation=copy.deepcopy(observation), action=1, reward=1.0, done=True)]]
-        )
-
-        encoder_changed = any(
-            not torch.equal(parameter.detach(), encoder_before[name])
-            for name, parameter in rl_model.encoder.state_dict().items()
-        )
-        value_head_changed = any(
-            not torch.equal(parameter.detach(), value_head_before[name])
-            for name, parameter in rl_model.value_head.state_dict().items()
-        )
-        self.assertTrue(encoder_changed)
-        self.assertFalse(value_head_changed)
-        self.assertTrue(any(parameter.grad is not None for parameter in rl_model.encoder.parameters()))
-
-    def test_end_to_end_smoke_path_produces_evaluation_metrics(self):
-        examples = [
-            build_pretrain_example("root", self.provider, self.config),
-            build_pretrain_example("root_alt", self.provider, self.config),
-        ]
-        pretrain_model = NodeValueModel(
-            k=1,
-            node_feat=self.node_feat,
-            device="cpu",
-            node_embed_hidden=12,
-            d_embed=8,
-            d_message=6,
-            n_heads=1,
-            d_att=4,
-            value_hidden=8,
-        )
-        pretrainer = SupervisedPretrainer(
-            model=pretrain_model,
-            tensorizer=self.tensorizer,
-            train_examples=examples,
-            validation_examples=examples,
-            config=SupervisedPretrainConfig(
-                batch_size=2,
-                learning_rate=0.03,
-                root_loss_weight=1.0,
-                epochs=3,
-                shuffle=False,
-            ),
-        )
-        pretrainer.fit()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = os.path.join(temp_dir, "encoder.pt")
-            pretrainer.save_best_encoder(checkpoint_path)
-
-            rl_model = PolicyValueTreeSearchModel(
-                k=1,
-                node_feat=self.node_feat,
-                device="cpu",
-                node_embed_hidden=12,
-                d_embed=8,
-                d_message=6,
-                n_heads=1,
-                d_att=4,
-                controller_hidden=8,
-                value_hidden=8,
-            )
-            trainer = FrozenEncoderControllerTrainer(
-                model=rl_model,
-                tensorizer=self.tensorizer,
-                envs=[make_toy_env(), make_toy_env()],
-                config=PPOConfig(
-                    rollout_steps=16,
-                    learning_rate=0.03,
-                    ppo_epochs=2,
-                    minibatch_size=4,
-                ),
-                encoder_checkpoint_path=checkpoint_path,
-            )
-            trainer.train(num_updates=2)
-
-            metrics = evaluate_controller(
-                model=rl_model,
-                tensorizer=self.tensorizer,
-                env_factory=make_toy_env,
-                num_episodes=4,
-            )
-
-            self.assertTrue(math.isfinite(metrics.average_return))
-            self.assertTrue(math.isfinite(metrics.average_expansions))
-            self.assertTrue(math.isfinite(metrics.average_terminal_quality))
-            self.assertTrue(metrics.halt_step_histogram)
-            self.assertTrue(metrics.quality_by_expansions)
-
-    def test_generated_tree_halt_env_builds_snapshot_sequence(self):
-        example = build_pretrain_example(
-            "root",
-            self.provider,
-            self.config,
-            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
-            rng=random.Random(3),
-        )
-        snapshots, qualities = build_snapshot_episode(example, self.config)
-        self.assertGreaterEqual(len(snapshots), 2)
-        self.assertEqual(len(snapshots), len(qualities))
-        self.assertEqual(snapshots[0].num_nodes(), 1)
-        self.assertTrue(all(math.isfinite(value) for value in qualities))
-
-        trimmed_snapshots, trimmed_qualities = trim_episode_to_first_root_decision(snapshots, qualities)
-        self.assertTrue(trimmed_snapshots[0].root_children())
-        self.assertEqual(len(trimmed_snapshots), len(trimmed_qualities))
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            example_path = os.path.join(tmpdir, "example.pt")
-            torch.save(example, example_path)
-
-            env = GeneratedTreeHaltEnv(
-                example_paths=[example_path],
-                quality_config=self.config,
-                continue_cost=0.05,
-                seed=0,
-                shuffle=False,
-                max_cache_size=2,
-            )
-            tree = env.reset()
-            self.assertTrue(tree.root_children())
-
-            done = False
-            while not done:
-                result = env.step(0)
-                done = result.done
-
-            self.assertIn("episode_return", result.info)
-            self.assertIn("terminal_quality", result.info)
-            self.assertEqual(result.info["example_path"], example_path)
-
-    def test_generated_tree_halt_env_shared_cache_reuses_loaded_episode(self):
-        example = build_pretrain_example(
-            "root",
-            self.provider,
-            self.config,
-            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
-            rng=random.Random(3),
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            example_path = os.path.join(tmpdir, "example.pt")
-            torch.save(example, example_path)
-
-            shared_cache = SnapshotEpisodeCache(max_size=2)
-            env_a = GeneratedTreeHaltEnv(
-                example_paths=[example_path],
-                quality_config=self.config,
-                continue_cost=0.05,
-                seed=0,
-                shuffle=False,
-                max_cache_size=2,
-                episode_cache=shared_cache,
-            )
-            env_b = GeneratedTreeHaltEnv(
-                example_paths=[example_path],
-                quality_config=self.config,
-                continue_cost=0.05,
-                seed=1,
-                shuffle=False,
-                max_cache_size=2,
-                episode_cache=shared_cache,
-            )
-
-            with patch("cts_episode_envs.torch.load", wraps=torch.load) as mocked_load:
-                env_a.reset()
-                env_b.reset()
-
-            self.assertEqual(mocked_load.call_count, 1)
-
     def test_trimmed_decision_episode_helper_extracts_halt_rewards(self):
         example = build_pretrain_example(
             "root",
@@ -1344,6 +673,54 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertEqual(episode.best_moves, episode_with_rewards.best_moves)
         self.assertEqual(halt_rewards, [episode.final_root_q_values[move] for move in episode.best_moves])
         self.assertTrue(all(snapshot.root_children() for snapshot in episode.snapshots))
+
+    def test_generated_examples_store_oracle_root_trace(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
+            rng=random.Random(5),
+        )
+
+        self.assertEqual(
+            example.oracle_trace_expansion_counts,
+            list(range(1, len(example.tree.ordered_expansion_parent_ids()) + 1)),
+        )
+        self.assertEqual(len(example.oracle_root_q_trace), len(example.oracle_trace_expansion_counts))
+        self.assertEqual(len(example.oracle_best_move_trace), len(example.oracle_trace_expansion_counts))
+        self.assertTrue(example.oracle_root_moves)
+        self.assertEqual(
+            example.oracle_final_root_q_values,
+            {
+                move: q_value
+                for move, q_value in zip(example.oracle_root_moves, example.oracle_root_q_trace[-1])
+            },
+        )
+
+    def test_snapshot_episode_metadata_uses_stored_oracle_trace_without_research(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=3, max_nodes=3),
+            rng=random.Random(9),
+        )
+
+        with patch("cts_episode_envs.compute_teacher_targets", side_effect=AssertionError("should not re-search")):
+            snapshots, qualities, best_moves, final_root_q_values, final_best_quality = build_snapshot_episode_metadata(
+                example,
+                self.config,
+            )
+
+        self.assertEqual(len(snapshots), len(example.tree.ordered_expansion_parent_ids()) + 1)
+        self.assertEqual(best_moves[1:], example.oracle_best_move_trace)
+        self.assertEqual(final_root_q_values, example.oracle_final_root_q_values)
+        self.assertAlmostEqual(final_best_quality, max(example.oracle_final_root_q_values.values()))
+        self.assertEqual(
+            qualities[1:],
+            [max(row) for row in example.oracle_root_q_trace],
+        )
 
     def test_snapshot_reconstruction_handles_nontrivial_expansion_order(self):
         tree = SearchTree()
@@ -1387,6 +764,173 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertTrue(math.isfinite(final_best_quality))
         for snapshot in snapshots:
             snapshot.validate()
+
+    def test_pretrain_example_compact_serialization_round_trips(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=4, max_nodes=4),
+            rng=random.Random(11),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "example.pt")
+            save_pretrain_example(path, example)
+            loaded = load_pretrain_example(path)
+            record = RawPretrainExampleRecord.load(path)
+
+        self.assertEqual(len(loaded.node_target_values), len(example.node_target_values))
+        for loaded_value, expected_value in zip(loaded.node_target_values, example.node_target_values):
+            self.assertAlmostEqual(loaded_value, expected_value)
+        self.assertEqual(set(loaded.edge_wdl_targets), set(example.edge_wdl_targets))
+        for edge_key, target in example.edge_wdl_targets.items():
+            loaded_target = loaded.edge_wdl_targets[edge_key]
+            for loaded_value, expected_value in zip(loaded_target, target):
+                self.assertAlmostEqual(loaded_value, expected_value)
+        self.assertEqual(loaded.metadata, example.metadata)
+        self.assertEqual(loaded.oracle_trace_expansion_counts, example.oracle_trace_expansion_counts)
+        self.assertEqual(loaded.oracle_root_moves, example.oracle_root_moves)
+        self.assertEqual(len(loaded.oracle_root_q_trace), len(example.oracle_root_q_trace))
+        for loaded_row, expected_row in zip(loaded.oracle_root_q_trace, example.oracle_root_q_trace):
+            self.assertEqual(len(loaded_row), len(expected_row))
+            for loaded_value, expected_value in zip(loaded_row, expected_row):
+                self.assertAlmostEqual(loaded_value, expected_value)
+        self.assertEqual(loaded.oracle_best_move_trace, example.oracle_best_move_trace)
+        self.assertEqual(set(loaded.oracle_final_root_q_values), set(example.oracle_final_root_q_values))
+        for move, expected_value in example.oracle_final_root_q_values.items():
+            self.assertAlmostEqual(loaded.oracle_final_root_q_values[move], expected_value)
+        self.assertEqual(loaded.tree.root_id, example.tree.root_id)
+        self.assertEqual(loaded.tree.num_nodes(), example.tree.num_nodes())
+        self.assertEqual(loaded.tree.num_edges(), example.tree.num_edges())
+        for loaded_node, original_node in zip(loaded.tree.iter_nodes(), example.tree.iter_nodes()):
+            self.assertEqual(loaded_node.parent_id, original_node.parent_id)
+            self.assertEqual(loaded_node.incoming_move_uci, original_node.incoming_move_uci)
+            self.assertEqual(loaded_node.fen, original_node.fen)
+            self.assertEqual(loaded_node.depth, original_node.depth)
+            self.assertEqual(loaded_node.is_terminal, original_node.is_terminal)
+            self.assertEqual(loaded_node.is_expanded, original_node.is_expanded)
+            self.assertEqual(set(loaded_node.scalar_features), set(original_node.scalar_features))
+            for feature_name, expected_value in original_node.scalar_features.items():
+                self.assertAlmostEqual(loaded_node.scalar_features[feature_name], expected_value)
+            self.assertEqual(loaded_node.metadata, original_node.metadata)
+        loaded.tree.validate()
+        reconstructed = record.to_pretrain_example().oracle_final_root_q_values
+        self.assertEqual(set(reconstructed), set(example.oracle_final_root_q_values))
+        for move, expected_value in example.oracle_final_root_q_values.items():
+            self.assertAlmostEqual(reconstructed[move], expected_value)
+
+    def test_raw_pretrain_record_direct_tensorization_matches_tree_tensorization(self):
+        example = build_pretrain_example(
+            "root",
+            self.provider,
+            self.config,
+            node_budget_distribution=NodeBudgetDistribution(min_nodes=4, max_nodes=4),
+            rng=random.Random(19),
+        )
+
+        record = RawPretrainExampleRecord.from_example(example)
+        direct = record.to_tensorized_tree_example(self.schema)
+        tensorized = tensorize_tree_with_targets(
+            example.tree,
+            example.node_target_values,
+            schema=self.schema,
+            edge_wdl_targets=example.edge_wdl_targets,
+        )
+
+        self.assertEqual(direct.feature_names, tensorized.feature_names)
+        self.assertTrue(torch.equal(direct.node_features, tensorized.node_features))
+        self.assertTrue(torch.equal(direct.parent_index, tensorized.parent_index))
+        self.assertTrue(torch.equal(direct.edge_parent, tensorized.edge_parent))
+        self.assertTrue(torch.equal(direct.edge_child, tensorized.edge_child))
+        self.assertTrue(torch.equal(direct.edge_slot, tensorized.edge_slot))
+        self.assertTrue(torch.equal(direct.depth, tensorized.depth))
+        self.assertTrue(torch.equal(direct.node_targets, tensorized.node_targets))
+        self.assertTrue(torch.equal(direct.edge_wdl_targets, tensorized.edge_wdl_targets))
+
+    def test_pretrain_example_compact_serialization_is_smaller_than_legacy_object_graph(self):
+        tree = SearchTree()
+        root_id = tree.create_root("root-position-spec", make_wdl_features(0.4, 0.2, 0.4, prior=1.0))
+        root_child_ids = tree.add_children(
+            root_id,
+            [
+                ExpansionChild(
+                    f"m{child_index:02d}",
+                    f"root-position-spec moves m{child_index:02d}",
+                    make_wdl_features(0.55, 0.15, 0.30, prior=1.0 / 32.0),
+                )
+                for child_index in range(32)
+            ],
+        )
+        for child_index, child_id in enumerate(root_child_ids):
+            grandchildren = [
+                ExpansionChild(
+                    f"m{child_index:02d}g{grandchild_index:02d}",
+                    f"root-position-spec moves m{child_index:02d} m{child_index:02d}g{grandchild_index:02d}",
+                    make_wdl_features(
+                        0.2 + 0.01 * (grandchild_index % 10),
+                        0.3,
+                        0.5 - 0.01 * (grandchild_index % 10),
+                        prior=1.0 / 8.0,
+                    ),
+                    is_terminal=(grandchild_index % 3 == 0),
+                )
+                for grandchild_index in range(8)
+            ]
+            tree.add_children(child_id, grandchildren)
+
+        edge_wdl_targets = {}
+        for parent_id in range(tree.num_nodes()):
+            for child_id in tree.child_ids(parent_id):
+                edge_wdl_targets[(parent_id, child_id)] = (0.25, 0.35, 0.40)
+
+        oracle_root_moves = [
+            tree.get_node(child_id).incoming_move_uci
+            for child_id in tree.root_children()
+        ]
+        example = PretrainExample(
+            tree=tree,
+            node_target_values=[float(node.depth) / 10.0 for node in tree.iter_nodes()],
+            edge_wdl_targets=edge_wdl_targets,
+            metadata={"root_position_id": "synthetic-large"},
+            oracle_trace_expansion_counts=list(range(1, 1 + len(tree.ordered_expansion_parent_ids()))),
+            oracle_root_moves=oracle_root_moves,
+            oracle_root_q_trace=[
+                [0.1 + 0.001 * idx for idx in range(len(oracle_root_moves))]
+                for _ in range(len(tree.ordered_expansion_parent_ids()))
+            ],
+            oracle_best_move_trace=[oracle_root_moves[-1]] * len(tree.ordered_expansion_parent_ids()),
+            oracle_final_root_q_values={
+                move: 0.1 + 0.001 * idx for idx, move in enumerate(oracle_root_moves)
+            },
+        )
+
+        legacy_tree_state = {
+            "root_id": example.tree.root_id,
+            "_nodes": [copy.deepcopy(node) for node in example.tree.iter_nodes()],
+            "_children": {node_id: list(child_ids) for node_id, child_ids in example.tree._children.items()},
+        }
+        legacy_example_state = {
+            "tree": legacy_tree_state,
+            "node_target_values": list(example.node_target_values),
+            "edge_wdl_targets": dict(example.edge_wdl_targets),
+            "metadata": dict(example.metadata),
+            "oracle_trace_expansion_counts": list(example.oracle_trace_expansion_counts),
+            "oracle_root_moves": list(example.oracle_root_moves),
+            "oracle_root_q_trace": [list(row) for row in example.oracle_root_q_trace],
+            "oracle_best_move_trace": list(example.oracle_best_move_trace),
+            "oracle_final_root_q_values": dict(example.oracle_final_root_q_values),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compact_path = os.path.join(tmpdir, "compact.pt")
+            legacy_path = os.path.join(tmpdir, "legacy.pt")
+            save_pretrain_example(compact_path, example)
+            torch.save(legacy_example_state, legacy_path)
+            compact_size = os.path.getsize(compact_path)
+            legacy_size = os.path.getsize(legacy_path)
+
+        self.assertLess(compact_size, legacy_size)
 
 
 if __name__ == "__main__":

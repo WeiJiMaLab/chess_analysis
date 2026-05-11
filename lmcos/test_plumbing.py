@@ -2,7 +2,6 @@ import unittest
 
 import torch
 
-from planning_state import PlanningState
 from schema import NodeFeatureSchema
 from tensorizer import TreeTensorizer, collate_tensorized_observations
 from tree import ExpansionChild, SearchTree
@@ -77,19 +76,6 @@ class SearchTreeTests(unittest.TestCase):
                     )
                 ],
             )
-
-    def test_best_root_child_uses_insertion_order_for_ties(self) -> None:
-        tree = SearchTree()
-        root_id = tree.create_root("root", {"value": 0.0})
-        tree.add_children(
-            root_id,
-            [
-                ExpansionChild("a2a4", "child-a", {"value": 1.0}),
-                ExpansionChild("b2b4", "child-b", {"value": 1.0}),
-            ],
-        )
-
-        self.assertEqual(tree.best_root_child(), 1)
 
     def test_clone_preserves_structure_without_sharing_state(self) -> None:
         tree = build_sample_tree()
@@ -234,40 +220,6 @@ class TensorizerTests(unittest.TestCase):
         self.assertEqual(batch.num_nodes, 8)
         self.assertEqual(batch.num_edges, 6)
         self.assertTrue(torch.equal(batch.root_index.cpu(), torch.tensor([0, 5], dtype=torch.long)))
-
-
-class PlanningStateTests(unittest.TestCase):
-    def test_planning_state_continue_expand_and_halt(self) -> None:
-        tree = SearchTree()
-        root_id = tree.create_root("root", {"value": 0.0})
-        state = PlanningState(tree=tree)
-
-        self.assertEqual(state.continue_planning(), 1)
-        child_ids = state.apply_expansion(
-            root_id,
-            [
-                ExpansionChild("e2e4", "child-1", {"value": 0.4}),
-                ExpansionChild("d2d4", "child-2", {"value": 0.9}),
-            ],
-        )
-        self.assertEqual(child_ids, [1, 2])
-
-        chosen_move = state.halt()
-
-        self.assertEqual(chosen_move, "d2d4")
-        self.assertTrue(state.halted)
-        self.assertEqual(state.chosen_move_uci, "d2d4")
-        self.assertEqual(state.history, ["continue", "expand:0:2", "halt:d2d4"])
-
-    def test_cannot_continue_after_halt(self) -> None:
-        tree = SearchTree()
-        root_id = tree.create_root("root", {"value": 0.0})
-        tree.add_children(root_id, [ExpansionChild("e2e4", "child-1", {"value": 0.4})])
-        state = PlanningState(tree=tree)
-        state.halt()
-
-        with self.assertRaises(ValueError):
-            state.continue_planning()
 
 
 if __name__ == "__main__":

@@ -32,7 +32,6 @@ def build_sbatch_command(
         "ENGINE_PATH": args.engine_path,
         "WEIGHTS_PATH": args.weights_path,
         "BACKEND": args.backend,
-        "MOVETIME_MS": str(args.movetime_ms),
         "MULTIPV": str(args.multipv),
         "MAX_DEPTH": str(args.max_depth),
         "SEARCH_BUDGET": str(args.search_budget),
@@ -75,7 +74,6 @@ def main() -> None:
     parser.add_argument("--engine-path", default="/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0")
     parser.add_argument("--weights-path", default="")
     parser.add_argument("--backend", default="")
-    parser.add_argument("--movetime-ms", type=int, default=200)
     parser.add_argument("--multipv", type=int, default=8)
     parser.add_argument("--max-depth", type=int, default=10)
     parser.add_argument("--search-budget", type=int, default=64)

@@ -19,17 +19,23 @@ import torch
 
 def _extract_episodes(payload: dict) -> List[Dict[str, Any]]:
     episode_step_ptr = payload["episode_step_ptr"]
+    episode_trajectory_index = payload["episode_trajectory_index"]
+    trajectory_step_ptr = payload["trajectory_step_ptr"]
     step_node_ptr = payload["step_node_ptr"]
     step_edge_ptr = payload["step_edge_ptr"]
     num_episodes = int(payload["num_episodes"])
 
     episodes = []
     for i in range(num_episodes):
-        s_begin = int(episode_step_ptr[i].item())
-        s_end = int(episode_step_ptr[i + 1].item())
+        episode_s_begin = int(episode_step_ptr[i].item())
+        episode_s_end = int(episode_step_ptr[i + 1].item())
+        num_steps = episode_s_end - episode_s_begin
+        trajectory_index = int(episode_trajectory_index[i].item())
+        trajectory_s_begin = int(trajectory_step_ptr[trajectory_index].item())
+        trajectory_s_end = trajectory_s_begin + num_steps
 
         step_nf, step_pi, step_ep, step_ec, step_es, step_d = [], [], [], [], [], []
-        for s in range(s_begin, s_end):
+        for s in range(trajectory_s_begin, trajectory_s_end):
             n0 = int(step_node_ptr[s].item())
             n1 = int(step_node_ptr[s + 1].item())
             e0 = int(step_edge_ptr[s].item())
@@ -49,45 +55,58 @@ def _extract_episodes(payload: dict) -> List[Dict[str, Any]]:
                 "step_ep": step_ep,
                 "step_ec": step_ec,
                 "step_es": step_es,
-                "halt_rewards": payload["halt_rewards"][s_begin:s_end],
-                "target_advantages": payload["target_advantages"][s_begin:s_end],
-                "tree_sizes": payload["tree_sizes"][s_begin:s_end],
-                "time_budgets": payload["time_budgets"][s_begin:s_end],
+                "halt_rewards": payload["halt_rewards"][episode_s_begin:episode_s_end],
+                "target_advantages": payload["target_advantages"][episode_s_begin:episode_s_end],
+                "tree_sizes": payload["tree_sizes"][episode_s_begin:episode_s_end],
+                "time_budgets": payload["time_budgets"][episode_s_begin:episode_s_end],
                 "oracle_stop_step": int(payload["oracle_stop_steps"][i].item()),
                 "oracle_value": float(payload["oracle_values"][i].item()),
                 "starting_budget": int(payload["starting_budgets"][i].item()),
                 "budget_bucket_index": int(payload["budget_bucket_indices"][i].item()),
                 "budget_bucket_name": payload["budget_bucket_names"][i],
                 "episode_key": payload["episode_keys"][i],
-                "source_path": payload["source_paths"][i],
+                "source_path": payload["trajectory_source_paths"][trajectory_index],
             }
         )
     return episodes
 
 
 def _write_shard(episodes: List[Dict[str, Any]], shard_path: Path, feature_names: list, metadata: dict) -> None:
+    trajectory_step_ptr = [0]
     episode_step_ptr = [0]
     step_node_ptr = [0]
     step_edge_ptr = [0]
     all_nf, all_pi, all_d = [], [], []
     all_ep, all_ec, all_es = [], [], []
     all_hr, all_ta, all_ns, all_tb = [], [], [], []
+    trajectory_source_paths = []
+    episode_trajectory_index = []
     oracle_stops, oracle_vals = [], []
     starting_budgets, bucket_indices = [], []
-    bucket_names, episode_keys, paths = [], [], []
+    bucket_names, episode_keys = [], []
+    trajectory_lookup: Dict[str, int] = {}
 
     for ep in episodes:
+        trajectory_index = trajectory_lookup.get(ep["source_path"])
+        if trajectory_index is None:
+            trajectory_index = len(trajectory_source_paths)
+            trajectory_lookup[ep["source_path"]] = trajectory_index
+            trajectory_source_paths.append(ep["source_path"])
+            num_steps = len(ep["step_nf"])
+            trajectory_step_ptr.append(trajectory_step_ptr[-1] + num_steps)
+            for s in range(num_steps):
+                all_nf.append(ep["step_nf"][s])
+                all_pi.append(ep["step_pi"][s])
+                all_d.append(ep["step_d"][s])
+                all_ep.append(ep["step_ep"][s])
+                all_ec.append(ep["step_ec"][s])
+                all_es.append(ep["step_es"][s])
+                step_node_ptr.append(step_node_ptr[-1] + ep["step_nf"][s].shape[0])
+                step_edge_ptr.append(step_edge_ptr[-1] + ep["step_ep"][s].shape[0])
+
         num_steps = len(ep["step_nf"])
         episode_step_ptr.append(episode_step_ptr[-1] + num_steps)
-        for s in range(num_steps):
-            all_nf.append(ep["step_nf"][s])
-            all_pi.append(ep["step_pi"][s])
-            all_d.append(ep["step_d"][s])
-            all_ep.append(ep["step_ep"][s])
-            all_ec.append(ep["step_ec"][s])
-            all_es.append(ep["step_es"][s])
-            step_node_ptr.append(step_node_ptr[-1] + ep["step_nf"][s].shape[0])
-            step_edge_ptr.append(step_edge_ptr[-1] + ep["step_ep"][s].shape[0])
+        episode_trajectory_index.append(trajectory_index)
         all_hr.append(ep["halt_rewards"])
         all_ta.append(ep["target_advantages"])
         all_ns.append(ep["tree_sizes"])
@@ -98,15 +117,17 @@ def _write_shard(episodes: List[Dict[str, Any]], shard_path: Path, feature_names
         bucket_indices.append(ep["budget_bucket_index"])
         bucket_names.append(ep["budget_bucket_name"])
         episode_keys.append(ep["episode_key"])
-        paths.append(ep["source_path"])
 
     torch.save(
         {
-            "format": "cts_budgeted_controller_episode_shard_v2",
+            "format": "cts_budgeted_controller_episode_shard_v3",
+            "num_trajectories": len(trajectory_source_paths),
             "num_episodes": len(episodes),
             "feature_names": feature_names,
             **metadata,
+            "trajectory_step_ptr": torch.tensor(trajectory_step_ptr, dtype=torch.long),
             "episode_step_ptr": torch.tensor(episode_step_ptr, dtype=torch.long),
+            "episode_trajectory_index": torch.tensor(episode_trajectory_index, dtype=torch.long),
             "step_node_ptr": torch.tensor(step_node_ptr, dtype=torch.long),
             "step_edge_ptr": torch.tensor(step_edge_ptr, dtype=torch.long),
             "node_features": torch.cat(all_nf, dim=0),
@@ -125,7 +146,7 @@ def _write_shard(episodes: List[Dict[str, Any]], shard_path: Path, feature_names
             "budget_bucket_indices": torch.tensor(bucket_indices, dtype=torch.long),
             "budget_bucket_names": bucket_names,
             "episode_keys": episode_keys,
-            "source_paths": paths,
+            "trajectory_source_paths": trajectory_source_paths,
         },
         shard_path,
     )
@@ -224,7 +245,7 @@ def _filter_split(
     with out_manifest_path.open("w", encoding="utf-8") as handle:
         json.dump(
             {
-                "format": "cts_budgeted_controller_episode_manifest_v2",
+                "format": "cts_budgeted_controller_episode_manifest_v3",
                 "split": split_name,
                 "total_episodes": len(kept),
                 "total_before_filter": total_before,

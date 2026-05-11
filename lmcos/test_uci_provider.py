@@ -5,26 +5,13 @@ import uci_provider
 from tree import ExpansionChild
 from uci_provider import (
     Lc0DirectEvalProvider,
-    Lc0AnalysisParser,
     Lc0NoSearchAnalysisParser,
-    StockfishAnalysisParser,
     UciAnalysis,
-    UciTreeExpansionProvider,
     parse_root_value_features_from_lines,
     parse_root_value_from_lines,
     append_move_to_position_spec,
     position_spec_to_uci_command,
 )
-
-
-class FakeEngineProcess:
-    def __init__(self, lines):
-        self.lines = list(lines)
-        self.calls = []
-
-    def analyse(self, fen):
-        self.calls.append(fen)
-        return list(self.lines)
 
 
 class MappingEngineProcess:
@@ -47,55 +34,6 @@ class UciProviderTests(unittest.TestCase):
             position_spec_to_uci_command(position_spec),
             "position fen root-fen moves e2e4 e7e5",
         )
-
-    def test_stockfish_parser_extracts_root_and_children(self):
-        lines = [
-            "info depth 12 seldepth 18 multipv 1 score cp 34 pv e2e4 e7e5",
-            "info depth 12 seldepth 18 multipv 2 score cp 12 pv d2d4 d7d5",
-            "bestmove e2e4 ponder e7e5",
-        ]
-        parser = StockfishAnalysisParser()
-
-        analysis = parser.parse(lines, "fen")
-
-        self.assertIsInstance(analysis, UciAnalysis)
-        self.assertAlmostEqual(analysis.root_value, 0.034)
-        self.assertEqual([child.move_uci for child in analysis.children], ["e2e4", "d2d4"])
-        self.assertEqual(analysis.children[0].fen, "fen ||moves|| e2e4")
-
-    def test_lc0_parser_extracts_priors_and_q_values(self):
-        lines = [
-            "info depth 8 score cp 21 pv e2e4 e7e5",
-            "info string e2e4 P: 0.62 Q: 0.44 N: 100",
-            "info string d2d4 P: 0.38 Q: 0.18 N: 60",
-            "bestmove e2e4 ponder e7e5",
-        ]
-        parser = Lc0AnalysisParser()
-
-        analysis = parser.parse(lines, "fen")
-
-        self.assertAlmostEqual(analysis.root_value, 0.021)
-        self.assertEqual([child.move_uci for child in analysis.children], ["e2e4", "d2d4"])
-        self.assertAlmostEqual(analysis.children[0].scalar_features["prior"], 0.62)
-        self.assertAlmostEqual(analysis.children[0].scalar_features["value"], 0.44)
-
-    def test_provider_caches_fen_analyses(self):
-        lines = [
-            "info depth 8 score cp 21 pv e2e4 e7e5",
-            "info string e2e4 P: 0.62 Q: 0.44 N: 100",
-            "info string d2d4 P: 0.38 Q: 0.18 N: 60",
-            "bestmove e2e4 ponder e7e5",
-        ]
-        engine = FakeEngineProcess(lines)
-        provider = UciTreeExpansionProvider(engine, Lc0AnalysisParser(), metadata={"engine": "lc0"})
-
-        root_features = provider.root_features("fen")
-        children = provider.expand_node("fen", 0)
-
-        self.assertEqual(engine.calls, ["fen"])
-        self.assertAlmostEqual(root_features["value"], 0.021)
-        self.assertEqual([child.move_uci for child in children], ["e2e4", "d2d4"])
-        self.assertEqual(provider.provider_metadata()["engine"], "lc0")
 
     def test_lc0_no_search_parser_extracts_only_priors(self):
         lines = [
@@ -144,6 +82,21 @@ class UciProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_root_value_features_from_lines(lines)
         self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
+    def test_parse_root_value_features_accepts_mate_score_without_wdl(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 39 score mate 1",
+            "bestmove d5g2",
+        ]
+
+        features = parse_root_value_features_from_lines(lines)
+
+        self.assertAlmostEqual(features["value"], 1.0)
+        self.assertAlmostEqual(features["wdl_win"], 1.0)
+        self.assertAlmostEqual(features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(features["wdl_loss"], 0.0)
+        self.assertAlmostEqual(features["wdl_var"], 0.0)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 1.0)
 
     def test_lc0_direct_eval_provider_uses_prior_and_value_engines(self):
         prior_engine = MappingEngineProcess(

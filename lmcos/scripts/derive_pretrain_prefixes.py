@@ -18,6 +18,7 @@ from cts_pretrain import (
     PretrainExample,
     TeacherSearchConfig,
     derive_prefix_pretrain_example,
+    load_pretrain_example,
     load_raw_pretrain_example_paths,
     save_pretrain_example_to_directory,
 )
@@ -41,7 +42,7 @@ def _existing_output_for_index(output_dir: Path, index: int) -> Path | None:
 
 def _derive_prefix_task(task: tuple[str, int, TeacherSearchConfig, int, int, int]) -> PretrainExample:
     path_str, global_index, config, min_nodes, max_nodes, base_seed = task
-    example = torch.load(path_str, weights_only=False)
+    example = load_pretrain_example(path_str)
     _validate_tree_encoder_example_features(example, context=str(path_str))
     example_rng = random.Random(f"{base_seed}:{global_index}")
     return derive_prefix_pretrain_example(
@@ -138,8 +139,29 @@ def main() -> None:
                 )
         return
 
-    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-        result_iter = iter(executor.map(_derive_prefix_task, process_tasks))
+    try:
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            result_iter = iter(executor.map(_derive_prefix_task, process_tasks))
+            for offset, work_item in enumerate(work_items):
+                mode = work_item[0]
+                global_index = work_item[1]
+                if mode == "skip":
+                    skipped += 1
+                else:
+                    prefix_example = next(result_iter)
+                    save_pretrain_example_to_directory(str(output_dir), prefix_example, global_index)
+                    saved += 1
+
+                completed = offset + 1
+                if completed % args.log_interval == 0 or completed == len(selected_paths):
+                    elapsed = time.time() - start_time
+                    print(
+                        f"progress={completed}/{len(selected_paths)} saved={saved} skipped={skipped} "
+                        f"elapsed_s={elapsed:.1f} base_examples_per_s={completed / max(elapsed, 1e-6):.2f}",
+                        flush=True,
+                    )
+    except (PermissionError, OSError):
+        result_iter = iter(map(_derive_prefix_task, process_tasks))
         for offset, work_item in enumerate(work_items):
             mode = work_item[0]
             global_index = work_item[1]
