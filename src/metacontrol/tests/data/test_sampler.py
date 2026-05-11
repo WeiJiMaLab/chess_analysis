@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 from pathlib import Path
 
-from metacontrol.data.sampler import ChessSampler
+from metacontrol.scripts.sample import ChessSampler
 
 pytestmark = pytest.mark.integration
 

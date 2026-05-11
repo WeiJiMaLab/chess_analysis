@@ -1,4 +1,4 @@
-"""Generate one search tree from a CSV FEN row, pack tensors, profile."""
+"""Generate one search tree from a CSV FEN row, save one payload, profile."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ import time
 from pathlib import Path
 
 import pandas as pd
-import torch
 
 from metacontrol.core.providers import LC0ExpansionProvider, StockfishExpansionProvider
 from metacontrol.core.schemas import GeneratorConfig
 from metacontrol.data.generator import TreeSearch
-from metacontrol.data.tree_pack import pack_single_tree_like_legacy_shard
 
 
 DEFAULT_LC0 = "/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0"
@@ -54,17 +52,16 @@ def generate_pack_profile(args: argparse.Namespace) -> None:
     result = search.generate(fen)
     t_grow = time.perf_counter() - t_wall0
 
-    t_pack0 = time.perf_counter()
-    packed = pack_single_tree_like_legacy_shard(result, continue_cost=args.continue_cost)
-    torch.save(packed, out_path)
-    t_pack = time.perf_counter() - t_pack0
+    t_save0 = time.perf_counter()
+    payload = search.save(result, out_path, continue_cost=args.continue_cost)
+    t_save = time.perf_counter() - t_save0
 
     total = time.perf_counter() - t_wall0
     print(
-        f"FEN row 0: nodes={packed['num_nodes']} edges={packed['num_edges']} "
-        f"snapshots={packed['num_snapshots']} expansions={result.num_expansions}"
+        f"FEN row 0: nodes={payload['num_nodes']} edges={payload['num_edges']} "
+        f"snapshots={payload['num_snapshots']} expansions={result.num_expansions}"
     )
-    print(f"Wall: grow={t_grow:.3f}s pack+save={t_pack:.3f}s total={total:.3f}s → {out_path}")
+    print(f"Wall: grow={t_grow:.3f}s save={t_save:.3f}s total={total:.3f}s → {out_path}")
     if total > args.max_wall_seconds:
         print(f"WARNING: total wall time {total:.1f}s exceeds budget {args.max_wall_seconds}s")
 

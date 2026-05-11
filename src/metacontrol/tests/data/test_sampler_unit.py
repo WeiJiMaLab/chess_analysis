@@ -1,6 +1,6 @@
-"""Fast unit tests for :mod:`metacontrol.data.sampler` (no DuckDB / parquet)."""
+"""Fast unit tests for :mod:`metacontrol.scripts.sample` (no DuckDB / parquet)."""
 
-from metacontrol.data.sampler import compose_full_fen
+from metacontrol.scripts.sample import compose_full_fen
 
 
 def test_compose_full_fen_basic():
