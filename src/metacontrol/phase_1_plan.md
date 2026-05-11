@@ -1,183 +1,63 @@
-# Phase 1: Implementation Plan & Design (Object-First Strategy)
+# Metacontrol Data Generation Pipeline: Stage 2 & Beyond
 
-This document details the staged implementation strategy and granular design for the `metacontrol` data generation pipeline, prioritizing readability and correctness before performance. It replaces the redundant search-per-snapshot logic with a unified search and a single DP pass.
+This document outlines the remaining steps for the `metacontrol` pipeline following the successful implementation and modularization of the core tree and target derivation logic.
 
-## 1. Directory Structure (Flat Data Layout)
+## 1. Current State (Completed)
+- [x] **Modular Architecture**: Established `core/` for schemas and data structures, and `data/` for pipeline logic.
+- [x] **Core Tree**: Implemented `SearchNode` and `SearchTree` with ASCII rendering.
+- [x] **Tree Growth**: Implemented `TreeSearch` (formerly `SearchGenerator`) with PUCT selection and backpropagation.
+- [x] **Target Derivation**: Implemented deterministic DP for meta-control advantages (`targets_mc.py`) and GNN target consolidation (`targets_gnn.py`).
+- [x] **Tensorization**: Integrated `TreeTensorizer` for batching trees into GNN-compatible formats.
+- [x] **Validation**: 100% pass rate on 50 integration and unit tests.
 
-```text
-src/metacontrol/
-├── core/
-│   ├── tree.py             # SearchNode, SearchTree, and ASCII render()
-│   ├── tensorizer.py       # TreeBatch and SnapshotTensorizer
-│   └── schema.py           # Hard-coded chess feature definitions
-├── data/
-│   ├── engine.py           # Engine abstraction (LC0, Stockfish)
-│   ├── generator.py        # Search logic (select, expand, backprop, record)
-│   ├── targets_gnn.py      # GNN-specific target calculation (Edge WDLs)
-│   ├── targets_mc.py       # MC-specific target calculation (DP Advantages)
-│   └── dataset.py          # PyTorch Dataset and Snapshot packing
-└── tests/
-    ├── core/
-    │   ├── test_tree.py
-    │   └── test_tensorizer.py
-    ├── data/
-    │   ├── test_generator.py
-    │   ├── test_targets_gnn.py
-    │   ├── test_targets_mc.py
-    │   └── test_pipeline.py
-    └── tactical/
-        └── test_chess_logic.py
-```
+---
 
-## 2. Class Schemas & Data Structures
+## 2. Upcoming Stage: Root Selection & Dataset Generation
 
-### `core/tree.py`
-We will simplify the `SearchTree` to be a pure data structure without search logic.
-- **`class SearchNode`**:
-    - `node_id: int`
-    - `fen: str`
-    - `parent: Optional[SearchNode]`
-    - `children: Dict[str, SearchNode]`
-    - `visit_count: int`
-    - `total_value: float`
-    - `q_value: float`
-    - `depth: int`
-    - `is_terminal: bool`
-    - `features: Dict[str, float]` (Hard-coded keys: `value`, `wdl_win`, `wdl_draw`, `wdl_loss`)
+### Stage 2.5: Root Sampling Logic
+- **Objective**: Create a script to sample root FENs from the Lichess database mirror (`lichess.db`) matching original research criteria.
+- **Implementation**:
+    - Build a DuckDB-based sampler in `src/metacontrol/data/sampler.py`.
+    - Apply filters: 
+        - ELO [1800, 2600]
+        - Ply [8, 120]
+        - Legal Moves [2, 60]
+        - Piece Count [8, 32]
+- **Parameters (Faithful to Original)**:
+    - `max_nodes`: **64** (Teacher search budget)
+    - `min_nodes`: **5** (Minimum snapshot size)
+    - `max_depth`: **10**
+    - `search_budget`: **64** (Engine sims per expansion)
 
-- **`class SearchTree`**:
-    - `root: SearchNode`
-    - `nodes_by_id: Dict[int, SearchNode]`
-    - `expansion_history: List[SearchNode]`
+---
 
-### `core/tensorizer.py`
-- **`class TreeTensorizer`**:
-    - `def tensorize(tree: SearchTree) -> TreeBatch`: Converts a tree to the packed format used by the GNN.
+## 3. Stage 5: Large-Scale Production Pipeline
+- **Objective**: Parallelize the generation of millions of snapshots across the cluster.
+- **Tasks**:
+    - [ ] **Engine Integration**: Connect the pipeline to the `lc0` binary via a production-ready `TreeExpansionProvider`.
+    - [ ] **Sharding**: Implement logic to save trees in packed shards (`.pt` files) for high-throughput training.
+    - [ ] **Slurm Orchestration**: Develop job templates for distributed generation.
 
-## 3. Stage 1: Core Tree (`core/tree.py`)
+---
 
-### Proposed Tests
-- **`test_single_leaf`**
-- **`test_child_of_parent_is_self`**
-- **`test_parent_of_child_is_self`**
-- **`test_root_is_depth_zero`**
-- **`test_tree_depth_after_adding_child`**
-- **`test_no_cycles`** (Transposition unfolding)
-- **`test_checkmate_is_leaf`**
-- **`test_render_with_depth`** (ASCII validation)
+## 4. Stage 6: Training Orchestration
+- **Objective**: Rebuild the training loops for the GNN and the Meta-Control head.
+- **Tasks**:
+    - [ ] **GNN Pretraining**: Supervised learning on `node_target_values` and `edge_wdl_targets`.
+    - [ ] **Controller Training**: Fitted-Q / Advantage regression using the Bellman-derived targets from `targets_mc.py`.
+    - [ ] **Evaluation Suite**: Measure oracle agreement and "economy of thought" metrics.
 
-## 4. Stage 1.5: Tensorization Link (`core/tensorizer.py`)
+---
 
-### Proposed Tests
-- **`test_single_leaf_tensorization`**
-- **`test_tensorization_different_sized_trees`**
-- **`test_ids_unique`** (Flattened batch uniqueness)
-- **`test_no_cycles_in_batch`**
-- **`test_move_slot_stability`** (UCI sorting)
-- **`test_round_trip`**: Verify that tensorized data contains the same node counts and edge relationships.
-
-## 5. Stage 2: Search Generator (`data/generator.py`)
-
-We will consolidate the disparate tree-building logic into a single class.
-
-### Configuration (Faithful to Original)
-To maintain parity with the original research, we use the following standard parameters:
-- `max_nodes`: **64** (Maximum tree size for the teacher search)
-- `min_nodes`: **5** (Minimum tree size for a valid snapshot)
-- `max_depth`: **10** (Maximum search depth)
-- `search_budget`: **64** (Engine-specific simulation budget per expansion)
-
-### API
-```python
-@dataclass
-class GeneratorConfig:
-    max_nodes: int = 64
-    max_depth: int = 10
-    c_puct: float = 1.0
-    search_budget: int = 64
-
-class TreeSearch:
-    """Unified generator that grows a tree and maintains search stats."""
-    def __init__(self, provider: TreeExpansionProvider, config: GeneratorConfig):
-        self.provider = provider
-        self.config = config
-```
-
-### Proposed Tests
-- **`test_puct_selection`**
-- **`test_backprop_averages`**
-- **`test_alternating_turns`**
-- **`test_discovery_dynamics`**
-- **`test_expand_on_checkmate`**
-- **`test_PUCT_should_converge_on_checkmate`**
-- **`test_sacrifice_queen_for_checkmate`**
-- **`test_Q_leaf_is_V`**
-- **`test_convergence`**: Assert that with a very high budget, the tree approximates minimax values.
-- **`test_invariants`**: Assert `node_count <= max_nodes` and `depth <= max_depth`.
-
-## 5.5. Stage 2.5: Root Selection Criteria
-To ensure our dataset is representative of the original study, root FENs will be sampled using the following criteria:
-- **ELO Range**: Both players must be between **1800** and **2600**.
-- **Game Length**: At least **20 half-moves** played in the source game.
-- **Ply Range**: Selected position must be between ply **8** and **120**.
-- **Legal Moves**: The position must have between **2** and **60** legal moves.
-- **Piece Count**: Between **8** and **32** pieces on the board.
-- **Diversity**: Sample exactly **one** random eligible position per game to avoid autocorrelation.
-
-## 6. Stage 3: Target Logic (`data/targets_gnn.py` & `data/targets_mc.py`)
-
-This replaces the redundant search-per-snapshot logic with a single DP pass.
-
-### API
-```python
-@dataclass
-class SearchSnapshot:
-    tree_prefix: SearchTree
-    halt_reward: float        # Value of best move at current snapshot
-    continue_value: float     # Optimal value from future search - cost
-    advantage: float          # continue_value - halt_reward
-
-def calculate_dp_values(tree: SearchTree, continue_cost: float) -> Dict[int, float]:
-    """
-    Performs a bottom-up DP pass over the tree to find the optimal value 
-    of each node under the stop/continue cost.
-    V(node) = max(V_halt(node), V_continue(node))
-    """
-
-def derive_snapshots(full_tree: SearchTree, continue_cost: float) -> List[SearchSnapshot]:
-    """
-    Iterates through the expansion sequence of the full_tree.
-    For each prefix, creates a SearchSnapshot with pre-calculated DP targets.
-    """
-```
-
-### Proposed Tests
-- **`test_linear_dp_math`** (Targets MC): Create a manual 3-node tree and verify advantages for different costs.
-- **`test_optimal_stop_logic`** (Targets MC)
-- **`test_monotonicity`** (Targets MC): Assert `V_halt` is non-decreasing as more nodes are added.
-- **`test_edge_wdl_consolidation`** (Targets GNN)
-- **`test_build_snapshots_integrity`**
-
-## 7. Stage 4: Integration & Pipeline (`test_pipeline.py`)
-
-### Proposed Tests
-- **`test_pipeline.py`**:
-    - End-to-end test: `FEN` $\rightarrow$ `SearchGenerator` $\rightarrow$ `derive_snapshots` $\rightarrow$ `DataLoader`.
-    - Verify that the resulting batch of snapshots has valid `advantage` targets.
-
-## 8. Stage 5: Performance Transition (Future)
-
+## 5. Performance Goals
 | Optimization | Method | Purpose |
 | :--- | :--- | :--- |
-| **Profiling** | `cProfile` | Identify bottlenecks. |
-| **Vectorization** | NumPy Arrays | Optimized memory layout. |
-| **JIT** | Numba | Fast PUCT selection. |
+| **Vectorization** | PyTorch/NumPy | Optimized memory layout for tree batches. |
+| **I/O Efficiency** | Sharded Packing | Fast loading during GPU training. |
+| **Parallelism** | Slurm Job Arrays | Multi-node generation throughput. |
 
-## 9. Visualization & Debugging
-- **`SearchTree.render()`**: Indented ASCII tree view.
-- **`SearchNode.to_dict()`**: Dictionary view for inspection.
+---
 
-## 10. Why this is better
-- **Efficiency**: One search builds the tree; one DP pass builds all targets. No redundant LC0 calls or re-searches.
-- **Readability**: Clear separation between *growing* the tree and *calculating* what the optimal meta-control decision should have been.
-- **Simplicity**: No more "if node_budget is None" branches.
+## 6. Visualization & Debugging
+- **Tree Inspector**: Extend `SearchTree.render()` to include derived targets (advantages/WDLs).
+- **Trajectory Analysis**: Plot halt rewards vs. expansion steps to verify "value of computation" landscapes.
