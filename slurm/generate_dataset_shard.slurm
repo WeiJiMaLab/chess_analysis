@@ -37,7 +37,6 @@ ENGINE_PATH="${ENGINE_PATH:-/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/relea
 WEIGHTS_PATH="${WEIGHTS_PATH:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz}"
 BACKEND="${BACKEND:-}"
 
-MOVETIME_MS="${MOVETIME_MS:-200}"
 MULTIPV="${MULTIPV:-8}"
 MAX_DEPTH="${MAX_DEPTH:-10}"
 SEARCH_BUDGET="${SEARCH_BUDGET:-64}"
@@ -93,7 +92,6 @@ fi
   "${EXTRA_ARGS[@]}" \
   --fens "${FENS_PATH}" \
   --output-dir "${SHARD_OUTPUT_DIR}" \
-  --movetime-ms "${MOVETIME_MS}" \
   --multipv "${MULTIPV}" \
   --max-depth "${MAX_DEPTH}" \
   --search-budget "${SEARCH_BUDGET}" \

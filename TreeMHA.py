@@ -31,33 +31,7 @@ class TreeAttMsgLayer(nn.Module):
         self.W_v = nn.Linear(d_embed, self.model_width, bias=False, device=device)
         self.W_o = nn.Linear(self.model_width, self.d_message, bias=False, device=device)
 
-    def _forward_python_loop(self, tree_acts, child_ptr, children_index, edge_slot_embed=None):
-        n_nodes, _ = tree_acts.shape
-
-        query = self.W_q(tree_acts).view(n_nodes, self.n_heads, self.d_att)
-
-        head_messages = tree_acts.new_zeros(n_nodes, self.n_heads, self.d_att)
-        for node_id in range(n_nodes):
-            start = child_ptr[node_id].item()
-            end = child_ptr[node_id + 1].item()
-            child_ids = children_index[start:end]
-            if child_ids.numel() == 0:
-                continue
-
-            q = query[node_id].unsqueeze(0)  # [1, H, D]
-            child_input = tree_acts[child_ids]
-            if edge_slot_embed is not None:
-                child_input = child_input + edge_slot_embed[start:end]
-            k = self.W_k(child_input).view(-1, self.n_heads, self.d_att)  # [C, H, D]
-            v = self.W_v(child_input).view(-1, self.n_heads, self.d_att)  # [C, H, D]
-
-            logits = (k * q).sum(dim=-1) / math.sqrt(self.d_att)  # [C, H]
-            attn = torch.softmax(logits, dim=0)
-            head_messages[node_id] = (attn.unsqueeze(-1) * v).sum(dim=0)
-
-        return self.W_o(head_messages.reshape(n_nodes, self.model_width))
-
-    def forward(self, tree_acts, edge_parent, edge_child, edge_slot_embed=None, child_ptr=None, children_index=None):
+    def forward(self, tree_acts, edge_parent, edge_child, edge_slot_embed=None):
         n_nodes, _ = tree_acts.shape
         if edge_child.numel() == 0:
             head_messages = tree_acts.new_zeros(n_nodes, self.n_heads, self.d_att)
@@ -75,13 +49,7 @@ class TreeAttMsgLayer(nn.Module):
 
         expanded_parent = edge_parent.unsqueeze(-1).expand(-1, self.n_heads)
         parent_max = logits.new_full((n_nodes, self.n_heads), float("-inf"))
-
-        if hasattr(parent_max, "scatter_reduce_"):
-            parent_max.scatter_reduce_(0, expanded_parent, logits, reduce="amax", include_self=True)
-        elif child_ptr is not None and children_index is not None:
-            return self._forward_python_loop(tree_acts, child_ptr, children_index, edge_slot_embed=edge_slot_embed)
-        else:
-            raise RuntimeError("Vectorized tree attention requires scatter_reduce_ support.")
+        parent_max.scatter_reduce_(0, expanded_parent, logits, reduce="amax", include_self=True)
 
         stabilized = logits - parent_max[edge_parent]
         exp_logits = stabilized.exp()

@@ -19,7 +19,6 @@ from budgeted_controller_oracle import (
     BudgetedOracleConfig,
     budgeted_oracle_metadata,
 )
-from cts_pretrain import load_encoder_checkpoint
 from schema import tree_encoder_feature_schema
 from train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
@@ -32,7 +31,6 @@ from train_fitted_q_controller import (
     _validate_packed_manifest_oracle,
     _write_diagnostics,
     evaluate_batched_greedy_policy,
-    evaluate_packed_greedy_policy,
 )
 
 
@@ -120,7 +118,9 @@ def main() -> None:
         q_hidden_layers=args.q_hidden_layers,
         separate_sign_head=args.separate_sign_head,
     )
-    load_encoder_checkpoint(args.encoder_checkpoint, model.encoder)
+    # Trust the encoder embedded in the controller checkpoint. --encoder-checkpoint
+    # is kept only as the cache key so multiple controllers trained against the same
+    # encoder share a materialized cache.
     checkpoint = torch.load(args.checkpoint, weights_only=False, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.freeze_encoder()

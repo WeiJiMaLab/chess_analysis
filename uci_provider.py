@@ -5,109 +5,27 @@ from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence
 
 from cts_uci_common import (
-    BESTMOVE_RE,
-    MOVE_STATS_RE,
-    MULTIPV_RE,
     POSITION_SPEC_SEPARATOR,
-    SCORE_LINE_RE,
     UCI_MOVE_PATTERN,
     analysis_has_no_legal_move,
     append_move_to_position_spec,
     board_from_position_spec,
     chess,
-    clamp as _clamp,
     position_spec_to_uci_command,
     split_position_spec,
     terminal_value_from_board,
     terminal_value_from_position_spec,
-    uci_score_to_value as _uci_score_to_value,
 )
 from cts_uci_parsers import (
-    Lc0AnalysisParser,
     Lc0NoSearchAnalysisParser,
-    StockfishAnalysisParser,
     UciAnalysis,
-    UciAnalysisParser,
     parse_root_value_features_from_lines,
     parse_root_value_from_lines,
     terminal_value_features,
 )
 from cts_uci_process import UciEngineConfig, UciEngineProcess
-from supervised_branch import TreeExpansionProvider
+from cts_pretrain import TreeExpansionProvider
 from tree import ExpansionChild
-
-
-class UciTreeExpansionProvider(TreeExpansionProvider):
-    def __init__(
-        self,
-        engine: UciEngineProcess,
-        parser: UciAnalysisParser,
-        metadata: Optional[Mapping[str, str]] = None,
-        populate_child_values_from_root_eval: bool = False,
-    ) -> None:
-        self.engine = engine
-        self.parser = parser
-        self._analysis_cache: Dict[str, UciAnalysis] = {}
-        self._terminal_cache: Dict[str, Optional[float]] = {}
-        self._metadata = dict(metadata or {})
-        self.populate_child_values_from_root_eval = populate_child_values_from_root_eval
-
-    def root_features(self, fen: str) -> Mapping[str, float]:
-        terminal_value = self._terminal_value_for_fen(fen)
-        if terminal_value is not None:
-            return {"value": terminal_value, "prior": 1.0}
-        analysis = self._analysis_for_fen(fen)
-        return {"value": analysis.root_value, "prior": 1.0}
-
-    def expand_node(
-        self,
-        fen: str,
-        depth: int,
-        max_children: Optional[int] = None,
-    ) -> Sequence[ExpansionChild]:
-        analysis = self._analysis_for_fen(fen)
-        if not self.populate_child_values_from_root_eval:
-            children = list(analysis.children)
-            if max_children is None:
-                return children
-            return children[:max_children]
-
-        expanded_children = []
-        selected_children = list(analysis.children)
-        if max_children is not None:
-            selected_children = selected_children[:max_children]
-        for child in selected_children:
-            child_value = self.root_features(child.fen)["value"]
-            scalar_features = dict(child.scalar_features)
-            scalar_features["value"] = child_value
-            expanded_children.append(
-                ExpansionChild(
-                    move_uci=child.move_uci,
-                    fen=child.fen,
-                    scalar_features=scalar_features,
-                    metadata=dict(child.metadata),
-                    is_terminal=child.is_terminal,
-                )
-            )
-        return expanded_children
-
-    def provider_metadata(self) -> Mapping[str, str]:
-        return dict(self._metadata)
-
-    def clear_caches(self) -> None:
-        self._analysis_cache.clear()
-        self._terminal_cache.clear()
-
-    def _analysis_for_fen(self, fen: str) -> UciAnalysis:
-        if fen not in self._analysis_cache:
-            lines = self.engine.analyse(fen)
-            self._analysis_cache[fen] = self.parser.parse(lines, fen)
-        return self._analysis_cache[fen]
-
-    def _terminal_value_for_fen(self, fen: str) -> Optional[float]:
-        if fen not in self._terminal_cache:
-            self._terminal_cache[fen] = terminal_value_from_position_spec(fen)
-        return self._terminal_cache[fen]
 
 
 class Lc0DirectEvalProvider(TreeExpansionProvider):
@@ -257,24 +175,13 @@ def _analysis_has_no_legal_move(lines: Sequence[str]) -> bool:
 
 
 __all__ = [
-    "BESTMOVE_RE",
-    "Lc0AnalysisParser",
     "Lc0DirectEvalProvider",
     "Lc0NoSearchAnalysisParser",
-    "MOVE_STATS_RE",
-    "MULTIPV_RE",
     "POSITION_SPEC_SEPARATOR",
-    "SCORE_LINE_RE",
-    "StockfishAnalysisParser",
     "UCI_MOVE_PATTERN",
     "UciAnalysis",
-    "UciAnalysisParser",
     "UciEngineConfig",
     "UciEngineProcess",
-    "UciTreeExpansionProvider",
-    "_analysis_has_no_legal_move",
-    "_clamp",
-    "_uci_score_to_value",
     "append_move_to_position_spec",
     "board_from_position_spec",
     "chess",

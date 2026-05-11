@@ -923,18 +923,15 @@ def _process_one_task(
         downsample_trivial,
     ) = task
 
-    try:
-        packed_tree_result = _build_packed_tree_result(
-            path_str,
-            reward_scale,
-            min_halt_reward_range,
-            min_decision_margin,
-            exclude_xaba,
-            feature_names,
-            oracle_config,
-        )
-    except (ValueError, Exception):
-        return None
+    packed_tree_result = _build_packed_tree_result(
+        path_str,
+        reward_scale,
+        min_halt_reward_range,
+        min_decision_margin,
+        exclude_xaba,
+        feature_names,
+        oracle_config,
+    )
 
     if packed_tree_result is None:
         return None
@@ -974,18 +971,15 @@ def _score_one_task(
     task: Tuple[str, float, float, float, bool, Tuple[str, ...], BudgetedOracleConfig],
 ) -> dict[str, Any]:
     path_str, reward_scale, min_halt_reward_range, min_decision_margin, exclude_xaba, feature_names, oracle_config = task
-    try:
-        packed_tree_result = _build_packed_tree_result(
-            path_str,
-            reward_scale,
-            min_halt_reward_range,
-            min_decision_margin,
-            exclude_xaba,
-            feature_names,
-            oracle_config,
-        )
-    except (ValueError, Exception):
-        return {"budget_score": 0.0}
+    packed_tree_result = _build_packed_tree_result(
+        path_str,
+        reward_scale,
+        min_halt_reward_range,
+        min_decision_margin,
+        exclude_xaba,
+        feature_names,
+        oracle_config,
+    )
     if packed_tree_result is None:
         return {"budget_score": 0.0}
     return {"budget_score": float(packed_tree_result["budget_score"])}
@@ -995,18 +989,15 @@ def _tree_stats_one_task(
     task: Tuple[str, float, float, float, bool, Tuple[str, ...], BudgetedOracleConfig],
 ) -> Optional[dict[str, Any]]:
     path_str, reward_scale, min_halt_reward_range, min_decision_margin, exclude_xaba, feature_names, oracle_config = task
-    try:
-        packed_tree_result = _build_packed_tree_result(
-            path_str,
-            reward_scale,
-            min_halt_reward_range,
-            min_decision_margin,
-            exclude_xaba,
-            feature_names,
-            oracle_config,
-        )
-    except (ValueError, Exception):
-        return None
+    packed_tree_result = _build_packed_tree_result(
+        path_str,
+        reward_scale,
+        min_halt_reward_range,
+        min_decision_margin,
+        exclude_xaba,
+        feature_names,
+        oracle_config,
+    )
     if packed_tree_result is None:
         return None
     return {

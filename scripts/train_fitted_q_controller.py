@@ -18,7 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 
 from budgeted_controller_oracle import (
     BudgetBucket,
@@ -47,21 +47,6 @@ class FittedQBatch:
     oracle_values: List[float]
     starting_budgets: List[int]
     budget_bucket_names: List[str]
-
-
-@dataclass(frozen=True)
-class MaterializedAdvantageEpisode:
-    path: str
-    source_path: str
-    features: torch.Tensor
-    target_advantages: torch.Tensor
-    halt_rewards: List[float]
-    tree_sizes: List[int]
-    time_budgets: List[int]
-    oracle_stop_step: int
-    oracle_value: float
-    starting_budget: int
-    budget_bucket_name: str
 
 
 @dataclass(frozen=True)
@@ -649,12 +634,6 @@ def _default_materialized_cache_path(manifest_path: str, encoder_checkpoint: str
     return str(manifest.with_name(f"{manifest_stem}.materialized_{split_name}_{encoder_stem}.pt"))
 
 
-def _materialized_tensor_dataset(episodes: Sequence[MaterializedAdvantageEpisode]) -> TensorDataset:
-    features = torch.cat([episode.features for episode in episodes], dim=0)
-    target_advantages = torch.cat([episode.target_advantages for episode in episodes], dim=0)
-    return TensorDataset(features, target_advantages)
-
-
 def _materialized_cache_shard_dir(path: str) -> Path:
     return Path(f"{path}.d")
 
@@ -923,112 +902,8 @@ def evaluate_advantage_predictions(
     )
 
 
-def _train_tensor_epoch(
-    model: ComputeAdvantageTreeSearchModel,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    *,
-    device: torch.device,
-    sign_loss_weight: float,
-    max_grad_norm: float,
-    epoch: int,
-    log_interval: int,
-) -> AdvantageMetrics:
-    model.train()
-    total_loss_sum = 0.0
-    total_advantage_mse = 0.0
-    total_sign_bce = 0.0
-    total_mean_abs_advantage_error = 0.0
-    total_examples = 0
-    total_correct = 0
-    started = time.time()
-
-    for batch_index, (features, target_advantages) in enumerate(loader, start=1):
-        features = features.to(device, non_blocking=True)
-        target_advantages = target_advantages.to(device, non_blocking=True)
-        predicted, sign_logits = model.predict_from_features(features)
-        advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
-        sign_loss = _sign_auxiliary_loss(sign_logits, target_advantages)
-        total_loss = advantage_mse + sign_loss_weight * sign_loss
-
-        optimizer.zero_grad()
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
-
-        examples = int(target_advantages.shape[0])
-        total_loss_sum += float(total_loss.item()) * examples
-        total_advantage_mse += float(advantage_mse.item()) * examples
-        total_sign_bce += float(sign_loss.item()) * examples
-        total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
-        total_examples += examples
-        total_correct += int(((sign_logits.detach() > 0) == (target_advantages > 0)).sum().item())
-
-        if log_interval > 0 and batch_index % log_interval == 0:
-            elapsed = time.time() - started
-            print(
-                f"epoch={epoch} batch={batch_index}/{len(loader)} "
-                f"snapshots={total_examples} "
-                f"total_loss={total_loss_sum / max(total_examples, 1):.3f} "
-                f"advantage_mse={total_advantage_mse / max(total_examples, 1):.3f} "
-                f"sign_bce={total_sign_bce / max(total_examples, 1):.3f} "
-                f"mean_abs_advantage_error={total_mean_abs_advantage_error / max(total_examples, 1):.3f} "
-                f"sign_accuracy={total_correct / max(total_examples, 1):.3f} "
-                f"elapsed_s={elapsed:.1f}",
-                flush=True,
-            )
-
-    if total_examples == 0:
-        raise ValueError("Tensor training loader produced no controller states.")
-    return AdvantageMetrics(
-        total_loss=total_loss_sum / total_examples,
-        advantage_mse=total_advantage_mse / total_examples,
-        sign_bce=total_sign_bce / total_examples,
-        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
-        sign_accuracy=total_correct / total_examples,
-        examples=total_examples,
-    )
 
 
-def evaluate_tensor_advantage_predictions(
-    model: ComputeAdvantageTreeSearchModel,
-    loader: DataLoader,
-    *,
-    device: torch.device,
-    sign_loss_weight: float,
-) -> AdvantageMetrics:
-    model.eval()
-    total_loss_sum = 0.0
-    total_advantage_mse = 0.0
-    total_sign_bce = 0.0
-    total_mean_abs_advantage_error = 0.0
-    total_examples = 0
-    total_correct = 0
-    with torch.inference_mode():
-        for features, target_advantages in loader:
-            features = features.to(device, non_blocking=True)
-            target_advantages = target_advantages.to(device, non_blocking=True)
-            predicted, sign_logits = model.predict_from_features(features)
-            advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, target_advantages)
-            sign_loss = _sign_auxiliary_loss(sign_logits, target_advantages)
-            total_loss = advantage_mse + sign_loss_weight * sign_loss
-            examples = int(target_advantages.shape[0])
-            total_loss_sum += float(total_loss.item()) * examples
-            total_advantage_mse += float(advantage_mse.item()) * examples
-            total_sign_bce += float(sign_loss.item()) * examples
-            total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
-            total_examples += examples
-            total_correct += int(((sign_logits > 0) == (target_advantages > 0)).sum().item())
-    if total_examples == 0:
-        raise ValueError("Tensor evaluation loader produced no controller states.")
-    return AdvantageMetrics(
-        total_loss=total_loss_sum / total_examples,
-        advantage_mse=total_advantage_mse / total_examples,
-        sign_bce=total_sign_bce / total_examples,
-        mean_abs_advantage_error=total_mean_abs_advantage_error / total_examples,
-        sign_accuracy=total_correct / total_examples,
-        examples=total_examples,
-    )
 
 
 def _train_materialized_cache_epoch(
@@ -1175,104 +1050,8 @@ def evaluate_materialized_cache_predictions(
     )
 
 
-def _predict_stop_step(
-    model: nn.Module,
-    episode: PackedControllerEpisode | MaterializedAdvantageEpisode,
-) -> tuple[int, List[float]]:
-    model.eval()
-    with torch.inference_mode():
-        if isinstance(episode, MaterializedAdvantageEpisode):
-            device = next(model.parameters()).device
-            predicted_advantages, sign_logits = model.predict_from_features(
-                episode.features.to(device),
-            )
-        else:
-            batch = PackedControllerCollator()([episode])
-            assert batch is not None
-            predicted_advantages, sign_logits = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
-        values = predicted_advantages.detach().cpu().tolist()
-    stop = len(values) - 1
-    for step_index, v in enumerate(values):
-        if float(v) <= 0.0:
-            stop = step_index
-            break
-    return stop, values
 
 
-def evaluate_packed_greedy_policy(
-    model: ComputeAdvantageTreeSearchModel,
-    dataset: PackedControllerEpisodeDataset,
-    oracle_config: BudgetedOracleConfig,
-    *,
-    log_interval: int,
-    diagnostics_out: List[Dict[str, Any]] | None = None,
-) -> GreedyPolicyMetrics:
-    exact = 0
-    first_action = 0
-    total_return = 0.0
-    total_oracle_value = 0.0
-    total_expansions = 0
-    started = time.time()
-
-    for index in range(len(dataset)):
-        episode = dataset[index]
-        predicted_stop, predicted_advantages = _predict_stop_step(model, episode)
-        predicted_return = return_for_stop_step(
-            episode.halt_rewards,
-            episode.tree_sizes.tolist(),
-            episode.time_budgets.tolist(),
-            predicted_stop,
-            oracle_config,
-        )
-        regret = episode.oracle_value - predicted_return
-        exact += int(predicted_stop == episode.oracle_stop_step)
-        first_action += int((predicted_stop == 0) == (episode.oracle_stop_step == 0))
-        total_return += predicted_return
-        total_oracle_value += episode.oracle_value
-        total_expansions += predicted_stop
-
-        if diagnostics_out is not None:
-            diagnostics_out.append(
-                {
-                    "path": episode.path,
-                    "source_path": episode.source_path,
-                    "episode_length": len(episode.halt_rewards),
-                    "starting_budget": episode.starting_budget,
-                    "budget_bucket_name": episode.budget_bucket_name,
-                    "tree_sizes": episode.tree_sizes.tolist(),
-                    "time_budgets": episode.time_budgets.tolist(),
-                    "halt_rewards": episode.halt_rewards,
-                    "oracle_stop_step": episode.oracle_stop_step,
-                    "oracle_value": episode.oracle_value,
-                    "predicted_stop_step": predicted_stop,
-                    "predicted_value": predicted_return,
-                    "regret": regret,
-                    "predicted_advantages": predicted_advantages,
-                    "target_advantages": episode.target_advantages.tolist(),
-                }
-            )
-
-        if log_interval > 0 and ((index + 1) % log_interval == 0 or index + 1 == len(dataset)):
-            elapsed = time.time() - started
-            print(
-                f"greedy_eval_progress={index + 1}/{len(dataset)} "
-                f"exact_stop_step_accuracy={exact / max(index + 1, 1):.3f} "
-                f"elapsed_s={elapsed:.1f}",
-                flush=True,
-            )
-
-    evaluated = len(dataset)
-    if evaluated == 0:
-        raise ValueError("Greedy evaluation produced no packed episodes.")
-    return GreedyPolicyMetrics(
-        exact_stop_step_accuracy=exact / evaluated,
-        first_action_accuracy=first_action / evaluated,
-        average_return=total_return / evaluated,
-        average_oracle_value=total_oracle_value / evaluated,
-        average_regret=(total_oracle_value - total_return) / evaluated,
-        average_expansions=total_expansions / evaluated,
-        evaluated_episodes=evaluated,
-    )
 
 
 def evaluate_batched_greedy_policy(
@@ -1699,24 +1478,20 @@ def main() -> None:
                 flush=True,
             )
         if args.greedy_eval_interval > 0 and (epoch % args.greedy_eval_interval == 0 or epoch == args.epochs):
+            if validation_cache is None:
+                raise RuntimeError(
+                    "Greedy evaluation requires a materialized validation cache. "
+                    "Either drop --unfreeze-encoder or set --greedy-eval-interval 0."
+                )
             diagnostics: List[Dict[str, Any]] | None = [] if (epoch == args.epochs and args.output_diagnostics) else None
-            if validation_cache is not None:
-                greedy_metrics = evaluate_batched_greedy_policy(
-                    model,
-                    validation_dataset,
-                    validation_cache,
-                    oracle_config,
-                    log_interval=args.log_interval,
-                    diagnostics_out=diagnostics,
-                )
-            else:
-                greedy_metrics = evaluate_packed_greedy_policy(
-                    model,
-                    validation_dataset,
-                    oracle_config,
-                    log_interval=args.log_interval,
-                    diagnostics_out=diagnostics,
-                )
+            greedy_metrics = evaluate_batched_greedy_policy(
+                model,
+                validation_dataset,
+                validation_cache,
+                oracle_config,
+                log_interval=args.log_interval,
+                diagnostics_out=diagnostics,
+            )
             print(
                 f"greedy_epoch={epoch}/{args.epochs} "
                 f"exact_stop_step_accuracy={greedy_metrics.exact_stop_step_accuracy:.3f} "

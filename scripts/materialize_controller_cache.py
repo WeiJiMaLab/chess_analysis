@@ -35,7 +35,6 @@ from scripts.train_fitted_q_controller import (
     ComputeAdvantageTreeSearchModel,
     PackedControllerCollator,
     PackedControllerEpisodeDataset,
-    _default_materialized_cache_path,
     _materialized_cache_shard_dir,
 )
 

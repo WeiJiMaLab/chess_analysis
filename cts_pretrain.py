@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from GNN import ChildWdlModel, NodeValueModel
+from GNN import ChildWdlModel
 from tensorizer import TensorizedTreeExample, TreeTensorizer, collate_tensorized_examples
 from tree import ExpansionChild, SearchNode, SearchTree
 from cts_uci_common import append_move_to_position_spec
@@ -185,7 +185,7 @@ class PretrainExample:
             if set(self.oracle_final_root_q_values) != set(self.oracle_root_moves):
                 raise ValueError("oracle_final_root_q_values must align with oracle_root_moves.")
 
-RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v1"
+RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v2"
 
 
 def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
@@ -213,11 +213,19 @@ def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -
 
 
 def _child_ptr_and_children_index(tree: SearchTree) -> Tuple[torch.Tensor, torch.Tensor]:
+    # Children are stored in UCI-lexicographic order so that edge_slot derived
+    # from `arange(count_per_parent)` matches the canonical slot assignment used
+    # by TreeTensorizer._sorted_child_ids_with_slots. Engine-dependent insertion
+    # order is non-canonical; sorting here makes the on-disk representation stable.
     child_ptr = [0]
     children_index: List[int] = []
     for node in tree.iter_nodes():
         child_ids = tree.child_ids(node.node_id)
-        children_index.extend(int(child_id) for child_id in child_ids)
+        sorted_child_ids = sorted(
+            child_ids,
+            key=lambda cid: (tree.get_node(cid).incoming_move_uci or "", cid),
+        )
+        children_index.extend(int(child_id) for child_id in sorted_child_ids)
         child_ptr.append(len(children_index))
     return (
         torch.tensor(child_ptr, dtype=torch.int32),
@@ -614,10 +622,13 @@ def save_pretrain_example(path: str, example: PretrainExample) -> None:
     RawPretrainExampleRecord.from_example(example).save(path)
 
 
+RAW_PRETRAIN_LIST_FORMAT = "cts_raw_pretrain_example_list_v2"
+
+
 def save_pretrain_examples(path: str, examples: Sequence[PretrainExample]) -> None:
     torch.save(
         {
-            "format": "cts_raw_pretrain_example_list_v1",
+            "format": RAW_PRETRAIN_LIST_FORMAT,
             "examples": [RawPretrainExampleRecord.from_example(example).to_payload() for example in examples],
         },
         path,
@@ -626,8 +637,8 @@ def save_pretrain_examples(path: str, examples: Sequence[PretrainExample]) -> No
 
 def load_pretrain_examples(path: str) -> List[PretrainExample]:
     payload = torch.load(path, weights_only=False)
-    if payload.get("format") != "cts_raw_pretrain_example_list_v1":
-        raise ValueError(f"Expected cts_raw_pretrain_example_list_v1 at {path}.")
+    if payload.get("format") != RAW_PRETRAIN_LIST_FORMAT:
+        raise ValueError(f"Expected {RAW_PRETRAIN_LIST_FORMAT} at {path}.")
     return [RawPretrainExampleRecord.from_payload(example_payload).to_pretrain_example() for example_payload in payload["examples"]]
 
 
@@ -815,16 +826,6 @@ def load_encoder_checkpoint(path: str, encoder, map_location: str = "cpu") -> Di
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     encoder.load_state_dict(checkpoint["encoder_state_dict"])
     return dict(checkpoint.get("metadata", {}))
-
-
-def save_policy_value_checkpoint(path: str, model, metadata: Optional[Mapping[str, Any]] = None) -> None:
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "metadata": dict(metadata or {}),
-        },
-        path,
-    )
 
 
 def build_tree_from_provider(
@@ -1355,28 +1356,6 @@ def derive_prefix_pretrain_example(
 
 
 @dataclass(frozen=True)
-class SupervisedPretrainConfig:
-    batch_size: int = 4
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.0
-    root_loss_weight: float = 1.0
-    epochs: int = 5
-    shuffle: bool = True
-    num_workers: int = 0
-    pin_memory: bool = False
-    prefetch_factor: int = 2
-    persistent_workers: bool = True
-
-
-@dataclass
-class SupervisedMetrics:
-    total_loss: float
-    node_mse: float
-    root_mse: float
-    num_examples: int
-
-
-@dataclass(frozen=True)
 class ChildWdlPretrainConfig:
     batch_size: int = 4
     learning_rate: float = 1e-3
@@ -1396,163 +1375,6 @@ class ChildWdlMetrics:
     num_supervised_edges: int
     target_entropy: float = 0.0
     loss_gap: float = 0.0
-
-
-class SupervisedPretrainer:
-    def __init__(
-        self,
-        model: NodeValueModel,
-        tensorizer: TreeTensorizer,
-        train_examples: Sequence[PretrainExample],
-        validation_examples: Sequence[PretrainExample],
-        config: SupervisedPretrainConfig,
-    ) -> None:
-        self.model = model
-        self.tensorizer = tensorizer
-        self.train_examples = train_examples
-        self.validation_examples = validation_examples
-        self.config = config
-        self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
-        )
-        self.best_validation_loss = float("inf")
-        self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
-
-    def _iter_batches(self, examples: Sequence[PretrainExample], shuffle: bool):
-        collate_fn = getattr(examples, "collate_fn", list)
-        dataloader_kwargs = {
-            "batch_size": self.config.batch_size,
-            "shuffle": shuffle,
-            "collate_fn": collate_fn,
-            "num_workers": self.config.num_workers,
-            "pin_memory": self.config.pin_memory,
-        }
-        if self.config.num_workers > 0:
-            dataloader_kwargs["prefetch_factor"] = self.config.prefetch_factor
-            dataloader_kwargs["persistent_workers"] = self.config.persistent_workers
-        return DataLoader(examples, **dataloader_kwargs)
-
-    def _target_tensor(self, examples: Sequence[PretrainExample], device: torch.device) -> torch.Tensor:
-        targets: List[float] = []
-        for example in examples:
-            targets.extend(example.node_target_values)
-        return torch.tensor(targets, dtype=torch.float32, device=device)
-
-    def _run_epoch(
-        self,
-        examples: Sequence[PretrainExample],
-        training: bool,
-        batch_progress_callback: Optional[
-            Callable[[str, int, int, int, float, float, float], None]
-        ] = None,
-    ) -> SupervisedMetrics:
-        if training:
-            self.model.train()
-        else:
-            self.model.eval()
-
-        metric_device = self.model.encoder.device
-        total_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
-        node_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
-        root_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
-        total_examples = 0
-
-        batches = self._iter_batches(examples, shuffle=training and self.config.shuffle)
-        total_batches = len(batches)
-        phase = "train" if training else "validation"
-        for batch_index, batch_data in enumerate(batches, start=1):
-            device = self.model.encoder.device
-            if isinstance(batch_data, tuple) and len(batch_data) == 2:
-                tree_batch, targets = batch_data
-                targets = targets.to(device)
-            else:
-                batch_examples = batch_data
-                tree_batch = self.tensorizer.tensorize_forest([example.tree for example in batch_examples])
-                targets = self._target_tensor(batch_examples, device=device)
-            root_index = tree_batch.root_index.to(device)
-
-            with torch.set_grad_enabled(training):
-                output = self.model(tree_batch)
-                node_mse = F.mse_loss(output.node_values, targets)
-                root_mse = F.mse_loss(output.node_values[root_index], targets[root_index])
-                total_loss = node_mse + self.config.root_loss_weight * root_mse
-
-                if training:
-                    self.optimizer.zero_grad()
-                    total_loss.backward()
-                    self.optimizer.step()
-
-            batch_size = int(tree_batch.batch_size)
-            total_examples += batch_size
-            total_loss_sum += total_loss.detach() * batch_size
-            node_loss_sum += node_mse.detach() * batch_size
-            root_loss_sum += root_mse.detach() * batch_size
-            if batch_progress_callback is not None:
-                total_loss_value = float(total_loss.item())
-                node_mse_value = float(node_mse.item())
-                root_mse_value = float(root_mse.item())
-                batch_progress_callback(
-                    phase,
-                    batch_index,
-                    total_batches,
-                    total_examples,
-                    total_loss_value,
-                    node_mse_value,
-                    root_mse_value,
-                )
-
-        if total_examples == 0:
-            return SupervisedMetrics(total_loss=0.0, node_mse=0.0, root_mse=0.0, num_examples=0)
-
-        return SupervisedMetrics(
-            total_loss=float((total_loss_sum / total_examples).item()),
-            node_mse=float((node_loss_sum / total_examples).item()),
-            root_mse=float((root_loss_sum / total_examples).item()),
-            num_examples=total_examples,
-        )
-
-    def train_epoch(
-        self,
-        batch_progress_callback: Optional[Callable[[str, int, int, int, float, float, float], None]] = None,
-    ) -> SupervisedMetrics:
-        return self._run_epoch(
-            self.train_examples,
-            training=True,
-            batch_progress_callback=batch_progress_callback,
-        )
-
-    def validate(
-        self,
-        batch_progress_callback: Optional[Callable[[str, int, int, int, float, float, float], None]] = None,
-    ) -> SupervisedMetrics:
-        return self._run_epoch(
-            self.validation_examples,
-            training=False,
-            batch_progress_callback=batch_progress_callback,
-        )
-
-    def fit(
-        self,
-        progress_callback: Optional[Callable[[int, SupervisedMetrics, SupervisedMetrics], None]] = None,
-        batch_progress_callback: Optional[Callable[[str, int, int, int, float, float, float], None]] = None,
-    ) -> List[Dict[str, SupervisedMetrics]]:
-        history: List[Dict[str, SupervisedMetrics]] = []
-        for epoch_index in range(1, self.config.epochs + 1):
-            train_metrics = self.train_epoch(batch_progress_callback=batch_progress_callback)
-            validation_metrics = self.validate(batch_progress_callback=batch_progress_callback)
-            history.append({"train": train_metrics, "validation": validation_metrics})
-            if validation_metrics.total_loss < self.best_validation_loss:
-                self.best_validation_loss = validation_metrics.total_loss
-                self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
-            if progress_callback is not None:
-                progress_callback(epoch_index, train_metrics, validation_metrics)
-        self.model.encoder.load_state_dict(self.best_encoder_state)
-        return history
-
-    def save_best_encoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
-        save_encoder_checkpoint(path, self.model.encoder, metadata=metadata)
 
 
 class ChildWdlPretrainer:
