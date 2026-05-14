@@ -1,0 +1,245 @@
+import unittest
+from unittest.mock import patch
+
+import cts.core.providers.lc0 as uci_provider  # patching target for patch.object(uci_provider, …)
+from cts.core.providers.lc0 import (
+    Lc0DirectEvalProvider,
+    UciAnalysis,
+    append_move_to_position_spec,
+    parse_no_search_analysis,
+    parse_root_value_features_from_lines,
+    parse_root_value_from_lines,
+    position_spec_to_uci_command,
+)
+from cts.core.tree import ExpansionChild
+
+
+class MappingEngineProcess:
+    def __init__(self, mapping):
+        self.mapping = dict(mapping)
+        self.calls = []
+
+    def analyse(self, fen):
+        self.calls.append(fen)
+        return list(self.mapping[fen])
+
+
+class UciProviderTests(unittest.TestCase):
+    def test_position_spec_helpers(self):
+        position_spec = append_move_to_position_spec("root-fen", "e2e4")
+        position_spec = append_move_to_position_spec(position_spec, "e7e5")
+
+        self.assertEqual(position_spec, "root-fen ||moves|| e2e4 e7e5")
+        self.assertEqual(
+            position_spec_to_uci_command(position_spec),
+            "position fen root-fen moves e2e4 e7e5",
+        )
+
+    def test_lc0_no_search_parser_extracts_only_priors(self):
+        lines = [
+            "info depth 1 score cp 6 pv f2f4",
+            "info string f2f4  (351 ) N:       0 (+ 0) (P: 13.94%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+            "info string g2g4  (378 ) N:       0 (+ 0) (P: 12.79%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+            "bestmove f2f4",
+        ]
+        analysis = parse_no_search_analysis(lines, "fen")
+
+        self.assertAlmostEqual(analysis.root_value, 0.006)
+        self.assertEqual([child.move_uci for child in analysis.children], ["f2f4", "g2g4"])
+        self.assertAlmostEqual(analysis.children[0].scalar_features["prior"], 0.1394)
+        self.assertNotIn("value", analysis.children[0].scalar_features)
+
+    def test_parse_root_value_from_lines(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 46 score cp 6",
+            "bestmove f2f4",
+        ]
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
+    def test_parse_root_value_features_from_wdl_lines(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497",
+            "bestmove f2f4",
+        ]
+
+        features = parse_root_value_features_from_lines(lines)
+
+        self.assertAlmostEqual(features["value"], 0.006)
+        self.assertAlmostEqual(features["wdl_win"], 0.503)
+        self.assertAlmostEqual(features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(features["wdl_loss"], 0.497)
+        self.assertAlmostEqual(features["wdl_var"], 1.0 - 0.006 * 0.006)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
+    def test_parse_root_value_features_requires_wdl_by_default(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 46 score cp 6",
+            "bestmove f2f4",
+        ]
+
+        with self.assertRaises(ValueError):
+            parse_root_value_features_from_lines(lines)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 0.006)
+
+    def test_parse_root_value_features_accepts_mate_score_without_wdl(self):
+        lines = [
+            "info depth 1 seldepth 1 nodes 39 score mate 1",
+            "bestmove d5g2",
+        ]
+
+        features = parse_root_value_features_from_lines(lines)
+
+        self.assertAlmostEqual(features["value"], 1.0)
+        self.assertAlmostEqual(features["wdl_win"], 1.0)
+        self.assertAlmostEqual(features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(features["wdl_loss"], 0.0)
+        self.assertAlmostEqual(features["wdl_var"], 0.0)
+        self.assertAlmostEqual(parse_root_value_from_lines(lines), 1.0)
+
+    def test_lc0_direct_eval_provider_uses_prior_and_value_engines(self):
+        prior_engine = MappingEngineProcess(
+            {
+                "fen": [
+                    "info depth 1 score cp 6 pv f2f4",
+                    "info string f2f4  (351 ) N:       0 (+ 0) (P: 13.94%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+                    "info string g2g4  (378 ) N:       0 (+ 0) (P: 12.79%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+                    "bestmove f2f4",
+                ]
+            }
+        )
+        value_engine = MappingEngineProcess(
+            {
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
+                "fen ||moves|| f2f4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp -43 wdl 478 1 521",
+                    "bestmove e7e5",
+                ],
+                "fen ||moves|| g2g4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp 12 wdl 506 0 494",
+                    "bestmove e7e5",
+                ],
+            }
+        )
+        provider = Lc0DirectEvalProvider(
+            prior_engine,
+            value_engine,
+            metadata={"engine": "lc0"},
+        )
+
+        root_features = provider.root_features("fen")
+        children = provider.expand_node("fen", 0)
+
+        self.assertAlmostEqual(root_features["value"], 0.006)
+        self.assertAlmostEqual(root_features["wdl_win"], 0.503)
+        self.assertAlmostEqual(root_features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(root_features["wdl_loss"], 0.497)
+        self.assertEqual([child.move_uci for child in children], ["f2f4", "g2g4"])
+        self.assertAlmostEqual(children[0].scalar_features["prior"], 0.1394)
+        self.assertAlmostEqual(children[0].scalar_features["value"], -0.043)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_win"], 0.478)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_draw"], 0.001)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_loss"], 0.521)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_var"], 0.999 - (-0.043 * -0.043))
+        self.assertEqual(prior_engine.calls, ["fen"])
+        self.assertEqual(value_engine.calls, ["fen", "fen ||moves|| f2f4", "fen ||moves|| g2g4"])
+        self.assertEqual(provider.provider_metadata()["engine"], "lc0")
+
+    def test_lc0_direct_eval_provider_skips_value_engine_for_terminal_children(self):
+        prior_engine = MappingEngineProcess(
+            {
+                "fen": [
+                    "info depth 1 score cp 6 pv f2f4",
+                    "info string f2f4  (351 ) N:       0 (+ 0) (P: 13.94%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+                    "info string g2g4  (378 ) N:       0 (+ 0) (P: 12.79%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+                    "bestmove f2f4",
+                ]
+            }
+        )
+        value_engine = MappingEngineProcess(
+            {
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
+                "fen ||moves|| g2g4": [
+                    "info depth 1 seldepth 1 nodes 46 score cp 12 wdl 506 0 494",
+                    "bestmove e7e5",
+                ],
+            }
+        )
+        provider = Lc0DirectEvalProvider(prior_engine, value_engine)
+
+        with patch.object(
+            uci_provider,
+            "terminal_value_from_position_spec",
+            side_effect=lambda fen: -1.0 if fen == "fen ||moves|| f2f4" else None,
+        ):
+            children = provider.expand_node("fen", 0)
+
+        self.assertEqual([child.move_uci for child in children], ["f2f4", "g2g4"])
+        self.assertTrue(children[0].is_terminal)
+        self.assertAlmostEqual(children[0].scalar_features["value"], -1.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_win"], 0.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_draw"], 0.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_loss"], 1.0)
+        self.assertAlmostEqual(children[0].scalar_features["wdl_var"], 0.0)
+        self.assertAlmostEqual(children[1].scalar_features["value"], 0.012)
+        self.assertAlmostEqual(children[1].scalar_features["wdl_win"], 0.506)
+        self.assertEqual(value_engine.calls, ["fen ||moves|| g2g4"])
+
+    def test_lc0_direct_eval_provider_caches_terminal_checks(self):
+        prior_engine = MappingEngineProcess(
+            {
+                "fen": [
+                    "info depth 1 score cp 6 pv f2f4",
+                    "info string f2f4  (351 ) N:       0 (+ 0) (P: 13.94%) (WL:  -.-----) (D: -.---) (M:  -.-) (Q: -0.28929)",
+                    "bestmove f2f4",
+                ]
+            }
+        )
+        value_engine = MappingEngineProcess(
+            {
+                "fen": ["info depth 1 seldepth 1 nodes 46 score cp 6 wdl 503 0 497", "bestmove f2f4"],
+            }
+        )
+        provider = Lc0DirectEvalProvider(prior_engine, value_engine)
+
+        with patch.object(
+            uci_provider,
+            "terminal_value_from_position_spec",
+            side_effect=lambda fen: None,
+        ) as mocked_terminal_check:
+            provider.root_features("fen")
+            provider.root_features("fen")
+
+        self.assertEqual(mocked_terminal_check.call_count, 1)
+
+    def test_lc0_direct_eval_provider_uses_parent_board_for_child_terminal_check(self):
+        provider = Lc0DirectEvalProvider(MappingEngineProcess({}), MappingEngineProcess({}))
+        child = ExpansionChild("e2e4", "fen ||moves|| e2e4", {"prior": 0.5})
+
+        class FakeBoard:
+            def copy(self, stack=False):
+                return self
+
+            def push_uci(self, move):
+                self.move = move
+
+        parent_board = FakeBoard()
+
+        with patch.object(uci_provider, "chess", object()), patch.object(
+            uci_provider,
+            "terminal_value_from_board",
+            return_value=-1.0,
+        ) as mocked_terminal_from_board, patch.object(
+            uci_provider,
+            "terminal_value_from_position_spec",
+            side_effect=AssertionError("should not reparse full child spec"),
+        ):
+            terminal_value = provider._terminal_value_for_child(child, parent_board)
+
+        self.assertEqual(terminal_value, -1.0)
+        self.assertEqual(provider._terminal_cache[child.fen], -1.0)
+        self.assertEqual(parent_board.move, "e2e4")
+        self.assertEqual(mocked_terminal_from_board.call_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2,10 +2,11 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/cts/async_soph}"
 SPLIT_ROOT="${SPLIT_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split}"
 SWEEP_ROOT="${SWEEP_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/planning_cost_sweeps}"
 ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_pretrain.pt}"
+CONFIG_ROOT="${CONFIG_ROOT:-${SWEEP_ROOT}/configs}"
 
 PACK_SCRIPT="${PACK_SCRIPT:-slurm/pack_controller_episodes_della.slurm}"
 FILTER_SCRIPT="${FILTER_SCRIPT:-slurm/filter_packed_episodes_della.slurm}"
@@ -29,6 +30,7 @@ TRAIN_EPISODE_BATCH_SIZE="${TRAIN_EPISODE_BATCH_SIZE:-8}"
 DRY_RUN="${DRY_RUN:-1}"
 
 mkdir -p "${SWEEP_ROOT}"
+mkdir -p "${CONFIG_ROOT}"
 
 sanitize() {
   echo "$1" | sed 's/-/m/g; s/\./p/g'
@@ -40,6 +42,65 @@ submit() {
     return 0
   fi
   "$@"
+}
+
+write_pack_config() {
+  local config_path="$1"
+  local packed_root="$2"
+  local continue_cost="$3"
+  local kind="$4"
+  local exponent="$5"
+
+  cat > "${config_path}" <<EOF
+split_root: ${SPLIT_ROOT}
+output_root: ${packed_root}
+shard_size: ${PACK_SHARD_SIZE}
+num_workers: ${PACK_NUM_WORKERS}
+continue_cost: ${continue_cost}
+planning_cost_kind: ${kind}
+planning_cost_exponent: ${exponent}
+EOF
+}
+
+write_filter_config() {
+  local config_path="$1"
+  local packed_root="$2"
+  local filtered_root="$3"
+
+  cat > "${config_path}" <<EOF
+train_manifest: ${packed_root}/train_manifest.json
+validation_manifest: ${packed_root}/validation_manifest.json
+output_dir: ${filtered_root}
+min_halt_reward_range: ${MIN_HALT_REWARD_RANGE}
+max_per_stop_step: ${MAX_PER_STOP_STEP}
+shard_size: ${FILTER_SHARD_SIZE}
+seed: ${SEED}
+EOF
+}
+
+write_train_config() {
+  local config_path="$1"
+  local data_root="$2"
+  local checkpoint_path="$3"
+  local diagnostics_path="$4"
+  local continue_cost="$5"
+  local kind="$6"
+  local exponent="$7"
+
+  cat > "${config_path}" <<EOF
+packed_train_data: ${data_root}/train_manifest.json
+packed_validation_data: ${data_root}/validation_manifest.json
+encoder_checkpoint: ${ENCODER_CHECKPOINT}
+output_checkpoint: ${checkpoint_path}
+output_diagnostics: ${diagnostics_path}
+continue_cost: ${continue_cost}
+planning_cost_kind: ${kind}
+planning_cost_exponent: ${exponent}
+epochs: ${TRAIN_EPOCHS}
+batch_size: ${TRAIN_BATCH_SIZE}
+episode_batch_size: ${TRAIN_EPISODE_BATCH_SIZE}
+seed: ${SEED}
+EOF
 }
 
 for kind in ${COST_KINDS}; do
@@ -61,27 +122,40 @@ for kind in ${COST_KINDS}; do
       checkpoint_path="${config_root}/checkpoints/fittedq_${suffix}.pt"
       diagnostics_path="${config_root}/analysis/fittedq_${suffix}_diagnostics.jsonl"
 
+      pack_config="${CONFIG_ROOT}/pack_${suffix}.yaml"
+      filter_config="${CONFIG_ROOT}/filter_${suffix}.yaml"
+      train_config="${CONFIG_ROOT}/train_${suffix}.yaml"
+
       echo "config=${suffix}"
+
+      write_pack_config "${pack_config}" "${packed_root}" "${continue_cost}" "${kind}" "${exponent}"
 
       pack_cmd=(
         sbatch
         --parsable
-        --export=ALL,PROJECT_DIR="${PROJECT_DIR}",SPLIT_ROOT="${SPLIT_ROOT}",OUTPUT_ROOT="${packed_root}",SHARD_SIZE="${PACK_SHARD_SIZE}",NUM_WORKERS="${PACK_NUM_WORKERS}",CONTINUE_COST="${continue_cost}",PLANNING_COST_KIND="${kind}",PLANNING_COST_EXPONENT="${exponent}"
+        --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${pack_config}"
         "${PACK_SCRIPT}"
       )
+
+      if [[ "${FILTER_PACKED}" == "1" ]]; then
+        write_filter_config "${filter_config}" "${packed_root}" "${filtered_root}"
+        write_train_config "${train_config}" "${filtered_root}" "${checkpoint_path}" "${diagnostics_path}" "${continue_cost}" "${kind}" "${exponent}"
+      else
+        write_train_config "${train_config}" "${packed_root}" "${checkpoint_path}" "${diagnostics_path}" "${continue_cost}" "${kind}" "${exponent}"
+      fi
 
       if [[ "${DRY_RUN}" == "1" ]]; then
         submit "${pack_cmd[@]}"
         if [[ "${FILTER_PACKED}" == "1" ]]; then
-          submit sbatch --parsable --dependency=afterok:<pack_job_id> \
-            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",TRAIN_MANIFEST="${packed_root}/train_manifest.json",VALIDATION_MANIFEST="${packed_root}/validation_manifest.json",OUTPUT_DIR="${filtered_root}",MIN_HALT_REWARD_RANGE="${MIN_HALT_REWARD_RANGE}",MAX_PER_STOP_STEP="${MAX_PER_STOP_STEP}",SHARD_SIZE="${FILTER_SHARD_SIZE}",SEED="${SEED}" \
+          submit sbatch --parsable --dependency=afterok:'<pack_job_id>' \
+            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${filter_config}" \
             "${FILTER_SCRIPT}"
-          submit sbatch --parsable --dependency=afterok:<filter_job_id> \
-            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",PACKED_TRAIN_DATA="${filtered_root}/train_manifest.json",PACKED_VALIDATION_DATA="${filtered_root}/validation_manifest.json",ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT}",OUTPUT_CHECKPOINT="${checkpoint_path}",OUTPUT_DIAGNOSTICS="${diagnostics_path}",CONTINUE_COST="${continue_cost}",PLANNING_COST_KIND="${kind}",PLANNING_COST_EXPONENT="${exponent}",EPOCHS="${TRAIN_EPOCHS}",BATCH_SIZE="${TRAIN_BATCH_SIZE}",EPISODE_BATCH_SIZE="${TRAIN_EPISODE_BATCH_SIZE}",SEED="${SEED}" \
+          submit sbatch --parsable --dependency=afterok:'<filter_job_id>' \
+            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${train_config}" \
             "${TRAIN_SCRIPT}"
         else
-          submit sbatch --parsable --dependency=afterok:<pack_job_id> \
-            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",PACKED_TRAIN_DATA="${packed_root}/train_manifest.json",PACKED_VALIDATION_DATA="${packed_root}/validation_manifest.json",ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT}",OUTPUT_CHECKPOINT="${checkpoint_path}",OUTPUT_DIAGNOSTICS="${diagnostics_path}",CONTINUE_COST="${continue_cost}",PLANNING_COST_KIND="${kind}",PLANNING_COST_EXPONENT="${exponent}",EPOCHS="${TRAIN_EPOCHS}",BATCH_SIZE="${TRAIN_BATCH_SIZE}",EPISODE_BATCH_SIZE="${TRAIN_EPISODE_BATCH_SIZE}",SEED="${SEED}" \
+          submit sbatch --parsable --dependency=afterok:'<pack_job_id>' \
+            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${train_config}" \
             "${TRAIN_SCRIPT}"
         fi
         continue
@@ -92,15 +166,15 @@ for kind in ${COST_KINDS}; do
       if [[ "${FILTER_PACKED}" == "1" ]]; then
         filter_job_id="$(
           submit sbatch --parsable --dependency=afterok:${pack_job_id} \
-            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",TRAIN_MANIFEST="${packed_root}/train_manifest.json",VALIDATION_MANIFEST="${packed_root}/validation_manifest.json",OUTPUT_DIR="${filtered_root}",MIN_HALT_REWARD_RANGE="${MIN_HALT_REWARD_RANGE}",MAX_PER_STOP_STEP="${MAX_PER_STOP_STEP}",SHARD_SIZE="${FILTER_SHARD_SIZE}",SEED="${SEED}" \
+            --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${filter_config}" \
             "${FILTER_SCRIPT}"
         )"
         submit sbatch --parsable --dependency=afterok:${filter_job_id} \
-          --export=ALL,PROJECT_DIR="${PROJECT_DIR}",PACKED_TRAIN_DATA="${filtered_root}/train_manifest.json",PACKED_VALIDATION_DATA="${filtered_root}/validation_manifest.json",ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT}",OUTPUT_CHECKPOINT="${checkpoint_path}",OUTPUT_DIAGNOSTICS="${diagnostics_path}",CONTINUE_COST="${continue_cost}",PLANNING_COST_KIND="${kind}",PLANNING_COST_EXPONENT="${exponent}",EPOCHS="${TRAIN_EPOCHS}",BATCH_SIZE="${TRAIN_BATCH_SIZE}",EPISODE_BATCH_SIZE="${TRAIN_EPISODE_BATCH_SIZE}",SEED="${SEED}" \
+          --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${train_config}" \
           "${TRAIN_SCRIPT}"
       else
         submit sbatch --parsable --dependency=afterok:${pack_job_id} \
-          --export=ALL,PROJECT_DIR="${PROJECT_DIR}",PACKED_TRAIN_DATA="${packed_root}/train_manifest.json",PACKED_VALIDATION_DATA="${packed_root}/validation_manifest.json",ENCODER_CHECKPOINT="${ENCODER_CHECKPOINT}",OUTPUT_CHECKPOINT="${checkpoint_path}",OUTPUT_DIAGNOSTICS="${diagnostics_path}",CONTINUE_COST="${continue_cost}",PLANNING_COST_KIND="${kind}",PLANNING_COST_EXPONENT="${exponent}",EPOCHS="${TRAIN_EPOCHS}",BATCH_SIZE="${TRAIN_BATCH_SIZE}",EPISODE_BATCH_SIZE="${TRAIN_EPISODE_BATCH_SIZE}",SEED="${SEED}" \
+          --export=ALL,PROJECT_DIR="${PROJECT_DIR}",CONFIG="${train_config}" \
           "${TRAIN_SCRIPT}"
       fi
     done

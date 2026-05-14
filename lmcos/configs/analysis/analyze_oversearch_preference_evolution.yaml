@@ -1,0 +1,5 @@
+diagnostics_path: null
+log_path: null
+output_dir: null
+path_rewrite: []
+allow_missing_sources: false

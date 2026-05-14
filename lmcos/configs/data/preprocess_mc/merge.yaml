@@ -1,0 +1,10 @@
+command: merge
+
+# Shared with materialize.
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/materialized_cache
+num_workers: 1
+
+# Required for merge.
+final_cache: /tigress/ysagiv/chess/cts/train_cache_rerun.pt
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1.pt

@@ -1,0 +1,8 @@
+command: generate-dataset
+engine_path: /scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0
+weights_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz
+fens: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/roots/sampled_root_fens_smoke.txt
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_smoke
+max_depth: 30
+min_nodes: 96
+max_nodes: 96

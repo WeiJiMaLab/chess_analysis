@@ -1,0 +1,5 @@
+fens: /path/to/candidate_fens.txt
+engine_path: /path/to/lc0
+weights_path: /path/to/weights.pb.gz
+sample_size: 200
+seed: 0

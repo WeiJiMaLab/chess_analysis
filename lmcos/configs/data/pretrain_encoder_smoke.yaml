@@ -1,0 +1,10 @@
+command: pretrain-child-wdl-encoder
+train_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_smoke/train_manifest.json
+validation_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_smoke/validation_manifest.json
+output_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_smoke.pt
+device: cuda
+k: 1
+epochs: 100
+batch_size: 128
+num_workers: 0
+log_interval: 1

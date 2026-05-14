@@ -8,19 +8,9 @@
 #SBATCH --time=00:30:00
 
 set -euo pipefail
+: "${CONFIG:?CONFIG env var required (path to YAML config)}"
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
-PACKED_ROOT="${PACKED_ROOT:-/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed}"
-TRAIN_MANIFEST="${TRAIN_MANIFEST:-${PACKED_ROOT}/train_manifest.json}"
-VALIDATION_MANIFEST="${VALIDATION_MANIFEST:-${PACKED_ROOT}/validation_manifest.json}"
-OUTPUT_DIR="${OUTPUT_DIR:-${PACKED_ROOT}/filtered}"
-MIN_HALT_REWARD_RANGE="${MIN_HALT_REWARD_RANGE:-0.05}"
-MAX_PER_STOP_STEP="${MAX_PER_STOP_STEP:-0}"
-SHARD_SIZE="${SHARD_SIZE:-512}"
-SEED="${SEED:-42}"
-
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/cts/async_soph}"
 
 mkdir -p "${PROJECT_DIR}/logs"
 
@@ -33,21 +23,13 @@ conda activate CTS
 set -u
 
 cd "${PROJECT_DIR}"
+export PYTHONPATH="${PROJECT_DIR}/src${PYTHONPATH:+:$PYTHONPATH}"
 
-echo "train_manifest=${TRAIN_MANIFEST}"
-echo "validation_manifest=${VALIDATION_MANIFEST}"
-echo "output_dir=${OUTPUT_DIR}"
-echo "min_halt_reward_range=${MIN_HALT_REWARD_RANGE}"
-echo "max_per_stop_step=${MAX_PER_STOP_STEP}"
+echo "config=${CONFIG}"
+echo "hostname=$(hostname)"
+nvidia-smi -L || true
 date
 
-python3 scripts/filter_packed_episodes.py \
-  --train-manifest "${TRAIN_MANIFEST}" \
-  --validation-manifest "${VALIDATION_MANIFEST}" \
-  --output-dir "${OUTPUT_DIR}" \
-  --min-halt-reward-range "${MIN_HALT_REWARD_RANGE}" \
-  --max-per-stop-step "${MAX_PER_STOP_STEP}" \
-  --shard-size "${SHARD_SIZE}" \
-  --seed "${SEED}"
+python3 -m cts.data.filter_packed_episodes --config "${CONFIG}"
 
 date

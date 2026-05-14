@@ -1,0 +1,5 @@
+source_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees
+split_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split
+validation_fraction: 0.05
+seed: 0
+clear: false

@@ -8,23 +8,11 @@
 #SBATCH --time=00:10:00
 
 set -euo pipefail
+: "${CONFIG:?CONFIG env var required (path to YAML config)}"
 
-if [[ -z "${SOURCE_ROOT:-}" ]]; then
-  echo "SOURCE_ROOT is required" >&2
-  exit 1
-fi
-if [[ -z "${SPLIT_ROOT:-}" ]]; then
-  echo "SPLIT_ROOT is required" >&2
-  exit 1
-fi
-
-PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/CTS/uncertainty}"
-VALIDATION_FRACTION="${VALIDATION_FRACTION:-0.05}"
-SEED="${SEED:-0}"
-CLEAR_FLAG="${CLEAR_FLAG:-1}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/cts/async_soph}"
 
 mkdir -p "${PROJECT_DIR}/logs"
-mkdir -p "${SPLIT_ROOT}"
 
 set +u
 module --force purge >/dev/null 2>&1 || true
@@ -35,26 +23,13 @@ conda activate CTS
 set -u
 
 cd "${PROJECT_DIR}"
+export PYTHONPATH="${PROJECT_DIR}/src${PYTHONPATH:+:$PYTHONPATH}"
 
-echo "project_dir=${PROJECT_DIR}"
-echo "source_root=${SOURCE_ROOT}"
-echo "split_root=${SPLIT_ROOT}"
-echo "validation_fraction=${VALIDATION_FRACTION}"
-echo "seed=${SEED}"
+echo "config=${CONFIG}"
 echo "hostname=$(hostname)"
+nvidia-smi -L || true
 date
 
-ARGS=(
-  --source-root "${SOURCE_ROOT}"
-  --split-root "${SPLIT_ROOT}"
-  --validation-fraction "${VALIDATION_FRACTION}"
-  --seed "${SEED}"
-)
-
-if [[ "${CLEAR_FLAG}" == "1" ]]; then
-  ARGS+=(--clear)
-fi
-
-python3 scripts/prepare_pretrain_split.py "${ARGS[@]}"
+python3 -m cts.data.preprocess_gnn.split --config "${CONFIG}"
 
 date

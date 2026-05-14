@@ -1,0 +1,6 @@
+command: merge
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/materialize_train_smoke
+num_workers: 1
+final_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_smoke.pt
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_smoke/train_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_smoke.pt

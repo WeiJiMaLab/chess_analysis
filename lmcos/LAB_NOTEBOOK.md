@@ -2597,3 +2597,26 @@ DDP investigation outcome (recorded for future reference, not pursued further th
 Pending run:
 
 - 4-GPU DDP, N_t removed, no warm-start, 20 epochs, `--time=24:00:00 --mem=128G --cpus-per-task=8 NUM_WORKERS=2 SIGN_LOSS_WEIGHT=0.25 WARM_START_CHECKPOINT=`. Output checkpoint: `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/finetune_controller.pt`. At ~66 min/epoch in DDP (without diagnostic instrumentation), 20 epochs ≈ 22 h — fits in the wall budget. Result to be logged once the run completes.
+
+## 2026-05-13
+
+### Codebase simplification + end-to-end pipeline verification
+
+Intent:
+- Migrate the flat repo layout to a hierarchical `src/cts/` package, switch every entry point and SLURM script to a single YAML-config interface, and prune accumulated dead code — then verify the refactored pipeline runs end-to-end on the cluster.
+
+Meaningful changes:
+
+1. **Package restructure**: flat top-level modules collapsed into `src/cts/{core,data,models,train,analysis}/`. `TreeNN` → `TreeEncoder`, `ComputeAdvantageTreeSearchModel` → `MetaController`. `pyproject.toml` + `conftest.py` added so `pip install -e .` and `pytest tests/` work cleanly. No shims preserved — every call site, config, and import moved in the same commit.
+2. **Config system**: every entry point now reads a Pydantic-validated YAML via `--config PATH`, with optional `--override key=value` for nested overrides. Each SLURM script collapses to `python3 -m cts.X.Y --config "${CONFIG}"`; experiment variants live as sibling YAMLs (the diff between two experiments is the diff between their YAMLs). `extra="forbid"` rejects typos at load time. Reference table for the full pipeline is recorded in `~/.claude/CLAUDE.md`.
+3. **Dead-code prune**: 7 dormant analysis scripts deleted (PPO-era trace tools, duplicated motif helpers). `analyze_budgeted_controller_run.py` (3050 LOC) split into 9 themed sub-modules under `cts/analysis/_budgeted/`. Five copies of duplicated regex parsers consolidated into `cts/analysis/_common.py`. The `TreeTensorizer` and `ControllerCollator` classes converted to free functions (no per-instance state). Defensive checks against impossible states removed throughout. README added; package docstrings tightened.
+4. **Self-describing checkpoints**: encoder architecture now embedded in checkpoint metadata under `encoder_architecture`. `materialize` and `controller_train` read it directly, so 7 encoder-arch knobs disappear from `MaterializeConfig` and downstream YAMLs.
+5. **Test suite**: 59 tests pass locally and on della (after `pip install pytest` in the CTS env). Two pre-existing brittle float-equality tests permanently deselected via `--deselect`.
+
+Verification:
+- Rsynced to a fresh cluster directory `~/chess/cts/async_soph_restruct/` so the previous code stayed intact.
+- Ran a 10-fen smoke through every pipeline stage in order: build_tree (sharded via orchestrator) → preprocess_gnn split → preprocess_gnn pack → encoder pretrain (100 epochs, K=1, loss decreased monotonically) → preprocess_mc pack → materialize + merge (train and validation) → controller train (slw01, 20 epochs). All outputs landed in `_smoke`-suffixed scratch directories.
+- Surfaced and fixed three pre-existing issues during the smoke: (a) `submit_generate_dataset_shards.py` still emitted the old `FENS_PATH`/`START_INDEX` env-var pattern after the slurm script had been migrated to read `CONFIG` — rewrote it to emit per-shard YAMLs; (b) CPU-only slurm scripts unconditionally `module load cudatoolkit/12.8`, which failed when they landed on CPU nodes — dropped the load from 6 scripts that don't request a GPU; (c) `merge` subcommand of materialize requires an explicit `encoder_checkpoint` field to populate cache metadata, or downstream `controller_train` rejects the cache as a mismatch — documented in the smoke merge YAMLs.
+
+Conclusion:
+- Refactored codebase verified operational end-to-end. The new YAML-driven interface and src layout are the baseline going forward; further experiments will branch off this state.

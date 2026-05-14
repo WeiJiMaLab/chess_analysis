@@ -1,0 +1,7 @@
+left_diagnostics: ""
+right_diagnostics: ""
+left_label: ""
+right_label: ""
+output_dir: ""
+max_state_rows: 500000
+state_sample_seed: 0
