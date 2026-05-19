@@ -12,12 +12,16 @@ pretraining packer in ``cts_pretrain._child_ptr_and_children_index``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
 import torch
 
-from .schema import NodeFeatureSchema
+from .schema import (
+    TEACHER_TOPOLOGY_FEATURE_NAMES,
+    TREE_ENCODER_FEATURE_NAMES,
+    NodeFeatureSchema,
+)
 from .tree import SearchTree
 
 
@@ -47,6 +51,7 @@ class TreeBatch:
     num_nodes: int  # N
     num_edges: int  # E
     edge_wdl_targets: Optional[torch.Tensor] = None  # [E, 3] normalized per-edge WDL targets when training the edge head
+    topology_targets: Optional[torch.Tensor] = None  # [N, 4] per-node topology supervision when topology-pretraining
 
 
 @dataclass
@@ -68,6 +73,7 @@ class TensorizedTreeExample:
     node_targets: torch.Tensor  # [n_nodes] training targets aligned to node order
     feature_names: Tuple[str, ...]  # mirrors the schema's column order
     edge_wdl_targets: Optional[torch.Tensor] = None  # [n_edges, 3] normalized WDL targets, when provided
+    topology_targets: Optional[torch.Tensor] = None  # [n_nodes, 4] topology supervision, when provided
 
 
 @dataclass
@@ -452,6 +458,57 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
         ),
     )
     return tree_batch, targets
+
+
+def collate_tensorized_examples_for_topology(
+    examples: Sequence[TensorizedTreeExample],
+) -> tuple[TreeBatch, torch.Tensor]:
+    """Stack trees for Encoder+TopologyHead training: encoder input is five cols; supervision is four."""
+    if not examples:
+        raise ValueError("Cannot collate an empty batch.")
+    encoder_width = len(TREE_ENCODER_FEATURE_NAMES)
+    encoder_examples: list[TensorizedTreeExample] = []
+    topology_parts: list[torch.Tensor] = []
+    for example in examples:
+        topology_row = example.topology_targets
+        num_feat = int(example.node_features.shape[1])
+        if topology_row is None and num_feat >= len(TREE_ENCODER_FEATURE_NAMES) + len(
+            TEACHER_TOPOLOGY_FEATURE_NAMES
+        ):
+            tail = tuple(example.feature_names[-len(TEACHER_TOPOLOGY_FEATURE_NAMES) :])
+            if tail == TEACHER_TOPOLOGY_FEATURE_NAMES:
+                topology_row = example.node_features[:, -len(TEACHER_TOPOLOGY_FEATURE_NAMES) :]
+
+        if topology_row is None:
+            raise ValueError(
+                "Every example must expose topology_targets (field or trailing node_features columns); "
+                "repack with topology_supervision_shard=true."
+            )
+
+        if num_feat < encoder_width:
+            raise ValueError(
+                f"node_features has {num_feat} columns; expected at least {encoder_width} for the encoder."
+            )
+        node_features = example.node_features
+        if num_feat > encoder_width:
+            node_features = node_features[:, :encoder_width]
+        encoder_examples.append(
+            replace(
+                example,
+                node_features=node_features,
+                feature_names=TREE_ENCODER_FEATURE_NAMES,
+            )
+        )
+        topology_parts.append(topology_row)
+
+    tree_batch, _node_targets = collate_tensorized_examples(encoder_examples)
+    topology_targets = torch.cat(topology_parts, dim=0)
+    tree_batch = replace(
+        tree_batch,
+        feature_names=TREE_ENCODER_FEATURE_NAMES,
+        topology_targets=topology_targets,
+    )
+    return tree_batch, topology_targets
 
 
 def collate_tensorized_observations(observations: Sequence[TensorizedTreeObservation]) -> TreeBatch:

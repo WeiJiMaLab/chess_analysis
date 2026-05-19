@@ -2620,3 +2620,148 @@ Verification:
 
 Conclusion:
 - Refactored codebase verified operational end-to-end. The new YAML-driven interface and src layout are the baseline going forward; further experiments will branch off this state.
+
+## 2026-05-15 (hl4291 — tree generation on della)
+
+### Cpu vs gpu for lc0 dataset generation
+
+Intent:
+- Establish practical throughput and cluster constraints for generating large teacher-tree shards with ysagiv’s `lc0` (CUDA-linked binary), before scaling to a 50k-FEN run.
+
+Observations:
+
+1. **Loader / libcublas on CPU nodes (historical).** Early CPU smokes needed pip CUDA wheels on `LD_LIBRARY_PATH` when `/usr/local/cuda-12.8` was missing. That path was too slow for production; only the **GPU array** wrapper in `hl4291_slurm/1_generate_shards.slurm` was used for the 50k corpus.
+
+2. **Throughput.** Tree generation is lc0-bound; **GPU array** is the production path (`--array=0-9`, `CHUNK_SIZE=5000`).
+
+3. **Per-example disk format.** Trees land as `cts_raw_pretrain_example_v3` per file; spot-checks via `load_raw_pretrain_record` / `to_pretrain_example()` confirm `format` tag, tensor lengths aligned with `tree.num_nodes()`, and edges consistent. Example sizes observed on scratch (thousands of nodes) reflect the teacher expansion, not a literal “96 nodes” cap — the `min_nodes` / `max_nodes` in YAML feed **budget sampling** in the search config.
+
+### Slurm: 50k shard array (gpu, 10 concurrent tasks)
+
+Meaningful changes:
+
+- **`hl4291_slurm/1_generate_shards.slurm`**: moved from `--partition=cpu` to **one GPU per task** (`#SBATCH --gres=gpu:1`, `#SBATCH --constraint=nomig`, wall `24:00:00`). Environment setup uses hl4291 venv + `module load cudatoolkit/12.8`. Set **`PYTHONUNBUFFERED=1`** and **`python3 -u`** so batch logs show progress without line-buffering surprises. (Yotam’s generic GPU wrapper remains in `slurm/generate_dataset_shard.slurm`.)
+- **Sharding policy**: build **50k indices** as **`--array=0-9`** with **`CHUNK_SIZE=5000`** (10 tasks × 5000 FENs) instead of 100×500, to stay within a typical **array-size cap** (~10 concurrent tasks at many sites).
+- **`configs/data/hl4291_build_tree_50k.yaml`**: header comments updated with the `sbatch` line including `CHUNK_SIZE=5000`; output remains `.../generated_trees_50k`.
+
+Operational:
+
+- Cleared prior **`generated_trees_50k/*.pt`** before a fresh GPU run.
+- Submitted GPU array job **`8289498`** (verify completion in `sacct` / `logs/cts-gen-50k_*`).
+
+### Smoke policy (project convention)
+
+- **Slurm smoke jobs** should keep **`--time` ≤ ~10 minutes** for quick checks; smoke YAMLs + overrides should be sized to finish under that unless deliberately stress-testing.
+
+## 2026-05-17 (hl4291 — topology-supervised encoder pretrain)
+
+Intent:
+
+- Use per-node teacher topology from ``cts_raw_pretrain_example_v3`` (``n_visits``, ``nodes_below``, ``max_breadth_relative``, ``max_depth_relative``) for **encoder pretraining** via a standalone **``TopologyHead``** (still separate from Child-WDL), with Huber regression by default and an optional **weighted / phased Huber curriculum** (`topology_target_weights` in `BuildTreeConfig` / `TopologyPretrainConfig`).
+- Optionally **widening** packed ``node_features`` to nine columns **for downstream Child-WDL** that should *see* teacher topology at the embedding input — without duplicating incompatible code paths.
+
+Packing presets ([`PackPretrainConfig`](src/cts/data/preprocess_gnn/pack.py)):
+
+| Situation | `topology_features` | `topology_supervision_shard` |
+|-----------|---------------------|-------------------------------|
+| Baseline Child-WDL (narrow) | `false` | `false` |
+| Topology-only shards (historic layout: 5-wide + flat targets) | `false` | `true` |
+| **Full template** (9-wide rows + duplicated flat ``topology_targets``, same scaled values from one helper) | `true` | `true` |
+
+**Validation**: `topology_features=true` requires `topology_supervision_shard=true` so targets are never missing for topology pretrain and tensors cannot drift.
+
+**YAML migration**: deprecated keys are still accepted once and stripped:
+
+- ``include_topology_targets: true`` → `topology_supervision_shard: true`, `topology_features: false`
+- ``include_teacher_topology: true`` → both flags `true` (full template).
+
+**Internals**: `scaled_teacher_topology_matrix` in [`teacher_targets.py`](src/cts/data/preprocess_gnn/teacher_targets.py) fills both the last four ``node_features`` columns (wide pack) and the flat ``topology_targets`` shard (`log1p` on visits and ``nodes_below`` only).
+
+**Checkpoint widths**: Topology pretraining still feeds a **five-column** subtree into ``TreeEncoder`` (``collate_tensorized_examples_for_topology`` strips trailing topology columns); saved encoder checkpoints therefore keep ``node_feat: 5``. **Nine-wide Child-WDL** requires a freshly built ``TreeEncoder(node_feat=9)`` and is **not** a silent ``load_state_dict`` from a topology-pretrained narrow checkpoint without resizing the input linear.
+
+**Weighted Huber**: `topology_target_weights: [w0,w1,w2,w3]` (aligned with [`topology_target_feature_names`](src/cts/core/schema.py)) averages per-target loss with that mask; zeros remove a dimension from the active denominator (implemented in [`TopologyPretrainer._regression_loss`](src/cts/train/gnn_pretrain.py)).
+
+**Collate fallback**: Wide shards without an explicit ``topology_targets`` tensor can still load if manifest + trailing column names match; prefer always writing ``topology_targets``.
+
+Example configs:
+
+- [`configs/data/preprocess_gnn/topology_pack_topology_supervision_only.yaml`](configs/data/preprocess_gnn/topology_pack_topology_supervision_only.yaml)
+- [`configs/data/preprocess_gnn/topology_pack_full_template.yaml`](configs/data/preprocess_gnn/topology_pack_full_template.yaml)
+- **Scratch (≈49k trees, topology full preset):** seeded train/val via [`configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml`](configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml) → pack via [`configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml).
+
+### 49k-ish scratch pipeline: seeded split + topology full pack
+
+Train/validation manifests should **not** be built as “sorted paths, first 90% / last 10%”: filename order tracks generation index and can bias val. Use [`split.py`](src/cts/data/preprocess_gnn/split.py) instead: collect `*.pt` under `source_root` in **sorted** order (so filesystem walk order does not leak into reproducibility), **shuffle with `SplitConfig.seed`**, then write validation as the first ``max(1, int(round(n * validation_fraction)))`` shuffled paths and train as the remainder (`validation_fraction` must stay in `(0,1)`).
+
+| Step | Config / artifact |
+|------|-------------------|
+| Split | [`hl4291_split_50k_topology.yaml`](configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml): `source_root=.../generated_trees_50k`, `split_root=.../pretrain_split_50k_topology`, `validation_fraction=0.1`, `seed=42`, `clear=true`. Typical counts with **48,701** `.pt`: **43,831 train**, **4870 validation**. |
+| CLI | ``python -u -m cts.data.preprocess_gnn.split --config configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml`` |
+| Pack | [`hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml): `topology_features` + `topology_supervision_shard`, ``output_root=.../pretrain_packed_50k_topology_full``, `shard_size=2000`, `clear=true`. Packing is serial in-process (no `num_workers`). Header comments point at the split config. |
+| Slurm | [`hl4291_slurm/2_pack_shards.slurm`](hl4291_slurm/2_pack_shards.slurm): `#SBATCH --time=00:15:00`, `cpus-per-task=1`, `mem=4G`, `#SBATCH --array=0`; job sets `OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1`. Activate `~/venv` (override with `VENV_ACTIVATE`). From `lmcos`: ``export CONFIG=$PWD/configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml`` then ``sbatch hl4291_slurm/2_pack_shards.slurm``. Logs under [`lmcos/logs/`](logs/). |
+
+Changing **`seed`** in `hl4291_split_50k_topology.yaml` gives a different random partition with the same tree set; rerun **split** before **pack** whenever the partition should change.
+
+CLI:
+
+- Split: ``python -m cts.data.preprocess_gnn.split --config ...``
+- Pack: ``python -m cts.data.preprocess_gnn.pack --config ...``
+- Topology pretrain: ``python -m cts.data.build_tree --config ...`` with ``command: pretrain-topology-encoder``; optional ``topology_target_weights: [1.0, 1.0, 0.0, 0.0]`` for phased training.
+
+Tests: [`tests/test_topology_pack_presets.py`](tests/test_topology_pack_presets.py).
+
+Operational note: 50k GPU run left indices **38701–39999** missing (array task 7); topology pack/pretrain can proceed on **48,701** v3 trees until that shard is regenerated.
+
+## 2026-05-18 (hl4291 — topology full pack: serial-only + Slurm sizing)
+
+### Why this work was needed
+
+Topology encoder pretrain on the **48,701-tree** split is blocked until [`hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml) finishes writing to ``pretrain_packed_50k_topology_full``. The first della pack job (**8365231**) produced a single train shard and then sat idle until **TIMEOUT** — so the failure mode had to be understood before burning more queue time or claiming the pipeline “just needs more wall clock.”
+
+### What went wrong (diagnosis)
+
+Symptom: after ~90 s and **shard_00000.pt**, logs stopped; four more hours with no `shard_examples=` lines, then Slurm killed the job.
+
+Why that pattern points away from “slow trees” or “bad shard-2 data”:
+
+- Throughput on shard 1 was healthy (~22 ex/s for 2k examples).
+- At that rate the full corpus is **~40 min**, not 4 h — so TIMEOUT was a **hang**, not under-provisioned time.
+- Shard-2 input paths exist and are similar size to shard 1; nothing suggested one pathological file.
+
+Actual mechanism: [`pack.py`](src/cts/data/preprocess_gnn/pack.py) opened a **new `ProcessPoolExecutor` for every shard**. Shard 1’s pool ran while the parent had only imported PyTorch. After shard 1, the parent held large tensors from **`torch.cat` / `torch.save`**, then forked workers for shard 2. **Fork + active PyTorch in the parent** is a known deadlock scenario; workers never returned, so `as_completed` never reached the next `log_interval` line. Reproduced on vis: second pool hangs after a parent `torch.cat`/`save` warmup; serial path crosses shard boundaries fine.
+
+The `hl4291` config used **`num_workers: 8`** even though topology templates used **`num_workers: 0`** — so we turned on a code path the repo did not actually rely on.
+
+### Decisions (why each change)
+
+| Decision | Why |
+|----------|-----|
+| **Pack serially only; delete `num_workers`** | Multiprocessing here is **unsafe** (per-shard fork after torch) and **unnecessary**: measured serial throughput on real trees is **~90–115 ex/s**, i.e. full pack in **~8–10 min**. Keeping `num_workers` implied a supported fast path that **fails silently at shard 2**; rejecting the key in YAML fails loud on stale configs. |
+| **Smoke test through shard 2** | The production bug was specifically “shard 1 OK, shard 2 never starts logging”; a test that only packs one example or one shard would not catch it. |
+| **`cpus-per-task=1` + `OMP_NUM_THREADS=1`** | Work is strictly sequential; extra Slurm CPUs do not speed this CLI and encourage false confidence that `num_workers` does something. |
+| **`mem=4G` (not 64G)** | Measured peak for a full 2k-tree topology shard (load + tensorize list + `torch.cat` + save) is **~1.7 GB**; memory does **not** grow with shard count because each shard is assembled and written then dropped. **64G was ~30× need** and unfair on a shared cluster; **4G ≈ 2× peak** leaves headroom without hoarding. |
+| **`time=00:15:00`** | Serial pack on the full ~49k split completed in **~9 min** on della (job **8429582**); 15 min leaves headroom vs vis-node benchmarks without hoarding queue time. |
+
+If we need parallelism later, the safe patterns are **Slurm array over shards** (separate processes, no fork-after-torch) or **`spawn`** with one long-lived pool — **not** “new `ProcessPoolExecutor` per shard” in one Python process.
+
+### What changed (reference)
+
+- [`pack.py`](src/cts/data/preprocess_gnn/pack.py): removed pool path; `tensorize_example_for_pack`; `PackPretrainConfig` rejects deprecated `num_workers`.
+- GNN pack YAMLs: dropped `num_workers` lines (including [`hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml)).
+- [`tests/test_topology_pack_presets.py`](tests/test_topology_pack_presets.py): `test_pack_topology_smoke_reaches_second_train_shard`.
+- [`hl4291_slurm/2_pack_shards.slurm`](hl4291_slurm/2_pack_shards.slurm): 1 CPU, 4G, 15 min wall, thread caps in the job script.
+
+### Result
+
+Cleared partial pack output and resubmitted on della after the Slurm/code fixes. Job **8429582** (`cts-pack-topo-50k`) **COMPLETED** (exit 0) in **9 min 15 s** on 2026-05-18.
+
+Output (`pretrain_packed_50k_topology_full` on scratch):
+
+| Split | Examples | Shards | Size |
+|-------|----------|--------|------|
+| Train | 43,831 | 22 | ~15 GB |
+| Validation | 4,870 | 3 | ~1.7 GB |
+
+Manifests: `topology_features=true`, `topology_supervision_shard=true`. Spot-check on `shard_00000`: `node_features` shape `(N, 9)`, `topology_targets` `(N, 4)`. Log throughput **~93–94 ex/s** (serial path). Log: [`logs/cts-pack-topo-50k_8429582_0.out`](logs/cts-pack-topo-50k_8429582_0.out).
+
+Topology encoder pretrain on this split is unblocked. Tree generation still missing indices **38701–39999** (array task 7); the pack used all **48,701** v3 trees currently on scratch.

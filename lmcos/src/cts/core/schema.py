@@ -111,10 +111,36 @@ class NodeFeatureSchema:
 # pretrain dataset on disk.
 TREE_ENCODER_FEATURE_NAMES: Tuple[str, ...] = ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
 
+# Optional extra columns sourced from teacher ``cts_raw_pretrain_example_v3`` tensors
+# (stored on the raw record, not legacy ``node_features`` columns).
+# Appended after ``TREE_ENCODER_FEATURE_NAMES`` when packing with ``topology_features: true``.
+# **Format-breaking** vs 5-wide shards and narrow encoder checkpoints — see LAB_NOTEBOOK.
+TEACHER_TOPOLOGY_FEATURE_NAMES: Tuple[str, ...] = (
+    "n_visits",
+    "nodes_below",
+    "max_breadth_relative",
+    "max_depth_relative",
+)
 
-def tree_encoder_feature_schema() -> NodeFeatureSchema:
-    """Return the canonical encoder schema. Callers should use this, not ad hoc constructions."""
-    return NodeFeatureSchema.from_ordered_features(TREE_ENCODER_FEATURE_NAMES)
+# Column order for flat ``topology_targets`` supervision tensors (``[N, 4]``); same order
+# as appended ``node_features`` when ``topology_features: true``.
+TOPOLOGY_TARGET_FEATURE_NAMES: Tuple[str, ...] = TEACHER_TOPOLOGY_FEATURE_NAMES
+
+# Metadata value stored in topology-pretrain checkpoints for target scaling.
+TOPOLOGY_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW = "log1p_visits_nodes_below"
+
+
+def topology_target_feature_names() -> Tuple[str, ...]:
+    """Return ordered topology supervision columns (same order as raw v3 tensors)."""
+    return TOPOLOGY_TARGET_FEATURE_NAMES
+
+
+def tree_encoder_feature_schema(*, topology_features: bool = False) -> NodeFeatureSchema:
+    """Column order for packed ``node_features`` (5 baseline, +4 teacher topology if ``topology_features``)."""
+    names = TREE_ENCODER_FEATURE_NAMES
+    if topology_features:
+        names = names + TEACHER_TOPOLOGY_FEATURE_NAMES
+    return NodeFeatureSchema.from_ordered_features(names)
 
 
 def require_tree_encoder_scalar_features(scalar_features: Mapping[str, float], *, context: str = "node") -> None:

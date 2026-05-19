@@ -428,7 +428,6 @@ class SupervisedBranchTests(unittest.TestCase):
                         "split_root": split_root,
                         "output_root": output_root,
                         "shard_size": 1,
-                        "num_workers": 2,
                         "log_interval": 1,
                         "clear": True,
                     }

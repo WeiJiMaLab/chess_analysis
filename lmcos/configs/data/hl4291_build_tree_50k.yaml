@@ -1,0 +1,14 @@
+# 50k teacher trees (v3 examples) on hl4291 scratch.
+# GPU array (10 shards × 5000 FENs from the first 50k lines of ysagiv's root list):
+#   export CONFIG=$PWD/configs/data/hl4291_build_tree_50k.yaml
+#   sbatch --array=0-9 --export=ALL,CHUNK_SIZE=5000 hl4291_slurm/1_generate_shards.slurm
+command: generate-dataset
+engine_path: /scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0
+weights_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz
+fens: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/roots/sampled_root_fens_2023.txt
+output_dir: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/generated_trees_50k
+max_depth: 30
+min_nodes: 96
+max_nodes: 96
+resume: true
+log_interval: 25

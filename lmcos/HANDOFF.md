@@ -33,10 +33,10 @@ src/cts/
     _budgeted/             themed sub-modules for the main analyzer
     _common.py             shared regex/parse helpers
 configs/                 YAML configs (one per entry point + variants)
-slurm/                   SLURM job scripts (della-specific defaults; adjust
-                         module loads + paths for other clusters)
+slurm/                   SLURM job scripts (Yotam / ysagiv della defaults)
+hl4291_slurm/            hl4291 Slurm scripts (50k tree gen, topology pack)
 scripts/                 orchestrators (just submit_generate_dataset_shards.py)
-tests/                   pytest suite (~60 tests, run with `pytest tests/`)
+tests/                   pytest suite (~77 tests, run with `pytest tests/`)
 LAB_NOTEBOOK.md          running experimental log; chronological
 data/                    sampled_root_fens_2023.txt and similar
 demos/                   April-era tutorial notebooks (some are stale — see §4)
@@ -45,19 +45,22 @@ demos/                   April-era tutorial notebooks (some are stale — see §
 ## 2. Setup
 
 Requirements:
-- Python 3.10+
-- PyTorch, pydantic v2, PyYAML, python-chess, matplotlib
+- Python 3.9+ (see `pyproject.toml`; cluster envs often use 3.10+)
+- **Core (declared):** PyTorch, NumPy, pydantic v2, PyYAML — `pip install -e .`
+- **Dev / full local tests:** DuckDB, matplotlib, python-chess (PyPI `chess`), pytest — `pip install -e ".[dev]"` (same as core + optional extras; see `pyproject.toml`).
+- **GPU PyTorch:** install the CUDA build from [pytorch.org](https://pytorch.org) before or after the editable install so pip does not downgrade you to a CPU-only wheel unintentionally.
 - lc0 with a weights file — only needed for tree generation (stages 1–3 below).
-  Training and analysis don't need lc0.
-- pytest (for the test suite)
+  Training on prepacked shards and most analysis do not need lc0.
 
 Install:
 ```
-pip install -e .
+pip install -e ".[dev]"
 ```
-The `pyproject.toml` declares the package and puts `src/cts/` on the import
-path. `conftest.py` does the equivalent for `pytest`. Run tests with
-`pytest tests/`; 59 should pass.
+For runtime only (no pytest / DuckDB / plot extras): `pip install -e .`
+
+The `pyproject.toml` declares dependencies and puts `src/cts/` on the import
+path when installed. `conftest.py` does the equivalent for `pytest` without an install. Run tests with
+`pytest tests/`.
 
 ## 3. The config + sbatch interface
 
@@ -159,6 +162,11 @@ Suggested order:
    smoke FEN file.
 3. Run stages 3 → 4a → 4b → 5 → 6 → 7a → 7b → 8 with the corresponding
    `*_smoke.yaml` configs. Each stage should complete in a few minutes.
+
+**Slurm smokes:** keep wall time **≤ 10 minutes** (`#SBATCH --time=00:10:00` or
+`sbatch --time=00:10:00 ...` overriding longer defaults). Smoke configs and tiny
+inputs should finish well under that; raise the limit only for deliberately heavier
+debug runs.
 
 The end state is `fittedq_smoke.pt` + `fittedq_smoke_diagnostics.jsonl`
 under the checkpoints dir. The diagnostics .jsonl has per-epoch loss

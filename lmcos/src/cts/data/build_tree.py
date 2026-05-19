@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 import random
 import time
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from cts.core.providers import (
     Lc0DirectEvalProvider,
@@ -25,6 +25,7 @@ from cts.core.providers import (
     UciEngineProcess,
 )
 from cts.core.schema import NodeFeatureSchema, tree_encoder_feature_schema
+from cts.core.tensorizer import TensorizedTreeExample
 from cts.data.preprocess_gnn.teacher_targets import (
     NodeBudgetDistribution,
     TeacherSearchConfig,
@@ -32,8 +33,14 @@ from cts.data.preprocess_gnn.teacher_targets import (
     load_pretrain_example_dataset,
     save_pretrain_example_to_directory,
 )
-from cts.models.gnn import ChildWdlModel
-from cts.train.gnn_pretrain import ChildWdlPretrainConfig, ChildWdlPretrainer
+from cts.core.schema import topology_target_feature_names
+from cts.models.gnn import ChildWdlModel, TopologyModel
+from cts.train.gnn_pretrain import (
+    ChildWdlPretrainConfig,
+    ChildWdlPretrainer,
+    TopologyPretrainConfig,
+    TopologyPretrainer,
+)
 
 
 def _default_lc0_engine_path() -> str:
@@ -50,7 +57,7 @@ def _default_lc0_weights_path() -> str | None:
 class BuildTreeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    command: Literal["generate-dataset", "pretrain-child-wdl-encoder"]
+    command: Literal["generate-dataset", "pretrain-child-wdl-encoder", "pretrain-topology-encoder"]
 
     # generate-dataset
     engine_path: str = _default_lc0_engine_path()
@@ -93,8 +100,20 @@ class BuildTreeConfig(BaseModel):
     prefetch_factor: int = 2
     pin_memory: bool = False
     disable_persistent_workers: bool = False
+    loss_type: Literal["huber", "mse"] = "huber"
+    huber_delta: float = 1.0
+    #: Phased topology Huber curriculum: weights aligned with :func:`topology_target_feature_names`.
+    topology_target_weights: Optional[Tuple[float, float, float, float]] = None
 
-
+    @field_validator("topology_target_weights", mode="before")
+    @classmethod
+    def _coerce_topology_target_weights(cls, value: object) -> Optional[Tuple[float, float, float, float]]:
+        if value is None:
+            return None
+        seq = tuple(float(x) for x in value)  # type: ignore[arg-type]
+        if len(seq) != 4:
+            raise ValueError("topology_target_weights must have exactly four entries when set.")
+        return seq
 def _feature_schema() -> NodeFeatureSchema:
     """Return the canonical encoder feature schema."""
     return tree_encoder_feature_schema()
@@ -104,6 +123,22 @@ def _load_fens(path: str) -> List[str]:
     """Read newline-separated FENs from ``path``, skipping blank lines."""
     with open(path, "r", encoding="utf-8") as handle:
         return [line.strip() for line in handle if line.strip()]
+
+
+def _build_topology_model(config: BuildTreeConfig, schema: NodeFeatureSchema) -> TopologyModel:
+    """Instantiate the topology-supervised pretraining model (5-wide encoder input)."""
+    return TopologyModel(
+        k=config.k,
+        node_feat=len(schema.feature_names),
+        device=config.device,
+        node_embed_hidden=config.node_embed_hidden,
+        d_embed=config.d_embed,
+        d_message=config.d_message,
+        n_heads=config.n_heads,
+        d_att=config.d_att,
+        decoder_hidden=config.decoder_hidden,
+        num_topology_targets=len(topology_target_feature_names()),
+    )
 
 
 def _build_child_wdl_model(config: BuildTreeConfig, schema: NodeFeatureSchema) -> ChildWdlModel:
@@ -360,7 +395,11 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
     )
 
     print("[child-wdl-pretrain] stage=build_schema_and_tensorizer", flush=True)
-    schema = _feature_schema()
+    first_example = train_examples[0]
+    if isinstance(first_example, TensorizedTreeExample):
+        schema = NodeFeatureSchema.from_ordered_features(first_example.feature_names)
+    else:
+        schema = tree_encoder_feature_schema()
     print("[child-wdl-pretrain] stage=build_model", flush=True)
     model = _build_child_wdl_model(config, schema)
     print("[child-wdl-pretrain] stage=build_trainer", flush=True)
@@ -480,12 +519,108 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
     )
 
 
+def pretrain_topology_encoder_command(config: BuildTreeConfig) -> None:
+    """Entry point for ``pretrain-topology-encoder``: fit encoder + ``TopologyHead`` on packed topology targets."""
+    print(f"[topology-pretrain] stage=load_train_dataset path={config.train_dir}", flush=True)
+    train_examples = load_pretrain_example_dataset(config.train_dir)
+    print(f"[topology-pretrain] stage=load_validation_dataset path={config.validation_dir}", flush=True)
+    validation_examples = load_pretrain_example_dataset(config.validation_dir)
+    print(
+        f"[topology-pretrain] stage=datasets_ready train_examples={len(train_examples)} "
+        f"validation_examples={len(validation_examples)}",
+        flush=True,
+    )
+
+    schema = tree_encoder_feature_schema(topology_features=False)
+    model = _build_topology_model(config, schema)
+    trainer = TopologyPretrainer(
+        model=model,
+        device=config.device,
+        train_examples=train_examples,
+        validation_examples=validation_examples,
+        config=TopologyPretrainConfig(
+            batch_size=config.batch_size,
+            learning_rate=config.learning_rate,
+            weight_decay=config.weight_decay,
+            epochs=config.epochs,
+            loss_type=config.loss_type,
+            huber_delta=config.huber_delta,
+            topology_target_weights=config.topology_target_weights,
+            shuffle=True,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            prefetch_factor=config.prefetch_factor,
+            persistent_workers=not config.disable_persistent_workers,
+        ),
+    )
+
+    resume_path = config.output_checkpoint.replace(".pt", "_resume.pt")
+    start_epoch = 1
+    if os.path.isfile(resume_path):
+        print(f"[topology-pretrain] stage=resume path={resume_path}", flush=True)
+        start_epoch = trainer.load_training_state(resume_path) + 1
+
+    last_logged_batch = {"train": 0, "validation": 0}
+
+    def _log_batch_progress(epoch_index, phase, batch_index, total_batches, seen_examples, seen_nodes, total_loss):
+        interval = config.log_interval
+        if not (
+            batch_index == 1
+            or batch_index == total_batches
+            or batch_index - last_logged_batch[phase] >= interval
+        ):
+            return
+        last_logged_batch[phase] = batch_index
+        print(
+            f"[topology-pretrain] epoch={epoch_index}/{config.epochs} phase={phase} "
+            f"batch={batch_index}/{total_batches} seen_examples={seen_examples} "
+            f"seen_nodes={seen_nodes} total_loss={total_loss:.6f}",
+            flush=True,
+        )
+
+    def _log_epoch(epoch_index, train_metrics, validation_metrics):
+        print(
+            f"epoch={epoch_index}/{config.epochs} "
+            f"train_total_loss={train_metrics.total_loss:.6f} "
+            f"train_supervised_nodes={train_metrics.num_supervised_nodes} "
+            f"val_total_loss={validation_metrics.total_loss:.6f} "
+            f"val_supervised_nodes={validation_metrics.num_supervised_nodes}",
+            flush=True,
+        )
+
+    history = trainer.fit(
+        progress_callback=_log_epoch,
+        batch_progress_callback=_log_batch_progress,
+        start_epoch=start_epoch,
+        resume_path=resume_path,
+    )
+
+    trainer.save_best_encoder(
+        config.output_checkpoint,
+        metadata={"stage": "supervised_pretrain"},
+    )
+    head_path = config.output_checkpoint.replace(".pt", "_topology_head.pt")
+    trainer.save_best_topology_head(
+        head_path,
+        metadata={"encoder_checkpoint": config.output_checkpoint},
+    )
+    final_validation = history[-1]["validation"]
+    print(
+        f"validation_total_loss={final_validation.total_loss:.6f} "
+        f"validation_supervised_nodes={final_validation.num_supervised_nodes} "
+        f"checkpoint={config.output_checkpoint} topology_head={head_path}",
+        flush=True,
+    )
+
+
 def main(config: BuildTreeConfig) -> None:
     """Dispatch to the selected subcommand based on ``config.command``."""
     if config.command == "generate-dataset":
         generate_dataset_command(config)
     elif config.command == "pretrain-child-wdl-encoder":
         pretrain_child_wdl_encoder_command(config)
+    elif config.command == "pretrain-topology-encoder":
+        pretrain_topology_encoder_command(config)
 
 
 if __name__ == "__main__":

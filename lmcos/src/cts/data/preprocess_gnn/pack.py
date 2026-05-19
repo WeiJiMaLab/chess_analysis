@@ -1,26 +1,31 @@
-"""Pack raw pretrain prefix examples into encoder-ready shard files.
+"""Flatten per-tree `.pt` pretrain examples into batched shards the GNN eats.
 
-Runs after ``prepare_pretrain_split.py`` and ``derive_pretrain_prefixes.py``:
-loads each per-example ``RawPretrainExampleRecord`` listed in the split's
-text manifest, projects its features onto the canonical encoder schema, and
-concatenates many examples into a single ``.pt`` shard with flat ``node_ptr``
-and ``edge_ptr`` offsets. The resulting per-split JSON manifest is what the
-encoder pretraining slurm script feeds into its dataset loader.
-"""
+Given split manifests pointing at teacher trees (`cts_raw_pretrain_example_*`), this CLI
+loads each example, aligns columns with the encoder schema (optionally widening with
+scaled teacher topology), and writes chunky ``.pt`` shards plus JSON manifests — the
+usual input to Child-WDL or topology Encoder/TopologyHead training — Huber on the four topology
+vectors lines up encoder **node** states (root included) with scaled teacher summaries, while checkpoints
+stay five columns wide at the embedding input.
+
+Pipeline: manifest paths → tensors per node/edge → stack many trees → shard files."""
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
-import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import torch
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
-
-from cts.core.schema import NodeFeatureSchema, tree_encoder_feature_schema
+from cts.core.schema import (
+    TEACHER_TOPOLOGY_FEATURE_NAMES,
+    topology_target_feature_names,
+    NodeFeatureSchema,
+    tree_encoder_feature_schema,
+)
+from cts.core.tensorizer import TensorizedTreeExample
 from cts.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
 
 
@@ -30,14 +35,56 @@ class PackPretrainConfig(BaseModel):
     split_root: str = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split"
     output_root: str = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed"
     shard_size: int = 2000
-    num_workers: int = 0
     log_interval: int = 1
     single_shard: bool = False
     clear: bool = False
 
+    #: Nine-column ``node_features`` if true (scaled teacher topology as last four cols).
+    topology_features: bool = False
+    #: Flat ``topology_targets`` in each shard + manifest flag ``topology_targets: true``.
+    topology_supervision_shard: bool = False
 
-def _read_manifest(path: Path) -> list[Path]:
-    """Read a newline-delimited list of example paths from a split manifest."""
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_deprecated_topology_yaml(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        if "num_workers" in out:
+            raise ValueError(
+                "Pack configs no longer accept `num_workers`; packing runs serially in-process. "
+                "Remove `num_workers` from your YAML."
+            )
+        lt_key = "include_topology_targets"
+        tt_key = "include_teacher_topology"
+        if lt_key in out or tt_key in out:
+            inc_lt = bool(out.pop(lt_key, False))
+            inc_tt = bool(out.pop(tt_key, False))
+            if inc_lt and inc_tt:
+                raise ValueError(
+                    f"Deprecated mutually exclusive YAML keys `{lt_key}` and `{tt_key}` cannot both be true. "
+                    "Use topology_features / topology_supervision_shard; see LAB_NOTEBOOK."
+                )
+            if inc_lt:
+                out.setdefault("topology_supervision_shard", True)
+                out.setdefault("topology_features", False)
+            elif inc_tt:
+                out.setdefault("topology_features", True)
+                out.setdefault("topology_supervision_shard", True)
+        return out
+
+    @model_validator(mode="after")
+    def topology_wide_must_ship_supervision(self) -> PackPretrainConfig:
+        if self.topology_features and not self.topology_supervision_shard:
+            raise ValueError(
+                "topology_features=true requires topology_supervision_shard=true so topology pretrain "
+                "has explicit targets and shards stay consistent; see LAB_NOTEBOOK presets."
+            )
+        return self
+
+
+def read_manifest(path: Path) -> list[Path]:
+    """Paths from ``train_manifest.txt`` / ``validation_manifest.txt`` (one path per line)."""
     if not path.exists():
         raise FileNotFoundError(f"Manifest does not exist: {path}")
     with path.open("r", encoding="utf-8") as handle:
@@ -47,54 +94,65 @@ def _read_manifest(path: Path) -> list[Path]:
     return examples
 
 
-def _feature_schema() -> NodeFeatureSchema:
-    """Return the canonical encoder schema used for every shard in this run."""
-    return tree_encoder_feature_schema()
-
-
-def _validate_tree_encoder_record_features(record: RawPretrainExampleRecord, *, context: str) -> None:
-    """Fail loudly if a raw record is missing any required encoder feature.
-
-    Older raw records may pre-date WDL features, which would otherwise show
-    up as silent NaN columns inside packed shards. We catch both the
-    missing-name case and any NaN entries up front so the offending file
-    path appears in the error.
-
-    Args:
-        record: raw per-example record loaded from disk.
-        context: short label (typically the file path) interpolated into
-            the error message so the caller can locate the bad record.
-    """
+def raise_if_example_cannot_pack(
+    record: RawPretrainExampleRecord,
+    schema: NodeFeatureSchema,
+    *,
+    example_path_label: str,
+    need_teacher_topology_columns: bool,
+) -> None:
+    """Raise ``ValueError`` if this raw example cannot populate the chosen encoder columns."""
     feature_index = {name: index for index, name in enumerate(record.feature_names)}
-    for required_feature in tree_encoder_feature_schema().feature_names:
+    num_nodes = int(record.parent_index.shape[0])
+    # Narrow shards still consume teacher topology tensors for the flat supervision row.
+    if need_teacher_topology_columns:
+        for name in TEACHER_TOPOLOGY_FEATURE_NAMES:
+            column = getattr(record, name)
+            if int(column.shape[0]) != num_nodes:
+                raise ValueError(
+                    f"{example_path_label} has {name} length {column.shape[0]} != num_nodes={num_nodes}."
+                )
+    for required_feature in schema.feature_names:
+        if required_feature in TEACHER_TOPOLOGY_FEATURE_NAMES and need_teacher_topology_columns:
+            continue  # lengths already enforced for all four teacher tensors above
         if required_feature not in feature_index:
-            raise ValueError(f"{context} is missing required tree encoder feature {required_feature!r}.")
+            raise ValueError(f"{example_path_label} is missing required tree encoder feature {required_feature!r}.")
         column = record.node_features[:, feature_index[required_feature]]
         if torch.isnan(column).any():
             bad_node = int(torch.nonzero(torch.isnan(column), as_tuple=False)[0].item())
             raise ValueError(
-                f"{context} node_id={bad_node} is missing required tree encoder feature {required_feature!r}."
+                f"{example_path_label} node_id={bad_node} is missing required tree encoder feature {required_feature!r}."
             )
 
 
-def _tensorize_example_path(task: tuple[str, tuple[str, ...]]) -> object:
-    """Worker entry point: load one raw record and return its tensorized form.
+def tensorize_example_for_pack(
+    path: Path,
+    schema: NodeFeatureSchema,
+    *,
+    topology_features: bool,
+    topology_supervision_shard: bool,
+) -> TensorizedTreeExample:
+    record = RawPretrainExampleRecord.load(path)
+    need_topo = topology_features or topology_supervision_shard
+    raise_if_example_cannot_pack(
+        record,
+        schema,
+        example_path_label=str(path),
+        need_teacher_topology_columns=need_topo,
+    )
+    return record.to_tensorized_tree_example(
+        schema,
+        topology_features=topology_features,
+        topology_supervision_shard=topology_supervision_shard,
+    )
 
-    Accepts a ``(path, feature_names)`` tuple rather than a schema object so
-    it can be pickled cleanly into a ``ProcessPoolExecutor`` worker.
-    """
-    path_str, feature_names = task
-    schema = NodeFeatureSchema(feature_names)
-    record = RawPretrainExampleRecord.load(path_str)
-    _validate_tree_encoder_record_features(record, context=str(path_str))
-    return record.to_tensorized_tree_example(schema)
 
-
-def _load_tensorized_examples(
+def tensorize_paths_for_shard(
     shard_paths: list[Path],
     schema: NodeFeatureSchema,
-    num_workers: int,
     *,
+    topology_features: bool,
+    topology_supervision_shard: bool,
     split_name: str,
     shard_index: int,
     total_shards: int,
@@ -102,85 +160,43 @@ def _load_tensorized_examples(
     total_examples_in_split: int,
     start_time: float,
     log_interval: int,
-) -> list[object]:
-    """Load and tensorize one shard's worth of examples, optionally in parallel.
-
-    Logs progress every ``log_interval`` examples and at shard end so the
-    slurm log shows a running examples/second rate. Falls back to serial
-    execution if ``num_workers <= 1`` or if process-pool startup fails with
-    ``PermissionError``/``OSError`` (seen on some cluster filesystems).
-    """
-    tasks = [(str(path), tuple(schema.feature_names)) for path in shard_paths]
-    if num_workers <= 1:
-        # Serial path: simpler, used when num_workers <= 1 or as a fallback.
-        results = []
-        for completed_in_shard, task in enumerate(tasks, start=1):
-            results.append(_tensorize_example_path(task))
-            if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
-                elapsed = time.time() - start_time
-                completed_total = total_examples_before_shard + completed_in_shard
-                print(
-                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                    f"shard_examples={completed_in_shard}/{len(tasks)} "
-                    f"packed_examples={completed_total}/{total_examples_in_split} "
-                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
-                    flush=True,
-                )
-        return results
-    try:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            # Preserve input order by recording each future's original index
-            # and writing into a pre-sized results list as futures complete.
-            futures = {
-                executor.submit(_tensorize_example_path, task): index
-                for index, task in enumerate(tasks)
-            }
-            results = [None] * len(tasks)
-            for completed_in_shard, future in enumerate(as_completed(futures), start=1):
-                results[futures[future]] = future.result()
-                if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
-                    elapsed = time.time() - start_time
-                    completed_total = total_examples_before_shard + completed_in_shard
-                    print(
-                        f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                        f"shard_examples={completed_in_shard}/{len(tasks)} "
-                        f"packed_examples={completed_total}/{total_examples_in_split} "
-                        f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
-                        flush=True,
-                    )
-            return results
-    except (PermissionError, OSError):
-        # Some cluster filesystems forbid the semaphore/socket creation that
-        # ProcessPoolExecutor needs. Fall back to the serial loop above.
-        results = []
-        for completed_in_shard, task in enumerate(tasks, start=1):
-            results.append(_tensorize_example_path(task))
-            if completed_in_shard % log_interval == 0 or completed_in_shard == len(tasks):
-                elapsed = time.time() - start_time
-                completed_total = total_examples_before_shard + completed_in_shard
-                print(
-                    f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                    f"shard_examples={completed_in_shard}/{len(tasks)} "
-                    f"packed_examples={completed_total}/{total_examples_in_split} "
-                    f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
-                    flush=True,
-                )
-        return results
+) -> list[TensorizedTreeExample]:
+    results: list[TensorizedTreeExample] = []
+    for completed_in_shard, path in enumerate(shard_paths, start=1):
+        results.append(
+            tensorize_example_for_pack(
+                path,
+                schema,
+                topology_features=topology_features,
+                topology_supervision_shard=topology_supervision_shard,
+            )
+        )
+        if completed_in_shard % log_interval == 0 or completed_in_shard == len(shard_paths):
+            elapsed = time.time() - start_time
+            completed_total = total_examples_before_shard + completed_in_shard
+            print(
+                f"split={split_name} shard={shard_index + 1}/{total_shards} "
+                f"shard_examples={completed_in_shard}/{len(shard_paths)} "
+                f"packed_examples={completed_total}/{total_examples_in_split} "
+                f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
+                flush=True,
+            )
+    return results
 
 
-def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_workers: int, log_interval: int) -> tuple[Path, int]:
-    """Pack one split (train or validation) into shard files and a JSON manifest.
+def pack_train_or_val_split_to_shards(
+    manifest_path: Path,
+    output_root: Path,
+    shard_size: int,
+    log_interval: int,
+    *,
+    schema: NodeFeatureSchema,
+    topology_features: bool,
+    topology_supervision_shard: bool,
+) -> tuple[Path, int]:
+    """Writes ``shard_*.pt`` under ``output_root/<split>/`` plus ``<split>_manifest.json``.
 
-    Writes ``shard_NNNNN.pt`` files under ``output_root/<split>/`` and a
-    ``<split>_manifest.json`` index at ``output_root``. Returns the manifest
-    path and the total example count for the split.
-
-    Args:
-        manifest_path: text manifest listing per-example raw record paths.
-        output_root: directory where the packed split subtree is created.
-        shard_size: maximum number of examples per output shard file.
-        num_workers: process-pool size used by ``_load_tensorized_examples``.
-        log_interval: emit a progress line every ``log_interval`` examples.
+    Args: returns ``(manifest_path, example_count)``
     """
     # Split name is derived from the manifest filename ("train_manifest.txt"
     # → "train") so the packed manifest and subdirectory stay aligned.
@@ -188,19 +204,19 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
     split_output_dir = output_root / split_name
     split_output_dir.mkdir(parents=True, exist_ok=True)
 
-    example_paths = _read_manifest(manifest_path)
+    example_paths = read_manifest(manifest_path)
     start_time = time.time()
     entries = []
     total_examples = 0
     total_shards = (len(example_paths) + shard_size - 1) // shard_size
-    schema = _feature_schema()
 
     for shard_index, start in enumerate(range(0, len(example_paths), shard_size)):
         shard_paths = example_paths[start : start + shard_size]
-        tensorized_examples = _load_tensorized_examples(
+        tensorized_examples = tensorize_paths_for_shard(
             shard_paths,
             schema,
-            num_workers,
+            topology_features=topology_features,
+            topology_supervision_shard=topology_supervision_shard,
             split_name=split_name,
             shard_index=shard_index,
             total_shards=total_shards,
@@ -223,6 +239,7 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
         depth_parts = []
         target_parts = []
         edge_wdl_target_parts = []
+        topology_targets_parts = []
 
         for tensorized in tensorized_examples:
             # Move everything to CPU before stacking — the resulting tensors
@@ -236,6 +253,10 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
             target_parts.append(tensorized.node_targets.cpu())
             if tensorized.edge_wdl_targets is not None:
                 edge_wdl_target_parts.append(tensorized.edge_wdl_targets.cpu())
+            if topology_supervision_shard:
+                if tensorized.topology_targets is None:
+                    raise ValueError("topology_supervision_shard requires topology_targets on every example.")
+                topology_targets_parts.append(tensorized.topology_targets.cpu())
             node_ptr.append(node_ptr[-1] + int(tensorized.node_features.shape[0]))
             edge_ptr.append(edge_ptr[-1] + int(tensorized.edge_parent.shape[0]))
 
@@ -265,6 +286,11 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
                 else None
             ),
         }
+        if topology_supervision_shard:
+            if len(topology_targets_parts) != len(tensorized_examples):
+                raise ValueError("topology_targets missing for some examples in shard.")
+            payload["topology_targets"] = torch.cat(topology_targets_parts, dim=0)
+            payload["topology_target_feature_names"] = list(topology_target_feature_names())
         torch.save(payload, shard_path)
         entries.append(
             {
@@ -277,26 +303,25 @@ def _pack_split(manifest_path: Path, output_root: Path, shard_size: int, num_wor
 
     packed_manifest_path = output_root / f"{split_name}_manifest.json"
     with packed_manifest_path.open("w", encoding="utf-8") as handle:
-        json.dump(
-            {
-                "format": "cts_tensorized_pretrain_manifest_v1",
-                "split": split_name,
-                "total_examples": total_examples,
-                "entries": entries,
-            },
-            handle,
-            indent=2,
-        )
+        manifest_payload = {
+            "format": "cts_tensorized_pretrain_manifest_v1",
+            "split": split_name,
+            "total_examples": total_examples,
+            "entries": entries,
+        }
+        if topology_supervision_shard:
+            manifest_payload["topology_targets"] = True
+        if topology_features:
+            manifest_payload["topology_features"] = True
+        json.dump(manifest_payload, handle, indent=2)
 
     return packed_manifest_path, total_examples
 
 
 def main(config: PackPretrainConfig) -> None:
-    """CLI entry point: pack the train and validation splits at ``split_root``."""
+    """Pack ``train_manifest.txt`` and ``validation_manifest.txt`` beside ``split_root``."""
     if config.shard_size <= 0:
         raise ValueError("shard_size must be positive.")
-    if config.num_workers < 0:
-        raise ValueError("num_workers must be non-negative.")
     if config.log_interval <= 0:
         raise ValueError("log_interval must be positive.")
 
@@ -318,25 +343,31 @@ def main(config: PackPretrainConfig) -> None:
 
     output_root.mkdir(parents=True, exist_ok=True)
 
-    train_paths = _read_manifest(train_manifest)
-    validation_paths = _read_manifest(validation_manifest)
+    train_paths = read_manifest(train_manifest)
+    validation_paths = read_manifest(validation_manifest)
     # ``single_shard`` collapses each split to one file; pick a shard size
     # large enough to cover whichever split has more examples.
     shard_size = max(len(train_paths), len(validation_paths)) if config.single_shard else config.shard_size
 
-    train_packed_manifest, train_count = _pack_split(
+    schema = tree_encoder_feature_schema(topology_features=config.topology_features)
+    tf, ts = config.topology_features, config.topology_supervision_shard
+    train_packed_manifest, train_count = pack_train_or_val_split_to_shards(
         train_manifest,
         output_root,
         shard_size,
-        config.num_workers,
         config.log_interval,
+        schema=schema,
+        topology_features=tf,
+        topology_supervision_shard=ts,
     )
-    validation_packed_manifest, validation_count = _pack_split(
+    validation_packed_manifest, validation_count = pack_train_or_val_split_to_shards(
         validation_manifest,
         output_root,
         shard_size,
-        config.num_workers,
         config.log_interval,
+        schema=schema,
+        topology_features=tf,
+        topology_supervision_shard=ts,
     )
 
     print(f"train_manifest={train_packed_manifest}")
@@ -344,9 +375,12 @@ def main(config: PackPretrainConfig) -> None:
     print(f"train_examples={train_count}")
     print(f"validation_examples={validation_count}")
     print(f"output_root={output_root}")
-    print(f"num_workers={config.num_workers}")
     print(f"single_shard={config.single_shard}")
     print(f"effective_shard_size={shard_size}")
+    print(f"topology_features={tf}")
+    print(f"topology_supervision_shard={ts}")
+    if config.topology_supervision_shard:
+        print(f"topology_target_columns={list(topology_target_feature_names())}")
 
 
 if __name__ == "__main__":

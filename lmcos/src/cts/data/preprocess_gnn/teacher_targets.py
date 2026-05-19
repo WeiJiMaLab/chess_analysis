@@ -3,7 +3,7 @@
 Extracted out of the monolithic ``cts_pretrain.py`` as part of the migration
 to the ``cts`` package layout. This module owns:
 
-- The on-disk pretrain example format (``cts_raw_pretrain_example_v2`` and
+- The on-disk pretrain example format (``cts_raw_pretrain_example_v3`` and
   its list counterpart) plus the save/load helpers.
 - The teacher PUCT search machinery that converts a partially-expanded tree
   into node value targets and per-edge WDL targets
@@ -36,7 +36,16 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import torch
 from torch.utils.data import DataLoader
 
-from cts.core.tensorizer import TensorizedTreeExample, collate_tensorized_examples
+from cts.core.schema import (
+    TEACHER_TOPOLOGY_FEATURE_NAMES,
+    TREE_ENCODER_FEATURE_NAMES,
+    tree_encoder_feature_schema,
+)
+from cts.core.tensorizer import (
+    TensorizedTreeExample,
+    collate_tensorized_examples,
+    collate_tensorized_examples_for_topology,
+)
 from cts.core.tree import ExpansionChild, SearchNode, SearchTree
 from cts.core.providers.common import append_move_to_position_spec
 from cts.core.providers.base import TreeExpansionProvider
@@ -183,6 +192,11 @@ class PretrainExample:
     oracle_root_q_trace: List[List[float]] = field(default_factory=list)
     oracle_best_move_trace: List[str] = field(default_factory=list)
     oracle_final_root_q_values: Dict[str, float] = field(default_factory=dict)  # final root child Q-values keyed by move
+    # Per-node teacher-search visit counts (PUCT backprop on edges) and subtree shape stats.
+    n_visits: List[int] = field(default_factory=list)
+    nodes_below: List[int] = field(default_factory=list)
+    max_breadth_relative: List[int] = field(default_factory=list)
+    max_depth_relative: List[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Normalize and validate at the boundary so the rest of the pipeline
@@ -204,8 +218,21 @@ class PretrainExample:
             str(move): float(value)
             for move, value in dict(self.oracle_final_root_q_values).items()
         }
+        self.n_visits = [int(value) for value in self.n_visits]
+        self.nodes_below = [int(value) for value in self.nodes_below]
+        self.max_breadth_relative = [int(value) for value in self.max_breadth_relative]
+        self.max_depth_relative = [int(value) for value in self.max_depth_relative]
         # --- Shape/coverage invariants ---
-        if len(self.node_target_values) != self.tree.num_nodes():
+        num_nodes = self.tree.num_nodes()
+        for field_name, values in (
+            ("n_visits", self.n_visits),
+            ("nodes_below", self.nodes_below),
+            ("max_breadth_relative", self.max_breadth_relative),
+            ("max_depth_relative", self.max_depth_relative),
+        ):
+            if values and len(values) != num_nodes:
+                raise ValueError(f"{field_name} must match tree.num_nodes().")
+        if len(self.node_target_values) != num_nodes:
             raise ValueError("node_target_values must match tree.num_nodes().")
         if self.edge_wdl_targets and len(self.edge_wdl_targets) != self.tree.num_edges():
             raise ValueError("edge_wdl_targets must match tree.num_edges().")
@@ -236,7 +263,10 @@ class PretrainExample:
 # Disk format tag for raw (un-packed) pretrain examples. The ``v2`` bump
 # was made when ``_child_ptr_and_children_index`` switched to UCI-sorted
 # child order — older files using insertion order are incompatible.
-RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v2"
+# ``v3`` adds per-node ``n_visits``, ``nodes_below``, ``max_breadth_relative``, and
+# ``max_depth_relative`` tensors alongside ``edge_wdl_targets``.
+RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v3"
+RAW_PRETRAIN_LEGACY_FORMATS = frozenset({"cts_raw_pretrain_example_v2", RAW_PRETRAIN_FORMAT})
 
 
 def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
@@ -254,6 +284,109 @@ def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
                 seen.add(name)
                 ordered.append(str(name))
     return tuple(ordered)
+
+
+def _node_visit_counts_from_edge_stats(
+    tree: SearchTree,
+    edge_stats: Mapping[Tuple[int, int], EdgeStats],
+) -> List[int]:
+    """Map PUCT edge visit counts to per-node visit totals.
+
+    Non-root nodes inherit the visit count on the incoming parent→child edge.
+    The root uses the sum of outgoing edge visits (total rollouts through the root).
+    """
+    counts = [0] * tree.num_nodes()
+    for node in tree.iter_nodes():
+        node_id = node.node_id
+        if node.parent_id is None:
+            counts[node_id] = sum(
+                edge_stats.get((node_id, child_id), EdgeStats()).visit_count
+                for child_id in tree.child_ids(node_id)
+            )
+        else:
+            counts[node_id] = edge_stats.get((node.parent_id, node_id), EdgeStats()).visit_count
+    return counts
+
+
+def _subtree_topology_for_node(tree: SearchTree, node_id: int) -> Tuple[int, int, int]:
+    """Return ``(nodes_below, max_breadth_relative, max_depth_relative)`` for one node.
+
+    ``nodes_below`` counts strict descendants. ``max_depth_relative`` is the
+    maximum ply distance to any descendant. ``max_breadth_relative`` is the widest
+    depth slice in the subtree below this node (not counting siblings above).
+    """
+    nodes_below = 0
+    max_rel_depth = 0
+    breadth_by_level: Dict[int, int] = {}
+    stack: List[Tuple[int, int]] = [(child_id, 1) for child_id in tree.child_ids(node_id)]
+    while stack:
+        current_id, rel_depth = stack.pop()
+        nodes_below += 1
+        max_rel_depth = max(max_rel_depth, rel_depth)
+        breadth_by_level[rel_depth] = breadth_by_level.get(rel_depth, 0) + 1
+        for child_id in tree.child_ids(current_id):
+            stack.append((child_id, rel_depth + 1))
+    max_breadth_relative = max(breadth_by_level.values()) if breadth_by_level else 0
+    return nodes_below, max_breadth_relative, max_rel_depth
+
+
+def _subtree_topology_features(tree: SearchTree) -> Tuple[List[int], List[int], List[int]]:
+    """Compute per-node subtree topology stats aligned with ``tree.iter_nodes()``."""
+    nodes_below: List[int] = []
+    max_breadth_relative: List[int] = []
+    max_depth_relative: List[int] = []
+    for node in tree.iter_nodes():
+        below, breadth, rel_depth = _subtree_topology_for_node(tree, node.node_id)
+        nodes_below.append(below)
+        max_breadth_relative.append(breadth)
+        max_depth_relative.append(rel_depth)
+    return nodes_below, max_breadth_relative, max_depth_relative
+
+
+def scaled_teacher_topology_matrix(record: "RawPretrainExampleRecord") -> torch.Tensor:
+    """``[num_nodes, 4]``: ``log1p`` on visits/subtree-count, raw breadth/depth; column order matches schema."""
+    num_nodes = int(record.parent_index.shape[0])
+    for name in TEACHER_TOPOLOGY_FEATURE_NAMES:
+        column = getattr(record, name)
+        if int(column.shape[0]) != num_nodes:
+            raise ValueError(f"{name} length {column.shape[0]} != num_nodes={num_nodes}.")
+    n_visits = torch.log1p(record.n_visits.to(dtype=torch.float32))
+    nodes_below = torch.log1p(record.nodes_below.to(dtype=torch.float32))
+    max_breadth = record.max_breadth_relative.to(dtype=torch.float32)
+    max_depth = record.max_depth_relative.to(dtype=torch.float32)
+    return torch.stack([n_visits, nodes_below, max_breadth, max_depth], dim=1)
+
+
+def _subtree_topology_from_csr(
+    parent_index: Sequence[int],
+    child_ptr: Sequence[int],
+    children_index: Sequence[int],
+) -> Tuple[List[int], List[int], List[int]]:
+    """CSR variant of ``_subtree_topology_features`` for legacy record loads."""
+    num_nodes = len(parent_index)
+    children: List[List[int]] = [[] for _ in range(num_nodes)]
+    for parent_id in range(num_nodes):
+        children[parent_id] = [int(children_index[i]) for i in range(int(child_ptr[parent_id]), int(child_ptr[parent_id + 1]))]
+
+    nodes_below: List[int] = []
+    max_breadth_relative: List[int] = []
+    max_depth_relative: List[int] = []
+    for node_id in range(num_nodes):
+        below = 0
+        max_rel_depth = 0
+        breadth_by_level: Dict[int, int] = {}
+        stack = [(child_id, 1) for child_id in children[node_id]]
+        while stack:
+            current_id, rel_depth = stack.pop()
+            below += 1
+            max_rel_depth = max(max_rel_depth, rel_depth)
+            breadth_by_level[rel_depth] = breadth_by_level.get(rel_depth, 0) + 1
+            for child_id in children[current_id]:
+                stack.append((child_id, rel_depth + 1))
+        nodes_below.append(below)
+        max_breadth_relative.append(max(breadth_by_level.values()) if breadth_by_level else 0)
+        max_depth_relative.append(max_rel_depth)
+    return nodes_below, max_breadth_relative, max_depth_relative
 
 
 def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -> torch.Tensor:
@@ -376,6 +509,10 @@ class RawPretrainExampleRecord:
     is_expanded: torch.Tensor  # [N] bool
     node_targets: torch.Tensor  # [N] float32 scalar value targets
     edge_wdl_targets: torch.Tensor  # [num_edges, 3] float32; aligned with children_index
+    n_visits: torch.Tensor  # [N] int32 PUCT visit counts per node
+    nodes_below: torch.Tensor  # [N] int32 strict descendant counts
+    max_breadth_relative: torch.Tensor  # [N] int16 max width of any depth slice below node
+    max_depth_relative: torch.Tensor  # [N] int16 max ply distance to any descendant
     metadata: Dict[str, Any]  # free-form tree-level metadata
     sparse_node_metadata: List[Tuple[int, Dict[str, Any]]]  # only nodes with non-empty metadata get a row
     oracle_trace_expansion_counts: torch.Tensor  # [T] int32; expansion-step indices for the oracle trace
@@ -400,6 +537,10 @@ class RawPretrainExampleRecord:
         object.__setattr__(self, "is_expanded", self.is_expanded.to(dtype=torch.bool, device="cpu"))
         object.__setattr__(self, "node_targets", self.node_targets.to(dtype=torch.float32, device="cpu"))
         object.__setattr__(self, "edge_wdl_targets", self.edge_wdl_targets.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(self, "n_visits", self.n_visits.to(dtype=torch.int32, device="cpu"))
+        object.__setattr__(self, "nodes_below", self.nodes_below.to(dtype=torch.int32, device="cpu"))
+        object.__setattr__(self, "max_breadth_relative", self.max_breadth_relative.to(dtype=torch.int16, device="cpu"))
+        object.__setattr__(self, "max_depth_relative", self.max_depth_relative.to(dtype=torch.int16, device="cpu"))
         object.__setattr__(self, "metadata", dict(self.metadata))
         object.__setattr__(
             self,
@@ -452,6 +593,14 @@ class RawPretrainExampleRecord:
             raise ValueError("is_expanded must align with parent_index.")
         if self.node_targets.shape != (num_nodes,):
             raise ValueError("node_targets must align with parent_index.")
+        if self.n_visits.shape != (num_nodes,):
+            raise ValueError("n_visits must align with parent_index.")
+        if self.nodes_below.shape != (num_nodes,):
+            raise ValueError("nodes_below must align with parent_index.")
+        if self.max_breadth_relative.shape != (num_nodes,):
+            raise ValueError("max_breadth_relative must align with parent_index.")
+        if self.max_depth_relative.shape != (num_nodes,):
+            raise ValueError("max_depth_relative must align with parent_index.")
         # CSR pointer validity.
         if self.child_ptr.shape != (num_nodes + 1,):
             raise ValueError("child_ptr must have length num_nodes + 1.")
@@ -497,6 +646,17 @@ class RawPretrainExampleRecord:
             [float(example.oracle_final_root_q_values[move]) for move in example.oracle_root_moves],
             dtype=torch.float32,
         ) if example.oracle_root_moves else torch.empty((0,), dtype=torch.float32)
+        if example.n_visits:
+            n_visits = torch.tensor(example.n_visits, dtype=torch.int32)
+            nodes_below = torch.tensor(example.nodes_below, dtype=torch.int32)
+            max_breadth_relative = torch.tensor(example.max_breadth_relative, dtype=torch.int16)
+            max_depth_relative = torch.tensor(example.max_depth_relative, dtype=torch.int16)
+        else:
+            n_visits = torch.zeros((tree.num_nodes(),), dtype=torch.int32)
+            below, breadth, rel_depth = _subtree_topology_features(tree)
+            nodes_below = torch.tensor(below, dtype=torch.int32)
+            max_breadth_relative = torch.tensor(breadth, dtype=torch.int16)
+            max_depth_relative = torch.tensor(rel_depth, dtype=torch.int16)
         return cls(
             root_position_spec=position_payload["root_position_spec"],
             incoming_moves=[node.incoming_move_uci for node in tree.iter_nodes()],
@@ -529,6 +689,10 @@ class RawPretrainExampleRecord:
             oracle_best_move_index=oracle_best_move_index,
             oracle_final_root_q_values=oracle_final_root_q_values,
             position_specs=position_payload["position_specs"],
+            n_visits=n_visits,
+            nodes_below=nodes_below,
+            max_breadth_relative=max_breadth_relative,
+            max_depth_relative=max_depth_relative,
         )
 
     def to_payload(self) -> Dict[str, Any]:
@@ -547,6 +711,10 @@ class RawPretrainExampleRecord:
             "is_expanded": self.is_expanded,
             "node_targets": self.node_targets,
             "edge_wdl_targets": self.edge_wdl_targets,
+            "n_visits": self.n_visits,
+            "nodes_below": self.nodes_below,
+            "max_breadth_relative": self.max_breadth_relative,
+            "max_depth_relative": self.max_depth_relative,
             "metadata": dict(self.metadata),
             "sparse_node_metadata": list(self.sparse_node_metadata),
             "oracle_trace_expansion_counts": self.oracle_trace_expansion_counts,
@@ -560,8 +728,35 @@ class RawPretrainExampleRecord:
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RawPretrainExampleRecord":
         """Reconstruct a record from a loaded payload dict. Rejects mismatched format tags."""
-        if payload.get("format") != RAW_PRETRAIN_FORMAT:
-            raise ValueError(f"Expected raw pretrain format {RAW_PRETRAIN_FORMAT}, got {payload.get('format')!r}.")
+        record_format = payload.get("format")
+        if record_format not in RAW_PRETRAIN_LEGACY_FORMATS:
+            raise ValueError(
+                f"Expected raw pretrain format in {sorted(RAW_PRETRAIN_LEGACY_FORMATS)}, got {record_format!r}."
+            )
+        parent_index = payload["parent_index"]
+        child_ptr = payload["child_ptr"]
+        children_index = payload["children_index"]
+        num_nodes = int(parent_index.shape[0])
+        if "n_visits" in payload:
+            n_visits = payload["n_visits"]
+            nodes_below = payload["nodes_below"]
+            max_depth_relative = payload["max_depth_relative"]
+            if "max_breadth_relative" in payload:
+                max_breadth_relative = payload["max_breadth_relative"]
+            elif "max_breadth" in payload:
+                max_breadth_relative = payload["max_breadth"]
+            else:
+                raise KeyError("payload is missing max_breadth_relative.")
+        else:
+            n_visits = torch.zeros((num_nodes,), dtype=torch.int32)
+            nodes_below, max_breadth_relative, max_depth_relative = _subtree_topology_from_csr(
+                parent_index.tolist(),
+                child_ptr.tolist(),
+                children_index.tolist(),
+            )
+            nodes_below = torch.tensor(nodes_below, dtype=torch.int32)
+            max_breadth_relative = torch.tensor(max_breadth_relative, dtype=torch.int16)
+            max_depth_relative = torch.tensor(max_depth_relative, dtype=torch.int16)
         return cls(
             root_position_spec=payload.get("root_position_spec"),
             incoming_moves=list(payload["incoming_moves"]),
@@ -575,6 +770,10 @@ class RawPretrainExampleRecord:
             is_expanded=payload["is_expanded"],
             node_targets=payload["node_targets"],
             edge_wdl_targets=payload["edge_wdl_targets"],
+            n_visits=n_visits,
+            nodes_below=nodes_below,
+            max_breadth_relative=max_breadth_relative,
+            max_depth_relative=max_depth_relative,
             metadata=dict(payload.get("metadata", {})),
             sparse_node_metadata=list(payload.get("sparse_node_metadata", [])),
             oracle_trace_expansion_counts=payload["oracle_trace_expansion_counts"],
@@ -703,19 +902,34 @@ class RawPretrainExampleRecord:
             oracle_root_q_trace=self.oracle_root_q_trace.tolist(),
             oracle_best_move_trace=oracle_best_move_trace,
             oracle_final_root_q_values=oracle_final_root_q_values,
+            n_visits=self.n_visits.tolist(),
+            nodes_below=self.nodes_below.tolist(),
+            max_breadth_relative=self.max_breadth_relative.tolist(),
+            max_depth_relative=self.max_depth_relative.tolist(),
         )
 
-    def to_tensorized_tree_example(self, schema) -> TensorizedTreeExample:
-        """Project this record onto the encoder schema and return a ``TensorizedTreeExample``.
+    def to_tensorized_tree_example(
+        self,
+        schema,
+        *,
+        topology_features: bool = False,
+        topology_supervision_shard: bool = False,
+    ) -> TensorizedTreeExample:
+        """Fill ``node_features`` (and optionally ``topology_targets``) exactly as configured by packing."""
 
-        The packed/training format keeps only the columns the encoder needs,
-        filled with schema defaults where the record's own feature names
-        don't cover a schema column. NaNs (signaling "feature absent for
-        this node") are replaced with the default value too.
+        expected = tree_encoder_feature_schema(topology_features=topology_features)
+        if tuple(schema.feature_names) != tuple(expected.feature_names):
+            raise ValueError(
+                "Record tensorization schema mismatch: "
+                f"got columns {schema.feature_names!r}; expected "
+                f"{tuple(expected.feature_names)!r} for "
+                f"topology_features={topology_features}. "
+                "Rebuild with the packing schema from preprocess_gnn.pack."
+            )
+        scaled_topo: Optional[torch.Tensor] = None
+        if topology_features or topology_supervision_shard:
+            scaled_topo = scaled_teacher_topology_matrix(self)
 
-        Args:
-            schema: the encoder feature schema (typically from ``schema.tree_encoder_feature_schema``).
-        """
         feature_index = {name: index for index, name in enumerate(self.feature_names)}
         num_nodes = int(self.parent_index.shape[0])
         # Allocate the output matrix and fill column by column, defaulting
@@ -723,6 +937,13 @@ class RawPretrainExampleRecord:
         node_features = torch.empty((num_nodes, len(schema.feature_names)), dtype=schema.dtype)
         for column_index, feature_name in enumerate(schema.feature_names):
             default_value = float(schema.defaults.get(feature_name, 0.0))
+            if feature_name in TEACHER_TOPOLOGY_FEATURE_NAMES:
+                if topology_features and scaled_topo is not None:
+                    ti = TEACHER_TOPOLOGY_FEATURE_NAMES.index(feature_name)
+                    node_features[:, column_index] = scaled_topo[:, ti].to(dtype=schema.dtype)
+                else:
+                    node_features[:, column_index] = default_value
+                continue
             if feature_name not in feature_index:
                 node_features[:, column_index] = default_value
                 continue
@@ -734,6 +955,7 @@ class RawPretrainExampleRecord:
                     source_column,
                 )
             node_features[:, column_index] = source_column
+        topology_targets = scaled_topo if topology_supervision_shard else None
         # Derive edge_parent / edge_slot from child_ptr: each parent contributes
         # `count` edges, and edge_slot is 0..count-1 within that block.
         counts = (self.child_ptr[1:] - self.child_ptr[:-1]).to(dtype=torch.long)
@@ -754,6 +976,7 @@ class RawPretrainExampleRecord:
             node_targets=self.node_targets.to(dtype=torch.float32),
             feature_names=tuple(schema.feature_names),
             edge_wdl_targets=self.edge_wdl_targets.to(dtype=torch.float32),
+            topology_targets=topology_targets,
         )
 
 
@@ -885,6 +1108,8 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         if not entries:
             raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
 
+        self.expect_topology_targets = bool(manifest.get("topology_targets", False))
+
         # Preload all shards and flatten into individual examples to avoid
         # shard-thrashing under shuffled access and view-pinning of large shard
         # storages.  Total memory is ~20KB per example (vs ~600MB per shard).
@@ -898,6 +1123,7 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
             edge_ptr = payload["edge_ptr"]
             feature_names = tuple(payload["feature_names"])
             edge_wdl_targets = payload.get("edge_wdl_targets")
+            shard_topology = payload.get("topology_targets")
             num_examples = int(entry["num_examples"])
             # Slice each example's nodes/edges out of the shard's flat tensors
             # and clone so the slice can outlive the shard payload (which we
@@ -914,8 +1140,32 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
                     # the within-parent slot id by assuming the canonical
                     # consecutive ordering inside each parent block.
                     edge_slot = torch.arange(ee - es, dtype=torch.long)
+                node_feat_block = payload["node_features"][ns:ne].clone()
+                topology_slice = None
+                if shard_topology is not None:
+                    topology_slice = shard_topology[ns:ne].clone()
+                elif self.expect_topology_targets:
+                    tail_need = tuple(TEACHER_TOPOLOGY_FEATURE_NAMES)
+                    if (
+                        node_feat_block.shape[1] >= len(TREE_ENCODER_FEATURE_NAMES) + len(tail_need)
+                        and tuple(feature_names[-len(tail_need) :]) == tail_need
+                    ):
+                        topology_slice = node_feat_block[:, -len(tail_need) :].clone()
+                    else:
+                        raise ValueError(
+                            f"Manifest requires topology_targets but shard {path} has no "
+                            "topology_targets key and node_features tail does not match "
+                            f"{tail_need!r}; repack or use shards with topology_targets written."
+                        )
+                elif (
+                    shard_topology is None
+                    and node_feat_block.shape[1] >= len(TREE_ENCODER_FEATURE_NAMES) + len(TEACHER_TOPOLOGY_FEATURE_NAMES)
+                    and tuple(feature_names[-len(TEACHER_TOPOLOGY_FEATURE_NAMES) :]) == tuple(TEACHER_TOPOLOGY_FEATURE_NAMES)
+                ):
+                    # Optional: hydrate supervision from wide features for callers that omit explicit tensor.
+                    topology_slice = node_feat_block[:, -len(TEACHER_TOPOLOGY_FEATURE_NAMES) :].clone()
                 self._examples.append(TensorizedTreeExample(
-                    node_features=payload["node_features"][ns:ne].clone(),
+                    node_features=node_feat_block,
                     parent_index=payload["parent_index"][ns:ne].clone(),
                     edge_parent=payload["edge_parent"][es:ee].clone(),
                     edge_child=payload["edge_child"][es:ee].clone(),
@@ -924,6 +1174,7 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
                     node_targets=payload["node_targets"][ns:ne].clone(),
                     feature_names=feature_names,
                     edge_wdl_targets=edge_wdl_targets[es:ee].clone() if edge_wdl_targets is not None else None,
+                    topology_targets=topology_slice,
                 ))
             del payload
 
@@ -937,6 +1188,11 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
     def collate_fn(batch: Sequence[TensorizedTreeExample]) -> tuple[Any, Any]:
         """DataLoader collate that defers to the canonical batcher in ``tensorizer``."""
         return collate_tensorized_examples(batch)
+
+    @staticmethod
+    def collate_fn_topology(batch: Sequence[TensorizedTreeExample]) -> tuple[Any, Any]:
+        """Collate for topology-supervised encoder pretraining."""
+        return collate_tensorized_examples_for_topology(batch)
 
 
 def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
@@ -1531,6 +1787,8 @@ def build_pretrain_example(
         oracle_best_move_trace = list(generated_tree.oracle_best_move_trace)
         oracle_final_root_q_values = _root_q_values_from_edge_stats(tree, generated_tree.edge_stats)
         metadata["oracle_trace_generation_version"] = "generated_search_root_q_v1"
+    n_visits = _node_visit_counts_from_edge_stats(tree, teacher_result.edge_stats)
+    nodes_below, max_breadth_relative, max_depth_relative = _subtree_topology_features(tree)
     return PretrainExample(
         tree=tree,
         node_target_values=teacher_result.node_target_values,
@@ -1541,6 +1799,10 @@ def build_pretrain_example(
         oracle_root_q_trace=oracle_root_q_trace,
         oracle_best_move_trace=oracle_best_move_trace,
         oracle_final_root_q_values=oracle_final_root_q_values,
+        n_visits=n_visits,
+        nodes_below=nodes_below,
+        max_breadth_relative=max_breadth_relative,
+        max_depth_relative=max_depth_relative,
     )
 
 

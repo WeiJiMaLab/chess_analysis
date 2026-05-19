@@ -1,0 +1,8 @@
+# Recommended preset: wide node_features + topology_targets shard (aligned via one tensorize helper).
+# topology_features implies topology_supervision_shard (validated in PackPretrainConfig).
+topology_features: true
+topology_supervision_shard: true
+split_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split
+output_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_full_topology
+shard_size: 2000
+log_interval: 1

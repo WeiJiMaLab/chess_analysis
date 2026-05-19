@@ -14,21 +14,26 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from cts.core.schema import NodeFeatureSchema
+from cts.core.schema import (
+    TOPOLOGY_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW,
+    NodeFeatureSchema,
+    topology_target_feature_names,
+    tree_encoder_feature_schema,
+)
 from cts.core.tensorizer import (
     TensorizedTreeExample,
     collate_tensorized_examples,
     edge_wdl_target_tensor,
     tensorize_forest,
 )
-from cts.data.preprocess_gnn.teacher_targets import PretrainExample
-from cts.models.gnn import ChildWdlModel
+from cts.data.preprocess_gnn.teacher_targets import PackedTensorizedShardDataset, PretrainExample
+from cts.models.gnn import ChildWdlModel, TopologyModel
 
 
 def save_encoder_checkpoint(path: str, encoder, metadata: Optional[Mapping[str, Any]] = None) -> None:
@@ -451,3 +456,241 @@ class ChildWdlPretrainer:
             "decoder_state_dict": self.model.child_wdl_head.state_dict(),
             "metadata": dict(metadata or {}),
         }, path)
+
+
+@dataclass(frozen=True)
+class TopologyPretrainConfig:
+    """Dataloader + optimizer settings for ``TopologyModel`` (Huber/MSE vs four teacher scalars)."""
+
+    batch_size: int = 4
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.0
+    epochs: int = 5
+    loss_type: Literal["huber", "mse"] = "huber"
+    huber_delta: float = 1.0
+    topology_target_weights: Optional[Tuple[float, float, float, float]] = None
+    shuffle: bool = True
+    num_workers: int = 0
+    pin_memory: bool = False
+    prefetch_factor: int = 2
+    persistent_workers: bool = True
+
+
+@dataclass
+class TopologyMetrics:
+    """Aggregated metrics for one topology-pretraining pass."""
+
+    total_loss: float
+    num_examples: int
+    num_supervised_nodes: int
+
+
+class TopologyPretrainer:
+    """Train ``TopologyModel`` on packed shards — encoder + ``TopologyHead``, regression only."""
+
+    def __init__(
+        self,
+        model: TopologyModel,
+        device: torch.device | str,
+        train_examples: Sequence[Any],
+        validation_examples: Sequence[Any],
+        config: TopologyPretrainConfig,
+    ) -> None:
+        self.model = model
+        self.device = torch.device(device)
+        self.train_examples = train_examples
+        self.validation_examples = validation_examples
+        self.config = config
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
+        self.best_validation_loss = float("inf")
+        self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+        self.best_topology_head_state = copy.deepcopy(self.model.topology_head.state_dict())
+
+    def _iter_batches(self, examples: Sequence[Any], shuffle: bool) -> DataLoader:
+        collate_fn = PackedTensorizedShardDataset.collate_fn_topology
+        dataloader_kwargs = {
+            "batch_size": self.config.batch_size,
+            "shuffle": shuffle,
+            "collate_fn": collate_fn,
+            "num_workers": self.config.num_workers,
+            "pin_memory": self.config.pin_memory,
+        }
+        if self.config.num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = self.config.prefetch_factor
+            dataloader_kwargs["persistent_workers"] = self.config.persistent_workers
+        return DataLoader(examples, **dataloader_kwargs)
+
+    def _regression_loss(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.config.loss_type == "mse":
+            per_example = (predictions - targets) ** 2
+        else:
+            per_example = F.huber_loss(predictions, targets, delta=self.config.huber_delta, reduction="none")
+        weights = self.config.topology_target_weights
+        if weights is None:
+            return per_example.mean()
+        if len(weights) != int(predictions.shape[-1]):
+            raise ValueError(
+                f"topology_target_weights length {len(weights)} != prediction width {predictions.shape[-1]}."
+            )
+        w_tensor = predictions.new_tensor(weights, dtype=per_example.dtype)
+        denom = w_tensor.sum().clamp_min(torch.finfo(per_example.dtype).eps)
+        per_node = (per_example * w_tensor.unsqueeze(0)).sum(dim=-1) / denom
+        return per_node.mean()
+
+    def _run_epoch(
+        self,
+        examples: Sequence[Any],
+        *,
+        training: bool,
+        epoch_index: int,
+        batch_progress_callback: Optional[
+            Callable[[int, str, int, int, int, int, float], None]
+        ] = None,
+    ) -> TopologyMetrics:
+        if training:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        metric_device = self.model.encoder.device
+        total_loss_sum = torch.zeros((), dtype=torch.float32, device=metric_device)
+        total_examples = 0
+        total_supervised_nodes = 0
+
+        batches = self._iter_batches(examples, shuffle=training and self.config.shuffle)
+        total_batches = len(batches)
+        phase = "train" if training else "validation"
+
+        for batch_index, (tree_batch, topology_targets) in enumerate(batches, start=1):
+            topology_targets = topology_targets.to(metric_device)
+            with torch.set_grad_enabled(training):
+                predictions = self.model(tree_batch)
+                total_loss = self._regression_loss(predictions, topology_targets)
+                if training:
+                    self.optimizer.zero_grad()
+                    total_loss.backward()
+                    self.optimizer.step()
+
+            num_nodes = int(topology_targets.shape[0])
+            batch_size = int(tree_batch.batch_size)
+            total_examples += batch_size
+            total_supervised_nodes += num_nodes
+            total_loss_sum += total_loss.detach() * num_nodes
+
+            if batch_progress_callback is not None:
+                batch_progress_callback(
+                    epoch_index,
+                    phase,
+                    batch_index,
+                    total_batches,
+                    total_examples,
+                    total_supervised_nodes,
+                    float(total_loss.item()),
+                )
+
+        if total_supervised_nodes == 0:
+            return TopologyMetrics(total_loss=0.0, num_examples=total_examples, num_supervised_nodes=0)
+        mean_loss = float((total_loss_sum / total_supervised_nodes).item())
+        return TopologyMetrics(
+            total_loss=mean_loss,
+            num_examples=total_examples,
+            num_supervised_nodes=total_supervised_nodes,
+        )
+
+    def train_epoch(
+        self,
+        epoch_index: int,
+        batch_progress_callback: Optional[
+            Callable[[int, str, int, int, int, int, float], None]
+        ] = None,
+    ) -> TopologyMetrics:
+        return self._run_epoch(
+            self.train_examples,
+            training=True,
+            epoch_index=epoch_index,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def validate(
+        self,
+        epoch_index: int,
+        batch_progress_callback: Optional[
+            Callable[[int, str, int, int, int, int, float], None]
+        ] = None,
+    ) -> TopologyMetrics:
+        return self._run_epoch(
+            self.validation_examples,
+            training=False,
+            epoch_index=epoch_index,
+            batch_progress_callback=batch_progress_callback,
+        )
+
+    def fit(
+        self,
+        progress_callback: Optional[Callable[[int, TopologyMetrics, TopologyMetrics], None]] = None,
+        batch_progress_callback: Optional[
+            Callable[[int, str, int, int, int, int, float], None]
+        ] = None,
+        start_epoch: int = 1,
+        resume_path: Optional[str] = None,
+    ) -> List[Dict[str, TopologyMetrics]]:
+        history: List[Dict[str, TopologyMetrics]] = []
+        for epoch_index in range(start_epoch, self.config.epochs + 1):
+            train_metrics = self.train_epoch(epoch_index, batch_progress_callback=batch_progress_callback)
+            validation_metrics = self.validate(epoch_index, batch_progress_callback=batch_progress_callback)
+            history.append({"train": train_metrics, "validation": validation_metrics})
+            if validation_metrics.total_loss < self.best_validation_loss:
+                self.best_validation_loss = validation_metrics.total_loss
+                self.best_encoder_state = copy.deepcopy(self.model.encoder.state_dict())
+                self.best_topology_head_state = copy.deepcopy(self.model.topology_head.state_dict())
+            if progress_callback is not None:
+                progress_callback(epoch_index, train_metrics, validation_metrics)
+            if resume_path is not None:
+                torch.save(
+                    {
+                        "epoch": epoch_index,
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "best_encoder_state": self.best_encoder_state,
+                        "best_topology_head_state": self.best_topology_head_state,
+                        "best_validation_loss": self.best_validation_loss,
+                    },
+                    resume_path,
+                )
+        self.model.encoder.load_state_dict(self.best_encoder_state)
+        self.model.topology_head.load_state_dict(self.best_topology_head_state)
+        return history
+
+    def load_training_state(self, path: str) -> int:
+        state = torch.load(path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(state["model_state_dict"])
+        self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        self.best_encoder_state = state["best_encoder_state"]
+        self.best_topology_head_state = state["best_topology_head_state"]
+        self.best_validation_loss = state["best_validation_loss"]
+        return int(state["epoch"])
+
+    def save_best_encoder(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
+        merged = {
+            "pretrain_objective": "topology",
+            "topology_target_scaling": TOPOLOGY_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW,
+            "topology_target_columns": list(topology_target_feature_names()),
+        }
+        if self.config.topology_target_weights is not None:
+            merged["topology_target_weights"] = list(self.config.topology_target_weights)
+        if metadata:
+            merged.update(metadata)
+        save_encoder_checkpoint(path, self.model.encoder, metadata=merged)
+
+    def save_best_topology_head(self, path: str, metadata: Optional[Mapping[str, Any]] = None) -> None:
+        torch.save(
+            {
+                "topology_head_state_dict": self.model.topology_head.state_dict(),
+                "metadata": dict(metadata or {}),
+            },
+            path,
+        )
