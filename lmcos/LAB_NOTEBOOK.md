@@ -2660,6 +2660,8 @@ Intent:
 - Use per-node teacher topology from ``cts_raw_pretrain_example_v3`` (``n_visits``, ``nodes_below``, ``max_breadth_relative``, ``max_depth_relative``) for **encoder pretraining** via a standalone **``TopologyHead``** (still separate from Child-WDL), with Huber regression by default and an optional **weighted / phased Huber curriculum** (`topology_target_weights` in `BuildTreeConfig` / `TopologyPretrainConfig`).
 - Optionally **widening** packed ``node_features`` to nine columns **for downstream Child-WDL** that should *see* teacher topology at the embedding input — without duplicating incompatible code paths.
 
+**Strategic framing (why we care):** see **`### Bigger picture: node potential`** at the end of **2026-05-19 (hl4291 — pipeline docs, `hl4291_slurm/`, `fens/` layout)** — embeddings should ultimately encode **node potential** for metacontroller decisions (especially at the root), not only minimize Huber on raw targets.
+
 Packing presets ([`PackPretrainConfig`](src/cts/data/preprocess_gnn/pack.py)):
 
 | Situation | `topology_features` | `topology_supervision_shard` |
@@ -2695,10 +2697,14 @@ Train/validation manifests should **not** be built as “sorted paths, first 90%
 
 | Step | Config / artifact |
 |------|-------------------|
+| FEN list | `.../CTS/fens/sampled_root_fens_2023.txt` — see [`hl4291_build_tree_50k.yaml`](configs/data/hl4291_build_tree_50k.yaml) |
+| Generate | [`hl4291_slurm/1_generate_shards.slurm`](hl4291_slurm/1_generate_shards.slurm): GPU array, `CHUNK_SIZE=5000`, 24 h wall |
 | Split | [`hl4291_split_50k_topology.yaml`](configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml): `source_root=.../generated_trees_50k`, `split_root=.../pretrain_split_50k_topology`, `validation_fraction=0.1`, `seed=42`, `clear=true`. Typical counts with **48,701** `.pt`: **43,831 train**, **4870 validation**. |
-| CLI | ``python -u -m cts.data.preprocess_gnn.split --config configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml`` |
-| Pack | [`hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml): `topology_features` + `topology_supervision_shard`, ``output_root=.../pretrain_packed_50k_topology_full``, `shard_size=2000`, `clear=true`. Packing is serial in-process (no `num_workers`). Header comments point at the split config. |
-| Slurm | [`hl4291_slurm/2_pack_shards.slurm`](hl4291_slurm/2_pack_shards.slurm): `#SBATCH --time=00:15:00`, `cpus-per-task=1`, `mem=4G`, `#SBATCH --array=0`; job sets `OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1`. Activate `~/venv` (override with `VENV_ACTIVATE`). From `lmcos`: ``export CONFIG=$PWD/configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml`` then ``sbatch hl4291_slurm/2_pack_shards.slurm``. Logs under [`lmcos/logs/`](logs/). |
+| CLI split | ``python -u -m cts.data.preprocess_gnn.split --config configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml`` |
+| Pack | [`hl4291_pack_50k_topology_full.yaml`](configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml): `topology_features` + `topology_supervision_shard`, ``output_root=.../pretrain_packed_50k_topology_full``, `shard_size=2000`, `clear=true`. Serial pack (no `num_workers`). |
+| Slurm pack | [`hl4291_slurm/2_pack_shards.slurm`](hl4291_slurm/2_pack_shards.slurm): `#SBATCH --time=00:15:00`, 1 CPU, 4G. ``sbatch hl4291_slurm/2_pack_shards.slurm`` with pack CONFIG. |
+
+Full hl4291 submit/status table: [`hl4291_slurm/README.md`](hl4291_slurm/README.md).
 
 Changing **`seed`** in `hl4291_split_50k_topology.yaml` gives a different random partition with the same tree set; rerun **split** before **pack** whenever the partition should change.
 
@@ -2765,3 +2771,198 @@ Output (`pretrain_packed_50k_topology_full` on scratch):
 Manifests: `topology_features=true`, `topology_supervision_shard=true`. Spot-check on `shard_00000`: `node_features` shape `(N, 9)`, `topology_targets` `(N, 4)`. Log throughput **~93–94 ex/s** (serial path). Log: [`logs/cts-pack-topo-50k_8429582_0.out`](logs/cts-pack-topo-50k_8429582_0.out).
 
 Topology encoder pretrain on this split is unblocked. Tree generation still missing indices **38701–39999** (array task 7); the pack used all **48,701** v3 trees currently on scratch.
+
+## 2026-05-19 (hl4291 — pipeline docs, `hl4291_slurm/`, `fens/` layout)
+
+### Status (end of day)
+
+The **topology-full pack** for the ~49k split is **done** (see 2026-05-18: job **8429582**, ~9 min). Scratch artifacts:
+
+| Artifact | Path |
+|----------|------|
+| Raw trees | `.../CTS/data/generated_trees_50k/` (**48,701** `.pt`; **1,299** missing at global indices **38701–39999**) |
+| Split manifests | `.../CTS/data/pretrain_split_50k_topology/` |
+| Packed GNN data | `.../CTS/data/pretrain_packed_50k_topology_full/` (43,831 train + 4,870 val examples) |
+| FEN inputs | `.../CTS/fens/` (repo-local mirror: [`fens/`](fens/)) |
+
+**Next:** topology encoder pretrain (`command: pretrain-topology-encoder`, Huber + `TopologyHead`) — needs a GPU YAML + Slurm script (not committed yet). Optional: backfill the **38701–39999** gap (~**2.8 h** on one GPU at ~0.13 roots/s, or ~**15–20 min** wall with 10 parallel sub-slices).
+
+### `hl4291_slurm/` (numbered scripts)
+
+Separated **hl4291** della wrappers from Yotam’s [`slurm/`](slurm/) (conda `CTS`, ysagiv paths). Only the paths that actually ran in production are kept:
+
+| # | Script | Role |
+|---|--------|------|
+| 1 | [`hl4291_slurm/1_generate_shards.slurm`](hl4291_slurm/1_generate_shards.slurm) | GPU array: `CHUNK_SIZE` × `SLURM_ARRAY_TASK_ID` → `--override start_index/end_index` |
+| 2 | [`hl4291_slurm/2_pack_shards.slurm`](hl4291_slurm/2_pack_shards.slurm) | Serial pack (`CONFIG` = topology preset, split paths, shard size) |
+
+Dropped unused CPU / single-GPU generate wrappers after confirming only the **array** job was used for the 50k corpus.
+
+### `fens/` vs `data/`
+
+Renamed input layout so FEN lists are not under `data/`: **`CTS/fens/`** for text inputs, **`CTS/data/`** for trees / splits / packed shards. [`hl4291_build_tree_50k.yaml`](configs/data/hl4291_build_tree_50k.yaml) now points at `.../CTS/fens/sampled_root_fens_2023.txt`. Repo checkout: [`fens/sampled_root_fens_2023.txt`](fens/sampled_root_fens_2023.txt).
+
+### Array task 7 failure (gap regen reference)
+
+Job **8289498_7** (**FAILED** after **8h 12m**, lc0 `Unexpected EOF` at ~global index **38700**; log [`logs/cts-gen-50k_8289498_7.out`](logs/cts-gen-50k_8289498_7.out)). Regenerate only the gap with `resume: true` and e.g.:
+
+### Topology pretrain loop (implemented 2026-05-19)
+
+**Entry point:** `python3 -m cts.data.build_tree` with `command: pretrain-topology-encoder` (same module as tree generation). Loads JSON manifests → `PackedTensorizedShardDataset` → `TopologyPretrainer` (Huber default) → best encoder + `TopologyHead` checkpoints.
+
+| Artifact | Path |
+|----------|------|
+| Slurm step 3 | [`hl4291_slurm/3_pretrain_topology.slurm`](hl4291_slurm/3_pretrain_topology.slurm) |
+| Full config | [`hl4291_pretrain_topology_50k.yaml`](configs/data/hl4291_pretrain_topology_50k.yaml) — 43,831 train / 4,870 val, `batch_size=8`, `epochs=20`, `k=1`, 128-d |
+| Slurm smoke config | [`hl4291_pretrain_topology_shard_slurm_smoke.yaml`](configs/data/hl4291_pretrain_topology_shard_slurm_smoke.yaml) — capped manifests under [`configs/data/manifests/`](configs/data/manifests/) (64+32 trees from shard 0 only) |
+| One-batch dev smoke | [`scripts/smoke_topology_pretrain_batch.py`](scripts/smoke_topology_pretrain_batch.py) |
+
+Shard Slurm smoke on GPU: **2 epochs**, val loss **≈0.56**, checkpoints written to `tree_encoder_topology_shard_smoke.pt` + `_topology_head.pt` (~33 s including preload).
+
+Full-run expectations: **~15–20 min** dataset preload (all shards into RAM), then **many hours per epoch** at `batch_size=8` on large trees — use `*_resume.pt` + chained 24 h jobs if needed.
+
+Single-GPU backfill (with `resume: true` in the build_tree YAML):
+
+```bash
+export CONFIG="$PWD/configs/data/hl4291_build_tree_50k.yaml"
+python3 -u -m cts.data.build_tree --config "${CONFIG}" \
+  --override start_index=38701 --override end_index=40000
+```
+
+Or submit via Slurm with the same overrides in the job script / a small gap-only YAML. For ~**15–20 min** wall, shard into 10 array tasks (`CHUNK_SIZE=130`, `BASE_START=38701`) — see [`hl4291_slurm/README.md`](hl4291_slurm/README.md).
+
+### Bigger picture: node potential (metacontroller-facing goal)
+
+This subsection records **constraints and intent** that sit above the concrete Huber/`TopologyHead` setup in **`## 2026-05-17 (hl4291 — topology-supervised encoder pretrain)`** earlier in this notebook. None of this *requires* a Dirichlet parametrization; that was optional geometry for sibling mass when we discussed simplex-aligned losses.
+
+**North star — what we need from GNN topology pretraining**
+
+- The encoder should yield representations that summarize **node potential**: a succinct sense of **how much further search/compute at this vertex is likely to matter**, given **only** what the teacher procedure actually produced from a **root-started** tree build.
+- **Why the root (and downstream controller) cares:** allocation decisions (“grow here vs there”, PV vs widening, stopping) eventually need signals that behave like **marginal value of additional computation** plus **local expansion structure**. Pure board features miss the **budget-conditioned search state** frozen into the shard; topology supervision is how we distill that state into **`d_embed` vectors** the metacontroller can consume without rerunning lc0 inside the controller loop.
+
+**Constraint (1) — root-only search; descendants are coarse**
+
+- We **will not** rerun full MCTS/PUCT from every node as independent roots (ideal “goalpost”; too expensive).
+- All per-node statistics in packed targets are induced by **simulations rooted once** — descendant rows are **path-conditional, budget-limited** summaries, not equilibrium from restarting search at each descendant. Statistical mass at **`n_visits ≈ 0`** and shallow leaves is therefore **expected**, not purely a labeling bug.
+
+**Constraint (2) — marginal value of compute is latent; use proxies**
+
+- Ground-truth \(\partial V / \partial \text{budget}\) per node is not shipped in the shards. Targets like **`log1p(n_visits)`**, subtree counts (`nodes_below`), and breadth/depth relatives are **cheap teacher proxies** for “traffic / unfinished business / shape” rather than literal marginal values.
+- A trained encoder can still be **metacontroller-useful**: the downstream module learns a nonlinear map from **`h_v`** (+ online cues) to stop/expand once online reward or auxiliary losses exist.
+
+**Constraint (3) — dual pretraining modes and observability shift**
+
+| Mode | What sees the graph | Typical supervision |
+|------|---------------------|---------------------|
+| **A — Topology GNN pretrain** | **Flattened** packed trees: effectively **all** nodes (and CSR edges inside the encoder) in offline batches | Per-node **`topology_targets`**, optionally future edge-group objectives |
+| **B — Metacontroller training** | **Growing** snapshot; in deployment often **narrow** visibility (e.g. along **principal variation + local fringe**), not the full contemporaneous subgraph used in Mode A |
+
+- **Risk:** embeddings tuned on the **dense offline view** may under-generalize when the controller only **`walks`** a subtree of what pretrain **flattened**.
+- **Mitigations to keep in mind:** path-centric masking / stochastic subgraph views at pretrain time, multi-view consistency, or distilling from teacher-rich states to student inputs that mimic online channels — design TBD alongside controller I/O spec.
+
+**Where Dirichlet / simplex language optionally fits**
+
+- If we supervise **how visit mass splits among siblings**, targets live on a **probability simplex** (\(\hat\pi_c \propto\) edge/consolidated child counts). Softmax **+ CE/KL is a practical surrogate** for that geometry; full Dirichlet–multinomial modeling is optional and orthogonal to `(1)`–`(3)` above.
+
+**Through-line.** The exploratory work on **`n_visits` histograms**, masking, sibling shares, etc. circles the same motive: recover a **representation of node potential under root-budget dynamics** well enough that, **especially at the root**, the stack can eventually answer “is more search here worthwhile?” without replaying lc0.
+
+**Generation budget (path B, current 50k yaml).** `generate-dataset` uses **`min_nodes` / `max_nodes`** (96/96) as the **expansion cap** (`num_expansions` in [`generate_partial_tree_from_provider`](src/cts/data/preprocess_gnn/teacher_targets.py)). Each loop iteration still does **PUCT select + backprop**; non-expanding iterations (depth cap, terminal, no children) **do not** increment `num_expansions` but **do** increment edge `visit_count`. **`search_budget`** is only consumed in **`compute_teacher_targets`** (path A) and is **inert** for the current 50k corpus — do not interpret **`n_visits`** as capped by `search_budget`.
+
+### Candidate pretrain targets (node potential proxies)
+
+**Conceptual shift (2026-05-20).** Move from supervising **static search artifacts** (`n_visits`, subtree shape) toward proxies for **future search evolution** / **search plasticity** — “how valuable would additional computation be **from here**?” — under the hard constraint that we only run **one root-started search** per position (no per-node MCTS restarts). All targets must be **derivable from partial snapshots of one evolving tree** (final tree and/or stored oracle trace).
+
+**Deliverable for downstream metacontroller:** a **node-level** representation of **compute value / epistemic unfinishedness**, consumed for **stopping and budget allocation**. Edge/sibling geometry remains **input structure** (entropy, Q spread, competition among children), but the primary learned object is **`h_v` (node potential)**, not an edge-wise visit distribution.
+
+| # | Target | What it measures | Pros | Cons | Suggested role |
+|---|--------|------------------|------|------|----------------|
+| **1** | **Value gap** \(V_{\text{best}} - V_{\text{second}}\) among children (visit-weighted Q at consolidation) | Action ambiguity / decision-boundary sharpness; small gap ⇒ unresolved competition | Simple, cheap, **per-node**, directly speaks to “might flip best move” | Ignores full policy vector; no explicit time axis; noisy when child visit counts are tiny | Strong **auxiliary** or lightweight primary |
+| **2** | **Policy drift** \(D(\pi_k, \pi_{k+n})\) (KL / JS / TV / argmax flip) along search time | Actual **belief change** under more compute | Most aligned with meta-reasoning (“search still reorganizing?”) | Needs **temporal snapshots**; only nodes present across snapshots are well-defined; noisier to derive | Most principled **primary** where traces exist |
+| **3** | **Child visit entropy** \(H(\hat\pi_{\text{children}})\), optionally normalized by branching factor \(K\) | Current allocation diffuseness / local competition | Cheap, dense, **simplex-aware**; easy from final `n_visits` | Confounds uncertainty with \(K\); static; weak evidence strength | **Auxiliary** ambiguity / plasticity proxy |
+
+**Edge-wise vs node-wise.** Metacontroller needs **scalar or low-dim node potential**, not mandatory edge softmax targets. Sibling structure informs the encoder and can define **derived node scalars** (gap, entropy) without training a full edge distribution head.
+
+**What is already on disk (50k v3, path B).**
+
+- **Final-tree, all nodes:** child Q / WDL from consolidation → **value gap** per internal node; **visit entropy** from [`n_visits`](src/cts/data/preprocess_gnn/teacher_targets.py) sibling groups (incoming edge counts).
+- **Temporal, root only:** [`oracle_root_q_trace`](src/cts/data/preprocess_gnn/teacher_targets.py), `oracle_best_move_trace`, `oracle_trace_expansion_counts` — **policy drift at the root** without re-search (see also §3 tree generation / §5 controller packing in this notebook).
+- **Not stored today:** per-node \(\pi_t\) traces across expansion steps — **policy drift at non-root nodes** would require new logging or offline replay from prefixes (prefix episodes exist for **controller** packing, not yet as GNN topology targets).
+
+**Current baseline vs this menu.** Topology pretrain supervision is **`value_gap` only** (raw centipawns, NaN on leaves / `<2` children) in **`cts_raw_pretrain_example_v5`** — no `n_visits` column, no edge WDL in the default generation path. Legacy Child-WDL pretrain can still opt into edge targets via `include_edge_wdl_targets=True`. **Repack required** for existing 50k topology-full manifests.
+
+**Open design choices.**
+
+- Combine targets as **multi-task Huber on scalars** vs **representation-only** (train head on proxies, export encoder without heads).
+- **Masking:** skip nodes with \(K<2\) children or zero parent visit mass for gap/entropy; root drift needs \(k, k+n\) inside trace length.
+- **Train/serve gap:** dense offline trees vs metacontroller **PV-narrow** views — consider path-masked pretrain when adopting drift-based targets.
+
+## 2026-05-19 (hl4291 — value_gap schema refactoring to `node_targets` + edge case unit tests)
+
+### Why this work was needed
+
+We aligned the GNN tree pretraining pipeline with the transition to the new `v5` `value_gap` supervision schema. As part of this, the term `topology_features` was identified as mis-named for describing node-wise supervision targets embedded into the GNN input node features. To illustrate that these are node-wise targets for the pre-trainer, we renamed `topology_features` to `node_targets`. 
+
+Additionally, we needed robust test coverage for specific mathematical edge-cases of the parent-perspective `value_gap` centipawn calculation (tied top siblings, tied suboptimal siblings, and single-child nodes).
+
+### What changed (reference)
+
+- **Terminology Alignment**:
+  - Refactored `topology_features` to `node_targets` across:
+    - [`schema.py`](src/cts/core/schema.py): Parameterized `tree_encoder_feature_schema` with `node_targets`.
+    - [`pack.py`](src/cts/data/preprocess_gnn/pack.py): Updated the `PackPretrainConfig` schema, `tensorize_example_for_pack`, and packing scripts.
+    - [`teacher_targets.py`](src/cts/data/preprocess_gnn/teacher_targets.py): Updated `to_tensorized_tree_example` signature and validation.
+    - [`build_tree.py`](src/cts/data/build_tree.py) and [`smoke_topology_pretrain_batch.py`](scripts/smoke_topology_pretrain_batch.py): Updated schema instantiations.
+  - Added a backward-compatible Pydantic validator in `PackPretrainConfig` that transparently maps deprecated `topology_features` keys in YAML configs directly to `node_targets`.
+- **Added Robust Unit Tests**:
+  - Implemented the following tests in [`tests/test_value_gap.py`](tests/test_value_gap.py):
+    - `test_two_siblings_share_best_value_yields_zero_gap`: Asserts that when the top two children share identical values (both best), the value gap is exactly `0.0`.
+    - `test_two_siblings_share_suboptimal_value_normal_gap`: Asserts that when two suboptimal children share identical values but are below the best child, the value gap correctly calculates as the normal difference between the best and second-best child values (no distortion).
+    - `test_single_child_gap_is_nan`: Asserts that an internal node with a single child yields a `NaN` gap.
+- **Hardened test suite**:
+  - Verified that all **84/84 tests pass** successfully with exit code 0.
+
+### Policy Drift Target Measurement (Softmax over visits & KL Divergence)
+
+We implemented robust support for measuring search policy drift from "early" search stages ($t_{\text{early}}$) to "late" search stages ($t_{\text{late}}$) to capture search plasticity:
+* **Softmax Policy Formulation**: Instantiated the child policy at time $t$ as a softmax distribution over child visit counts:
+  $$p_t(c) = \text{softmax}\left(\frac{N_t(c)}{\tau}\right)$$
+  Using softmax rather than raw frequency ratio ensures that all probabilities are strictly positive ($>0$), giving complete numerical stability to the downstream distance metric.
+* **KL Divergence Distance Metric**: Quantified drift between early policy $p_{\text{early}}$ and late policy $p_{\text{late}}$ via KL Divergence:
+  $$D_{\text{KL}}(p_{\text{early}} \parallel p_{\text{late}}) = \sum_c p_{\text{early}}(c) \log\left(\frac{p_{\text{early}}(c)}{p_{\text{late}}(c)}\right)$$
+* **Non-Triviality Thresholds ($n_{\text{min}}$)**: Enforced a minimum visit requirement $N_{\text{parent}} \ge n_{\text{min}}$ for the early stage, ignoring trivial nodes or leaves with $<2$ children to keep targets meaningful.
+* **Corpus Boundary Confirmation**: Confirmed that since the 50k dataset generation yaml uses a flat `min_nodes: 96, max_nodes: 96` budget, the maximum possible expansion count step is exactly $t = 96$ across all examples.
+* **Added `policy_drift` Module & Tests**:
+  - Implemented the algorithms in [`src/cts/data/preprocess_gnn/policy_drift.py`](src/cts/data/preprocess_gnn/policy_drift.py).
+  - Added robust test suite [`tests/test_policy_drift.py`](tests/test_policy_drift.py) covering tied visits, temperature scaling, KL divergence correctness, $n_{\text{min}}$ filtering, leaf exclusion, and the 96-expansion boundary validation.
+  - Verified that all **91/91 tests** in the project pass successfully.
+
+### Why We Do Not Drop `NaN` Nodes from the GNN Forward Pass
+We analyzed the suggestion of dropping nodes with `NaN` targets completely from the pass and clarified why the current masking design is structurally superior:
+1. **Connectivity Invariance in GNN Message-Passing**: GNN operations rely on the full tree structure to propagate features upwards to the root. If we physically pruned `NaN` target nodes (like leaf nodes or single-child subtrees) from the graph during the forward pass, we would break the graph's structural message-passing paths. The root node would become disconnected from its descendants, completely destroying the GNN's capacity to aggregate context across the search tree.
+2. **Contextual Feature Contribution**: Even if a node has a `NaN` target (meaning we don't compute loss on it), its input features (e.g. prior policy, static value, or evaluation signals) are vital contextual information for computing the representations of its ancestor nodes (including the root).
+3. **Loss Masking via `torch.isfinite`**: The current regression loss dynamically masks out these nodes during gradient backpropagation via `torch.isfinite(targets)`. This guarantees that these nodes do not contribute to parameter gradients while fully utilizing their features in GNN message passing.
+
+### Refactored to `NodePretrainer`
+* **Renamed classes**: Renamed `TopologyPretrainer` $\to$ **`NodePretrainer`**, `TopologyPretrainConfig` $\to$ **`NodePretrainConfig`**, and `TopologyMetrics` $\to$ **`NodePretrainMetrics`** across `gnn_pretrain.py`, `build_tree.py`, `smoke_topology_pretrain_batch.py`, and the test suite (`test_topology_pack_presets.py`).
+* All **91/91 unit tests** are fully updated and continue to pass.
+
+### Multi-Head GNN Target Integration (Value Gap + Policy Drift)
+
+We completed the expansion of the tree pretraining targets to a multi-task learning setup by integrating policy drift alongside the value gap target head in the production `v5` schema:
+* **Dynamic Multi-Head Schema Modification**:
+  - Updated `TEACHER_TOPOLOGY_FEATURE_NAMES` in `schema.py` to `("value_gap", "policy_drift")`.
+  - Stacking both target columns enables the GNN pretrainer to train joint objectives simultaneously or mask individual objectives if needed.
+* **On-Disk Record Serialization Upgrade**:
+  - Expanded `PretrainExample` and `RawPretrainExampleRecord` in `teacher_targets.py` to carry, validate, and serialize `policy_drift` tensors alongside `value_gap`.
+  - Modified `to_payload`, `from_payload`, and `to_pretrain_example` to support multi-target serialization, ensuring full backward compatibility with older datasets.
+* **Empirical Policy Drift Target Calculation**:
+  - Added visit-count tracking (`oracle_root_visits_trace`) inside the main PUCT loop of `generate_partial_tree_from_provider` to record the root's child visit distribution after each step.
+  - In `build_pretrain_example`, dynamically calculated the empirical root node KL divergence drift from early search ($N_{\text{parent}} \ge 10$) to late search ($t = 96$). Nodes that are suboptimal or do not meet the minimum visit requirement are assigned `NaN` to be masked during regression.
+* **Multi-Target Scaling & Collation**:
+  - Re-implemented `scaled_teacher_topology_matrix` in `teacher_targets.py` to return stacked `[num_nodes, 2]` targets.
+  - Updated `to_tensorized_tree_example` to dynamically map column slices using their index in `TEACHER_TOPOLOGY_FEATURE_NAMES` instead of hardcoded 1D indexes.
+* **Hardened Test Suite & 100% Pass**:
+  - Adapted collator and loss masking tests in `test_topology_pack_presets.py` and `test_value_gap.py` to support 2-dimensional target shapes.
+  - Implemented an end-to-end integration test `test_record_serialization_round_trip_with_policy_drift` in `test_policy_drift.py` validating that policy drift correctly round-trips from generation through record packing and target scaling.
+  - Verified all **92/92 tests pass** successfully with exit code 0.
+

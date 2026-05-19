@@ -18,7 +18,7 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import torch
 
 from .schema import (
-    TEACHER_TOPOLOGY_FEATURE_NAMES,
+    TEACHER_NODETARGETS_FEATURE_NAMES,
     TREE_ENCODER_FEATURE_NAMES,
     NodeFeatureSchema,
 )
@@ -51,7 +51,7 @@ class TreeBatch:
     num_nodes: int  # N
     num_edges: int  # E
     edge_wdl_targets: Optional[torch.Tensor] = None  # [E, 3] normalized per-edge WDL targets when training the edge head
-    topology_targets: Optional[torch.Tensor] = None  # [N, 4] per-node topology supervision when topology-pretraining
+    nodetargets_targets: Optional[torch.Tensor] = None  # [N, len(TEACHER_NODETARGETS_FEATURE_NAMES)] per-node supervision when pretraining
 
 
 @dataclass
@@ -73,7 +73,7 @@ class TensorizedTreeExample:
     node_targets: torch.Tensor  # [n_nodes] training targets aligned to node order
     feature_names: Tuple[str, ...]  # mirrors the schema's column order
     edge_wdl_targets: Optional[torch.Tensor] = None  # [n_edges, 3] normalized WDL targets, when provided
-    topology_targets: Optional[torch.Tensor] = None  # [n_nodes, 4] topology supervision, when provided
+    nodetargets_targets: Optional[torch.Tensor] = None  # [n_nodes, len(TEACHER_NODETARGETS_FEATURE_NAMES)] supervision, when provided
 
 
 @dataclass
@@ -460,28 +460,28 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
     return tree_batch, targets
 
 
-def collate_tensorized_examples_for_topology(
+def collate_tensorized_examples_for_nodetargets(
     examples: Sequence[TensorizedTreeExample],
 ) -> tuple[TreeBatch, torch.Tensor]:
-    """Stack trees for Encoder+TopologyHead training: encoder input is five cols; supervision is four."""
+    """Stack trees for Encoder+NodeTargetsHead training."""
     if not examples:
         raise ValueError("Cannot collate an empty batch.")
     encoder_width = len(TREE_ENCODER_FEATURE_NAMES)
     encoder_examples: list[TensorizedTreeExample] = []
-    topology_parts: list[torch.Tensor] = []
+    nodetargets_parts: list[torch.Tensor] = []
     for example in examples:
-        topology_row = example.topology_targets
+        nodetargets_row = example.nodetargets_targets
         num_feat = int(example.node_features.shape[1])
-        if topology_row is None and num_feat >= len(TREE_ENCODER_FEATURE_NAMES) + len(
-            TEACHER_TOPOLOGY_FEATURE_NAMES
+        if nodetargets_row is None and num_feat >= len(TREE_ENCODER_FEATURE_NAMES) + len(
+            TEACHER_NODETARGETS_FEATURE_NAMES
         ):
-            tail = tuple(example.feature_names[-len(TEACHER_TOPOLOGY_FEATURE_NAMES) :])
-            if tail == TEACHER_TOPOLOGY_FEATURE_NAMES:
-                topology_row = example.node_features[:, -len(TEACHER_TOPOLOGY_FEATURE_NAMES) :]
+            tail = tuple(example.feature_names[-len(TEACHER_NODETARGETS_FEATURE_NAMES) :])
+            if tail == TEACHER_NODETARGETS_FEATURE_NAMES:
+                nodetargets_row = example.node_features[:, -len(TEACHER_NODETARGETS_FEATURE_NAMES) :]
 
-        if topology_row is None:
+        if nodetargets_row is None:
             raise ValueError(
-                "Every example must expose topology_targets (field or trailing node_features columns); "
+                "Every example must expose nodetargets_targets (field or trailing node_features columns); "
                 "repack with topology_supervision_shard=true."
             )
 
@@ -499,16 +499,16 @@ def collate_tensorized_examples_for_topology(
                 feature_names=TREE_ENCODER_FEATURE_NAMES,
             )
         )
-        topology_parts.append(topology_row)
+        nodetargets_parts.append(nodetargets_row)
 
     tree_batch, _node_targets = collate_tensorized_examples(encoder_examples)
-    topology_targets = torch.cat(topology_parts, dim=0)
+    nodetargets_targets = torch.cat(nodetargets_parts, dim=0)
     tree_batch = replace(
         tree_batch,
         feature_names=TREE_ENCODER_FEATURE_NAMES,
-        topology_targets=topology_targets,
+        nodetargets_targets=nodetargets_targets,
     )
-    return tree_batch, topology_targets
+    return tree_batch, nodetargets_targets
 
 
 def collate_tensorized_observations(observations: Sequence[TensorizedTreeObservation]) -> TreeBatch:

@@ -38,7 +38,7 @@ hl4291_slurm/            hl4291 Slurm scripts (50k tree gen, topology pack)
 scripts/                 orchestrators (just submit_generate_dataset_shards.py)
 tests/                   pytest suite (~77 tests, run with `pytest tests/`)
 LAB_NOTEBOOK.md          running experimental log; chronological
-data/                    sampled_root_fens_2023.txt and similar
+fens/                    root FEN lists (e.g. sampled_root_fens_2023.txt); separate from data/ outputs
 demos/                   April-era tutorial notebooks (some are stale — see §4)
 ```
 
@@ -110,6 +110,17 @@ update `PROJECT_DIR` and scratch paths in the YAMLs to match your env.
 | 7b | merge worker caches | same slurm | same module | same module (`command: merge`) |
 | 8 | controller train (fitted-Q) | `slurm/train_fitted_q_controller_della.slurm` | `configs/train/controller_train.yaml` | `cts.train.controller_train` |
 
+### hl4291 track (topology encoder on teacher trees)
+
+Parallel pipeline on hl4291 scratch; Slurm in [`hl4291_slurm/`](hl4291_slurm/) (numbered scripts, `~/venv`). Inputs under **`CTS/fens/`**; outputs under **`CTS/data/`**. Status as of **2026-05-19**: **48,701** trees generated, split + topology-full pack **complete**; **topology pretrain not yet run**. See [`LAB_NOTEBOOK.md`](LAB_NOTEBOOK.md) (2026-05-17 – 2026-05-19) and [`hl4291_slurm/README.md`](hl4291_slurm/README.md).
+
+| # | Stage | Slurm | YAML |
+|---|--------|-------|------|
+| 1 | build trees (GPU array) | `hl4291_slurm/1_generate_shards.slurm` | `configs/data/hl4291_build_tree_50k.yaml` |
+| — | split train/val (CLI) | — | `configs/data/preprocess_gnn/hl4291_split_50k_topology.yaml` |
+| 2 | pack (topology full) | `hl4291_slurm/2_pack_shards.slurm` | `configs/data/preprocess_gnn/hl4291_pack_50k_topology_full.yaml` |
+| 3 | topology encoder pretrain | `hl4291_slurm/3_pretrain_topology.slurm` | `configs/data/hl4291_pretrain_topology_50k.yaml` |
+
 ### Stage 3 orchestrator
 Build_tree is the only stage with an orchestrator (because lc0 is slow and
 shard parallelism is essential). The orchestrator reads a base YAML, slices
@@ -157,7 +168,7 @@ To verify the install works end-to-end on a tiny dataset (called a "smoke"
 in our lab notebook), every pipeline stage has a sibling `*_smoke.yaml`
 that points at smoke-suffixed scratch directories and a 10-FEN input file.
 Suggested order:
-1. `head -n 10 /path/to/sampled_root_fens.txt > /path/to/sampled_root_fens_smoke.txt`
+1. `head -n 10 /path/to/fens/sampled_root_fens_2023.txt > /path/to/fens/sampled_root_fens_smoke.txt`
 2. Update `fens:` in `configs/data/build_tree_smoke.yaml` to point at the
    smoke FEN file.
 3. Run stages 3 → 4a → 4b → 5 → 6 → 7a → 7b → 8 with the corresponding

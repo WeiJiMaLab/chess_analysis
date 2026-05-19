@@ -61,7 +61,7 @@ class BudgetedControllerOracleTests(unittest.TestCase):
         self.assertLess(policy.target_advantages[0], 0.0)
 
     def test_large_tree_flips_to_halt_via_maintenance_cost(self):
-        policy = compute_budgeted_oracle([0.0, 0.6], [3000, 3000], 20, BudgetedOracleConfig())
+        policy = compute_budgeted_oracle([0.0, 0.6], [3000, 3000], 20, BudgetedOracleConfig(maintenance_scale=0.01))
         self.assertEqual(policy.optimal_stop_step, 0)
         self.assertLess(policy.target_advantages[0], 0.0)
 

@@ -1,0 +1,21 @@
+# Slurm-friendly topology pretrain smoke: one packed shard, capped example counts (fast preload).
+#   export CONFIG=$PWD/configs/data/hl4291_pretrain_topology_shard_slurm_smoke.yaml
+#   sbatch hl4291_slurm/3_pretrain_topology.slurm
+command: pretrain-topology-encoder
+train_dir: /home/hl4291/chess_analysis/lmcos/configs/data/manifests/hl4291_topology_pretrain_shard0_train.json
+validation_dir: /home/hl4291/chess_analysis/lmcos/configs/data/manifests/hl4291_topology_pretrain_shard0_val.json
+output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/checkpoints/tree_encoder_topology_shard_smoke.pt
+device: cuda
+k: 1
+d_embed: 128
+d_message: 128
+n_heads: 4
+d_att: 32
+node_embed_hidden: 128
+decoder_hidden: 128
+batch_size: 4
+epochs: 2
+num_workers: 0
+log_interval: 1
+loss_type: huber
+huber_delta: 1.0

@@ -271,7 +271,7 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertAlmostEqual(sum(target), 1.0)
 
     def test_pretrain_example_target_order_matches_tensorized_node_order(self):
-        example = build_pretrain_example("root", self.provider, self.config, root_position_id="p0")
+        example = build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0")
         tree_batch = tensorize_tree(example.tree, schema=self.schema, device=self.device)
 
         self.assertEqual(len(example.node_target_values), tree_batch.num_nodes)
@@ -290,13 +290,14 @@ class SupervisedBranchTests(unittest.TestCase):
         self.assertTrue(all(left < right for left, right in zip(counts, counts[1:])))
 
     def test_derive_prefix_pretrain_example_uses_root_prefix_and_recomputes_targets(self):
-        source_example = build_pretrain_example("root", self.provider, self.config, root_position_id="p0")
+        source_example = build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0")
         prefix_example = derive_prefix_pretrain_example(
             source_example,
             config=self.config,
             min_nodes=3,
             max_nodes=5,
             rng=random.Random(0),
+            include_edge_wdl_targets=True,
         )
 
         self.assertEqual(prefix_example.tree.root_id, 0)
@@ -342,6 +343,7 @@ class SupervisedBranchTests(unittest.TestCase):
             min_nodes=8,
             max_nodes=48,
             rng=random.Random(0),
+            include_edge_wdl_targets=True,
         )
 
         self.assertGreater(prefix_example.tree.num_nodes(), 48)
@@ -355,8 +357,8 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_derive_pretrain_prefixes_script_supports_multiprocessing(self):
         repo_root = Path(__file__).resolve().parents[1]
         examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p1"),
         ]
 
         with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir, tempfile.TemporaryDirectory() as config_dir:
@@ -405,8 +407,8 @@ class SupervisedBranchTests(unittest.TestCase):
     def test_pack_pretrain_examples_script_supports_multiprocessing(self):
         repo_root = Path(__file__).resolve().parents[1]
         examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p1"),
         ]
 
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as split_root, tempfile.TemporaryDirectory() as output_root, tempfile.TemporaryDirectory() as config_dir:
@@ -457,8 +459,8 @@ class SupervisedBranchTests(unittest.TestCase):
 
     def test_pretrain_example_directory_dataset_loads_examples_lazily(self):
         examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p1"),
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             for index, example in enumerate(examples):
@@ -484,8 +486,8 @@ class SupervisedBranchTests(unittest.TestCase):
 
     def test_load_raw_pretrain_example_paths_recurses_through_shard_directories(self):
         examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p1"),
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             shard_a = os.path.join(tmpdir, "shard_00000")
@@ -503,8 +505,8 @@ class SupervisedBranchTests(unittest.TestCase):
 
     def test_pretrain_example_manifest_dataset_loads_examples_lazily(self):
         examples = [
-            build_pretrain_example("root", self.provider, self.config, root_position_id="p0"),
-            build_pretrain_example("root_alt", self.provider, self.config, root_position_id="p1"),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p0"),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True, root_position_id="p1"),
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             paths = []
@@ -612,8 +614,8 @@ class SupervisedBranchTests(unittest.TestCase):
 
     def test_child_wdl_pretraining_reduces_validation_loss_and_checkpoint_restores_encoder(self):
         train_examples = [
-            build_pretrain_example("root", self.provider, self.config),
-            build_pretrain_example("root_alt", self.provider, self.config),
+            build_pretrain_example("root", self.provider, self.config, include_edge_wdl_targets=True),
+            build_pretrain_example("root_alt", self.provider, self.config, include_edge_wdl_targets=True),
         ]
         model = ChildWdlModel(
             k=1,
@@ -843,6 +845,7 @@ class SupervisedBranchTests(unittest.TestCase):
             self.config,
             node_budget_distribution=NodeBudgetDistribution(min_nodes=4, max_nodes=4),
             rng=random.Random(19),
+            include_edge_wdl_targets=True,
         )
 
         record = RawPretrainExampleRecord.from_example(example)

@@ -400,10 +400,10 @@ class ChildWdlModel(nn.Module):
         return self.child_wdl_head(encoded.node_states[edge_parent], slot_states)
 
 
-class TopologyHead(nn.Module):
-    """Per-node MLP that regresses teacher topology scalars from encoded node states."""
+class NodeTargetsHead(nn.Module):
+    """Per-node MLP that regresses teacher node targets scalars from encoded node states."""
 
-    def __init__(self, d_embed: int, num_targets: int = 4, hidden_dim: int = 128, device: str | torch.device = "cpu"):
+    def __init__(self, d_embed: int, num_targets: int = 1, hidden_dim: int = 128, device: str | torch.device = "cpu"):
         super().__init__()
         device = torch.device(device)
         self.mlp = nn.Sequential(
@@ -417,8 +417,8 @@ class TopologyHead(nn.Module):
         return self.mlp(node_states)
 
 
-class TopologyModel(nn.Module):
-    """Encoder plus per-node topology decoder for supervised pretraining."""
+class NodeTargetsModel(nn.Module):
+    """Encoder plus per-node node targets decoder for supervised pretraining."""
 
     def __init__(
         self,
@@ -431,7 +431,7 @@ class TopologyModel(nn.Module):
         n_heads=4,
         d_att=128,
         decoder_hidden=128,
-        num_topology_targets: int = 4,
+        num_node_targets: int = 1,
         encoder=None,
         sequential=True,
     ):
@@ -449,14 +449,14 @@ class TopologyModel(nn.Module):
                 sequential=sequential,
             )
         self.encoder = encoder
-        self.topology_head = TopologyHead(
+        self.node_targets_head = NodeTargetsHead(
             d_embed=encoder.d_embed,
-            num_targets=num_topology_targets,
+            num_targets=num_node_targets,
             hidden_dim=decoder_hidden,
             device=encoder.device,
         )
 
     def forward(self, tree_batch) -> torch.Tensor:
-        """Encode the batch and return per-node topology predictions ``[N, num_targets]``."""
+        """Encode the batch and return per-node target predictions ``[N, num_targets]``."""
         encoded = self.encoder(tree_batch)
-        return self.topology_head(encoded.node_states)
+        return self.node_targets_head(encoded.node_states)

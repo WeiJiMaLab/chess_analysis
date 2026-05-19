@@ -111,35 +111,30 @@ class NodeFeatureSchema:
 # pretrain dataset on disk.
 TREE_ENCODER_FEATURE_NAMES: Tuple[str, ...] = ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
 
-# Optional extra columns sourced from teacher ``cts_raw_pretrain_example_v3`` tensors
-# (stored on the raw record, not legacy ``node_features`` columns).
-# Appended after ``TREE_ENCODER_FEATURE_NAMES`` when packing with ``topology_features: true``.
-# **Format-breaking** vs 5-wide shards and narrow encoder checkpoints — see LAB_NOTEBOOK.
-TEACHER_TOPOLOGY_FEATURE_NAMES: Tuple[str, ...] = (
-    "n_visits",
-    "nodes_below",
-    "max_breadth_relative",
-    "max_depth_relative",
-)
+# Optional extra columns for node targets GNN pretraining (``v5+``): per-node value gap and policy drift.
+# Appended after ``TREE_ENCODER_FEATURE_NAMES`` when packing with ``node_targets: true``.
+# We selectively extract only the "policy_drift" head for pretraining.
+TEACHER_NODETARGETS_FEATURE_NAMES: Tuple[str, ...] = ("policy_drift",)
 
-# Column order for flat ``topology_targets`` supervision tensors (``[N, 4]``); same order
-# as appended ``node_features`` when ``topology_features: true``.
-TOPOLOGY_TARGET_FEATURE_NAMES: Tuple[str, ...] = TEACHER_TOPOLOGY_FEATURE_NAMES
+# Column order for flat ``nodetargets_targets`` supervision tensors.
+NODETARGETS_TARGET_FEATURE_NAMES: Tuple[str, ...] = TEACHER_NODETARGETS_FEATURE_NAMES
 
-# Metadata value stored in topology-pretrain checkpoints for target scaling.
-TOPOLOGY_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW = "log1p_visits_nodes_below"
+# Metadata value stored in node-pretrain checkpoints for target scaling.
+NODETARGETS_TARGET_SCALING_VALUE_GAP_CP = "raw_value_gap_cp"
+NODETARGETS_TARGET_SCALING_LOG1P_VISITS = "log1p_visits_raw_value_gap_cp"
+NODETARGETS_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW = "log1p_visits_nodes_below"
 
 
-def topology_target_feature_names() -> Tuple[str, ...]:
-    """Return ordered topology supervision columns (same order as raw v3 tensors)."""
-    return TOPOLOGY_TARGET_FEATURE_NAMES
+def nodetargets_target_feature_names() -> Tuple[str, ...]:
+    """Return ordered node targets supervision columns."""
+    return NODETARGETS_TARGET_FEATURE_NAMES
 
 
-def tree_encoder_feature_schema(*, topology_features: bool = False) -> NodeFeatureSchema:
-    """Column order for packed ``node_features`` (5 baseline, +4 teacher topology if ``topology_features``)."""
+def tree_encoder_feature_schema(*, node_targets: bool = False) -> NodeFeatureSchema:
+    """Column order for packed ``node_features`` (5 baseline, +1 teacher node target if ``node_targets``)."""
     names = TREE_ENCODER_FEATURE_NAMES
-    if topology_features:
-        names = names + TEACHER_TOPOLOGY_FEATURE_NAMES
+    if node_targets:
+        names = names + TEACHER_NODETARGETS_FEATURE_NAMES
     return NodeFeatureSchema.from_ordered_features(names)
 
 

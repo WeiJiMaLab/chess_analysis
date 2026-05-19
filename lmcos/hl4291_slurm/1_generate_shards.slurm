@@ -1,5 +1,6 @@
 #!/bin/bash
 # Step 1 — GPU array: lc0 teacher trees (slice CONFIG by SLURM_ARRAY_TASK_ID × CHUNK_SIZE).
+# FEN list path is set in CONFIG (typically under CTS/fens/, not data/).
 #
 #   export CONFIG="$PWD/configs/data/hl4291_build_tree_50k.yaml"
 #   sbatch --array=0-9 --export=ALL,CHUNK_SIZE=5000 hl4291_slurm/1_generate_shards.slurm

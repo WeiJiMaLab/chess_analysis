@@ -38,8 +38,8 @@ from cts.models.gnn import ChildWdlModel, TopologyModel
 from cts.train.gnn_pretrain import (
     ChildWdlPretrainConfig,
     ChildWdlPretrainer,
-    TopologyPretrainConfig,
-    TopologyPretrainer,
+    NodePretrainConfig,
+    NodePretrainer,
 )
 
 
@@ -103,16 +103,14 @@ class BuildTreeConfig(BaseModel):
     loss_type: Literal["huber", "mse"] = "huber"
     huber_delta: float = 1.0
     #: Phased topology Huber curriculum: weights aligned with :func:`topology_target_feature_names`.
-    topology_target_weights: Optional[Tuple[float, float, float, float]] = None
+    topology_target_weights: Optional[Tuple[float, ...]] = None
 
     @field_validator("topology_target_weights", mode="before")
     @classmethod
-    def _coerce_topology_target_weights(cls, value: object) -> Optional[Tuple[float, float, float, float]]:
+    def _coerce_topology_target_weights(cls, value: object) -> Optional[Tuple[float, ...]]:
         if value is None:
             return None
         seq = tuple(float(x) for x in value)  # type: ignore[arg-type]
-        if len(seq) != 4:
-            raise ValueError("topology_target_weights must have exactly four entries when set.")
         return seq
 def _feature_schema() -> NodeFeatureSchema:
     """Return the canonical encoder feature schema."""
@@ -531,14 +529,14 @@ def pretrain_topology_encoder_command(config: BuildTreeConfig) -> None:
         flush=True,
     )
 
-    schema = tree_encoder_feature_schema(topology_features=False)
+    schema = tree_encoder_feature_schema(node_targets=False)
     model = _build_topology_model(config, schema)
-    trainer = TopologyPretrainer(
+    trainer = NodePretrainer(
         model=model,
         device=config.device,
         train_examples=train_examples,
         validation_examples=validation_examples,
-        config=TopologyPretrainConfig(
+        config=NodePretrainConfig(
             batch_size=config.batch_size,
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,

@@ -12,7 +12,7 @@ This home directory is the working root for a research thread that combines **la
 | `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/src/metacontrol/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
-| `chess_analysis/lmcos/` | Legacy tree encoder, offline controller training, Slurm job definitions |
+| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`hl4291_slurm/`** (hl4291 topology pipeline), **`slurm/`** (ysagiv defaults) |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
 | `chess_analysis/src/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
