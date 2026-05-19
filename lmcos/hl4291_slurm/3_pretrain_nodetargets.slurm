@@ -1,13 +1,13 @@
 #!/bin/bash
-# Step 3 — Topology encoder pretrain (TreeEncoder + TopologyHead, Huber on packed topology targets).
+# Step 3 — Node targets encoder pretrain (TreeEncoder + NodeTargetsHead, Huber on packed node targets).
 #
-#   export CONFIG="$PWD/configs/data/hl4291_pretrain_topology_shard_slurm_smoke.yaml"
-#   sbatch hl4291_slurm/3_pretrain_topology.slurm
+#   export CONFIG="$PWD/configs/data/hl4291_pretrain_nodetargets_shard_slurm_smoke.yaml"
+#   sbatch hl4291_slurm/3_pretrain_nodetargets.slurm
 #
 # Full 50k corpus:
-#   export CONFIG="$PWD/configs/data/hl4291_pretrain_topology_50k.yaml"
+#   export CONFIG="$PWD/configs/data/hl4291_pretrain_nodetargets_50k.yaml"
 
-#SBATCH --job-name=cts-topo-pretrain
+#SBATCH --job-name=cts-nodetargets-pretrain
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --cpus-per-task=8
@@ -17,7 +17,7 @@
 #SBATCH --constraint=nomig
 
 set -euo pipefail
-: "${CONFIG:?CONFIG env var required (path to hl4291_pretrain_topology_*.yaml)}"
+: "${CONFIG:?CONFIG env var required (path to hl4291_pretrain_nodetargets_*.yaml)}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_env.sh

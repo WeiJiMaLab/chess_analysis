@@ -1033,7 +1033,7 @@ class RawPretrainExampleRecord:
                 if _record_has_edge_wdl_targets(self.edge_wdl_targets)
                 else None
             ),
-            topology_targets=topology_targets,
+            nodetargets_targets=topology_targets,
         )
 
 
@@ -1165,7 +1165,7 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         if not entries:
             raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
 
-        self.expect_topology_targets = bool(manifest.get("topology_targets", False))
+        self.expect_topology_targets = bool(manifest.get("topology_targets", False)) or bool(manifest.get("nodetargets_targets", False))
 
         # Preload all shards and flatten into individual examples to avoid
         # shard-thrashing under shuffled access and view-pinning of large shard

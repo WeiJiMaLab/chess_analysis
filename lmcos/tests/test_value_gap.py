@@ -21,7 +21,7 @@ from cts.data.preprocess_gnn.teacher_targets import (
     node_value_gap_centipawns,
     node_value_gap_features,
     save_pretrain_example,
-    scaled_teacher_topology_matrix,
+    scaled_teacher_node_matrix,
     scalar_value_to_centipawns,
 )
 from cts.core.providers.base import TreeExpansionProvider
@@ -232,9 +232,11 @@ class ValueGapTests(unittest.TestCase):
         )
         record = RawPretrainExampleRecord.from_example(example)
         self.assertEqual(record.to_payload()["format"], RAW_PRETRAIN_FORMAT)
-        matrix = scaled_teacher_topology_matrix(record)
-        self.assertEqual(tuple(matrix.shape), (tree.num_nodes(), 2))
-        self.assertAlmostEqual(float(matrix[0, 0].item()), 50.0)
+        from unittest.mock import patch
+        with patch("cts.data.preprocess_gnn.teacher_targets.TEACHER_NODETARGETS_FEATURE_NAMES", ("value_gap", "policy_drift")):
+            matrix = scaled_teacher_node_matrix(record)
+            self.assertEqual(tuple(matrix.shape), (tree.num_nodes(), 2))
+            self.assertAlmostEqual(float(matrix[0, 0].item()), 50.0)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = f"{tmp}/example.pt"

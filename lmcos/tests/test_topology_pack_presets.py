@@ -1,4 +1,4 @@
-"""Regression tests for topology pack presets + weighted topology loss."""
+"""Regression tests for node targets pack presets + weighted node targets loss."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import torch
 
 from cts.core.providers.base import TreeExpansionProvider
 from cts.core.schema import TREE_ENCODER_FEATURE_NAMES, tree_encoder_feature_schema
-from cts.core.tensorizer import TensorizedTreeExample, collate_tensorized_examples_for_topology
+from cts.core.tensorizer import TensorizedTreeExample, collate_tensorized_examples_for_nodetargets
 from cts.core.tree import ExpansionChild
 from cts.data.preprocess_gnn.pack import PackPretrainConfig, main as pack_main
 from cts.data.preprocess_gnn.teacher_targets import TeacherSearchConfig, build_pretrain_example, save_pretrain_example
-from cts.models.gnn import TopologyModel
+from cts.models.gnn import NodeTargetsModel
 from cts.train.gnn_pretrain import NodePretrainConfig, NodePretrainer
 
 
@@ -65,7 +65,7 @@ def _smoke_search_config() -> TeacherSearchConfig:
 
 def test_pack_config_rejects_wide_without_supervision_shard() -> None:
     with pytest.raises(ValueError):
-        PackPretrainConfig(node_targets=True, topology_supervision_shard=False)
+        PackPretrainConfig(node_targets=True, node_supervision_shard=False)
 
 
 def test_pack_config_rejects_num_workers() -> None:
@@ -120,7 +120,7 @@ def test_pack_topology_smoke_reaches_second_train_shard() -> None:
                 log_interval=1,
                 clear=True,
                 node_targets=True,
-                topology_supervision_shard=True,
+                node_supervision_shard=True,
             )
         )
 
@@ -138,19 +138,19 @@ def test_pack_topology_smoke_reaches_second_train_shard() -> None:
 
 def test_pack_config_maps_include_topology_targets_yaml() -> None:
     cfg = PackPretrainConfig.model_validate({"include_topology_targets": True})
-    assert cfg.topology_supervision_shard is True
+    assert cfg.node_supervision_shard is True
     assert cfg.node_targets is False
 
 
 def test_pack_config_maps_teacher_topology_yaml_to_full_template() -> None:
     cfg = PackPretrainConfig.model_validate({"include_teacher_topology": True})
     assert cfg.node_targets is True
-    assert cfg.topology_supervision_shard is True
+    assert cfg.node_supervision_shard is True
 
 
 def test_collate_topology_derives_targets_from_wide_node_features() -> None:
     schema = tree_encoder_feature_schema(node_targets=True)
-    tail = torch.tensor([[25.0, 0.0]], dtype=torch.float32)
+    tail = torch.tensor([[0.25]], dtype=torch.float32)
     base = torch.zeros(1, len(TREE_ENCODER_FEATURE_NAMES), dtype=torch.float32)
     wide = torch.cat([base, tail], dim=-1)
     ex = TensorizedTreeExample(
@@ -163,16 +163,16 @@ def test_collate_topology_derives_targets_from_wide_node_features() -> None:
         node_targets=torch.zeros(1, dtype=torch.float32),
         feature_names=tuple(schema.feature_names),
         edge_wdl_targets=None,
-        topology_targets=None,
+        nodetargets_targets=None,
     )
-    tree_batch, topology_targets = collate_tensorized_examples_for_topology([ex])
+    tree_batch, nodetargets_targets = collate_tensorized_examples_for_nodetargets([ex])
     assert tree_batch.node_features.shape == (1, len(TREE_ENCODER_FEATURE_NAMES))
-    assert torch.allclose(topology_targets, tail)
+    assert torch.allclose(nodetargets_targets, tail)
 
 
 @pytest.mark.parametrize("loss_type", ["huber", "mse"])
 def test_topology_weighted_loss_masks_tail_dims(loss_type: str) -> None:
-    model = TopologyModel(
+    model = NodeTargetsModel(
         k=2,
         node_feat=5,
         device="cpu",
@@ -182,14 +182,13 @@ def test_topology_weighted_loss_masks_tail_dims(loss_type: str) -> None:
         n_heads=2,
         d_att=16,
         decoder_hidden=32,
-        num_topology_targets=2,
+        num_node_targets=1,
     )
-    cfg = NodePretrainConfig(loss_type=loss_type, topology_target_weights=(1.0, 1.0))
+    cfg = NodePretrainConfig(loss_type=loss_type, nodetargets_target_weights=(1.0,))
     trainer = NodePretrainer(model=model, device="cpu", train_examples=[], validation_examples=[], config=cfg)
-    pred = torch.zeros(2, 2)
-    targ_finite = torch.tensor([[3.0, 3.0], [3.0, 3.0]])
-    targ_with_nan = torch.tensor([[3.0, 3.0], [float("nan"), float("nan")]])
+    pred = torch.zeros(2, 1)
+    targ_finite = torch.tensor([[3.0], [3.0]])
+    targ_with_nan = torch.tensor([[3.0], [float("nan")]])
     loss_finite = float(trainer._regression_loss(pred, targ_finite))
     loss_with_nan = float(trainer._regression_loss(pred, targ_with_nan))
     assert abs(loss_finite - loss_with_nan) < 1e-5
-

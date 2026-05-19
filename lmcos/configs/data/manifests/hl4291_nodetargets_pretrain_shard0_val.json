@@ -2,11 +2,11 @@
   "format": "cts_tensorized_pretrain_manifest_v1",
   "split": "validation",
   "total_examples": 32,
-  "topology_targets": true,
-  "topology_features": true,
+  "nodetargets_targets": true,
+  "node_targets": true,
   "entries": [
     {
-      "path": "/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/pretrain_packed_50k_topology_full/validation/shard_00000.pt",
+      "path": "/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/pretrain_packed_50k_nodetargets_full/validation/shard_00000.pt",
       "num_examples": 32,
       "shard_index": 0
     }

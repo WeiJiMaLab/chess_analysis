@@ -98,7 +98,7 @@ class PolicyDriftTests(unittest.TestCase):
 
     def test_record_serialization_round_trip_with_policy_drift(self) -> None:
         """Verify that policy_drift round-trips correctly through RawPretrainExampleRecord and target scaling."""
-        from cts.data.preprocess_gnn.teacher_targets import PretrainExample, RawPretrainExampleRecord, scaled_teacher_topology_matrix
+        from cts.data.preprocess_gnn.teacher_targets import PretrainExample, RawPretrainExampleRecord, scaled_teacher_node_matrix
         from cts.core.tree import SearchTree, ExpansionChild
         import torch
 
@@ -136,11 +136,10 @@ class PolicyDriftTests(unittest.TestCase):
         self.assertAlmostEqual(rehydrated.policy_drift[0], 0.25)
         self.assertTrue(math.isnan(rehydrated.policy_drift[1]))
 
-        # Test scaled_teacher_topology_matrix
-        matrix = scaled_teacher_topology_matrix(reconstructed)
-        self.assertEqual(tuple(matrix.shape), (3, 2))
-        self.assertAlmostEqual(float(matrix[0, 0].item()), 10.0)
-        self.assertAlmostEqual(float(matrix[0, 1].item()), 0.25)
+        # Test scaled_teacher_node_matrix
+        matrix = scaled_teacher_node_matrix(reconstructed)
+        self.assertEqual(tuple(matrix.shape), (3, 1))
+        self.assertAlmostEqual(float(matrix[0, 0].item()), 0.25)
 
 
 if __name__ == "__main__":

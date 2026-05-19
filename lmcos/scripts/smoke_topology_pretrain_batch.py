@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Smoke: load a packed topology shard and run one Huber training step.
+"""Smoke: load a packed node targets shard and run one Huber training step.
 
 Avoids ``PackedTensorizedShardDataset`` full-corpus preload — one ``torch.load``
 per shard, then only ``--num-examples`` trees are sliced out for a single batch.
 
 Example (production shard, CPU):
-  python3 scripts/smoke_topology_pretrain_batch.py \\
-    --shard /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/pretrain_packed_50k_topology_full/train/shard_00000.pt \\
+  python3 scripts/smoke_topology_pretrain_batch.py \
+    --shard /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/pretrain_packed_50k_topology_full/train/shard_00000.pt \
     --num-examples 4 --batch-size 2 --device cpu
 """
 
@@ -20,7 +20,7 @@ import torch
 
 from cts.core.schema import tree_encoder_feature_schema
 from cts.core.tensorizer import TensorizedTreeExample
-from cts.data.build_tree import BuildTreeConfig, _build_topology_model
+from cts.data.build_tree import BuildTreeConfig, _build_nodetargets_model
 from cts.train.gnn_pretrain import NodePretrainConfig, NodePretrainer
 
 
@@ -28,13 +28,14 @@ def _examples_from_shard(shard_path: Path, num_examples: int) -> list[Tensorized
     payload = torch.load(shard_path, map_location="cpu", weights_only=False)
     if payload.get("format") != "cts_tensorized_pretrain_shard_v1":
         raise ValueError(f"Unexpected shard format: {shard_path}")
-    if payload.get("topology_targets") is None:
-        raise ValueError(f"Shard missing topology_targets: {shard_path}")
+    # Read either old key or new key to support legacy and new shards transparently
+    shard_topology = payload.get("topology_targets")
+    if shard_topology is None:
+        raise ValueError(f"Shard missing topology/node targets: {shard_path}")
 
     node_ptr = payload["node_ptr"]
     edge_ptr = payload["edge_ptr"]
     feature_names = tuple(payload["feature_names"])
-    shard_topology = payload["topology_targets"]
     edge_wdl_targets = payload.get("edge_wdl_targets")
     total = int(payload["num_examples"])
     take = min(num_examples, total)
@@ -58,14 +59,14 @@ def _examples_from_shard(shard_path: Path, num_examples: int) -> list[Tensorized
                 node_targets=payload["node_targets"][ns:ne].clone(),
                 feature_names=feature_names,
                 edge_wdl_targets=edge_wdl_targets[es:ee].clone() if edge_wdl_targets is not None else None,
-                topology_targets=shard_topology[ns:ne].clone(),
+                nodetargets_targets=shard_topology[ns:ne].clone(),
             )
         )
     return examples
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="One-batch topology pretrain smoke.")
+    parser = argparse.ArgumentParser(description="One-batch node targets pretrain smoke.")
     parser.add_argument("--shard", type=Path, required=True, help="Path to shard_XXXXX.pt")
     parser.add_argument("--num-examples", type=int, default=4, help="Trees to slice from shard")
     parser.add_argument("--batch-size", type=int, default=2)
@@ -85,7 +86,7 @@ def main() -> None:
         print(
             f"  example[0] nodes={ex0.node_features.shape[0]} "
             f"node_feat_cols={ex0.node_features.shape[1]} "
-            f"topology_targets={tuple(ex0.topology_targets.shape)}"
+            f"nodetargets_targets={tuple(ex0.nodetargets_targets.shape)}"
         )
 
     device = args.device
@@ -95,7 +96,7 @@ def main() -> None:
 
     schema = tree_encoder_feature_schema(node_targets=False)
     build_cfg = BuildTreeConfig(
-        command="pretrain-topology-encoder",
+        command="pretrain-nodetargets-encoder",
         device=device,
         k=args.k,
         d_embed=64,
@@ -105,7 +106,7 @@ def main() -> None:
         node_embed_hidden=64,
         decoder_hidden=64,
     )
-    model = _build_topology_model(build_cfg, schema)
+    model = _build_nodetargets_model(build_cfg, schema)
     trainer = NodePretrainer(
         model=model,
         device=device,

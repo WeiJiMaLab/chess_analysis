@@ -41,8 +41,8 @@ class PackPretrainConfig(BaseModel):
 
     #: Append supervision targets directly to node features.
     node_targets: bool = False
-    #: Flat ``topology_targets`` in each shard + manifest flag ``topology_targets: true``.
-    topology_supervision_shard: bool = False
+    #: Flat ``nodetargets_targets`` in each shard + manifest flag ``nodetargets_targets: true``.
+    node_supervision_shard: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -58,6 +58,8 @@ class PackPretrainConfig(BaseModel):
         # Migrate legacy topology_features key to node_targets
         if "topology_features" in out:
             out["node_targets"] = out.pop("topology_features")
+        if "topology_supervision_shard" in out:
+            out["node_supervision_shard"] = out.pop("topology_supervision_shard")
 
         lt_key = "include_topology_targets"
         tt_key = "include_teacher_topology"
@@ -67,21 +69,21 @@ class PackPretrainConfig(BaseModel):
             if inc_lt and inc_tt:
                 raise ValueError(
                     f"Deprecated mutually exclusive YAML keys `{lt_key}` and `{tt_key}` cannot both be true. "
-                    "Use node_targets / topology_supervision_shard; see LAB_NOTEBOOK."
+                    "Use node_targets / node_supervision_shard; see LAB_NOTEBOOK."
                 )
             if inc_lt:
-                out.setdefault("topology_supervision_shard", True)
+                out.setdefault("node_supervision_shard", True)
                 out.setdefault("node_targets", False)
             elif inc_tt:
                 out.setdefault("node_targets", True)
-                out.setdefault("topology_supervision_shard", True)
+                out.setdefault("node_supervision_shard", True)
         return out
 
     @model_validator(mode="after")
     def topology_wide_must_ship_supervision(self) -> PackPretrainConfig:
-        if self.node_targets and not self.topology_supervision_shard:
+        if self.node_targets and not self.node_supervision_shard:
             raise ValueError(
-                "node_targets=true requires topology_supervision_shard=true so topology pretrain "
+                "node_targets=true requires node_supervision_shard=true so node pretrain "
                 "has explicit targets and shards stay consistent; see LAB_NOTEBOOK presets."
             )
         return self
@@ -108,17 +110,17 @@ def raise_if_example_cannot_pack(
     """Raise ``ValueError`` if this raw example cannot populate the chosen encoder columns."""
     feature_index = {name: index for index, name in enumerate(record.feature_names)}
     num_nodes = int(record.parent_index.shape[0])
-    # Narrow shards still consume teacher topology tensors for the flat supervision row.
+    # Narrow shards still consume teacher targets tensors for the flat supervision row.
     if need_teacher_topology_columns:
-        for name in TEACHER_TOPOLOGY_FEATURE_NAMES:
+        for name in TEACHER_NODETARGETS_FEATURE_NAMES:
             column = getattr(record, name)
             if int(column.shape[0]) != num_nodes:
                 raise ValueError(
                     f"{example_path_label} has {name} length {column.shape[0]} != num_nodes={num_nodes}."
                 )
     for required_feature in schema.feature_names:
-        if required_feature in TEACHER_TOPOLOGY_FEATURE_NAMES and need_teacher_topology_columns:
-            continue  # lengths already enforced for all four teacher tensors above
+        if required_feature in TEACHER_NODETARGETS_FEATURE_NAMES and need_teacher_topology_columns:
+            continue  # lengths already enforced above
         if required_feature not in feature_index:
             raise ValueError(f"{example_path_label} is missing required tree encoder feature {required_feature!r}.")
         column = record.node_features[:, feature_index[required_feature]]
@@ -134,10 +136,10 @@ def tensorize_example_for_pack(
     schema: NodeFeatureSchema,
     *,
     node_targets: bool,
-    topology_supervision_shard: bool,
+    node_supervision_shard: bool,
 ) -> TensorizedTreeExample:
     record = RawPretrainExampleRecord.load(path)
-    need_topo = node_targets or topology_supervision_shard
+    need_topo = node_targets or node_supervision_shard
     raise_if_example_cannot_pack(
         record,
         schema,
@@ -147,7 +149,7 @@ def tensorize_example_for_pack(
     return record.to_tensorized_tree_example(
         schema,
         node_targets=node_targets,
-        topology_supervision_shard=topology_supervision_shard,
+        topology_supervision_shard=node_supervision_shard,
     )
 
 
@@ -156,7 +158,7 @@ def tensorize_paths_for_shard(
     schema: NodeFeatureSchema,
     *,
     node_targets: bool,
-    topology_supervision_shard: bool,
+    node_supervision_shard: bool,
     split_name: str,
     shard_index: int,
     total_shards: int,
@@ -172,7 +174,7 @@ def tensorize_paths_for_shard(
                 path,
                 schema,
                 node_targets=node_targets,
-                topology_supervision_shard=topology_supervision_shard,
+                node_supervision_shard=node_supervision_shard,
             )
         )
         if completed_in_shard % log_interval == 0 or completed_in_shard == len(shard_paths):
@@ -196,7 +198,7 @@ def pack_train_or_val_split_to_shards(
     *,
     schema: NodeFeatureSchema,
     node_targets: bool,
-    topology_supervision_shard: bool,
+    node_supervision_shard: bool,
 ) -> tuple[Path, int]:
     """Writes ``shard_*.pt`` under ``output_root/<split>/`` plus ``<split>_manifest.json``.
 
@@ -220,7 +222,7 @@ def pack_train_or_val_split_to_shards(
             shard_paths,
             schema,
             node_targets=node_targets,
-            topology_supervision_shard=topology_supervision_shard,
+            node_supervision_shard=node_supervision_shard,
             split_name=split_name,
             shard_index=shard_index,
             total_shards=total_shards,
@@ -257,10 +259,10 @@ def pack_train_or_val_split_to_shards(
             target_parts.append(tensorized.node_targets.cpu())
             if tensorized.edge_wdl_targets is not None:
                 edge_wdl_target_parts.append(tensorized.edge_wdl_targets.cpu())
-            if topology_supervision_shard:
-                if tensorized.topology_targets is None:
-                    raise ValueError("topology_supervision_shard requires topology_targets on every example.")
-                topology_targets_parts.append(tensorized.topology_targets.cpu())
+            if node_supervision_shard:
+                if tensorized.nodetargets_targets is None:
+                    raise ValueError("node_supervision_shard requires nodetargets_targets on every example.")
+                topology_targets_parts.append(tensorized.nodetargets_targets.cpu())
             node_ptr.append(node_ptr[-1] + int(tensorized.node_features.shape[0]))
             edge_ptr.append(edge_ptr[-1] + int(tensorized.edge_parent.shape[0]))
 
@@ -290,11 +292,11 @@ def pack_train_or_val_split_to_shards(
                 else None
             ),
         }
-        if topology_supervision_shard:
+        if node_supervision_shard:
             if len(topology_targets_parts) != len(tensorized_examples):
-                raise ValueError("topology_targets missing for some examples in shard.")
+                raise ValueError("nodetargets_targets missing for some examples in shard.")
             payload["topology_targets"] = torch.cat(topology_targets_parts, dim=0)
-            payload["topology_target_feature_names"] = list(topology_target_feature_names())
+            payload["topology_target_feature_names"] = list(nodetargets_target_feature_names())
         torch.save(payload, shard_path)
         entries.append(
             {
@@ -313,7 +315,7 @@ def pack_train_or_val_split_to_shards(
             "total_examples": total_examples,
             "entries": entries,
         }
-        if topology_supervision_shard:
+        if node_supervision_shard:
             manifest_payload["topology_targets"] = True
         if node_targets:
             manifest_payload["node_targets"] = True
@@ -354,7 +356,7 @@ def main(config: PackPretrainConfig) -> None:
     shard_size = max(len(train_paths), len(validation_paths)) if config.single_shard else config.shard_size
 
     schema = tree_encoder_feature_schema(node_targets=config.node_targets)
-    nt, ts = config.node_targets, config.topology_supervision_shard
+    nt, ts = config.node_targets, config.node_supervision_shard
     train_packed_manifest, train_count = pack_train_or_val_split_to_shards(
         train_manifest,
         output_root,
@@ -362,7 +364,7 @@ def main(config: PackPretrainConfig) -> None:
         config.log_interval,
         schema=schema,
         node_targets=nt,
-        topology_supervision_shard=ts,
+        node_supervision_shard=ts,
     )
     validation_packed_manifest, validation_count = pack_train_or_val_split_to_shards(
         validation_manifest,
@@ -371,7 +373,7 @@ def main(config: PackPretrainConfig) -> None:
         config.log_interval,
         schema=schema,
         node_targets=nt,
-        topology_supervision_shard=ts,
+        node_supervision_shard=ts,
     )
 
     print(f"train_manifest={train_packed_manifest}")
@@ -382,9 +384,9 @@ def main(config: PackPretrainConfig) -> None:
     print(f"single_shard={config.single_shard}")
     print(f"effective_shard_size={shard_size}")
     print(f"node_targets={nt}")
-    print(f"topology_supervision_shard={ts}")
-    if config.topology_supervision_shard:
-        print(f"topology_target_columns={list(topology_target_feature_names())}")
+    print(f"node_supervision_shard={ts}")
+    if config.node_supervision_shard:
+        print(f"nodetargets_target_columns={list(nodetargets_target_feature_names())}")
 
 
 if __name__ == "__main__":
