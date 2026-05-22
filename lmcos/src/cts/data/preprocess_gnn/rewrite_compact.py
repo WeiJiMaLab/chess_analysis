@@ -22,9 +22,16 @@ from pydantic import BaseModel, ConfigDict
 from cts.core.providers.common import append_move_to_position_spec
 from cts.core.tree import SearchNode, SearchTree
 from cts.data.preprocess_gnn.teacher_targets import (
+    RAW_PRETRAIN_FORMAT,
     PretrainExample,
     RawPretrainExampleRecord,
     _normalize_wdl_target,
+)
+
+
+_LEGACY_RAW_FORMAT_TAGS = (
+    "cts_raw_pretrain_example_v1",
+    RAW_PRETRAIN_FORMAT,
 )
 
 
@@ -233,13 +240,27 @@ def _install_legacy_unpicklers() -> None:
 def _load_record_from_source(source: Path) -> RawPretrainExampleRecord:
     """Load one legacy example and return it as a ``RawPretrainExampleRecord``.
 
-    Accepts both the v1 raw-record payload dict and a directly-pickled
-    ``PretrainExample``. The legacy unpicklers are installed eagerly because
-    ``torch.load`` may instantiate either type before this function returns.
+    Accepts the v1 raw-record payload dict, the current v2 dict, and a
+    directly-pickled ``PretrainExample`` (the pre-v1 legacy form). The
+    legacy unpicklers are installed eagerly because ``torch.load`` may
+    instantiate any of these types before this function returns.
+
+    The v2 disk-format bump (``cts_raw_pretrain_example_v2``) only enforced
+    canonical UCI-sorted slot ordering for the on-disk ``children_index``
+    array. Production v1 records were created by the lc0 provider, which
+    emits moves in UCI-alphabetical order anyway, so v1 ``children_index``
+    is already in canonical order in practice. We therefore retag v1
+    payloads to v2 and delegate to ``from_payload`` for the strict shape
+    validation; this is the minimum-impact fix that doesn't require a
+    separate v1-specific parser to be kept in lockstep with v2.
     """
     _install_legacy_unpicklers()
     payload = torch.load(source, weights_only=False)
-    if isinstance(payload, dict) and payload.get("format") == "cts_raw_pretrain_example_v1":
+    if isinstance(payload, dict) and payload.get("format") in _LEGACY_RAW_FORMAT_TAGS:
+        if payload.get("format") != RAW_PRETRAIN_FORMAT:
+            # Local-copy retag so we don't mutate any aliased reference.
+            payload = dict(payload)
+            payload["format"] = RAW_PRETRAIN_FORMAT
         return RawPretrainExampleRecord.from_payload(payload)
     if isinstance(payload, PretrainExample):
         return RawPretrainExampleRecord.from_example(payload)

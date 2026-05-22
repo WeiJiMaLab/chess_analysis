@@ -13,13 +13,20 @@ for controller training and analysis.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from cts.core.kl_buckets import (
+    compute_subtree_sizes,
+    depth_bin,
+    depth_bin_labels,
+    size_bin,
+    size_bin_labels,
+)
 from cts.core.schema import (
     NODETARGETS_TARGET_SCALING_VALUE_GAP_CP,
     NodeFeatureSchema,
@@ -105,6 +112,21 @@ class ChildWdlPretrainConfig:
     pin_memory: bool = False
     prefetch_factor: int = 2  # only used when num_workers > 0
     persistent_workers: bool = True  # only used when num_workers > 0
+    # Per-validation-epoch bucketed-KL logging. When set, the validation
+    # loop also accumulates per-edge KL into a (size, depth) grid; the
+    # summary is exposed alongside the standard metrics so callers can
+    # serialize it (e.g. to JSONL) for offline plotting of the time series.
+    log_bucketed_kl: bool = False
+    bucket_max_depth_bin: int = 12
+    bucket_subtree_size_log_max: int = 10  # ≥1024 top bin; covers chess trees up to ~2000 nodes
+    # When True, each edge's cross-entropy is weighted by its child's subtree
+    # size before averaging. Principle: each "node summarized" gets equal
+    # voice in the loss, instead of each edge prediction. Without this,
+    # ~97% of edges are leaves (subtree_size=1, near-trivial input-copy
+    # predictions) and they dominate the gradient, leaving large-subtree
+    # children — the predictions that actually require summarization
+    # capacity — with little optimization budget.
+    loss_weight_by_subtree_size: bool = False
 
 
 @dataclass
@@ -116,6 +138,105 @@ class ChildWdlMetrics:
     num_supervised_edges: int  # number of edges with WDL targets that contributed to the loss
     target_entropy: float = 0.0  # entropy of the target distribution (lower bound on total_loss)
     loss_gap: float = 0.0  # total_loss - target_entropy; the "real" KL we're driving toward zero
+
+
+@dataclass
+class BucketedKLState:
+    """Per-validation-epoch accumulator for per-edge KL bucketed by structure.
+
+    Mirrors the audit module's grid (rows = child-subtree-size log₂ bins,
+    cols = parent-depth bins) so the time series during pretraining is
+    directly comparable to the post-hoc audit numbers. Updated per batch
+    via ``update`` and reduced to a JSON-serializable dict via ``summary``.
+    """
+
+    max_depth_bin: int
+    subtree_size_log_max: int
+    sum_kl: torch.Tensor  # [num_size_bins, num_depth_bins] float64
+    count: torch.Tensor  # [num_size_bins, num_depth_bins] long
+    overall_sum_kl: torch.Tensor  # scalar float64
+    overall_count: int = 0
+
+    @classmethod
+    def empty(
+        cls,
+        max_depth_bin: int,
+        subtree_size_log_max: int,
+        device: torch.device,
+    ) -> "BucketedKLState":
+        """Allocate zeroed accumulators sized to the given bin grid."""
+        num_size_bins = subtree_size_log_max + 1
+        num_depth_bins = max_depth_bin + 1
+        return cls(
+            max_depth_bin=int(max_depth_bin),
+            subtree_size_log_max=int(subtree_size_log_max),
+            sum_kl=torch.zeros((num_size_bins, num_depth_bins), dtype=torch.float64, device=device),
+            count=torch.zeros((num_size_bins, num_depth_bins), dtype=torch.long, device=device),
+            overall_sum_kl=torch.zeros((), dtype=torch.float64, device=device),
+            overall_count=0,
+        )
+
+    def update(self, tree_batch: Any, per_edge_kl: torch.Tensor) -> None:
+        """Bucket ``per_edge_kl`` by (child_subtree_size, parent_depth) and accumulate.
+
+        Uses the same bucketing helpers the audit module uses, so the per-bin
+        numbers are directly comparable across the audit and the pretraining
+        time series.
+        """
+        if per_edge_kl.numel() == 0:
+            return
+        device = self.sum_kl.device
+        edge_parent = tree_batch.edge_parent.to(device)
+        edge_child = tree_batch.edge_child.to(device)
+        depth_all = tree_batch.depth.to(device)
+        parent_index_all = tree_batch.parent_index.to(device)
+
+        subtree_sizes = compute_subtree_sizes(parent_index_all, depth_all)
+        child_size_bin = size_bin(subtree_sizes[edge_child], self.subtree_size_log_max)
+        parent_depth_bin = depth_bin(depth_all[edge_parent], self.max_depth_bin)
+        num_size_bins = self.subtree_size_log_max + 1
+        num_depth_bins = self.max_depth_bin + 1
+        flat_bin = child_size_bin * num_depth_bins + parent_depth_bin
+
+        flat_sum = torch.zeros(num_size_bins * num_depth_bins, dtype=torch.float64, device=device)
+        flat_count = torch.zeros(num_size_bins * num_depth_bins, dtype=torch.long, device=device)
+        flat_sum.scatter_add_(0, flat_bin, per_edge_kl.to(torch.float64))
+        flat_count.scatter_add_(0, flat_bin, torch.ones_like(flat_bin, dtype=torch.long))
+        self.sum_kl += flat_sum.view(num_size_bins, num_depth_bins)
+        self.count += flat_count.view(num_size_bins, num_depth_bins)
+        self.overall_sum_kl += per_edge_kl.to(torch.float64).sum()
+        self.overall_count += int(per_edge_kl.shape[0])
+
+    def summary(self) -> Dict[str, Any]:
+        """Return a JSON-serializable per-bin summary plus marginals + overall stats."""
+        sum_kl_cpu = self.sum_kl.detach().cpu()
+        count_cpu = self.count.detach().cpu()
+        mean_kl = torch.where(
+            count_cpu > 0,
+            sum_kl_cpu / count_cpu.clamp_min(1).to(torch.float64),
+            torch.zeros_like(sum_kl_cpu),
+        )
+        # Marginals: collapse one axis, weight by edge counts.
+        def _axis_mean(axis: int) -> List[float]:
+            sums = sum_kl_cpu.sum(dim=axis)
+            counts = count_cpu.sum(dim=axis).clamp_min(1).to(torch.float64)
+            return (sums / counts).tolist()
+
+        overall_mean = float((self.overall_sum_kl / max(self.overall_count, 1)).item()) if self.overall_count > 0 else 0.0
+        return {
+            "overall_mean_kl": overall_mean,
+            "overall_edge_count": int(self.overall_count),
+            "max_depth_bin": int(self.max_depth_bin),
+            "subtree_size_log_max": int(self.subtree_size_log_max),
+            "mean_kl_grid": mean_kl.tolist(),
+            "edge_count_grid": count_cpu.tolist(),
+            "marginal_mean_kl_by_depth": _axis_mean(axis=0),
+            "marginal_mean_kl_by_size_bin": _axis_mean(axis=1),
+            "marginal_edge_count_by_depth": count_cpu.sum(dim=0).tolist(),
+            "marginal_edge_count_by_size_bin": count_cpu.sum(dim=1).tolist(),
+            "size_bin_labels": size_bin_labels(self.subtree_size_log_max),
+            "depth_bin_labels": depth_bin_labels(self.max_depth_bin),
+        }
 
 
 class ChildWdlPretrainer:
@@ -247,6 +368,7 @@ class ChildWdlPretrainer:
         total_loss_sum: torch.Tensor,
         target_entropy_sum: torch.Tensor,
         batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+        bucket_state: Optional[BucketedKLState] = None,
     ) -> tuple[int, int, torch.Tensor, torch.Tensor]:
         """Stream batches, compute per-edge cross-entropy, step the optimizer when training.
 
@@ -265,19 +387,46 @@ class ChildWdlPretrainer:
                 edge_logits = self.model(tree_batch)
                 log_probs = F.log_softmax(edge_logits, dim=-1)
                 per_edge_loss = -(edge_targets * log_probs).sum(dim=-1)
-                total_loss = per_edge_loss.mean()
                 # Target entropy is a constant of the data; tracking it
                 # gives the loss_gap, which is the part of the loss we can
                 # actually drive down.
                 target_log_probs = edge_targets.clamp_min(1e-12).log()
                 per_edge_target_entropy = -(edge_targets * target_log_probs).sum(dim=-1)
-                target_entropy = per_edge_target_entropy.mean()
+
+                if self.config.loss_weight_by_subtree_size:
+                    # Weight each edge by its child's subtree size: the encoder's
+                    # job is to summarize subtrees into the parent state, and
+                    # this weighting makes "amount of information summarized"
+                    # the unit of equal contribution to the loss rather than
+                    # "edges predicted." Both the cross-entropy and the
+                    # target-entropy reference use the same weights so
+                    # ``loss_gap`` remains a clean weighted KL.
+                    depth_all = tree_batch.depth.to(self.model.encoder.device)
+                    parent_index_all = tree_batch.parent_index.to(self.model.encoder.device)
+                    edge_child = tree_batch.edge_child.to(self.model.encoder.device)
+                    subtree_sizes = compute_subtree_sizes(parent_index_all, depth_all)
+                    edge_weights = subtree_sizes[edge_child].to(per_edge_loss.dtype)
+                    weight_sum = edge_weights.sum()
+                    total_loss = (edge_weights * per_edge_loss).sum() / weight_sum
+                    target_entropy = (edge_weights * per_edge_target_entropy).sum() / weight_sum
+                else:
+                    total_loss = per_edge_loss.mean()
+                    target_entropy = per_edge_target_entropy.mean()
                 loss_gap = total_loss - target_entropy
 
                 if training:
                     self.optimizer.zero_grad()
                     total_loss.backward()
                     self.optimizer.step()
+
+                # Bucketed-KL accumulation runs inside the no-grad guard but
+                # only when an accumulator is supplied (i.e. on validation
+                # when logging is enabled). Per-edge KL is loss − target
+                # entropy, which the loop has already computed; we just need
+                # to detach and scatter into bins.
+                if bucket_state is not None:
+                    per_edge_kl = (per_edge_loss - per_edge_target_entropy).detach()
+                    bucket_state.update(tree_batch, per_edge_kl)
 
             # Bookkeeping. We weight the running means by edge count rather
             # than batch count so micro-batches with few edges don't get
@@ -329,6 +478,7 @@ class ChildWdlPretrainer:
         epoch_index: int,
         training: bool,
         batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+        bucket_state: Optional[BucketedKLState] = None,
     ) -> ChildWdlMetrics:
         """Run one full pass over ``examples`` in either training or eval mode.
 
@@ -351,6 +501,7 @@ class ChildWdlPretrainer:
                 total_loss_sum,
                 target_entropy_sum,
                 batch_progress_callback=batch_progress_callback,
+                bucket_state=bucket_state,
             )
         )
         return self._finalize_epoch_metrics(
@@ -377,13 +528,20 @@ class ChildWdlPretrainer:
         self,
         epoch_index: int = 1,
         batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
+        bucket_state: Optional[BucketedKLState] = None,
     ) -> ChildWdlMetrics:
-        """Run one validation pass over ``self.validation_examples`` (no grad, no shuffle)."""
+        """Run one validation pass over ``self.validation_examples`` (no grad, no shuffle).
+
+        If ``bucket_state`` is supplied, per-edge KL is also accumulated
+        into that grid as a side effect; callers query ``bucket_state.summary()``
+        after the call to read the per-bin time-series row for the epoch.
+        """
         return self._run_epoch(
             self.validation_examples,
             epoch_index,
             training=False,
             batch_progress_callback=batch_progress_callback,
+            bucket_state=bucket_state,
         )
 
     def save_training_state(self, path: str, epoch: int) -> None:
@@ -409,10 +567,11 @@ class ChildWdlPretrainer:
 
     def fit(
         self,
-        progress_callback: Optional[Callable[[int, ChildWdlMetrics, ChildWdlMetrics], None]] = None,
+        progress_callback: Optional[Callable[..., None]] = None,
         batch_progress_callback: Optional[Callable[[int, str, int, int, int, int, float, float, float], None]] = None,
         start_epoch: int = 1,
         resume_path: Optional[str] = None,
+        bucketed_kl_callback: Optional[Callable[[int, Dict[str, Any]], None]] = None,
     ) -> List[Dict[str, ChildWdlMetrics]]:
         """Drive the full epoch loop, tracking best-validation weights.
 
@@ -429,9 +588,25 @@ class ChildWdlPretrainer:
                 to this path after every epoch so a crash can resume.
         """
         history: List[Dict[str, ChildWdlMetrics]] = []
+        log_buckets = bool(self.config.log_bucketed_kl)
         for epoch_index in range(start_epoch, self.config.epochs + 1):
             train_metrics = self.train_epoch(epoch_index, batch_progress_callback=batch_progress_callback)
-            validation_metrics = self.validate(epoch_index, batch_progress_callback=batch_progress_callback)
+            # Allocate a fresh accumulator per validation epoch so the per-epoch
+            # summary reflects the latest weights, not a running average across epochs.
+            bucket_state = (
+                BucketedKLState.empty(
+                    max_depth_bin=self.config.bucket_max_depth_bin,
+                    subtree_size_log_max=self.config.bucket_subtree_size_log_max,
+                    device=self.model.encoder.device,
+                )
+                if log_buckets
+                else None
+            )
+            validation_metrics = self.validate(
+                epoch_index,
+                batch_progress_callback=batch_progress_callback,
+                bucket_state=bucket_state,
+            )
             history.append({"train": train_metrics, "validation": validation_metrics})
             if validation_metrics.total_loss < self.best_validation_loss:
                 self.best_validation_loss = validation_metrics.total_loss
@@ -439,6 +614,8 @@ class ChildWdlPretrainer:
                 self.best_decoder_state = copy.deepcopy(self.model.child_wdl_head.state_dict())
             if progress_callback is not None:
                 progress_callback(epoch_index, train_metrics, validation_metrics)
+            if bucket_state is not None and bucketed_kl_callback is not None:
+                bucketed_kl_callback(epoch_index, bucket_state.summary())
             if resume_path is not None:
                 self.save_training_state(resume_path, epoch_index)
         # Restore best-validation weights before returning.

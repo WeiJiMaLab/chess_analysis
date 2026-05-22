@@ -1,0 +1,13 @@
+command: merge
+
+# Workers wrote shards into this directory; merge stitches them.
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted_shards
+num_workers: 3  # matches the materialize stage; merge iterates worker_00..worker_02
+
+# Identity fields stamped into the merged cache's metadata so the trainer
+# can validate it matches the run's manifest + encoder before reusing.
+# Both values must match the materialize stage's config and the
+# controller-training config that will consume the cache.
+final_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted.pt
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt

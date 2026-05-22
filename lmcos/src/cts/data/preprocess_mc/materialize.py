@@ -13,6 +13,7 @@ manifests into the single cache file the training script expects.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -137,8 +138,57 @@ def materialize_worker(config: MaterializeConfig) -> None:
     shard_index = 0
     started = time.time()
 
+    # Resume support: shards are written atomically (write to .tmp, then
+    # os.replace) and only flushed at batch boundaries, so any shard_*.pt
+    # file on disk represents a contiguous prefix of the worker's slice.
+    # On startup, clean up leftover .tmp files (artifacts of a previous
+    # kill mid-write) and scan shards in order. If a shard fails to load
+    # — which should only happen for shards from a pre-atomic-write run,
+    # or for shards corrupted by external causes — truncate the resume
+    # point there: delete the corrupted shard plus every later one (to
+    # keep numbering contiguous) and resume from before it. The
+    # DataLoader is shuffle=False, so batch order is deterministic across
+    # runs and the truncated resume point is well-defined.
+    for tmp_leftover in shard_dir.glob("*.tmp"):
+        print(f"[materialize] cleaning up leftover {tmp_leftover}", flush=True)
+        tmp_leftover.unlink()
+    existing_shards = sorted(shard_dir.glob("shard_*.pt"))
+    for index, shard_path in enumerate(existing_shards):
+        try:
+            payload = torch.load(shard_path, weights_only=False)
+        except Exception as exc:  # noqa: BLE001 — torch.load raises a variety of errors
+            print(
+                f"[materialize] worker={config.worker_index} corrupted shard "
+                f"{shard_path}: {type(exc).__name__}: {exc}; truncating "
+                f"resume point here and deleting {len(existing_shards) - index} "
+                f"shards (this one and any later)",
+                flush=True,
+            )
+            for stale in existing_shards[index:]:
+                stale.unlink()
+            break
+        shard_paths.append(str(shard_path))
+        shard_sizes.append(int(payload["features"].shape[0]))
+        total_snapshots += shard_sizes[-1]
+    shard_index = len(shard_paths)
+    if shard_index:
+        print(
+            f"[materialize] worker={config.worker_index} resume: "
+            f"using {shard_index} existing shards covering "
+            f"{total_snapshots} snapshots; will skip those batches",
+            flush=True,
+        )
+    snapshots_to_skip = total_snapshots
+    snapshots_skipped_so_far = 0
+
     def flush_shard() -> None:
-        """Concatenate buffered batches and write one shard file."""
+        """Concatenate buffered batches and atomically write one shard file.
+
+        Atomic write: torch.save to ``<path>.tmp``, then ``os.replace`` the
+        tmp into the final path. A process killed mid-write leaves at most
+        a stale .tmp file (cleaned up on next startup), never a half-written
+        ``shard_NNNNN.pt`` that resume would try to torch.load and crash on.
+        """
         nonlocal shard_features, shard_targets, shard_oracle_steps, shard_snapshots, shard_index
         if not shard_features:
             return
@@ -146,6 +196,7 @@ def materialize_worker(config: MaterializeConfig) -> None:
         targets = torch.cat(shard_targets, dim=0)
         oracle = torch.cat(shard_oracle_steps, dim=0)
         shard_path = shard_dir / f"shard_{shard_index:05d}.pt"
+        tmp_path = shard_path.with_suffix(".pt.tmp")
         torch.save(
             {
                 "format": "cts_materialized_advantage_cache_shard_v2",
@@ -153,8 +204,9 @@ def materialize_worker(config: MaterializeConfig) -> None:
                 "target_advantages": targets,
                 "oracle_stop_steps": oracle,
             },
-            shard_path,
+            tmp_path,
         )
+        os.replace(tmp_path, shard_path)
         shard_paths.append(str(shard_path))
         shard_sizes.append(int(features.shape[0]))
         shard_features = []
@@ -166,6 +218,29 @@ def materialize_worker(config: MaterializeConfig) -> None:
     with torch.inference_mode():
         for batch_index, batch in enumerate(loader, start=1):
             if batch is None:
+                continue
+            # Resume skip: advance through batches whose snapshots are
+            # already covered by existing shards. Each iteration here still
+            # tensorizes (collate runs) — but skips the encoder forward,
+            # which is the dominant cost — so resumed runs spend a few
+            # seconds replaying the loader rather than re-encoding.
+            if snapshots_skipped_so_far < snapshots_to_skip:
+                batch_snapshots = int(batch.target_advantages.shape[0])
+                snapshots_skipped_so_far += batch_snapshots
+                total_episodes += len(batch.paths)
+                # Sanity: shards must end on batch boundaries because
+                # flush_shard() only fires after a full batch was appended
+                # to the buffer. A mismatch here means either a corrupted
+                # shard or a non-deterministic loader — refuse to silently
+                # produce wrong outputs.
+                if snapshots_skipped_so_far > snapshots_to_skip:
+                    raise RuntimeError(
+                        f"Resume skip overshot: existing shards covered "
+                        f"{snapshots_to_skip} snapshots but the loader's batch "
+                        f"boundaries don't align (skipped {snapshots_skipped_so_far} "
+                        f"after batch {batch_index}). Delete shard_dir "
+                        f"{shard_dir} and restart from scratch."
+                    )
                 continue
             # Encode every snapshot in the batch and move to CPU immediately
             # so the GPU isn't held up waiting on disk writes.

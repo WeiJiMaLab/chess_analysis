@@ -1,0 +1,12 @@
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_oracle96_trace_filtered_rerun/train_manifest.txt
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt
+decoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun_decoder.pt
+output_json: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/audit_train.json
+output_heatmap: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/audit_train.pdf
+device: cuda
+batch_size: 32
+num_workers: 4
+max_depth_bin: 12
+subtree_size_log_max: 7
+decoder_hidden_dim: null
+log_interval: 100

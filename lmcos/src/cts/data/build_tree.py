@@ -12,6 +12,7 @@ and ``--start-index``/``--end-index`` for shard parallelism, plus a periodic
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import time
@@ -104,6 +105,18 @@ class BuildTreeConfig(BaseModel):
     huber_delta: float = 1.0
     #: Phased node targets Huber curriculum: weights aligned with :func:`nodetargets_target_feature_names`.
     nodetargets_target_weights: Optional[Tuple[float, ...]] = None
+    # When set, the pretrainer's validation pass also accumulates per-edge KL
+    # into a (child_subtree_size, parent_depth) grid, and appends one JSONL
+    # row per epoch to ``log_bucketed_kl_path`` containing the per-bin mean
+    # KL + edge counts + marginals. Same bucketing as ``cts.analysis.audit_encoder_kl``
+    # so the time series is directly comparable to the post-hoc audit.
+    log_bucketed_kl_path: Optional[str] = None
+    bucket_max_depth_bin: int = 12
+    bucket_subtree_size_log_max: int = 10
+    # When True, encoder pretraining weights each edge's cross-entropy by
+    # its child's subtree size — see ``ChildWdlPretrainConfig`` for the
+    # full rationale.
+    loss_weight_by_subtree_size: bool = False
 
     @field_validator("nodetargets_target_weights", mode="before")
     @classmethod
@@ -417,6 +430,10 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
             pin_memory=config.pin_memory,
             prefetch_factor=config.prefetch_factor,
             persistent_workers=not config.disable_persistent_workers,
+            log_bucketed_kl=bool(config.log_bucketed_kl_path),
+            bucket_max_depth_bin=config.bucket_max_depth_bin,
+            bucket_subtree_size_log_max=config.bucket_subtree_size_log_max,
+            loss_weight_by_subtree_size=config.loss_weight_by_subtree_size,
         ),
     )
     # Resume convention: the trainer writes ``<output>_resume.pt`` after
@@ -480,11 +497,27 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
             flush=True,
         )
 
+    # Optional JSONL writer for the per-validation-epoch bucketed-KL time series.
+    bucketed_kl_callback = None
+    if config.log_bucketed_kl_path:
+        os.makedirs(os.path.dirname(config.log_bucketed_kl_path) or ".", exist_ok=True)
+        if start_epoch == 1 and os.path.isfile(config.log_bucketed_kl_path):
+            # Fresh run: truncate any stale JSONL from a previous run targeting the same path.
+            os.remove(config.log_bucketed_kl_path)
+
+        def _write_bucketed_row(epoch_index: int, summary: dict) -> None:
+            row = {"epoch": int(epoch_index), **summary}
+            with open(config.log_bucketed_kl_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+
+        bucketed_kl_callback = _write_bucketed_row
+
     history = trainer.fit(
         progress_callback=_log_epoch,
         batch_progress_callback=_log_batch_progress,
         start_epoch=start_epoch,
         resume_path=resume_path,
+        bucketed_kl_callback=bucketed_kl_callback,
     )
     # Best encoder + best decoder go to separate files: downstream training
     # stages load the encoder alone, while analysis tools may need the

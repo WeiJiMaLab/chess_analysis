@@ -27,10 +27,13 @@ src/cts/
     tree_mha.py            slot-conditioned multi-head attention
     mc.py                  MetaController (encoder + advantage MLP)
   train/                 training loops
-    gnn_pretrain.py        encoder pretraining (child-WDL targets)
-    controller_train.py    fitted-Q controller training
+    gnn_pretrain.py        encoder pretraining (child-WDL targets; supports
+                           subtree-size loss weighting + per-epoch bucketed-KL JSONL)
+    controller_train.py    fitted-Q controller training (positive-enumeration
+                           `controller_inputs` over {z_t, N_t, T_t})
   analysis/              diagnostics, plots, evaluation tools
     _budgeted/             themed sub-modules for the main analyzer
+    audit_encoder_kl.py    per-(parent_depth, child_subtree_size) KL audit
     _common.py             shared regex/parse helpers
 configs/                 YAML configs (one per entry point + variants)
 slurm/                   SLURM job scripts (Yotam / ysagiv della defaults)
@@ -144,7 +147,20 @@ cache embeddings. Two subcommands:
   .pt file. Run once after all materialize jobs complete.
 
 For train + validation you run materialize+merge separately (4 jobs total
-in serial mode, or 2 parallel pairs).
+in serial mode, or 2 parallel pairs). Production runs use 3 parallel workers
+per split via the `WORKER_INDEX` env var (the materialize slurm script reads
+`WORKER_INDEX` and overrides `worker_index` in the config); each worker writes
+atomically and tolerates partial shards on resume.
+
+### Stage 5 (encoder pretrain) — current options
+- `loss_weight_by_subtree_size: true` weights each edge's loss by its child's
+  subtree size. Pushes gradient onto large-subtree (metacontrol-relevant)
+  predictions; trades ~3× higher aggregate KL for ~21× lower KL on the
+  size ≥1024 cell. This is the current production default — see §7.
+- The trainer writes a per-validation-epoch bucketed-KL JSONL alongside the
+  encoder checkpoint at `{output_checkpoint%.pt}_kl.jsonl` with the
+  (parent_depth, child_subtree_size) grid, marginals, and overall stats.
+  Schema matches `cts.train.gnn_pretrain.BucketedKLState.summary`.
 
 ### Optional / non-standard stages
 - `cts.data.preprocess_gnn.derive_prefixes` — samples variable-size root
@@ -197,15 +213,53 @@ default. The python invocation (`python3 -m cts.X.Y --config "${CONFIG}"`)
 stays the same. For non-SLURM environments, invoke the python module
 directly with `--config`.
 
-## 7. Project-standard parameters
+## 7. Project-standard parameters and current baselines
 
-Recorded for reproducibility:
-- Tree generation: `SEARCH_BUDGET=64`, `MIN_NODES=96`, `MAX_NODES=96`
-  (fixed 96-node trees), `MAX_DEPTH=30`, `MULTIPV=8`.
-- Encoder: `k=1`, `node_embed_hidden=d_embed=d_message=128`, `n_heads=4`,
-  `d_att=32`, `decoder_hidden=128`.
-- Controller training default: `sign_loss_weight=0.1` (slw01), 20 epochs,
-  `batch_size=1024`, `learning_rate=1e-3`, cosine LR (default).
+State as of 2026-05-21.
 
-See `LAB_NOTEBOOK.md` for the experimental history; entries are dated and
-include rationale, command, and outcome for each meaningful run.
+**Tree generation:** `SEARCH_BUDGET=64`, `MIN_NODES=96`, `MAX_NODES=96`
+(fixed 96-node trees), `MAX_DEPTH=30`, `MULTIPV=8`.
+
+**Encoder pretraining:** `k=1` (async), `node_embed_hidden=d_embed=d_message=128`,
+`n_heads=4`, `d_att=32`, `decoder_hidden=128`, `batch_size=128`,
+`learning_rate=1e-3`, weight_decay=0, 1000 epochs from random init.
+Current production setting: `loss_weight_by_subtree_size: true`. Validation
+bucketed-KL JSONL is emitted automatically.
+
+**Controller training:** `sign_loss_weight=0.1` (slw01), 20 epochs,
+`batch_size=1024`, `learning_rate=1e-3`, cosine LR (default).
+`controller_inputs` config field selects the head's features from the
+canonical `[z_t, N_t, T_t]` cache (positive enumeration validated against
+`("z_t", "N_t", "T_t")`). Default: `["z_t", "T_t"]` — `N_t` is dropped
+because it acts as a near-perfect step counter that lets the head shortcut
+around `z_t`. The cache layout is unchanged; selection happens at the
+model boundary.
+
+**Current canonical artifacts (subtree-weighted encoder line):**
+- Encoder: `tree_encoder_child_wdl_async_k1_subtree_weighted.pt` (+ paired
+  decoder and `_kl.jsonl`).
+- Materialized caches: `train_cache_subtree_weighted.pt`,
+  `validation_cache_subtree_weighted.pt`.
+- Controller: `fittedq_subtree_weighted_zt_tt.pt`
+  (`controller_inputs: [z_t, T_t]`), validation regret **0.024**.
+
+**Reference grid (greedy regret on the standard combined validation set):**
+
+| Encoder | Inputs | Training | Regret |
+|---|---|---|---|
+| subtree-weighted | `[z_t, T_t]` | 20-ep vanilla slw01 | **0.024** |
+| subtree-weighted | `[z_t]` | 20-ep vanilla slw01 | 0.076 |
+| subtree-weighted | `[T_t]` | 20-ep vanilla slw01 | 0.212 |
+| rerun (legacy) | `[z_t, T_t]` | 20-ep vanilla slw01 | 0.219 (no descent) |
+| rerun (legacy) | `[z_t, T_t]` | 200-ep + kitchen-sink interventions | 0.176 |
+| historical | `[N_t, T_t]` (no encoder) | 20-ep | 0.056 |
+| historical | `[T_t]` only | 20-ep | 0.218 |
+
+Takeaway: the 0.176 → 0.024 improvement is attributable to the *encoder*
+(subtree-size loss weighting), not pipeline drift. The
+`rerun + [z_t, T_t] = 0.219` ablation isolates this; the subtree-weighted
+encoder yields a controller that beats the prior best by 7× in a tenth of
+the epoch budget with no loss-side interventions.
+
+See `LAB_NOTEBOOK.md` (entries 2026-05-18 through 2026-05-21) for the
+design discussion, encoder KL audit, and the run-by-run trajectory.

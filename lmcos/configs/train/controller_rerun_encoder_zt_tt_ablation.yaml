@@ -1,0 +1,48 @@
+# Ablation: train the same [z_t, T_t] slw01 controller on the RERUN encoder's
+# existing materialized cache, using the new controller_inputs code. Question:
+# does today's regret 0.024 come from the subtree-weighted encoder or from
+# pipeline changes (controller_inputs plumbing, defaults, etc.)? If this run
+# lands near 0.024, the encoder isn't the cause. If it lands near the prior
+# best (0.176, kitchen-sink, 200 ep) or the T_t-only floor (0.218), the
+# subtree-weighted encoder is doing the work.
+
+packed_train_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+packed_validation_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt
+materialized_train_cache: /tigress/ysagiv/chess/cts/train_cache_rerun.pt
+materialized_validation_cache: /tigress/ysagiv/chess/cts/validation_cache_rerun.pt
+output_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_rerun_encoder_zt_tt_ablation.pt
+output_diagnostics: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_rerun_encoder_zt_tt_ablation_diagnostics.jsonl
+
+device: cuda
+seed: 0
+k: 1
+node_embed_hidden: 128
+d_embed: 128
+d_message: 128
+n_heads: 4
+d_att: 32
+hidden_dim: 256
+hidden_layers: 3
+unfreeze_encoder: false
+
+batch_size: 1024
+episode_batch_size: 8
+epochs: 20
+learning_rate: 1.0e-3
+min_lr: 0.0
+weight_decay: 0.0
+sign_loss_weight: 0.1  # slw01, matches today's submissions
+nontrivial_loss_weight: 1.0
+inverse_freq_weights: false
+separate_sign_head: false
+max_grad_norm: 1.0
+num_workers: 0
+log_interval: 25
+validation_interval: 1
+greedy_eval_interval: 1
+
+# Same controller_inputs as today's subtree-weighted [z_t, T_t] run — the
+# only deliberate difference between this and today's run is which encoder's
+# cache is being read.
+controller_inputs: [z_t, T_t]

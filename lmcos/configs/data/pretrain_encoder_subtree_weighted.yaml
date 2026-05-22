@@ -1,0 +1,42 @@
+command: pretrain-child-wdl-encoder
+
+# Same packed data as the bucketed run; the only difference is the loss.
+train_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/train_manifest.json
+validation_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/validation_manifest.json
+
+# New encoder + decoder so the unweighted bucketed encoder stays on disk
+# for direct A/B comparison.
+output_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt
+
+device: cuda
+
+# Architecture identical to the bucketed (and rerun) encoder.
+k: 1
+node_embed_hidden: 128
+d_embed: 128
+d_message: 128
+n_heads: 4
+d_att: 32
+decoder_hidden: 128
+
+batch_size: 128
+learning_rate: 1.0e-3
+weight_decay: 0.0
+epochs: 1000  # matches the bucketed run so the loss difference is the only knob.
+
+num_workers: 0
+prefetch_factor: 2
+pin_memory: false
+disable_persistent_workers: false
+
+log_interval: 100
+
+# Bucketed KL diagnostic, same axes as the unweighted run. The accumulator
+# remains UNweighted so we can fairly compare per-bucket means across the
+# two runs.
+log_bucketed_kl_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted_kl.jsonl
+bucket_max_depth_bin: 12
+bucket_subtree_size_log_max: 10
+
+# The intervention: weight each edge's cross-entropy by its child's subtree size.
+loss_weight_by_subtree_size: true

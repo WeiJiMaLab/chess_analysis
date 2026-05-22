@@ -6,9 +6,21 @@ The motivation is to build a planning model that keeps the abstract tree-search 
 
 Current work is intentionally narrower: meta-control of search only (e.g. when to continue expanding vs when to halt), on teacher-generated search trees and offline targets. Given snapshots of a growing search tree, a controller decides whether to continue expanding search or halt and act on the current best move. The setting is offline: trajectories come from teacher search on positions (e.g. drawn from the Lichess database with simple filters), and supervision is derived from counterfactual value-of-computation—how halting at each expansion step compares to continuing under a fixed continue cost and halt rewards defined from the search state.
 
-The main representation pipeline is neural encoding of search trees. A TreeNN-style encoder embeds each snapshot; training combines encoder pretraining (e.g. child-WDL and related targets) with fitted Q-style training of a scalar compute-advantage head that predicts whether continuing is better than halting, rather than policy-gradient RL on the same objective. The scientific questions include whether a simple meta-controller can learn optimal control given this TreeNN representation, what tree encoding features or control features (e.g. continue cost architecture) support optimal control learning, and to what extent the controller's behaviour matches real human choices. That is the first slice that must work on real tree encodings and real halt/continue tradeoffs.
+The main representation pipeline is neural encoding of search trees. A tree-structured GNN encoder embeds each snapshot; training combines encoder pretraining (e.g. child-WDL and related targets) with fitted Q-style training of a scalar compute-advantage head that predicts whether continuing is better than halting, rather than policy-gradient RL on the same objective. The scientific questions include whether a simple meta-controller can learn optimal control given this tree-encoder representation, what tree encoding features or control features (e.g. continue cost architecture) support optimal control learning, and to what extent the controller's behaviour matches real human choices. That is the first slice that must work on real tree encodings and real halt/continue tradeoffs.
 
 Later, the same tree representation is meant to support a full planning head whose action space includes concrete planning operations (which node to expand, which to evaluate, etc.), still inside the same overall loop sketched above. The lab notebook records experiments along that path—encoders, packing, fitted-Q controller training, diagnostics, and evaluation—not incidental refactors.
+
+### Repo structure
+
+The codebase lives under `src/cts/` with five subpackages:
+
+- `cts.core` — shared substrate (`SearchTree`, tensorizer, feature schema, lc0 providers).
+- `cts.data` — data generation and preprocessing. FEN sampling (`cts.data.sample_fens`), FEN filtering (`cts.data.validate_fens`), tree generation (`cts.data.build_tree`), the encoder-pretrain target chain (`cts.data.preprocess_gnn.split` and `.pack`), and the controller-target chain (`cts.data.preprocess_mc.pack` and `.materialize`).
+- `cts.models` — neural network modules (`TreeEncoder` in `cts.models.gnn`, `MetaController` in `cts.models.mc`, slot-conditioned attention in `cts.models.tree_mha`).
+- `cts.train` — training loops (`cts.train.gnn_pretrain` for encoder pretraining, `cts.train.controller_train` for fitted-Q controller training).
+- `cts.analysis` — diagnostics, plotting, and evaluation tools (the main analyzer `cts.analysis.analyze_budgeted_controller_run` is split across themed sub-modules under `cts.analysis._budgeted/`).
+
+Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-validated YAML config. SLURM scripts in `slurm/` collapse to `python3 -m cts.X.Y --config "${CONFIG}"`. Sibling YAMLs in `configs/` parameterize each entry point (one base config per stage, plus variants per experiment — the diff between two experiments is the diff between their YAMLs). Tests live under `tests/` (`pytest tests/`). Tree generation is the only stage with an orchestrator (`scripts/submit_generate_dataset_shards.py`) because lc0 is slow and shard parallelism is essential.
 
 ### Pipeline stages
 
@@ -16,11 +28,11 @@ The full data-to-model pipeline has six stages. Each stage's output feeds direct
 
 #### 1. FEN sampling
 
-Starting positions are sampled from a Lichess game database via SQL (DuckDB). The query selects ~200k games from 2023 with both players rated 1800–2600 and at least 20 half-moves. From each sampled game, one board position is drawn uniformly at random (subject to ply 8–120, 2–60 legal moves, 8–32 pieces). A final reservoir sample reduces the set to ~100k FENs. The output is a flat text file of FEN strings and an accompanying Parquet table with game metadata (ELO, time control, opening, piece counts). See `sql/download_FENs.py`.
+Starting positions are sampled from a Lichess game database via SQL (DuckDB). The query selects ~200k games from 2023 with both players rated 1800–2600 and at least 20 half-moves. From each sampled game, one board position is drawn uniformly at random (subject to ply 8–120, 2–60 legal moves, 8–32 pieces). A final reservoir sample reduces the set to ~100k FENs. The output is a flat text file of FEN strings and an accompanying Parquet table with game metadata (ELO, time control, opening, piece counts). See `sql/download_FENs.py` for the DuckDB query and `cts.data.sample_fens` for the module entry point.
 
 #### 2. FEN filtering
 
-Not all positions produce informative search trees. A PUCT-based stability filter runs a short tree search (default 16 nodes, same PUCT logic used for full tree generation) on each FEN and records the best root move at 1 expansion, at a midpoint (~5 expansions), and at the full budget. A FEN is kept only if the best move at 1 expansion differs from the best move at the full budget **and** the best move at the midpoint also differs from the full-budget best move. This selects positions where search materially changes the chosen action, so the resulting trees will have nontrivial stopping structure for the controller. This step is embarrassingly parallel and is submitted as sharded Slurm jobs. See `scripts/filter_fens_by_puct_stability.py` and `scripts/submit_puct_filter_shards.py`.
+Not all positions produce informative search trees. A PUCT-based stability filter runs a short tree search (default 16 nodes, same PUCT logic used for full tree generation) on each FEN and records the best root move at 1 expansion, at a midpoint (~5 expansions), and at the full budget. A FEN is kept only if the best move at 1 expansion differs from the best move at the full budget **and** the best move at the midpoint also differs from the full-budget best move. This selects positions where search materially changes the chosen action, so the resulting trees will have nontrivial stopping structure for the controller. This step is embarrassingly parallel and is submitted as sharded Slurm jobs. See `scripts/filter_fens_by_puct_stability.py` and `scripts/submit_puct_filter_shards.py` for the sharded variant; `cts.data.validate_fens` is the in-line module entry point for smaller runs.
 
 #### 3. Tree generation
 
@@ -30,17 +42,17 @@ During expansion, an oracle trace is recorded: after every expansion step, the c
 
 After expansion completes, teacher targets are extracted. Node value targets are visit-weighted averages of child Q-values. Edge WDL targets are visit-weighted averages of the WDL vectors accumulated during backpropagation, perspective-flipped to the parent's viewpoint. These targets, together with the tree structure, per-node scalar features (value, WDL, prior), and the oracle trace, are saved as a serialized `PretrainExample`.
 
-Variable-size trees can also be derived from a full 96-node tree by sampling a prefix node count from a log-uniform distribution and recomputing targets on the truncated tree, avoiding additional engine calls. See `cts_pretrain.py` (core logic) and `supervised_branch_cli.py` (CLI entry points).
+Variable-size trees can also be derived from a full 96-node tree by sampling a prefix node count and recomputing targets on the truncated tree, avoiding additional engine calls (`cts.data.preprocess_gnn.derive_prefixes`); this path exists but is not part of the standard chain — production has historically packed full 96-node trees directly. See `cts.data.preprocess_gnn.teacher_targets` for the consolidation logic and `cts.data.build_tree` for the CLI (subcommands `generate-dataset` and `pretrain-child-wdl-encoder`).
 
 #### 4. Encoder pretraining
 
-The tree encoder is a GNN (class `TreeNN` in `GNN.py`) that operates on variable-size trees packed into a single flat batch. Each node starts with a 5-dimensional feature vector (value, WDL win/draw/loss, WDL variance) embedded through a two-layer MLP into a `d_embed`-dimensional state. The encoder then runs `k` rounds of alternating upward (children→parent) and downward (parent→children) message passing. In the upward pass, each parent aggregates its children's states via a multi-head attention layer (`TreeAttMsgLayer`) conditioned on sinusoidal slot embeddings that encode each child's position among its siblings (sorted by UCI move string). In the downward pass, each child receives a linear projection of its parent's state. Both directions update node states through a shared GRU cell.
+The tree encoder is a GNN (class `TreeEncoder` in `cts.models.gnn`) that operates on variable-size trees packed into a single flat batch. Each node starts with a 5-dimensional feature vector (value, WDL win/draw/loss, WDL variance) embedded through a two-layer MLP into a `d_embed`-dimensional state. The encoder then runs `k` rounds of alternating upward (children→parent) and downward (parent→children) message passing. In the upward pass, each parent aggregates its children's states via a multi-head attention layer (`TreeAttMsgLayer`) conditioned on sinusoidal slot embeddings that encode each child's position among its siblings (sorted by UCI move string). In the downward pass, each child receives a linear projection of its parent's state. Both directions update node states through a shared GRU cell.
 
 Two propagation modes exist. In **synchronous** mode, all nodes update simultaneously from the previous round's states, giving a receptive field of `k` hops. In **asynchronous** (sequential) mode, the upward pass processes nodes from leaves to root in depth order and the downward pass from root to leaves, so each node sees already-updated neighbors. With `k = 1` in asynchronous mode, every node's receptive field covers the entire tree regardless of depth. The current encoder uses asynchronous mode with `k = 1`.
 
 The encoder output is the set of all node states plus the root state for each tree in the batch. Trees are batched by flattening all nodes into a single tensor with a CSR (compressed sparse row) child-pointer structure and a tree-index vector that maps each node back to its source tree.
 
-Pretraining uses the **child-WDL objective**: a slot-conditioned decoder MLP takes the concatenation of a parent node's state and a sinusoidal slot embedding and predicts a 3-way softmax over win/draw/loss for each parent→child edge. The loss is cross-entropy against the search-consolidated edge WDL targets from tree generation. The pretraining loop iterates over packed tensorized shards with Adam, tracking loss gap (cross-entropy minus target entropy) as the primary validation metric. The best encoder checkpoint (by validation loss) is saved and used as the frozen backbone for controller training. See `GNN.py`, `cts_pretrain.py` (class `ChildWdlPretrainer`), and `supervised_branch_cli.py` (`pretrain-child-wdl-encoder` subcommand).
+Pretraining uses the **child-WDL objective**: a slot-conditioned decoder MLP takes the concatenation of a parent node's state and a sinusoidal slot embedding and predicts a 3-way softmax over win/draw/loss for each parent→child edge. The loss is cross-entropy against the search-consolidated edge WDL targets from tree generation. The pretraining loop iterates over packed tensorized shards with Adam, tracking loss gap (cross-entropy minus target entropy) as the primary validation metric. The best encoder checkpoint (by validation loss) is saved and used as the frozen backbone for controller training. The encoder architecture is embedded in the checkpoint metadata under `encoder_architecture` so downstream stages reconstruct the encoder shape directly from the file. See `cts.models.gnn` for the encoder, `cts.train.gnn_pretrain` (class `ChildWdlPretrainer`) for the pretraining loop, and `cts.data.build_tree` for the `pretrain-child-wdl-encoder` subcommand. Data prep for this stage runs through `cts.data.preprocess_gnn.split` (writes train/validation text manifests) and `cts.data.preprocess_gnn.pack` (concatenates examples into tensorized shards plus a JSON manifest).
 
 #### 5. Controller episode packing
 
@@ -59,19 +71,19 @@ If the starting budget expires before the episode ends, a large negative timeout
 
 Before packing, source trees are filtered: trees whose halt-reward range across the episode falls below a threshold (default 0.10) are discarded, and trees exhibiting `X*AB*A` root-move churn patterns (where the best move oscillates back to a previously abandoned move) can be excluded. An optional hierarchical `dj` stratification rebalances the training set across stop-depth-excess bins (how deep the oracle searches on average) and budget-action-variance bins (how much the oracle's halt/continue decisions vary across budgets), to reduce overrepresentation of trivially easy trees.
 
-The output is packed tensorized shards: each shard stores per-step node features, parent/child indices, depth, edge slots, halt rewards, target advantages, tree sizes, time budgets, oracle stop steps, and starting budgets for a batch of episodes. See `scripts/pack_controller_episodes.py`, `budgeted_controller_oracle.py`, and `cts_episode_envs.py`.
+The output is packed tensorized shards: each shard stores per-step node features, parent/child indices, depth, edge slots, halt rewards, target advantages, tree sizes, time budgets, oracle stop steps, and starting budgets for a batch of episodes. See `cts.data.preprocess_mc.pack` for the packing entry point, `cts.data.preprocess_mc.oracle` for the budgeted backward induction, and `cts.data.episode_envs` for the snapshot-episode reconstruction.
 
 #### 6. Controller training
 
-The controller predicts the **compute advantage** `A(s) = Q_continue(s) − Q_halt(s)` at each planning step and halts when `A(s) ≤ 0`. The model (class `ComputeAdvantageTreeSearchModel` in `scripts/train_fitted_q_controller.py`) consists of the pretrained TreeNN encoder (typically frozen) plus an MLP advantage head. The encoder processes each step's tree snapshot and produces a root embedding; this is concatenated with two scalar state features (current tree size `N_t` and remaining time budget `T_t`) to form the advantage head's input. The MLP head (configurable width and depth; default 3 layers of 256 units) outputs a scalar predicted advantage. An optional separate sign head shares the MLP backbone but has its own final projection for a binary continue/halt logit.
+The controller predicts the **compute advantage** `A(s) = Q_continue(s) − Q_halt(s)` at each planning step and halts when `A(s) ≤ 0`. The model (class `MetaController` in `cts.models.mc`) consists of the pretrained tree encoder (typically frozen) plus an MLP advantage head. The encoder processes each step's tree snapshot and produces a root embedding; this is concatenated with two scalar state features (current tree size `N_t` and remaining time budget `T_t`) to form the advantage head's input. The MLP head (configurable width and depth; default 3 layers of 256 units) outputs a scalar predicted advantage. An optional separate sign head shares the MLP backbone but has its own final projection for a binary continue/halt logit.
 
 Training minimizes a weighted combination of advantage MSE and sign BCE (binary cross-entropy on the sign of the advantage). The sign loss directly targets the decision boundary rather than relying on squared-error alone, which can be insensitive to small wrong-sign predictions near zero.
 
-To avoid repeated frozen-encoder forward passes, the training script supports **materialization**: on the first run for a given packed dataset and encoder checkpoint, all per-step root embeddings are computed once and cached to disk alongside the scalar features and targets. Subsequent runs load these cached tensors directly and train only the advantage head on a flat `TensorDataset`.
+To avoid repeated frozen-encoder forward passes, the encoder cache is **materialized** as a separate pipeline stage (`cts.data.preprocess_mc.materialize` with two subcommands: `materialize` writes per-worker shards, `merge` stitches them into a single `final_cache` .pt that downstream training loads). The controller training loop reads the cache directly and trains only the advantage head on a flat `TensorDataset`. The cache stores the source manifest path and encoder checkpoint path in its metadata; the trainer rejects a cache whose metadata doesn't match its current config, so a stale cache surfaces immediately rather than silently feeding wrong embeddings into training.
 
 **Greedy evaluation** runs the trained model's stopping rule on validation episodes: starting from the first planning step, it predicts advantages and halts at the first step where `A(s) ≤ 0` (or at the episode's last step). The resulting stop step determines the achieved return (halt reward minus accumulated continue costs), which is compared to the oracle's optimal return. Reported metrics include exact stop-step accuracy, first-action accuracy, average return, average oracle value, average regret, and average number of expansions used. Per-episode diagnostics (predicted advantages, oracle/predicted stop steps, difficulty scalars, regret decomposition) can be written to JSONL for offline analysis.
 
-See `scripts/train_fitted_q_controller.py` for the full training loop, and `scripts/analyze_budgeted_controller_run.py` for post-hoc analysis of trained controllers.
+See `cts.train.controller_train` for the full training loop, `cts.data.preprocess_mc.materialize` for the encoder-cache materialization, and `cts.analysis.analyze_budgeted_controller_run` (with themed sub-modules under `cts.analysis._budgeted/`) for post-hoc analysis of trained controllers.
 
 This file is the running experimental record for the project.
 
@@ -82,6 +94,80 @@ What belongs here:
 What does not belong here:
 - Tiny plumbing edits with no experimental consequence.
 - Incidental refactors or formatting-only changes.
+
+## Disk inventory
+
+Permanent registry of every artifact this project has produced or consumed, so the
+question "what is `X` for / where did it come from?" is answerable forever — including
+for files that have since been superseded or deleted. The dated experiment entries
+below carry the scientific story; this section is the index of paths.
+
+Convention:
+
+- Every experiment entry includes explicit `Inputs:` and `Outputs:` lines listing the
+  exact paths it read and wrote.
+- Every path that appears under `Outputs:` is registered as a line in this section in
+  the same commit. Likewise for `Inputs:` paths the first time they show up.
+- Each line has the form
+  `PATH — short description (producer: YYYY-MM-DD entry title) [status]` where
+  `status` is one of:
+  - `active` — current canonical, still on disk and still in use;
+  - `superseded` — replaced by a later artifact under the same stage, may or may not still be on disk;
+  - `deleted` — known to no longer be on disk;
+  - `experimental` — one-off output that wasn't promoted to canonical; kept here so its existence and purpose are not lost.
+- Status changes get an explicit edit: when a directory is deleted or a successor lands, update the line rather than removing it.
+- Stages without entries below have simply not had any artifact touched by a logged
+  experiment yet. Silence does not mean "no canonical exists."
+
+### FEN sampling
+*(no artifacts logged for this stage yet)*
+
+### FEN filtering
+*(no artifacts logged for this stage yet)*
+
+### Tree generation
+*(no artifacts logged for this stage yet)*
+
+### Pretrain split / pack
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_oracle96_trace_filtered_rerun/` — train + validation text manifests for the rerun encoder pretraining (producer: pre-2026-04-04). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/` — packed tensorized shards + JSON manifests, regenerated from the rerun split for downstream audits (producer: 2026-05-18 encoder KL audit). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed/` — packed pretrain dir that previously fed the rerun encoder pretraining; the directory no longer exists on disk as of 2026-05-18 and was rebuilt as `pretrain_packed_oracle96_trace_filtered_rerun/`. `[deleted]`
+
+### Encoder pretrain
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt` — current canonical encoder (async k=1, child-WDL pretrain objective) used by every Section 3 controller (producer: pre-2026-04-04). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun_decoder.pt` — paired child-WDL decoder head saved alongside the encoder; used to reconstruct edge WDL predictions for analyses (producer: pre-2026-04-04). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed.pt` — fresh-from-init encoder, 1000 epochs under current code; same architecture as the rerun encoder. Overall validation KL = 0.0040 (producer: 2026-05-20 bucketed encoder pretraining). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed_decoder.pt` — paired decoder (producer: 2026-05-20). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed_kl.jsonl` — 1000-row per-epoch JSONL time series for the bucketed run; schema matches `cts.train.gnn_pretrain.BucketedKLState.summary` (producer: 2026-05-20). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt` — fresh-from-init encoder, 1000 epochs with cross-entropy loss weighted per edge by child subtree size. Trades ~3x worse leaf-cell KL for ~21x lower KL on the large-subtree cells the weighting targeted (producer: 2026-05-20 subtree-size-weighted pretraining). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted_decoder.pt` — paired decoder (producer: 2026-05-20). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted_kl.jsonl` — 1000-row per-epoch JSONL for the weighted run; the bucketed-KL accumulator inside the JSONL is *unweighted* so per-cell numbers are directly comparable to the bucketed run cell-by-cell (producer: 2026-05-20). `[active]`
+
+### Controller episode packing
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/` — combined packed controller episodes used across the λ=18.5 / λ=5 sweeps and Section 3 rerun controllers (producer: pre-2026-04-29). `[active]`
+
+### Materialized controller cache
+- `/tigress/ysagiv/chess/cts/train_cache_rerun.pt` — materialized encoder cache for the train split, feeds Section 3 rerun controller training (producer: 2026-04-30 entries). `[active]`
+- `/tigress/ysagiv/chess/cts/validation_cache_rerun.pt` — matched validation cache for the same training runs (producer: 2026-04-30 entries). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted.pt` — materialized cache against the subtree-weighted encoder, train split (producer: 2026-05-21 subtree-weighted controller training). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted.pt` — matched validation cache (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted_shards/` — per-worker shard directory the merge stage stitched into `train_cache_subtree_weighted.pt`; kept so resumes are possible (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted_shards/` — same for the validation split (producer: 2026-05-21). `[active]`
+
+### Controller checkpoints
+- `~/chess/cts/async_soph/configs/section3_rerun_models.json` — index file mapping the five Section 3 rerun controller labels (slw01, reweight_w4, inv_freq, affine, affine+rw) to their checkpoint + diagnostics paths under `/tigress/ysagiv/chess/cts/checkpoints/` (producer: pre-2026-05-18). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_tt.pt` — controller trained on the subtree-weighted encoder with `controller_inputs: [z_t, T_t]`; greedy regret 0.024 (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_tt_diagnostics.jsonl` — per-episode diagnostics for the run above (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_only.pt` — same encoder, `controller_inputs: [z_t]` (no time-budget); regret 0.076 (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_only_diagnostics.jsonl` — paired diagnostics (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_tt_only.pt` — `controller_inputs: [T_t]` baseline under the new pipeline (encoder unused); regret 0.212 best / 0.234 final, reproduces the historical T_t-only floor of 0.218 (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_tt_only_diagnostics.jsonl` — paired diagnostics (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_rerun_encoder_zt_tt_ablation.pt` — ablation: rerun encoder + `controller_inputs: [z_t, T_t]` under the new pipeline, vanilla 20-epoch training; regret 0.219 best / 0.291 final (producer: 2026-05-21). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_rerun_encoder_zt_tt_ablation_diagnostics.jsonl` — paired diagnostics (producer: 2026-05-21). `[active]`
+
+### Analysis outputs
+- `/tigress/ysagiv/chess/cts/analysis/advantage_head/` — Section 3 advantage-head probe outputs (JSON + per-model PDFs) for the five rerun controllers; consumed by paper figures (producer: pre-2026-05-18). `[active]`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/` — per-edge encoder KL bucketed by (parent_depth, child_subtree_size) for the rerun encoder, train + validation; JSON tables + heatmap PDFs (producer: 2026-05-18 encoder KL audit). `[active]`
 
 ## 2026-04-04
 
@@ -2772,6 +2858,144 @@ Manifests: `topology_features=true`, `topology_supervision_shard=true`. Spot-che
 
 Topology encoder pretrain on this split is unblocked. Tree generation still missing indices **38701–39999** (array task 7); the pack used all **48,701** v3 trees currently on scratch.
 
+## 2026-05-18
+
+### VOC-based metacontrol framework: design exploration
+
+This entry records a long design discussion on how to fix the Section-3 failure mode (controller collapses to a `T_t` countdown, ignoring child-WDL information in `z_root`). It is conclusions-oriented but includes enough of the alternatives considered that the rationale is recoverable without the original conversation.
+
+**Motivation and reframing of Section 3.**
+
+The original Section 3 finding was that the trained advantage head loads almost entirely on directions of `z_root` orthogonal to the decoded child-WDL subspace (78% weight orthogonal; Pearson with decoded VPI ~0.07-0.09). The natural first reading was an extraction failure: WDL is in `z_root`, the controller just can't read it. The right reading is structural: value of computation depends on *posterior uncertainty* over child values, and a point-estimate WDL contains no such signal — VOC over a point estimate is zero by definition. The controller correctly assigned negligible weight to a feature that mathematically cannot distinguish "child confidently winning" from "child looks winning but search hasn't settled." It fell back on `T_t` (and `N_t`, before that was removed), which at least proxies "how much has been searched."
+
+The fix is upstream of the controller: the encoder must output a posterior (mean *and* concentration) per child, not just a mean. The controller can then potentially learn to use the concentration channel.
+
+**Three layers of uncertainty, kept separate.**
+
+- *Layer 1:* WDL point estimate — the mean of the engine's belief over a child's value distribution. This is what current pretraining targets.
+- *Layer 2:* Concentration of the belief itself — how stable the WDL would be under more teacher search. This is the layer VOC depends on, and is missing from the current pretraining objective.
+- *Layer 3:* Student-level reconstruction error — how reliably the encoder predicts the teacher's WDL. Orthogonal to the Bayesian content; relates to model uncertainty.
+
+The intervention targets Layer 2 explicitly via Dirichlet pretraining: the encoder outputs Dirichlets on the W/D/L simplex per parent→child edge, with mean reflecting the WDL estimate and concentration reflecting accumulated search-derived evidence.
+
+**Where the Dirichlets come from.**
+
+Two candidate sources were considered:
+
+- *Path 1 (within-tree leaf variability).* Treat leaf evaluations under each child's subtree as soft observations under a conjugate Dirichlet–Multinomial model. The target posterior at edge `e` is `α_e* = ε·1 + κ·θ_leaf_c + Σ_l θ_leaf_l`, where `θ_leaf_c` is lc0's evaluation of `c` itself (serving as a per-position prior with strength `κ`), `ε·1` is small Laplace smoothing (keeps Dirichlets non-degenerate against zero-component lc0 outputs), and the sum is over expanded leaves in `c`'s subtree.
+
+- *Path 2 (across-search variability).* Run teacher search `M` times per position with different random seeds (root Dirichlet noise, tie-breaking, expansion order); use the spread of resulting WDLs as the layer-2 estimate. More empirically principled and makes no parametric assumption about leaf exchangeability, but costs M× the dominant search compute.
+
+Path 1 was chosen on efficiency and cognitive-plausibility grounds (humans don't run search multiple times). The load-bearing approximation is that leaves are iid samples from a single underlying distribution per node — violated in tactical positions where shallow leaves (e.g., immediate material loss after a sacrifice) and deep leaves (mating attack emerging) are systematically different. The iid assumption is acceptable as a baseline; the principled refinement is a hierarchical model with parent-conditional priors, if calibration diagnostics show it's needed empirically.
+
+**Aggregation operator at internal nodes.**
+
+The encoder outputs Dirichlets at every node; target Dirichlets are computed by aggregating from leaves up. Several operators were considered:
+
+- *Leaf-sum.* Each node's Dirichlet is `ε·1 + κ·θ_leaf_self + Σ_subtree θ_leaf` — the additive Bayesian conjugate update. Smooth, simple. Failure mode under VOC-max search: a confident-and-best child gets few visits (no further information to gain), so its high value never accumulates in ancestor leaf-sums. The mate-leaf at depth 5 only contributes one observation to root's leaf-sum, drowned by visits to less-resolved children. PUCT hid this bug because exploitation kept the best child accumulating visits.
+
+- *Hard max.* Each node's Dirichlet inherits from its leader child (the one with highest `μ̄ = w̄ - l̄`), recursively. Propagates a mate's certainty exactly up the tree. Failure mode: discrete cascade dynamics — a single new observation that flips the leader at any level cascades the leader chain up to root, producing discontinuous training targets for the encoder (two near-identical trees can have very different Dirichlet targets at every internal node).
+
+- *Softmax-weighted.* Parent's Dirichlet parameters = softmax(`μ̄_c / τ`)-weighted sum of children's Dirichlet parameters. At `τ → 0` recovers hard max; at `τ → ∞` becomes uniform average. With low `τ`, the operator approximates hard max while keeping training targets smooth in the children's parameters.
+
+Softmax-weighted aggregation with low `τ` chosen. One operator throughout, smooth at training, near-hard at inference.
+
+**Where VOC computation lives.**
+
+This was the most repeatedly confused part of the discussion. Resolution: **VOC computation is purely a data-generation tool. There is no VOC math at inference.**
+
+The role of VOC in the pipeline:
+
+1. *Data generation.* During teacher search, expansion is driven by VOC-max: at each step, compute Dirichlets at every node in the current tree via bottom-up softmax aggregation; compute VOC at each level via 1D numerical integration over the predictive Dirichlet; descend by argmax VOC to a frontier leaf; lc0 evaluates that leaf (and its children, per the project's expansion convention). Iterate to budget.
+
+2. *Training.* The encoder learns to predict the bottom-up-aggregated Dirichlets (KL loss). The metacontroller learns from the resulting snapshot-sequence trajectories via fitted-Q with Bellman targets — exactly the existing training pipeline, applied to the new data.
+
+3. *Inference.* Encoder forward pass produces Dirichlets. Metacontroller forward pass produces decisions. No closed-form math, no Gaussian order statistics, no numerical integration. The metacontroller has learned (via fitted-Q on VOC-expanded data) to mimic the VOC-max policy: at root it predicts halt iff `max_c A ≤ 0`; at internal nodes during descent it picks argmax A.
+
+The closed-form Gaussian-order-statistics approach to VOC was the natural inference-time computation if VOC were needed at inference — but under fitted-Q, the metacontroller doesn't need explicit VOC targets, and at inference the metacontroller's output replaces explicit VOC. So that machinery moves to data-generation time, where exactness matters more than speed. **1D numerical integration** over the marginal of `θ_leaf_W - θ_leaf_L` was chosen for VOC computation during data generation: deterministic, bounded error by floating-point precision, no hyperparameter to tune, no MC convergence diagnostics. One-time cost paid once at data prep.
+
+**Cascade behavior is accepted.**
+
+Under VOC-max + softmax-with-low-τ aggregation, a single new leaf observation can cascade leader changes from its parent up to root (one observation can flip the entire decision chain). This is the correct behavior — finding a mate should immediately commit to that line, not require many confirmation visits. PUCT's smooth backup actively fights against this property by requiring many visits to accumulate certainty. The cascade is a feature, not a bug, for chess metacontrol. The training-time discontinuities it creates are handled by the softmax smoothing.
+
+**Final framework.**
+
+- *Data generation.* Per sampled position: build a tree using VOC-max as the in-tree search policy. At each step: compute Dirichlets at every node via bottom-up softmax aggregation from leaves; compute VOC at each level via 1D numerical integration on the predictive Dirichlet; descend by VOC-max to a frontier leaf; lc0 evaluates the leaf and its children; iterate to budget. Output: tree with leaf evaluations, Dirichlet targets at every node, and the snapshot sequence for trajectory data.
+
+- *Encoder.* Same GNN architecture as existing. Decoder output changed from softmax over `(W, D, L)` to softplus-parameterized Dirichlet `(α_W, α_D, α_L)`. Loss: Dirichlet KL against the per-node targets. Each leaf's Dirichlet is just `ε·1 + κ·θ_leaf` (no descendants).
+
+- *Metacontroller.* Same MLP architecture as existing. Input changed to `(z_root, T_t)` — `N_t` dropped, since it's a near-perfect step counter that lets the controller shortcut around `z_root`. Training: fitted-Q on offline trajectories with Bellman targets (the existing approach).
+
+- *Inference.* Per iteration:
+  1. Encoder forward pass on the current tree.
+  2. Metacontroller applied at root → halt iff `max_c A ≤ 0`.
+  3. If continue: metacontroller applied at each level during descent, argmax over children's `A` to pick descent direction, ending at a frontier leaf.
+  4. lc0 evaluates that leaf; encoder reruns; next iteration.
+
+- *Hyperparameters.* `κ` (lc0 prior strength), `ε` (Laplace smoothing), `τ` (softmax aggregation temperature). To be tuned empirically.
+
+- *Diagnostics.* Held-out scatter of predicted vs. target Dirichlets (mean and concentration). Section-3-style weight-orthogonality check on the new advantage head — does it now load on variance-bearing directions of `z_root`? Regret/exact-stop on the existing eval set vs. the current baseline.
+
+**Two implementation branches.**
+
+To separate the encoder hypothesis from the search-policy hypothesis:
+
+- *Branch 1 (GNN-only change).* Retrain encoder on Dirichlet targets using *existing* PUCT-generated trees. Metacontroller retrained via fitted-Q on existing trajectories. Inference unchanged (PUCT for in-tree search). Tests whether Layer-2 information in `z_root` alone fixes the `T_t`-countdown collapse, without changing the search policy.
+
+- *Branch 2 (full pipeline).* Regenerate trees using VOC-max expansion. Encoder and metacontroller trained on this new corpus. Inference uses the metacontroller for both halt and descent. Tests whether VOC-max as the search policy adds value beyond Layer-2 pretraining alone.
+
+Branch 1 ships first (smaller change, isolates the encoder hypothesis, reuses existing data). Branch 2 added if Branch 1 shows the encoder hypothesis is correct but plateaus below the target performance.
+
+**Key abandoned ideas, with reasons.**
+
+- *Direct VOC supervision of the encoder.* Rejected on the principle that the GNN should produce primitives (Dirichlets) and the controller should learn control. Predicting VOC directly would blur this decomposition and is closer to AlphaZero-style direct value supervision than to the project's "primitives for downstream tasks" framing.
+
+- *Two-phase scheme (VOC-max planning + hard-max consolidation at action time).* Initially proposed as a way to combine efficient compute allocation with correct value propagation. Rejected because if planning uses leaf-sum values and action uses consolidation-derived values, the planning VOC computation is optimizing against a quantity (`max` of leaf-sum means) different from the actual decision rule (`max` of consolidated means). The cascade dynamics of hard max are what create the misalignment; soft (visit-weighted) aggregation under PUCT historically papered over this by over-visiting good children.
+
+- *Expected-max aggregation with moment-matched Dirichlets at internal nodes.* The expected-max distribution at an internal node lives on a scalar (`max_c μ_c ∈ [-1, 1]`), not on the simplex. Moment-matching to a Dirichlet is conceptually muddled — forcing a simplex parametric form on a quantity that isn't simplex-valued.
+
+- *Dropping Dirichlets at internal nodes in favor of `(mean, variance)` scalars.* Introduces a leaves-vs-internal asymmetry in the encoder's output representation. Better to keep one parametric form throughout (Dirichlets) and let softmax aggregation handle the recursion.
+
+- *MC sampling for VOC computation at data gen.* Functional but requires choosing K and verifying convergence — unwanted ongoing calibration burden. 1D numerical integration replaces it: same accuracy class, no hyperparameter, deterministic.
+
+**Status.**
+
+Conceptually settled. Implementation hasn't started. Next steps: Branch 1 first (encoder retraining on existing data), with the calibration diagnostic and Section-3 weight-orthogonality check as the immediate post-training go/no-go signals.
+
+### Encoder KL audit by (parent_depth, child_subtree_size)
+
+Intent: the pretraining log reports one scalar `loss_gap ≈ KL(target‖pred)` averaged over every supervised edge. That hides whether the encoder is uniformly accurate or leans heavily on easy slices (e.g. leaf children, where the "child WDL" target is just the leaf's own raw WDL with no consolidation). For the metacontrol question this matters: `z_root` has to summarize the root's children, which in 96-node trees are internal nodes with substantial subtrees beneath them, not leaves.
+
+Approach: re-run the rerun encoder + decoder over the rerun pretrain split, compute per-edge `KL(target‖pred) = (target * (log target − log pred)).sum(-1)`, and bucket by parent depth (plies from root, 0–12+) and child subtree size in log₂ bins (1, 2–3, 4–7, …, ≥128). Output: per-cell mean KL + edge counts, marginals along each axis, overall mean KL (sanity-checks against the pretraining log), and a heatmap PDF. Implementation lives at `cts.analysis.audit_encoder_kl` with the universal `load_pretrain_example_dataset` so it accepts either packed JSON manifests or raw text manifests.
+
+`rewrite_compact` bug surfaced and worked around (not fixed): the pack stage requires raw examples in `cts_raw_pretrain_example_v2`, but the rerun split's .pt files are still `_v1`. The `cts.data.preprocess_gnn.rewrite_compact` module advertises v1 dict → v2 conversion (`_load_record_from_source` line 242), but the v1-dict branch immediately calls `RawPretrainExampleRecord.from_payload`, which validates strict-v2 (`teacher_targets.py` lines 563–564) and rejects v1. The v1 PretrainExample-pickle branch (`from_example`) works; only the dict branch is broken. Worked around by pointing the audit at the rerun split's text manifests directly (the audit tensorizes on the fly via the universal loader; costs minutes on a 1h walltime). The rewrite_compact + pack chain is wired but unused; restoring `pretrain_packed_oracle96_trace_filtered_rerun/` to disk requires fixing the bug first.
+
+**Inputs:**
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_oracle96_trace_filtered_rerun/{train,validation}_manifest.txt` — rerun pretrain split, text manifests pointing at v1 raw .pt examples.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt` — rerun encoder.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun_decoder.pt` — paired child-WDL decoder.
+
+**Outputs:**
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/audit_{train,validation}.json` — per-bucket mean KL, edge counts, marginals, overall mean KL, plus depth and size-bin labels.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/audit_{train,validation}.pdf` — heatmap of mean KL over the (parent_depth, child_subtree_size) grid with edge counts annotated.
+
+Outcome: pending — sbatches submitted, results to be appended.
+
+### rewrite_compact v1-dict branch is broken (independent bug, noted)
+
+`cts.data.preprocess_gnn.rewrite_compact._load_record_from_source` claims to accept v1 raw-record dicts as input (module docstring + line 242 dispatch). It does not: the v1 branch immediately calls `RawPretrainExampleRecord.from_payload`, and `from_payload` (in `cts.data.preprocess_gnn.teacher_targets`, lines 563–564) is strict-v2:
+
+```python
+if payload.get("format") != RAW_PRETRAIN_FORMAT:  # "cts_raw_pretrain_example_v2"
+    raise ValueError(f"Expected raw pretrain format {RAW_PRETRAIN_FORMAT}, got {payload.get('format')!r}.")
+```
+
+The PretrainExample-pickle branch (`from_example`) still works, because that path reconstructs a `PretrainExample` via the legacy unpickler shim and converts via `from_example`. So `rewrite_compact` works on legacy pickled-`PretrainExample` files but fails on the v1 dict-payload variant — which is what the rerun split's raw .pt files happen to be.
+
+The fix is not just relaxing the format check: the v2 bump was motivated by canonical UCI-sorted slot ordering (see `_child_ptr_and_children_index` comment, `teacher_targets.py` line 284). A v1 dict's `children_index` may be in engine-dependent (non-canonical) order, so a correct v1→v2 conversion has to re-sort children by UCI and reorder `edge_wdl_targets` to match — not just retag.
+
+Not fixed this session; out of scope for the encoder KL audit. Recorded here so the next person who tries to use `rewrite_compact` doesn't repeat the diagnosis. Workaround for any analysis that needs v1 raw .pt files: use the universal `load_pretrain_example_dataset` (text-manifest or directory mode), which tensorizes on the fly via `tensorize_forest` and `edge_wdl_target_tensor` — those helpers apply the canonical slot sort, so downstream is consistent with v2 packed shards.
+
 ## 2026-05-19 (hl4291 — pipeline docs, `hl4291_slurm/`, `fens/` layout)
 
 ### Status (end of day)
@@ -2986,3 +3210,185 @@ We successfully completed all terminology transitions and fully finalized the in
 The pipeline is fully operational, verified, mathematically sound, and ready to launch fresh tree generation and pretraining runs!
 
 
+## 2026-05-20
+
+### Bucketed (unweighted) encoder pretraining — fresh from random init under current code
+
+Intent:
+- Get an encoder pretrained under current code (post-2026-05-11 slot-ordering fix) with a per-validation-epoch bucketed-KL time series, so the (parent_depth, child_subtree_size) breakdown can be tracked over training rather than only measured at the endpoint.
+- Provide a clean current-code baseline against which interventions on the loss can be compared.
+
+Configuration matches the rerun encoder's hyperparameters as recorded in the 2026-04-30 lab notebook entry plus the pre-YAML-migration slurm script defaults (commit `5c84fd6^`): k=1, async, d_embed=128, d_message=128, n_heads=4, d_att=32, node_embed_hidden=128, decoder_hidden=128, batch_size=128, lr=1e-3, weight_decay=0. Departures: 1000 epochs (vs the rerun's chained-to-200), and a JSONL is written per validation epoch with the per-bucket grid.
+
+Result:
+- Run completed 1000 epochs in ~8 h.
+- Final overall mean KL on the validation set (unweighted accumulator): 0.00396.
+- Best-validation epoch was 956 at KL 0.00365, very close to final — the trajectory was monotone-decreasing in trend across the whole run.
+- Per-bucket pattern at convergence: leaves (size 1, 97% of edges) at KL 0.0039; KL escalates with child subtree size to 0.051 at size ≥1024. Same qualitative shape as the rerun-encoder audit reported on 2026-05-18, but at ~13x lower absolute magnitudes.
+- Trajectory was clean: no spikes above 3x median in post-warmup epochs (>100).
+
+Comparison to the rerun-encoder audit (2026-05-18 entry): the bucketed encoder under current code reaches lower validation KL than the audit reported on the rerun encoder by every cell. The reasons aren't fully determined — candidate mechanisms include (a) effective training duration (the rerun's actual saved-checkpoint epoch count was not separately verified against the lab notebook claim of 200), and (b) slot-semantics mismatch from commit `f297744` (the rerun was trained pre-fix; the audit ran the rerun encoder through post-fix code that re-canonicalizes slot ordering at tensorize time). Both are plausible; neither has been isolated. The 2026-05-18 entry's claim that the gap is "a real and bad finding about the rerun encoder, not an artifact of the audit" was overconfident — at minimum, the absolute magnitude is partly attributable to the cross-code-version effect.
+
+What the bucketed run does establish cleanly: the *structural* pattern (large-subtree children harder than leaves) is a property of the encoder architecture/objective, not of a specific run. It shows up in both encoders, at different absolute scales.
+
+Inputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/{train,validation}_manifest.json` — packed shards, regenerated this session from the rerun split via the `rewrite_compact` v1-dict fix (commit `fb2c5b9`) followed by a fresh pack.
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed.pt` — best-validation encoder, 1000 epochs from random init under current code.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed_decoder.pt` — paired child-WDL decoder.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed_kl.jsonl` — 1000-row JSONL time series, one row per validation epoch. Schema matches `cts.train.gnn_pretrain.BucketedKLState.summary` (per-bucket mean KL grid, edge-count grid, marginals, overall stats, bin labels).
+
+### Subtree-size-weighted encoder pretraining
+
+Intent:
+- Push the encoder's gradient budget onto the non-trivial summarization predictions. The unweighted loss is mean-over-edges; ~97% of edges target leaf children where the prediction task is near-trivial (the leaf's input WDL is in the encoder's input and the decoder essentially round-trips it through the parent state). Large-subtree children, where the encoder has to summarize many descendants into a single parent-state representation, contributed little gradient signal because they're rare.
+
+Principle: weight each edge's cross-entropy by its child's subtree size. Each "node summarized" gets equal voice in the loss instead of each edge prediction. Both the cross-entropy and target-entropy reference are weighted identically so `loss_gap` remains a clean weighted KL. The bucketed-KL accumulator in the JSONL stays *unweighted* so per-cell numbers are directly comparable to the bucketed (unweighted) run cell-by-cell.
+
+Configuration: identical to the bucketed run except `loss_weight_by_subtree_size: true`. Same encoder architecture, same dataset, same 1000-epoch budget.
+
+Runtime: ~20 h (vs the unweighted run's ~8 h). The slowdown was caused by `compute_subtree_sizes` running once per training batch (in addition to once per validation batch as in the unweighted run) with `.nonzero` / `.item` / `.any` calls forcing GPU→CPU stalls — about 30–50 ms per batch. Refactored mid-run to a sync-free version (commit `3a46c03`); applies to future runs only.
+
+Result:
+- Run completed 1000 epochs. Best-validation epoch was 956.
+- Final overall mean KL (unweighted accumulator, comparable to bucketed run): 0.0121, vs the bucketed run's 0.0040 — 3x higher on the aggregate, exactly as expected for an intervention that downweights the leaves that dominate the unweighted mean.
+- Per-bucket trade-off at convergence (compared to bucketed run final-epoch values):
+  - Size ≥1024 marginal: 0.0024 vs 0.0507 — ~21x lower.
+  - Size 1 (leaves) marginal: 0.0123 vs 0.0039 — ~3x higher.
+  - depth-0 × size ≥1024 cell (the headline diagnostic for metacontrol-relevant root-children predictions): 0.0023 vs 0.048 — ~21x lower. This cell hit its floor by ~epoch 30 and remained flat thereafter.
+- Other large-subtree cells (128+) also improved 4–10x; leaves and small-subtree cells (1–15) all degraded 2–3x.
+
+Trajectory stability: mostly smooth, with five to seven distinct perturbation events across the 800 post-warmup epochs. The largest was at epoch 318 (overall KL = 0.545, ~33x the local median; recovered to baseline within ~10 epochs). Two smaller clusters at 276–280 (peak 0.148) and 934–937 (peak 0.113), plus a handful of isolated single-epoch spikes. The saved encoder (best-val at epoch 956) is well clear of all of them.
+
+The variance concern flagged when we discussed weighting normalization was visible in these spikes — linear weighting puts very high per-edge weight on the ~5k rare ≥1024-subtree edges, and batches that happen to draw many such edges produce noisier gradients. The run worked through it, but if we run a follow-on variant a sub-linear weighting (sqrt or log) would be the natural way to reduce the gradient-noise without giving up the targeting.
+
+Whether this trade-off helps metacontrol is a downstream question — the controller doesn't directly consume per-edge WDL accuracy; it consumes z_t at root. Answer pending controller training on the new encoder.
+
+Inputs:
+- Same packed manifests as the bucketed run.
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt` — best-validation encoder.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted_decoder.pt` — paired decoder.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted_kl.jsonl` — 1000-row JSONL.
+
+### Controller training infrastructure: positive-enumeration `controller_inputs`
+
+`cts.train.controller_train` previously hardcoded the advantage head's input to `[z_t, N_t, T_t]` while the saved-checkpoint metadata stamped `controller_inputs: ["z_t", "N_t", "T_t"]` as if it were configurable — two sources of truth that could disagree silently. Replaced both with a single `controller_inputs` config field that drives the head's `input_dim`, the feature-slicing inside `MetaController._select_features`, and the saved-checkpoint metadata (commit `7dfd099`).
+
+The field uses positive enumeration (`[z_t, T_t]` to drop N_t, `[z_t]` for z_t-only) rather than exclusion flags, validated at config load via a Pydantic field validator over `("z_t", "N_t", "T_t")`. The canonical cache layout (`[z_t, N_t, T_t]`) is unchanged; selection happens at the model boundary.
+
+Two follow-on controller training configs are wired and ready to submit once the subtree-weighted encoder's cache is materialized:
+- `configs/train/controller_subtree_weighted_zt_tt.yaml` — `controller_inputs: [z_t, T_t]`.
+- `configs/train/controller_subtree_weighted_zt_only.yaml` — `controller_inputs: [z_t]`.
+
+Cache materialization configs are also ready:
+- `configs/data/preprocess_mc/materialize_subtree_weighted_{train,validation}.yaml`.
+
+Not yet run; the experimental phase begins when those go to the cluster.
+
+## 2026-05-21
+
+### Cache materialization for the subtree-weighted encoder
+
+Standard materialize-then-merge against the subtree-weighted encoder, producing the `[z_t, N_t, T_t]` feature caches the controller reads at training time. Ran with three parallel workers per split via the `WORKER_INDEX` env-var path added to the materialize slurm script the prior session. No issues; final caches written atomically.
+
+Inputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/{train,validation}_manifest.json`
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted.pt`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted.pt`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted_shards/` (per-worker, kept for resume)
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted_shards/`
+
+### Controller training on the subtree-weighted encoder: `[z_t, T_t]` and `[z_t]`
+
+Both controllers trained 20 epochs at LR 1e-3, sign_loss_weight 0.1, vanilla losses (no T-sensitivity filter, no MSE cooling, no regret weighting), canonical capacity (Q_HIDDEN=256, 3 layers), new `controller_inputs` pipeline (no N_t).
+
+Greedy validation regret:
+
+| Controller inputs | Best | Final | Per-epoch trajectory |
+|---|---|---|---|
+| `[z_t, T_t]` | **0.023** (ep 7) | 0.024 | 0.023–0.027 across all 20 epochs; flat from epoch 1 |
+| `[z_t]` | **0.073** (ep 12) | 0.076 | 0.073–0.087; mildly oscillating |
+
+The `[z_t, T_t]` run hit 0.027 on the first validation epoch and never moved more than 0.004 from that floor. Qualitatively different from every prior controller training on the rerun encoder — the historical best of 0.176 (kitchen sink, run 11 on 2026-04-29) required 200 epochs of stacked interventions (T-sensitivity filter + MSE cosine cooling + regret-weighted loss) to converge at 0.176. Under the subtree-weighted encoder, the head saturates at 0.024 with none of those interventions in a tenth of the epoch budget.
+
+The `[z_t]`-only run is informative on its own: with no time-budget input at all, z_t alone reaches 0.076 — about 2.9x lower than the T_t-only floor (0.218 historical, 0.212 reproduced today; see next sub-entry). But it does *not* match the historical `[N_t, T_t]`-without-encoder baseline (0.056 on 2026-04-29), so z_t alone in this encoder doesn't fully substitute for the (N_t, T_t) pair as a step-and-budget signal. It carries some of that information plus information that's complementary to T_t — the `[z_t, T_t]` number (0.024) is 3.2x lower than `[z_t]` alone, well outside what you'd see from redundant inputs.
+
+Inputs:
+- Encoder + caches from the materialization sub-entry above.
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/{train,validation}_manifest.json`
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_tt.pt` + `_diagnostics.jsonl`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_only.pt` + `_diagnostics.jsonl`
+
+Slurm logs: `cts-fittedq_8527146.out` (zt_tt), `cts-fittedq_8527147.out` (zt_only).
+
+### Ablation: rerun encoder + `[z_t, T_t]` under the new pipeline
+
+Is the `[z_t, T_t] = 0.024` result coming from the new *encoder* or the new *code base* (controller_inputs refactor, default changes, anything else that drifted between the rerun-era pipeline and today's)? This sub-entry isolates that.
+
+Configuration identical to the subtree-weighted `[z_t, T_t]` run except the encoder checkpoint and matching cache are swapped to the rerun encoder's. Cache reuse, not re-materialization, since the rerun cache already exists at `/tigress/`. Same 20 epochs, LR 1e-3, slw01, vanilla loss, `controller_inputs: [z_t, T_t]`.
+
+Result: regret oscillated 0.219–0.324 across the 20 epochs with no descent trend. Best 0.219 at epoch 15, final 0.291. This sits within noise of the historical *naive* `[z_root, T_t]` baseline (0.238, 2026-04-29 (N_t, T_t)-baseline reference table) and just above the T_t-only floor (0.218). I.e., under vanilla training the rerun encoder's z_t contributes nothing on top of T_t.
+
+Conclusion: the 0.176 → 0.024 improvement is attributable to the *encoder*, not to the pipeline. The rerun encoder needed 200 epochs of stacked loss-side interventions to extract any usable z_t signal at all (and even then only down to 0.176); the subtree-weighted encoder yields a controller that beats that floor by 7x in 20 epochs of vanilla training.
+
+Inputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_rerun.pt`
+- `/tigress/ysagiv/chess/cts/train_cache_rerun.pt`
+- `/tigress/ysagiv/chess/cts/validation_cache_rerun.pt`
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/{train,validation}_manifest.json`
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_rerun_encoder_zt_tt_ablation.pt` + `_diagnostics.jsonl`
+
+Slurm log: `cts-fittedq_8533204.out`.
+
+### T_t-only baseline under the new `controller_inputs` pipeline
+
+Sanity check: does `controller_inputs: [T_t]` under the new code reproduce the historical T_t-only floor (0.218, 2026-04-29)? If yes, the new code isn't silently breaking the floor; the numbers above can be read against the historical reference grid without an extra correction.
+
+Same cache as the subtree-weighted runs — cache choice is moot for a T_t-only head since T_t is encoder-independent. Same 20-epoch vanilla slw01 training.
+
+Result: best 0.212 at epoch 14, final 0.234, range 0.212–0.239 across the 20 epochs, no learning trend (T_t is a single scalar; there's nothing for the head to fit beyond a thresholded function of T_t). Within 0.006 of the historical floor.
+
+Inputs:
+- Same as the (z_t, T_t) / (z_t) runs (cache is read but the z-component is unused by the model under `controller_inputs: [T_t]`).
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_tt_only.pt` + `_diagnostics.jsonl`
+
+Slurm log: `cts-fittedq_8550917.out`.
+
+### Consolidated reference grid
+
+Numbers grouped by encoder and training regime. The four runs from this entry are bolded.
+
+| Run | Inputs | Encoder | Training | Greedy regret |
+|---|---|---|---|---|
+| Oracle | — | — | — | 0.000 |
+| **Subtree-weighted `[z_t, T_t]`** | z_t, T_t | subtree-weighted | vanilla, 20 ep | **0.023 / 0.024** (best / final) |
+| Historical slw01 (rerun) | z_t, N_t, T_t | rerun | vanilla, 20 ep | 0.031 |
+| Historical `[N_t, T_t]` (no encoder) | N_t, T_t | — | vanilla, 20 ep | 0.056 |
+| **Subtree-weighted `[z_t]`** | z_t | subtree-weighted | vanilla, 20 ep | **0.073 / 0.076** |
+| Kitchen sink | z_t, T_t | rerun | filter + cooling + regret-w, 200 ep | 0.176 |
+| **T_t-only (new pipeline)** | T_t | — | vanilla, 20 ep | **0.212 / 0.234** |
+| T_t-only floor (historical) | T_t | — | vanilla | 0.218 |
+| **Rerun-encoder ablation** | z_t, T_t | rerun | vanilla, 20 ep | **0.219 / 0.291** |
+| Naive `[z_root, T_t]` (historical) | z_t, T_t | rerun | vanilla | 0.238 |
+
+Headline: the subtree-weighted encoder produces a controller that beats every previously-recorded Section 3 baseline. With `[z_t, T_t]` alone (no N_t, no loss-side interventions, 20 epochs, canonical capacity) it reaches regret 0.024 — below the historical slw01_rerun (0.031, which used N_t as a step-counter shortcut), 7.3x below the rerun-era best (kitchen sink at 0.176 over 200 epochs), and 9.1x below the T_t-only floor (0.218 historical / 0.212 reproduced).
+
+The earlier characterization of z_root as "decorative" was a property of the rerun encoder under vanilla training, not of the architecture: under the subtree-size-weighted pretraining objective the same encoder architecture produces a z_t that carries usable metacontrol signal directly, without scaffolding scalars or loss-side interventions.
+
+Caveats:
+- Single seed per configuration. The historical-comparison numbers from earlier entries are likewise single-seed.
+- All 20-epoch runs at canonical capacity. Whether more epochs further reduce 0.024 is untested (trajectory was flat from epoch 1, so the headroom is probably small, but unmeasured).
+- The subtree-weighted encoder pretraining had several short-lived spike events across its 1000-epoch trajectory (logged 2026-05-20). The saved checkpoint is at epoch 956, well clear of all of them. Whether other saved checkpoints would give similar controller numbers is untested.
+- The downstream evaluation grid (Pareto figures, oversearch reports, advantage-head analysis) has not been regenerated against these new controllers.

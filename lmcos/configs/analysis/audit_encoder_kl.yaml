@@ -1,0 +1,12 @@
+manifest_path: ???
+encoder_checkpoint: ???
+decoder_checkpoint: ???
+output_json: ???
+output_heatmap: null
+device: cuda
+batch_size: 32
+num_workers: 4
+max_depth_bin: 12
+subtree_size_log_max: 7
+decoder_hidden_dim: null
+log_interval: 100

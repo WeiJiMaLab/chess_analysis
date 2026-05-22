@@ -11,3 +11,4 @@ weights/
 .cursor/
 AGENTS.md
 temp_disabled_agents.md
+audit_outputs/

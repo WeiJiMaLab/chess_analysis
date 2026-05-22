@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=cts-materialize
+#SBATCH --job-name=cts-audit-encoder-kl
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --cpus-per-task=4
@@ -32,16 +32,6 @@ echo "hostname=$(hostname)"
 nvidia-smi -L || true
 date
 
-# When WORKER_INDEX is set in the env (e.g. submitting 3 parallel workers
-# per split), thread it through as a config override so the YAML's
-# default worker_index can stay 0 and submission just varies the env var.
-# Unset / empty WORKER_INDEX leaves the YAML value (e.g. merge stage
-# doesn't need this).
-EXTRA_ARGS=()
-if [[ -n "${WORKER_INDEX:-}" ]]; then
-  EXTRA_ARGS+=("--override" "worker_index=${WORKER_INDEX}")
-fi
-
-python3 -m cts.data.preprocess_mc.materialize --config "${CONFIG}" "${EXTRA_ARGS[@]}"
+python3 -m cts.analysis.audit_encoder_kl --config "${CONFIG}"
 
 date

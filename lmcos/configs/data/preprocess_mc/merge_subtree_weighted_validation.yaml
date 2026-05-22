@@ -1,0 +1,8 @@
+command: merge
+
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted_shards
+num_workers: 3
+
+final_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted.pt
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt

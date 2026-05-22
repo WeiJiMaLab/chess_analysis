@@ -1,0 +1,43 @@
+# Controller training on the subtree-weighted encoder, advantage head fed
+# z_t only — no time-budget signal at all. Tests whether z_t alone carries
+# enough metacontrol signal once the encoder has been pretrained with
+# subtree-size weighting. Cache is the same as the (z_t, T_t) variant; only
+# the controller_inputs differ.
+
+packed_train_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+packed_validation_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt
+materialized_train_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted.pt
+materialized_validation_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted.pt
+output_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_only.pt
+output_diagnostics: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/fittedq_subtree_weighted_zt_only_diagnostics.jsonl
+
+device: cuda
+seed: 0
+k: 1
+node_embed_hidden: 128
+d_embed: 128
+d_message: 128
+n_heads: 4
+d_att: 32
+hidden_dim: 256
+hidden_layers: 3
+unfreeze_encoder: false
+
+batch_size: 1024
+episode_batch_size: 8
+epochs: 20
+learning_rate: 1.0e-3
+min_lr: 0.0
+weight_decay: 0.0
+sign_loss_weight: 0.1
+nontrivial_loss_weight: 1.0
+inverse_freq_weights: false
+separate_sign_head: false
+max_grad_norm: 1.0
+num_workers: 0
+log_interval: 25
+validation_interval: 1
+greedy_eval_interval: 1
+
+controller_inputs: [z_t]

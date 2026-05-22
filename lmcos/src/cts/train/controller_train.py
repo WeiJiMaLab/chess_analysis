@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, Dataset
 
 from cts.core.schema import NodeFeatureSchema, tree_encoder_feature_schema
@@ -38,7 +38,11 @@ from cts.data.preprocess_mc.oracle import (
     return_for_stop_step,
 )
 from cts.models.gnn import TreeEncoderOutput, TreeEncoder
-from cts.models.mc import MetaController
+from cts.models.mc import (
+    CONTROLLER_INPUT_NAMES,
+    MetaController,
+    validate_controller_inputs,
+)
 from cts.train.gnn_pretrain import load_encoder_checkpoint
 
 
@@ -98,6 +102,16 @@ class ControllerTrainConfig(BaseModel):
     large_max_time: int = 60
     very_large_min_time: int = 61
     very_large_max_time: int = 120
+    # Which canonical inputs the advantage head consumes. Order in the list is
+    # not significant; the model concatenates the selected features in
+    # canonical ``(z_t, N_t, T_t)`` order regardless. Default keeps the
+    # pre-refactor behavior (all three inputs).
+    controller_inputs: List[str] = Field(default_factory=lambda: list(CONTROLLER_INPUT_NAMES))
+
+    @field_validator("controller_inputs")
+    @classmethod
+    def _validate_controller_inputs(cls, value: List[str]) -> List[str]:
+        return list(validate_controller_inputs(value))
 
 
 @dataclass(frozen=True)
@@ -1437,6 +1451,7 @@ def _build_model_and_optimizer(
         hidden_dim=config.hidden_dim,
         hidden_layers=config.hidden_layers,
         separate_sign_head=config.separate_sign_head,
+        controller_inputs=config.controller_inputs,
     )
     load_encoder_checkpoint(config.encoder_checkpoint, model.encoder)
     if not config.unfreeze_encoder:
@@ -1694,7 +1709,7 @@ def _maybe_run_greedy_eval_and_save_best(
             "nontrivial_loss_weight": config.nontrivial_loss_weight,
             "inverse_freq_weights": config.inverse_freq_weights,
             "separate_sign_head": config.separate_sign_head,
-            "controller_inputs": ["z_t", "N_t", "T_t"],
+            "controller_inputs": list(config.controller_inputs),
             **budgeted_oracle_metadata(oracle_config),
         }
         if config.output_checkpoint:
@@ -1779,7 +1794,7 @@ def _save_fallback_checkpoint_if_needed(
                 "epoch": config.epochs,
                 "encoder_checkpoint": config.encoder_checkpoint,
                 "unfreeze_encoder": config.unfreeze_encoder,
-                "controller_inputs": ["z_t", "N_t", "T_t"],
+                "controller_inputs": list(config.controller_inputs),
                 **budgeted_oracle_metadata(oracle_config),
             },
         )

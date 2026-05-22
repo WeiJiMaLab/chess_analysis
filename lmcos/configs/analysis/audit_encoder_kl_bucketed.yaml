@@ -1,0 +1,14 @@
+manifest_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun/validation_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed.pt
+decoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_bucketed_decoder.pt
+output_json: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/encoder_kl_audit/audit_bucketed_validation.json
+output_heatmap: null  # render locally from JSON if needed
+device: cuda
+batch_size: 32
+num_workers: 4
+max_depth_bin: 12
+subtree_size_log_max: 10  # ≥1024 ceiling, matching the pretraining-time logging
+num_children_max_bin: 40  # chess legal-move ceiling
+decoder_hidden_dim: null
+log_interval: 100
+checkpoint_every: 100  # resume payload now carries both grids; safe to enable

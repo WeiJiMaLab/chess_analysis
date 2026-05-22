@@ -1,0 +1,15 @@
+command: materialize
+
+packed_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt
+output_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_cache_subtree_weighted_shards
+worker_index: 0  # overridden per slurm job via WORKER_INDEX env var
+num_workers: 3
+
+device: cuda
+episode_batch_size: 8
+max_snapshots_per_shard: 250000
+log_interval: 100
+
+hidden_dim: 256
+hidden_layers: 3
