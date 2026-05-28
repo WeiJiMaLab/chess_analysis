@@ -1,41 +1,39 @@
 # Analysis (Yotam controller / encoder outputs)
 
-Offline analysis of ysagiv's della artifacts. Full Slurm training lives in [`../lmcos/`](../lmcos/); this folder holds **cheap proxies** and plots.
+## Stage 2b named variants
 
-## Layout
+| Variant name | Encoder | Head inputs | Yotam greedy regret (20 ep) |
+|--------------|---------|-------------|------------------------------|
+| `subtree_weight_root+budget` | subtree-weighted | z_t + T_t | **~0.024** (best) |
+| `subtree_weight_root` | subtree-weighted | z_t only | ~0.076 |
+| `no_subtree_weight_root+budget` | rerun (no subtree weighting) | z_t + T_t | ~0.22 |
 
-| Path | Role |
-|------|------|
-| [`config.py`](config.py) | All scratch paths, controller runs, caches |
-| [`2b_train_controller.py`](2b_train_controller.py) | Stage 2b train proxy (`--max-batches 1000`) + loss plots |
-| [`plot_controller_regret_curves.py`](plot_controller_regret_curves.py) | Regret vs epoch from Slurm logs |
-| [`sync_logs.sh`](sync_logs.sh) | Copy `cts-fittedq_*.out` from ysagiv's repo |
-| [`smoke_benchmark.py`](smoke_benchmark.py) | Time I/O only |
-| `logs/` | Local Slurm logs (gitignored) |
-| `outputs/` | Figures (gitignored) |
+Artifacts on scratch (`/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/2b/`):
 
-## Stage 2b proxy train
+- `{name}_controller.pt`
+- `{name}_metrics.json`
+
+Plots (`analysis/outputs/2b/`):
+
+- `{name}_loss.png` — per variant (two panels)
+- `overlay_loss.png` — total loss overlay
 
 ```bash
 cd /home/hl4291/chess_analysis
-python3 analysis/2b_train_controller.py --max-batches 1000
+
+# Train all three (1000-batch proxy each)
+python3 analysis/2b_train_controller.py --all --max-batches 1000 --save
+
+# Or one variant (default = best)
+python3 analysis/2b_train_controller.py --variant subtree_weight_root+budget --max-batches 1000 --save
+
+# Plot all metrics in 2b/ + overlay
+python3 analysis/2b_plot_loss.py
 ```
 
-Output: `analysis/outputs/2b_train_controller_loss.png` (two panels: total loss vs batch; MSE vs sign BCE).
-
-**Loss terms** (same as `cts.train.controller_train`):
-
-- `advantage_mse` — regress the oracle advantage `A = Q_continue − Q_halt` (how much better continuing is than stopping).
-- `sign_bce` — classify `sign(A)` (continue vs halt); weighted by `sign_loss_weight` (0.1 in the best run).
-- `total_loss = advantage_mse + 0.1 × sign_bce`
-
-MSE is usually small (~0.01) when fits are good; sign BCE is often larger (~0.6) because it's a binary cross-entropy, not because the model is "worse" on that term.
-
-## Regret curves (finished Slurm runs)
+## Regret curves (full Slurm runs)
 
 ```bash
 ./analysis/sync_logs.sh
 python3 analysis/plot_controller_regret_curves.py
 ```
-
-Output: `analysis/outputs/controller_regret_curves.png`

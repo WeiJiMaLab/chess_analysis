@@ -18,6 +18,65 @@ YSAGIV_REPO = Path("/home/ysagiv/chess/cts/async_soph")
 LMCOS_ROOT = Path(__file__).resolve().parents[1] / "lmcos"
 ANALYSIS_ROOT = Path(__file__).resolve().parent
 
+# hl4291 scratch outputs for Stage 2b proxy runs
+HL4291_SCRATCH = Path("/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS")
+HL4291_2B_DIR = HL4291_SCRATCH / "2b"
+ANALYSIS_2B_PLOT_DIR = ANALYSIS_ROOT / "outputs" / "2b"
+
+# Legacy single-run names (superseded by named variants below)
+DEFAULT_2B_CONTROLLER_CHECKPOINT = HL4291_2B_DIR / "controller.pt"
+DEFAULT_2B_METRICS_JSON = HL4291_2B_DIR / "metrics.json"
+
+
+@dataclass(frozen=True)
+class Stage2bVariant:
+    """One Stage 2b proxy training recipe (encoder cache + controller head inputs)."""
+
+    name: str  # basename for ``{name}_controller.pt`` and ``{name}_metrics.json``
+    plot_label: str
+    lmcos_config: Path
+    description: str
+
+    def controller_path(self, root: Path = HL4291_2B_DIR) -> Path:
+        return root / f"{self.name}_controller.pt"
+
+    def metrics_path(self, root: Path = HL4291_2B_DIR) -> Path:
+        return root / f"{self.name}_metrics.json"
+
+    def loss_plot_path(self, root: Path = ANALYSIS_2B_PLOT_DIR) -> Path:
+        return root / f"{self.name}_loss.png"
+
+
+STAGE2B_VARIANTS: dict[str, Stage2bVariant] = {
+    "subtree_weight_root+budget": Stage2bVariant(
+        name="subtree_weight_root+budget",
+        plot_label="Subtree-weighted (root, budget)",
+        lmcos_config=LMCOS_ROOT / "configs/train/controller_subtree_weighted_zt_tt.yaml",
+        description="Best Yotam setup: subtree-weighted encoder, head on z_t + T_t.",
+    ),
+    "subtree_weight_root": Stage2bVariant(
+        name="subtree_weight_root",
+        plot_label="Subtree-weighted (root)",
+        lmcos_config=LMCOS_ROOT / "configs/train/controller_subtree_weighted_zt_only.yaml",
+        description="Subtree-weighted encoder, head on z_t only (no budget scalar).",
+    ),
+    "no_subtree_weight_root+budget": Stage2bVariant(
+        name="no_subtree_weight_root+budget",
+        plot_label="No-subtree-weighted (root, budget)",
+        lmcos_config=LMCOS_ROOT / "configs/train/controller_rerun_encoder_zt_tt_ablation.yaml",
+        description="Rerun (unweighted) encoder ablation, head on z_t + T_t.",
+    ),
+}
+
+STAGE2B_VARIANT_ORDER: tuple[str, ...] = (
+    "subtree_weight_root+budget",
+    "subtree_weight_root",
+    "no_subtree_weight_root+budget",
+)
+
+# Default single variant = best model
+STAGE2B_DEFAULT_VARIANT = STAGE2B_VARIANTS["subtree_weight_root+budget"]
+
 # --- Controller packed episodes (Stage 2b labels / oracle targets) -----------
 
 CONTROLLER_PACKED = YSAGIV_SCRATCH / "data/controller_packed_combined_nomaint_no_xaba"

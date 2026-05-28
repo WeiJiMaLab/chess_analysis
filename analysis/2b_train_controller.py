@@ -1,36 +1,30 @@
 #!/usr/bin/env python3
 """Stage 2b: train the metacontroller on ysagiv materialized caches (cheap proxy run).
 
-Mirrors ``cts.train.controller_train``'s frozen-encoder path for ``max_batches``
-optimizer steps, then plots per-batch loss. Use this as a stable stand-in for a
-full Slurm run when iterating on analysis or configs.
-
-Loss (same as production, ``sign_loss_weight`` default 0.1)::
-
-    total_loss = advantage_mse + sign_loss_weight * sign_bce
-
-- **advantage_mse** — regression: match the oracle advantage ``A = Q_continue − Q_halt``
-  (how much better continuing search is vs stopping now). Measures magnitude errors.
-- **sign_bce** — classification: predict ``sign(A)`` (continue vs halt). Anchors the
-  halt/continue decision even when ``A`` is near zero. Often larger in raw value than MSE.
+Named variants (see ``config.STAGE2B_VARIANTS``) match the Yotam May 2026 comparison.
+**Best model:** ``subtree_weight_root+budget`` (subtree-weighted encoder, z_t + T_t).
 
 Usage::
 
-    python3 analysis/2b_train_controller.py --max-batches 1000
+    python3 analysis/2b_train_controller.py --variant subtree_weight_root+budget --max-batches 1000 --save
+    python3 analysis/2b_train_controller.py --all --max-batches 1000 --save
+    python3 analysis/2b_plot_loss.py
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
-import matplotlib.pyplot as plt
 import torch
+from tqdm import tqdm
 
 _ANALYSIS_ROOT = Path(__file__).resolve().parent
 _LMCOS_ROOT = _ANALYSIS_ROOT.parent / "lmcos"
@@ -40,200 +34,318 @@ for _p in (_ANALYSIS_ROOT, _LMCOS_ROOT / "src"):
 
 from cts._config import load_config
 from cts.core.schema import tree_encoder_feature_schema
+from cts.models.mc import MetaController
 from cts.train.controller_train import (
     ControllerTrainConfig,
     MaterializedCache,
     _advantage_loss_components,
     _build_model_and_optimizer,
     _load_materialized_cache,
+    _save_checkpoint,
     _sign_auxiliary_loss,
 )
 
 from config import (
-    ANALYSIS_ROOT,
-    CACHE_SUBTREE_WEIGHTED_TRAIN,
-    CONTROLLER_TRAIN_CONFIG_BEST,
-    PACKED_TRAIN_MANIFEST,
+    HL4291_2B_DIR,
+    STAGE2B_DEFAULT_VARIANT,
+    STAGE2B_VARIANT_ORDER,
+    STAGE2B_VARIANTS,
+    Stage2bVariant,
 )
 
 
 @dataclass
-class BatchRecord:
-    batch: int
-    elapsed_s: float
-    total_loss: float
-    advantage_mse: float
-    sign_bce: float
-    snapshots: int
+class TrainMetrics:
+    """Per-batch training losses (one entry per optimizer step)."""
+
+    batch: list[int] = field(default_factory=list)
+    total_loss: list[float] = field(default_factory=list)
+    advantage_mse: list[float] = field(default_factory=list)
+    sign_bce: list[float] = field(default_factory=list)
+    sign_loss_weight: float = 0.1
+    n_batches: int = 0
+    wall_s: float = 0.0
+    batches_per_epoch: int | None = None
+
+    def __len__(self) -> int:
+        return len(self.batch)
 
 
-def _print_scale(cache: MaterializedCache, batch_size: int) -> int:
-    batches_per_epoch = math.ceil(cache.examples / batch_size)
-    print("Train materialized cache scale")
-    print(f"  total snapshots:     {cache.examples:,}")
-    print(f"  batch_size:          {batch_size}")
-    print(f"  batches / epoch:     {batches_per_epoch:,}")
-    print(f"  train episodes:      ~576,830  (many snapshots per episode)")
-    return batches_per_epoch
-
-
-def train_max_batches(
+def train(
+    model: MetaController,
+    n_batches: int,
     *,
-    model,
     cache: MaterializedCache,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     batch_size: int,
     sign_loss_weight: float,
-    max_batches: int,
-    seed: int,
-) -> list[BatchRecord]:
-    """Same loop as ``_train_materialized_cache_epoch``, capped at ``max_batches``."""
+    seed: int = 0,
+    log_interval: int = 10,
+) -> tuple[MetaController, TrainMetrics]:
+    """Run ``n_batches`` steps on the materialized cache; return model and all batch metrics."""
+    metrics = TrainMetrics(sign_loss_weight=sign_loss_weight)
     model.train()
-    records: list[BatchRecord] = []
     batch_counter = 0
     started = time.perf_counter()
 
     shard_order = list(range(len(cache.shard_paths)))
     random.Random(seed).shuffle(shard_order)
 
-    for shard_index in shard_order:
-        if batch_counter >= max_batches:
-            break
-        payload = torch.load(cache.shard_paths[shard_index], weights_only=False)
-        features = payload["features"]
-        target_advantages = payload["target_advantages"]
-        order = torch.randperm(features.shape[0])
-        for start in range(0, int(features.shape[0]), batch_size):
-            if batch_counter >= max_batches:
+    pbar = tqdm(total=n_batches, desc="train", unit="batch")
+    try:
+        for shard_index in shard_order:
+            if batch_counter >= n_batches:
                 break
-            batch_counter += 1
-            batch_index = order[start : start + batch_size]
-            batch_features = features[batch_index].to(device, non_blocking=True)
-            batch_targets = target_advantages[batch_index].to(device, non_blocking=True)
+            payload = torch.load(cache.shard_paths[shard_index], weights_only=False)
+            features = payload["features"]
+            target_advantages = payload["target_advantages"]
+            order = torch.randperm(features.shape[0])
+            for start in range(0, int(features.shape[0]), batch_size):
+                if batch_counter >= n_batches:
+                    break
+                batch_counter += 1
+                batch_index = order[start : start + batch_size]
+                batch_features = features[batch_index].to(device, non_blocking=True)
+                batch_targets = target_advantages[batch_index].to(device, non_blocking=True)
 
-            predicted, sign_logits = model.predict_from_features(batch_features)
-            advantage_mse, _, _ = _advantage_loss_components(predicted, batch_targets)
-            sign_loss = _sign_auxiliary_loss(sign_logits, batch_targets)
-            total_loss = advantage_mse + sign_loss_weight * sign_loss
+                predicted, sign_logits = model.predict_from_features(batch_features)
+                advantage_mse, _, _ = _advantage_loss_components(predicted, batch_targets)
+                sign_loss = _sign_auxiliary_loss(sign_logits, batch_targets)
+                total_loss = advantage_mse + sign_loss_weight * sign_loss
 
-            optimizer.zero_grad()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+                optimizer.zero_grad()
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
 
-            records.append(
-                BatchRecord(
-                    batch=batch_counter,
-                    elapsed_s=time.perf_counter() - started,
-                    total_loss=float(total_loss.item()),
-                    advantage_mse=float(advantage_mse.item()),
-                    sign_bce=float(sign_loss.item()),
-                    snapshots=int(batch_targets.shape[0]),
-                )
-            )
+                pbar.update(1)
+                total_f = float(total_loss.item())
+                mse_f = float(advantage_mse.item())
+                bce_f = float(sign_loss.item())
+                elapsed = time.perf_counter() - started
 
-    if not records:
+                metrics.batch.append(batch_counter)
+                metrics.total_loss.append(total_f)
+                metrics.advantage_mse.append(mse_f)
+                metrics.sign_bce.append(bce_f)
+
+                if _should_log(batch_counter, n_batches, log_interval):
+                    _print_batch(batch_counter, total_f, mse_f, bce_f, elapsed)
+    finally:
+        pbar.close()
+
+    if batch_counter == 0:
         raise RuntimeError("No batches ran — is the train cache present?")
-    return records
+
+    metrics.n_batches = batch_counter
+    metrics.wall_s = time.perf_counter() - started
+    return model, metrics
 
 
-def plot_loss_vs_batch(records: list[BatchRecord], output: Path, sign_loss_weight: float) -> None:
-    batches = [r.batch for r in records]
-    total_loss = [r.total_loss for r in records]
-    mse = [r.advantage_mse for r in records]
-    bce = [r.sign_bce for r in records]
-
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-    ax = axes[0]
-    ax.plot(batches, total_loss, linewidth=1.2, color="#4c72b0")
-    ax.set_xlabel("Batch index")
-    ax.set_ylabel("Loss")
-    ax.set_title("Total loss vs batch index")
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[1]
-    ax.plot(batches, mse, label="advantage_mse (regression on A)", linewidth=1.2)
-    ax.plot(batches, bce, label="sign_bce (halt vs continue)", linewidth=1.2, alpha=0.85)
-    ax.set_xlabel("Batch index")
-    ax.set_ylabel("Loss component")
-    ax.set_title("Loss components vs batch index")
-    ax.legend(loc="upper right", fontsize=8)
-    ax.grid(True, alpha=0.3)
-
-    fig.suptitle(
-        f"Stage 2b controller ({len(records)} batches, "
-        f"total = mse + {sign_loss_weight}×bce)",
-        fontsize=10,
-        y=1.02,
-    )
-    fig.tight_layout()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, bbox_inches="tight")
-    plt.close(fig)
-    print(f"wrote {output}")
+def save_controller(
+    model: MetaController,
+    path: Path,
+    *,
+    variant: Stage2bVariant,
+    train_config: ControllerTrainConfig,
+    metrics: TrainMetrics,
+) -> None:
+    metadata: dict[str, Any] = {
+        "stage": "analysis_2b_proxy",
+        "variant": variant.name,
+        "variant_label": variant.plot_label,
+        "n_batches": metrics.n_batches,
+        "wall_s": metrics.wall_s,
+        "batches_per_epoch": metrics.batches_per_epoch,
+        "encoder_checkpoint": train_config.encoder_checkpoint,
+        "unfreeze_encoder": train_config.unfreeze_encoder,
+        "controller_inputs": list(train_config.controller_inputs),
+        "sign_loss_weight": train_config.sign_loss_weight,
+        "batch_size": train_config.batch_size,
+        "learning_rate": train_config.learning_rate,
+        "lmcos_config_yaml": str(variant.lmcos_config),
+        "final_total_loss": metrics.total_loss[-1] if metrics.total_loss else None,
+        "final_advantage_mse": metrics.advantage_mse[-1] if metrics.advantage_mse else None,
+        "final_sign_bce": metrics.sign_bce[-1] if metrics.sign_bce else None,
+    }
+    _save_checkpoint(str(path), model, metadata)
+    print(f"wrote {path}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-batches", type=int, default=1000)
-    parser.add_argument(
-        "--device",
-        default="cuda" if torch.cuda.is_available() else "cpu",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=ANALYSIS_ROOT / "outputs" / "2b_train_controller_loss.png",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=CONTROLLER_TRAIN_CONFIG_BEST,
-    )
-    args = parser.parse_args()
+def save_metrics(
+    metrics: TrainMetrics,
+    path: Path,
+    *,
+    variant: Stage2bVariant,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    run_info: dict[str, Any] = {
+        "variant": variant.name,
+        "variant_label": variant.plot_label,
+        "description": variant.description,
+    }
+    if extra:
+        run_info.update(extra)
+    payload: dict[str, Any] = {
+        "summary": {
+            "n_batches": metrics.n_batches,
+            "wall_s": metrics.wall_s,
+            "batches_per_epoch": metrics.batches_per_epoch,
+            "sign_loss_weight": metrics.sign_loss_weight,
+            "final_total_loss": metrics.total_loss[-1] if metrics.total_loss else None,
+            "final_advantage_mse": metrics.advantage_mse[-1] if metrics.advantage_mse else None,
+            "final_sign_bce": metrics.sign_bce[-1] if metrics.sign_bce else None,
+        },
+        "run": run_info,
+        "curves": asdict(metrics),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"wrote {path}")
 
-    if not CACHE_SUBTREE_WEIGHTED_TRAIN.is_file():
-        raise SystemExit(f"Missing train cache: {CACHE_SUBTREE_WEIGHTED_TRAIN}")
 
-    train_config = load_config(ControllerTrainConfig, str(args.config))
-    device = torch.device(args.device)
+def build_model_and_cache(
+    train_config: ControllerTrainConfig,
+    device: torch.device,
+) -> tuple[MetaController, torch.optim.Optimizer, MaterializedCache, int]:
     schema = tree_encoder_feature_schema()
-
+    train_cache = train_config.materialized_train_cache
+    if not train_cache or not Path(train_cache).is_file():
+        raise SystemExit(f"Missing train cache: {train_cache}")
     cache = _load_materialized_cache(
-        str(CACHE_SUBTREE_WEIGHTED_TRAIN),
-        manifest_path=str(PACKED_TRAIN_MANIFEST),
+        train_cache,
+        manifest_path=str(train_config.packed_train_data),
         encoder_checkpoint=train_config.encoder_checkpoint,
     )
     batches_per_epoch = _print_scale(cache, train_config.batch_size)
-
     model, optimizer, _ = _build_model_and_optimizer(train_config, schema)
     model.to(device)
+    return model, optimizer, cache, batches_per_epoch
 
-    print(f"Running {args.max_batches} training batches on {device} ...", flush=True)
-    t0 = time.perf_counter()
-    records = train_max_batches(
-        model=model,
+
+def run_variant(
+    variant: Stage2bVariant,
+    *,
+    max_batches: int,
+    log_interval: int,
+    device: torch.device,
+    save: bool,
+) -> TrainMetrics:
+    print(f"\n=== variant: {variant.name} ===")
+    print(f"    {variant.description}")
+    print(f"    config: {variant.lmcos_config}")
+    train_config = load_config(ControllerTrainConfig, str(variant.lmcos_config))
+    model, optimizer, cache, batches_per_epoch = build_model_and_cache(train_config, device)
+
+    model, metrics = train(
+        model,
+        max_batches,
         cache=cache,
         optimizer=optimizer,
         device=device,
         batch_size=train_config.batch_size,
         sign_loss_weight=train_config.sign_loss_weight,
-        max_batches=args.max_batches,
         seed=train_config.seed,
+        log_interval=log_interval,
     )
-    wall = time.perf_counter() - t0
-    per_batch = wall / len(records)
-    print()
-    print(f"Completed {len(records)} batches in {wall:.2f} s ({per_batch*1000:.1f} ms/batch)")
-    print(f"Extrapolated train-only 1 epoch: {per_batch * batches_per_epoch / 60:.1f} min")
+    metrics.batches_per_epoch = batches_per_epoch
+
+    per_batch = metrics.wall_s / metrics.n_batches
     print(
-        f"Last batch: total={records[-1].total_loss:.4f} "
-        f"mse={records[-1].advantage_mse:.4f} bce={records[-1].sign_bce:.4f}"
+        f"Done [{variant.name}]: {metrics.n_batches} batches in {metrics.wall_s:.2f} s "
+        f"({per_batch*1000:.1f} ms/batch)"
+    )
+    if batches_per_epoch:
+        print(f"Extrapolated train-only 1 epoch: {per_batch * batches_per_epoch / 60:.1f} min")
+
+    if save:
+        save_controller(
+            model,
+            variant.controller_path(),
+            variant=variant,
+            train_config=train_config,
+            metrics=metrics,
+        )
+        save_metrics(
+            metrics,
+            variant.metrics_path(),
+            variant=variant,
+            extra={
+                "max_batches_requested": max_batches,
+                "log_interval": log_interval,
+                "device": str(device),
+            },
+        )
+    return metrics
+
+
+def _should_log(batch: int, n_batches: int, log_interval: int) -> bool:
+    if batch == 1 or batch == n_batches:
+        return True
+    return log_interval > 0 and batch % log_interval == 0
+
+
+def _print_batch(batch: int, total: float, mse: float, bce: float, elapsed_s: float) -> None:
+    print(
+        f"batch={batch:>5d}  elapsed={elapsed_s:6.1f}s  "
+        f"total={total:.4f}  mse={mse:.4f}  sign_bce={bce:.4f}",
+        flush=True,
     )
 
-    plot_loss_vs_batch(records, args.output, train_config.sign_loss_weight)
+
+def _print_scale(cache: MaterializedCache, batch_size: int) -> int:
+    batches_per_epoch = math.ceil(cache.examples / batch_size)
+    print("  total snapshots:     {:,}".format(cache.examples))
+    print("  batch_size:          {}".format(batch_size))
+    print("  batches / epoch:     {:,}".format(batches_per_epoch))
+    return batches_per_epoch
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--max-batches", type=int, default=1000)
+    parser.add_argument("--log-interval", type=int, default=10)
+    parser.add_argument(
+        "--device",
+        default="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--variant",
+        choices=list(STAGE2B_VARIANTS),
+        default=None,
+        help=f"Named run (default: {STAGE2B_DEFAULT_VARIANT.name}).",
+    )
+    group.add_argument(
+        "--all",
+        action="store_true",
+        help="Train all variants in comparison order.",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help=f"Write {{name}}_controller.pt and {{name}}_metrics.json under {HL4291_2B_DIR}",
+    )
+    args = parser.parse_args()
+
+    device = torch.device(args.device)
+    HL4291_2B_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.all:
+        names = STAGE2B_VARIANT_ORDER
+    else:
+        name = args.variant or STAGE2B_DEFAULT_VARIANT.name
+        names = [name]
+
+    for name in names:
+        run_variant(
+            STAGE2B_VARIANTS[name],
+            max_batches=args.max_batches,
+            log_interval=args.log_interval,
+            device=device,
+            save=args.save,
+        )
 
 
 if __name__ == "__main__":
