@@ -3392,3 +3392,54 @@ Caveats:
 - All 20-epoch runs at canonical capacity. Whether more epochs further reduce 0.024 is untested (trajectory was flat from epoch 1, so the headroom is probably small, but unmeasured).
 - The subtree-weighted encoder pretraining had several short-lived spike events across its 1000-epoch trajectory (logged 2026-05-20). The saved checkpoint is at epoch 956, well clear of all of them. Whether other saved checkpoints would give similar controller numbers is untested.
 - The downstream evaluation grid (Pareto figures, oversearch reports, advantage-head analysis) has not been regenerated against these new controllers.
+
+## 2026-05-28 (hl4291 — Stage 2b proxy analysis on ysagiv caches)
+
+Cheap offline proxy runs to compare the three May-2026 controller recipes without re-submitting full 20-epoch Slurm training. Code lives in the sibling repo checkout `chess_analysis/analysis/` (not under `lmcos/`): train with `2b_train_controller.py`, plot with `2b_plot_loss.py`, regret curves from synced Slurm logs via `plot_controller_regret_curves.py`.
+
+### Setup
+
+Three named variants mirror the subtree-weighted comparison above:
+
+| Name | Encoder cache | Head inputs | Full Slurm greedy regret (20 ep, Yotam) |
+|---|---|---|---|
+| `subtree_weight_root+budget` | subtree-weighted | `[z_t, T_t]` | **0.024** |
+| `subtree_weight_root` | subtree-weighted | `[z_t]` | 0.076 |
+| `no_subtree_weight_root+budget` | rerun | `[z_t, T_t]` | ~0.22–0.29 |
+
+Each proxy run: **1000 training batches** (~6% of one full epoch over the train materialized cache), **eval every 200 batches** on the **full validation cache** for advantage MSE and on the **first 3000 validation episodes** for policy regret. Checkpoints and per-batch metrics JSON are written under hl4291 scratch.
+
+**Policy regret metric (proxy eval):** expected regret under **probabilistic stopping**, not the production greedy rule. At step `t`, stop with probability `P(stop) = σ(−A_t / τ)` (`τ = 1` default); any remaining probability mass stops on the final step. Expected return is computed exactly as `Σ_t P(stop at t) × R(t)`; regret = `oracle_value − E[return]`. This is smoother than halting at the first `A ≤ 0` and can rank variants differently from greedy regret when validation MSE and stop-step accuracy diverge (notably `z_t`-only: high irreducible MSE but moderate greedy regret on full Slurm runs).
+
+### Results @ batch 1000 (proxy)
+
+| Variant | Train adv. MSE (final batch) | Val adv. MSE | Expected regret |
+|---|---|---|---|
+| `subtree_weight_root+budget` | 0.012 | **0.013** | **0.247** |
+| `subtree_weight_root` | 0.374 | 0.313 | 0.274 |
+| `no_subtree_weight_root+budget` | 0.031 | 0.030 | 0.326 |
+
+Takeaways aligned with the full Slurm grid:
+
+- **Encoder dominates:** subtree-weighted + budget has the lowest validation MSE and the lowest expected regret in this proxy; rerun + `[z_t, T_t]` has low MSE but the worst regret (same qualitative pattern as greedy eval: fits targets better yet stops poorly).
+- **`z_t` only:** train/val MSE stays ~0.31 (structural ceiling without `T_t`), but expected regret (0.274) is still better than the rerun ablation — consistent with subtree-weighted `z_t` carrying halt/continue signal even when scalar targets are not fully predictable.
+- **Loss ≠ regret:** ranking by validation MSE does not match ranking by policy regret; the proxy tooling logs both on the same batch index so curves can be compared directly.
+
+Plots: `chess_analysis/analysis/outputs/2b/` (`overlay_loss.png`, `overlay_regret.png`, `overlay_val_mse.png`, per-variant `*_loss.png` / `*_eval.png`).
+
+Inputs:
+- ysagiv materialized caches and configs (read-only), same paths as the 2026-05-21 controller entries.
+- `chess_analysis/lmcos/configs/train/controller_{subtree_weighted_zt_tt,subtree_weighted_zt_only,rerun_encoder_zt_tt_ablation}.yaml`
+
+Outputs:
+- `/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/2b/{variant}_controller.pt` — proxy checkpoints (1000 batches).
+- `/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/2b/{variant}_metrics.json` — train loss curves + periodic val MSE / expected regret.
+- `chess_analysis/analysis/outputs/2b/*.png` — figures from `2b_plot_loss.py`.
+- `chess_analysis/analysis/logs/cts-fittedq_852714{6,7}.out`, `cts-fittedq_8533204.out` — copied Slurm logs for full-run greedy regret curves.
+
+Commands (replot only, no retrain):
+
+```bash
+cd /home/hl4291/chess_analysis
+python3 analysis/2b_plot_loss.py
+```
