@@ -17,8 +17,14 @@ set -euo pipefail
 : "${CONFIG:?CONFIG env var required (YAML for cts.data.preprocess_gnn.pack)}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=_env.sh
-source "${SCRIPT_DIR}/_env.sh"
+if [[ -f "${SCRIPT_DIR}/_env.sh" ]]; then
+  source "${SCRIPT_DIR}/_env.sh"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/hl4291_slurm/_env.sh" ]]; then
+  source "${SLURM_SUBMIT_DIR}/hl4291_slurm/_env.sh"
+else
+  echo "Error: Could not locate _env.sh" >&2
+  exit 1
+fi
 hl4291_slurm_setup
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 

@@ -1,0 +1,5 @@
+logs/*.out
+outputs/*.png
+outputs/*.pdf
+outputs/*.pt
+outputs/*.jsonl

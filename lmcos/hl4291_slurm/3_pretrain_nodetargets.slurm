@@ -20,8 +20,14 @@ set -euo pipefail
 : "${CONFIG:?CONFIG env var required (path to hl4291_pretrain_nodetargets_*.yaml)}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=_env.sh
-source "${SCRIPT_DIR}/_env.sh"
+if [[ -f "${SCRIPT_DIR}/_env.sh" ]]; then
+  source "${SCRIPT_DIR}/_env.sh"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/hl4291_slurm/_env.sh" ]]; then
+  source "${SLURM_SUBMIT_DIR}/hl4291_slurm/_env.sh"
+else
+  echo "Error: Could not locate _env.sh" >&2
+  exit 1
+fi
 hl4291_slurm_setup_gpu
 
 if [[ ! -f "${CONFIG}" ]]; then
