@@ -12,7 +12,7 @@ This home directory is the working root for a research thread that combines **la
 | `chess_analysis/human_analytics/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/human_analytics/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
-| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`slurm/`** (stage-organized della scripts + **`slurm/configs/`** run YAMLs) |
+| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`src/`** (`cts` package), **`analysis/`** (`cts.analysis`), **`slurm/`** (stage scripts + **`slurm/configs/`** run YAMLs) |
 | `chess_analysis/human_analytics/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
 For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/human_analytics/README.md`. The latter documents **code layout** (`human_analytics/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
@@ -123,7 +123,7 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates live under `chess_analysis/lmcos/slurm/`.
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `chess_analysis/lmcos/slurm/` (`slurm/configs/<stage>/`). Stage **4** smoke configs (`legacy_root_budget.yaml`, `subtree_weighting_root_budget.yaml`, `subtree_weighting_root.yaml`; display names `legacy[root+budget]`, etc.) train 1000 steps on ysagiv materialized caches with validation every 100 steps; see `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
 
 ### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
 
@@ -242,8 +242,8 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/human_analytics/README.md`** (pipeline CLIs under **`human_analytics/slurm/scripts/`**); for meta-controller code see **`lmcos/`** (`src/`, stage-organized **`slurm/`**, **`configs/`**).
+For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/human_analytics/README.md`** (pipeline CLIs under **`human_analytics/slurm/scripts/`**); for meta-controller code see **`lmcos/`** (`src/`, **`analysis/`**, stage-organized **`slurm/`**, **`slurm/configs/`**).
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `human_analytics/` layout (DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `lmcos/slurm/` smoke controller configs, and `human_analytics/` layout (2026-05-29).*

@@ -44,15 +44,38 @@ Materialize uses parallel workers via `WORKER_INDEX` env override (see script co
 
 | Script | Module |
 |--------|--------|
-| `train_fitted_q_controller_della.slurm` | `cts.train.controller_train` |
+| `controller_train_supervised.slurm` | `cts.train.controller_train` |
+| `submit_smoke_controller_parallel.sh` | Submit three smoke configs in parallel |
+
+#### Smoke configs (hl4291, ysagiv read-only caches)
+
+| YAML | Display name | Encoder | Controller inputs |
+|------|--------------|---------|-------------------|
+| `legacy_root_budget.yaml` | `legacy[root+budget]` | rerun async k=1 | `[z_t, T_t]` |
+| `subtree_weighting_root_budget.yaml` | `subtree-weighting[root+budget]` | subtree-weighted async k=1 | `[z_t, T_t]` |
+| `subtree_weighting_root.yaml` | `subtree-weighting[root]` | subtree-weighted async k=1 | `[z_t]` |
+
+All three use `train_batches: 1000`, `batch_size: 18000`, `metrics_log_interval: 20`, `validation_step_interval: 100`, and `greedy_eval_step_interval: 100`. `ControllerTrainMetricsLogger` writes `metrics.yaml` and refreshes `training_curves.png` every 100 steps.
+
+Submit all three in parallel (comparison plot auto-submits with `afterok` when training finishes):
+
+```bash
+cd /home/hl4291/chess_analysis/lmcos
+export VENV_DIR=/home/hl4291/venv
+./slurm/4_supervised_controller/submit_smoke_controller_parallel.sh
+# → slurm/logs/4_supervised_controller/smoke_comparison.png
+```
+
+Slurm stdout/stderr land in `slurm/logs/` (job-level `%x_%j.out`).
 
 ## Environment
 
-Scripts default to ysagiv's della layout (`PROJECT_DIR`, conda `CTS`). Adjust module loads and `PROJECT_DIR` for hl4291 runs. Set:
+Set for hl4291 runs:
 
 ```bash
 export PROJECT_DIR=/home/hl4291/chess_analysis/lmcos
+export VENV_DIR=/home/hl4291/venv
 export PYTHONPATH="${PROJECT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-See [`LAB_NOTEBOOK.md`](../LAB_NOTEBOOK.md) for experiment history and [`REPO_STRUCTURE.md`](../REPO_STRUCTURE.md) for layout rationale (2026-05-29 refactor).
+See [`LAB_NOTEBOOK.md`](../LAB_NOTEBOOK.md) for experiment history and [`../README.md`](../README.md) for workspace overview.

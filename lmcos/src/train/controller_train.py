@@ -20,11 +20,12 @@ import time
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, Dataset
 
@@ -81,8 +82,18 @@ class ControllerTrainConfig(BaseModel):
     num_workers: int = 0
     log_interval: int = 25
     validation_interval: int = 1
+    validation_step_interval: Optional[int] = None  # validate every N train batches; disables epoch validation_interval when set
+    greedy_eval_step_interval: Optional[int] = None  # greedy eval every N train batches; defaults to validation_step_interval when unset
     greedy_eval_interval: int = 1
     output_diagnostics: Optional[str] = None
+    metrics_path: Optional[str] = None
+    metrics_run_name: Optional[str] = None  # plot title / comparison legend; default: output_checkpoint stem
+    metrics_plot_path: Optional[str] = None  # default: training_curves.png beside metrics_path
+    plot_refresh_step_interval: Optional[int] = None  # default: validation_step_interval
+    metrics_log_interval: int = 10
+    train_batches: Optional[int] = None  # gradient steps per epoch; unset = full pass over train data
+    max_validation_batches: Optional[int] = None  # rarely used; smoke leaves unset (full val cache)
+    max_greedy_eval_episodes: Optional[int] = None  # rarely used; smoke leaves unset (full val episodes)
     maintenance_scale: float = 0.0
     maintenance_ref_nodes: float = 30.0
     maintenance_exponent: float = 1.1
@@ -238,6 +249,396 @@ class GreedyPolicyMetrics:
     evaluated_episodes: int  # number of episodes evaluated
 
 
+def _advantage_metrics_dict(metrics: AdvantageMetrics) -> Dict[str, float | int]:
+    return {
+        "total_loss": metrics.total_loss,
+        "advantage_mse": metrics.advantage_mse,
+        "sign_bce": metrics.sign_bce,
+        "mean_abs_advantage_error": metrics.mean_abs_advantage_error,
+        "sign_accuracy": metrics.sign_accuracy,
+        "snapshots": metrics.examples,
+    }
+
+
+def _greedy_metrics_dict(metrics: GreedyPolicyMetrics) -> Dict[str, float | int]:
+    return {
+        "exact_stop_step_accuracy": metrics.exact_stop_step_accuracy,
+        "first_action_accuracy": metrics.first_action_accuracy,
+        "average_return": metrics.average_return,
+        "average_oracle_value": metrics.average_oracle_value,
+        "average_regret": metrics.average_regret,
+        "average_expansions": metrics.average_expansions,
+        "evaluated_episodes": metrics.evaluated_episodes,
+    }
+
+
+def _load_metrics_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"batches": []}
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Metrics file {path} must contain a YAML mapping at the top level.")
+    data.setdefault("batches", [])
+    return data
+
+
+def _save_metrics_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+
+
+def _plot_title_from_run_start(run_start: dict[str, Any] | None) -> str | None:
+    if not run_start:
+        return None
+    if run_start.get("run_name"):
+        return str(run_start["run_name"])
+    output_checkpoint = run_start.get("output_checkpoint")
+    if output_checkpoint:
+        return Path(str(output_checkpoint)).stem
+    return None
+
+
+def _style_plot_axes(ax: Any, *, legend: bool) -> None:
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, alpha=0.25, linewidth=0.8)
+    if legend:
+        ax.legend(frameon=False)
+
+
+_PLOT_LINE_STYLE = {"linewidth": 1.5, "markersize": 3}
+
+_COMPARISON_MODEL_COLORS = (
+    "#2171b5",
+    "#525252",
+    "#6baed6",
+    "#969696",
+    "#08519c",
+    "#bdbdbd",
+)
+
+
+def _metric_series(
+    batch_rows: list[dict[str, Any]],
+    section: str,
+    field: str,
+) -> tuple[list[int], list[float]]:
+    xs: list[int] = []
+    ys: list[float] = []
+    for row in batch_rows:
+        payload = row.get(section)
+        if payload is None:
+            continue
+        xs.append(int(row["n_batches"]))
+        ys.append(float(payload[field]))
+    return xs, ys
+
+
+@dataclass
+class ControllerTrainMetricsLogger:
+    """Single sink for controller training metrics: YAML log + curve plot refresh."""
+
+    metrics_path: Path
+    plot_path: Path
+    metrics_log_interval: int = 10
+    plot_refresh_step_interval: int | None = None
+    epochs: int = 1
+    title: str | None = None
+    run_name: str | None = None
+    n_batches: int = 0
+
+    def _append_batch_record(self, epoch: int, record: Dict[str, Any]) -> None:
+        payload: Dict[str, Any] = {
+            "n_batches": self.n_batches,
+            "epoch": epoch,
+            "epochs": self.epochs,
+        }
+        payload.update(record)
+        data = _load_metrics_file(self.metrics_path)
+        data["batches"].append(payload)
+        _save_metrics_file(self.metrics_path, data)
+
+    def write_run_start(
+        self,
+        config: ControllerTrainConfig,
+        oracle_config: BudgetedOracleConfig,
+        *,
+        train_batches_per_epoch: int,
+        full_train_batches_per_epoch: int | None,
+    ) -> None:
+        _save_metrics_file(
+            self.metrics_path,
+            {
+                "run_start": {
+                    "run_name": self.run_name,
+                    "packed_train_data": config.packed_train_data,
+                    "packed_validation_data": config.packed_validation_data,
+                    "encoder_checkpoint": config.encoder_checkpoint,
+                    "output_checkpoint": config.output_checkpoint,
+                    "controller_inputs": list(config.controller_inputs),
+                    "device": config.device,
+                    "epochs": config.epochs,
+                    "train_batches_per_epoch": train_batches_per_epoch,
+                    "full_train_batches_per_epoch": full_train_batches_per_epoch,
+                    "train_batches": config.train_batches,
+                    "validation_step_interval": config.validation_step_interval,
+                    "greedy_eval_step_interval": config.greedy_eval_step_interval,
+                    "max_validation_batches": config.max_validation_batches,
+                    "max_greedy_eval_episodes": config.max_greedy_eval_episodes,
+                    "metrics_log_interval": config.metrics_log_interval,
+                    **budgeted_oracle_metadata(oracle_config),
+                },
+                "batches": [],
+            },
+        )
+
+    def after_train_batch(
+        self,
+        epoch: int,
+        *,
+        total_loss_sum: float,
+        total_advantage_mse: float,
+        total_sign_bce: float,
+        total_mean_abs_advantage_error: float,
+        total_correct: int,
+        total_examples: int,
+    ) -> None:
+        self.n_batches += 1
+        interval = self.metrics_log_interval
+        if interval <= 0 or self.n_batches % interval != 0:
+            return
+        examples = max(total_examples, 1)
+        self._append_batch_record(
+            epoch,
+            {
+                "train": _advantage_metrics_dict(
+                    AdvantageMetrics(
+                        total_loss=total_loss_sum / examples,
+                        advantage_mse=total_advantage_mse / examples,
+                        sign_bce=total_sign_bce / examples,
+                        mean_abs_advantage_error=total_mean_abs_advantage_error / examples,
+                        sign_accuracy=total_correct / examples,
+                        examples=total_examples,
+                    )
+                ),
+            },
+        )
+
+    def after_epoch_eval(
+        self,
+        epoch: int,
+        validation_metrics: AdvantageMetrics | None,
+        greedy_metrics: GreedyPolicyMetrics | None,
+    ) -> None:
+        if validation_metrics is None and greedy_metrics is None:
+            return
+        record: Dict[str, Any] = {}
+        if validation_metrics is not None:
+            record["validation"] = _advantage_metrics_dict(validation_metrics)
+        if greedy_metrics is not None:
+            record["greedy"] = _greedy_metrics_dict(greedy_metrics)
+        self._append_batch_record(epoch, record)
+        self.maybe_refresh_plot()
+
+    def finish(self) -> None:
+        self.refresh_plot(force=True)
+
+    @staticmethod
+    def load_metrics(metrics_path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Parse metrics YAML into ``(run_start, batch_rows)``."""
+        if not metrics_path.exists():
+            return None, []
+        data = _load_metrics_file(metrics_path)
+        run_start = data.get("run_start")
+        batch_rows = list(data.get("batches") or [])
+        batch_rows.sort(key=lambda row: int(row["n_batches"]))
+        return run_start, batch_rows
+
+    @classmethod
+    def from_config(cls, config: ControllerTrainConfig) -> ControllerTrainMetricsLogger | None:
+        if not config.metrics_path:
+            return None
+        metrics_path = Path(config.metrics_path)
+        plot_path = Path(config.metrics_plot_path or metrics_path.with_name("training_curves.png"))
+        plot_interval = config.plot_refresh_step_interval
+        if plot_interval is None:
+            plot_interval = config.validation_step_interval
+        run_name = (
+            config.metrics_run_name
+            or (Path(config.output_checkpoint).stem if config.output_checkpoint else metrics_path.parent.name)
+        )
+        return cls(
+            metrics_path=metrics_path,
+            plot_path=plot_path,
+            metrics_log_interval=config.metrics_log_interval,
+            plot_refresh_step_interval=plot_interval,
+            epochs=config.epochs,
+            run_name=run_name,
+        )
+
+    @classmethod
+    def from_metrics_path(
+        cls,
+        metrics_path: Path | str,
+        *,
+        output_path: Path | str | None = None,
+        title: str | None = None,
+    ) -> ControllerTrainMetricsLogger:
+        metrics_path = Path(metrics_path)
+        plot_path = Path(output_path) if output_path is not None else metrics_path.with_name("training_curves.png")
+        return cls(metrics_path=metrics_path, plot_path=plot_path, title=title)
+
+    def refresh_plot(self, *, force: bool = False) -> bool:
+        """Rewrite ``plot_path`` from the current ``metrics_path`` contents."""
+        run_start, batch_rows = self.load_metrics(self.metrics_path)
+        if not batch_rows:
+            if force:
+                raise ValueError(f"No batch records found in {self.metrics_path}")
+            return False
+
+        import matplotlib.pyplot as plt
+
+        train_x = [int(row["n_batches"]) for row in batch_rows if row.get("train") is not None]
+        train_loss = [float(row["train"]["total_loss"]) for row in batch_rows if row.get("train") is not None]
+        val_x = [int(row["n_batches"]) for row in batch_rows if row.get("validation") is not None]
+        validation_loss = [
+            float(row["validation"]["total_loss"]) for row in batch_rows if row.get("validation") is not None
+        ]
+        regret_x = [int(row["n_batches"]) for row in batch_rows if row.get("greedy") is not None]
+        greedy_regret = [
+            float(row["greedy"]["average_regret"]) for row in batch_rows if row.get("greedy") is not None
+        ]
+
+        plot_title = self.title or _plot_title_from_run_start(run_start) or self.run_name or "Controller training"
+        line_style = _PLOT_LINE_STYLE
+
+        self.plot_path.parent.mkdir(parents=True, exist_ok=True)
+        fig, (ax_loss, ax_regret) = plt.subplots(2, 1, figsize=(8, 7), sharex=True, constrained_layout=True)
+
+        if train_x:
+            ax_loss.plot(
+                train_x,
+                train_loss,
+                marker="o",
+                color="#9ecae1",
+                label="Train loss",
+                **line_style,
+            )
+        if val_x:
+            ax_loss.plot(
+                val_x,
+                validation_loss,
+                marker="o",
+                color="#2171b5",
+                label="Val loss",
+                **line_style,
+            )
+        ax_loss.set_ylabel("Total loss")
+        ax_loss.set_title(plot_title)
+        _style_plot_axes(ax_loss, legend=bool(train_x or val_x))
+
+        if regret_x:
+            ax_regret.plot(
+                regret_x,
+                greedy_regret,
+                marker="o",
+                color="black",
+                **line_style,
+            )
+            ax_regret.set_ylabel("Average regret")
+        else:
+            ax_regret.text(
+                0.5,
+                0.5,
+                "No greedy eval records",
+                ha="center",
+                va="center",
+                transform=ax_regret.transAxes,
+            )
+        ax_regret.set_xlabel("Training batches (n_batches)")
+        _style_plot_axes(ax_regret, legend=False)
+
+        fig.savefig(self.plot_path, dpi=180)
+        plt.close(fig)
+        print(f"[controller_train_metrics_logger] wrote {self.plot_path}", flush=True)
+        return True
+
+    def maybe_refresh_plot(self) -> bool:
+        interval = self.plot_refresh_step_interval
+        if interval is None or interval <= 0 or self.n_batches % interval != 0:
+            return False
+        if not self.metrics_path.exists():
+            return False
+        return self.refresh_plot()
+
+    @staticmethod
+    def plot_comparison(
+        metrics_paths: Sequence[Path | str],
+        output_path: Path | str,
+        *,
+        title: str | None = None,
+    ) -> None:
+        """Overlay val loss (top) and average regret (bottom) across runs."""
+        import matplotlib.pyplot as plt
+
+        labeled_runs: list[tuple[str, list[dict[str, Any]]]] = []
+        for metrics_path in metrics_paths:
+            path = Path(metrics_path)
+            run_start, batch_rows = ControllerTrainMetricsLogger.load_metrics(path)
+            if not batch_rows:
+                raise ValueError(f"No batch records found in {path}")
+            label = _plot_title_from_run_start(run_start) or path.parent.name
+            labeled_runs.append((label, batch_rows))
+
+        fig, (ax_val, ax_regret) = plt.subplots(2, 1, figsize=(8, 7), sharex=True, constrained_layout=True)
+        has_val = False
+        has_regret = False
+        for index, (label, batch_rows) in enumerate(labeled_runs):
+            color = _COMPARISON_MODEL_COLORS[index % len(_COMPARISON_MODEL_COLORS)]
+            val_x, val_y = _metric_series(batch_rows, "validation", "total_loss")
+            regret_x, regret_y = _metric_series(batch_rows, "greedy", "average_regret")
+            if val_x:
+                has_val = True
+                ax_val.plot(val_x, val_y, marker="o", color=color, label=label, **_PLOT_LINE_STYLE)
+            if regret_x:
+                has_regret = True
+                ax_regret.plot(regret_x, regret_y, marker="o", color=color, label=label, **_PLOT_LINE_STYLE)
+
+        ax_val.set_ylabel("Val loss")
+        ax_val.set_title(title or "Controller comparison")
+        if has_val:
+            _style_plot_axes(ax_val, legend=True)
+        else:
+            ax_val.text(
+                0.5,
+                0.5,
+                "No validation records",
+                ha="center",
+                va="center",
+                transform=ax_val.transAxes,
+            )
+            _style_plot_axes(ax_val, legend=False)
+
+        if has_regret:
+            ax_regret.set_ylabel("Average regret")
+            _style_plot_axes(ax_regret, legend=True)
+        else:
+            ax_regret.text(
+                0.5,
+                0.5,
+                "No greedy eval records",
+                ha="center",
+                va="center",
+                transform=ax_regret.transAxes,
+            )
+            _style_plot_axes(ax_regret, legend=False)
+        ax_regret.set_xlabel("Training batches (n_batches)")
+
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=180)
+        plt.close(fig)
+        print(f"[controller_train_metrics_logger] wrote {output}", flush=True)
 
 
 @dataclass(frozen=True)
@@ -296,6 +697,7 @@ class ControllerEpisodeDataset(Dataset):
         # cumulative_sizes[i] is the total number of episodes in shards 0..i,
         # which lets bisect map a global episode index to (shard, offset) in O(log n).
         self.shard_paths: List[str] = []
+        self.shard_num_episodes: List[int] = []
         self.cumulative_sizes: List[int] = []
         total = 0
         for entry in entries:
@@ -304,6 +706,7 @@ class ControllerEpisodeDataset(Dataset):
                 continue
             total += num_episodes
             self.shard_paths.append(entry["path"])
+            self.shard_num_episodes.append(num_episodes)
             self.cumulative_sizes.append(total)
         if not self.shard_paths:
             raise ValueError(f"All shards empty in manifest: {manifest_path}")
@@ -468,6 +871,7 @@ class ControllerEpisodeDataset(Dataset):
 
 def _extract_all_episode_metadata(
     dataset: ControllerEpisodeDataset,
+    max_episodes: int | None = None,
 ) -> List[EpisodeMetadata]:
     """Extract per-episode metadata from packed shards without tree reconstruction."""
     metadata: List[EpisodeMetadata] = []
@@ -488,7 +892,7 @@ def _extract_all_episode_metadata(
         episode_keys = payload["episode_keys"]
         trajectory_source_paths = payload["trajectory_source_paths"]
 
-        num_episodes = len(episode_step_ptr) - 1
+        num_episodes = dataset.shard_num_episodes[shard_index]
         for i in range(num_episodes):
             ep_step_begin = int(episode_step_ptr[i].item())
             ep_step_end = int(episode_step_ptr[i + 1].item())
@@ -511,6 +915,8 @@ def _extract_all_episode_metadata(
                 budget_bucket_name=budget_bucket_names[i],
                 num_steps=num_steps,
             ))
+            if max_episodes is not None and len(metadata) >= max_episodes:
+                return metadata
     return metadata
 
 
@@ -917,6 +1323,9 @@ def _train_epoch(
     max_grad_norm: float,
     epoch: int,
     log_interval: int,
+    max_batches: int | None = None,
+    logger: ControllerTrainMetricsLogger | None = None,
+    after_step: Callable[[int, int], None] | None = None,
 ) -> AdvantageMetrics:
     """One training epoch over the *live* encoder path (no materialized cache).
 
@@ -970,6 +1379,20 @@ def _train_epoch(
                 f"elapsed_s={elapsed:.1f}",
                 flush=True,
             )
+        if logger is not None:
+            logger.after_train_batch(
+                epoch,
+                total_loss_sum=total_loss_sum,
+                total_advantage_mse=total_advantage_mse,
+                total_sign_bce=total_sign_bce,
+                total_mean_abs_advantage_error=total_mean_abs_advantage_error,
+                total_correct=total_correct,
+                total_examples=total_examples,
+            )
+            if after_step is not None:
+                after_step(epoch, logger.n_batches)
+        if max_batches is not None and batch_index >= max_batches:
+            break
 
     if total_examples == 0:
         raise ValueError("Training loader produced no valid controller states.")
@@ -989,6 +1412,7 @@ def evaluate_advantage_predictions(
     *,
     device: torch.device,
     sign_loss_weight: float,
+    max_batches: int | None = None,
 ) -> AdvantageMetrics:
     """Live-encoder validation pass; mirror of ``_train_epoch`` without the backward."""
     model.eval()
@@ -998,10 +1422,12 @@ def evaluate_advantage_predictions(
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
+    batch_index = 0
     with torch.inference_mode():
         for batch in loader:
             if batch is None:
                 continue
+            batch_index += 1
             targets = batch.target_advantages.to(device, non_blocking=True)
             predicted, sign_logits = model(batch.tree_batch, batch.tree_sizes, batch.time_budgets)
             advantage_mse, mean_abs_advantage_error, _ = _advantage_loss_components(predicted, targets)
@@ -1014,6 +1440,8 @@ def evaluate_advantage_predictions(
             total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
             total_examples += examples
             total_correct += int(((sign_logits > 0) == (targets > 0)).sum().item())
+            if max_batches is not None and batch_index >= max_batches:
+                break
     if total_examples == 0:
         raise ValueError("Evaluation loader produced no valid controller states.")
     return AdvantageMetrics(
@@ -1043,6 +1471,9 @@ def _train_materialized_cache_epoch(
     seed: int,
     bin_weights: torch.Tensor | None = None,
     bin_boundaries: torch.Tensor | None = None,
+    max_batches: int | None = None,
+    logger: ControllerTrainMetricsLogger | None = None,
+    after_step: Callable[[int, int], None] | None = None,
 ) -> AdvantageMetrics:
     """One training epoch over the materialized cache (frozen-encoder path).
 
@@ -1075,7 +1506,10 @@ def _train_materialized_cache_epoch(
     # gradient descent from the same shard's distribution.
     shard_order = list(range(len(cache.shard_paths)))
     random.Random(seed + epoch).shuffle(shard_order)
+    stop_epoch = False
     for shard_index in shard_order:
+        if stop_epoch:
+            break
         payload = torch.load(cache.shard_paths[shard_index], weights_only=False)
         features = payload["features"]
         target_advantages = payload["target_advantages"]
@@ -1134,6 +1568,21 @@ def _train_materialized_cache_epoch(
                     f"elapsed_s={elapsed:.1f}",
                     flush=True,
                 )
+            if logger is not None:
+                logger.after_train_batch(
+                    epoch,
+                    total_loss_sum=total_loss_sum,
+                    total_advantage_mse=total_advantage_mse,
+                    total_sign_bce=total_sign_bce,
+                    total_mean_abs_advantage_error=total_mean_abs_advantage_error,
+                    total_correct=total_correct,
+                    total_examples=total_examples,
+                )
+                if after_step is not None:
+                    after_step(epoch, logger.n_batches)
+            if max_batches is not None and batch_counter >= max_batches:
+                stop_epoch = True
+                break
 
     if total_examples == 0:
         raise ValueError("Materialized cache training produced no controller states.")
@@ -1154,6 +1603,7 @@ def evaluate_materialized_cache_predictions(
     device: torch.device,
     batch_size: int,
     sign_loss_weight: float,
+    max_batches: int | None = None,
 ) -> AdvantageMetrics:
     """Cached-feature validation: deterministic order, no weighting, no shuffle."""
     model.eval()
@@ -1163,12 +1613,14 @@ def evaluate_materialized_cache_predictions(
     total_mean_abs_advantage_error = 0.0
     total_examples = 0
     total_correct = 0
+    batch_counter = 0
     with torch.inference_mode():
         for shard_path in cache.shard_paths:
             payload = torch.load(shard_path, weights_only=False)
             features = payload["features"]
             target_advantages = payload["target_advantages"]
             for start in range(0, int(features.shape[0]), batch_size):
+                batch_counter += 1
                 batch_features = features[start : start + batch_size].to(device, non_blocking=True)
                 batch_targets = target_advantages[start : start + batch_size].to(device, non_blocking=True)
                 predicted, sign_logits = model.predict_from_features(batch_features)
@@ -1182,6 +1634,10 @@ def evaluate_materialized_cache_predictions(
                 total_mean_abs_advantage_error += float(mean_abs_advantage_error.item()) * examples
                 total_examples += examples
                 total_correct += int(((sign_logits > 0) == (batch_targets > 0)).sum().item())
+                if max_batches is not None and batch_counter >= max_batches:
+                    break
+            if max_batches is not None and batch_counter >= max_batches:
+                break
     if total_examples == 0:
         raise ValueError("Materialized cache evaluation produced no controller states.")
     return AdvantageMetrics(
@@ -1198,12 +1654,14 @@ def evaluate_materialized_cache_predictions(
 
 def _collect_episode_metadata_and_step_count(
     dataset: ControllerEpisodeDataset,
+    max_episodes: int | None = None,
 ) -> Tuple[List[EpisodeMetadata], int]:
-    """Pull all per-episode scalars out of the packed shards and sum total controller steps."""
-    episode_metadata = _extract_all_episode_metadata(dataset)
-    assert len(episode_metadata) == len(dataset), (
-        f"Metadata extraction returned {len(episode_metadata)} episodes but dataset has {len(dataset)}"
-    )
+    """Pull episode scalars out of packed shards and sum total controller steps."""
+    episode_metadata = _extract_all_episode_metadata(dataset, max_episodes=max_episodes)
+    if max_episodes is None:
+        assert len(episode_metadata) == len(dataset), (
+            f"Metadata extraction returned {len(episode_metadata)} episodes but dataset has {len(dataset)}"
+        )
     total_steps = sum(m.num_steps for m in episode_metadata)
     return episode_metadata, total_steps
 
@@ -1212,8 +1670,9 @@ def _predict_advantages_for_cache(
     model: MetaController,
     cache: MaterializedCache,
     predict_batch_size: int,
+    max_snapshots: int | None = None,
 ) -> torch.Tensor:
-    """Run a batched forward pass over every cached feature and return one flat advantage tensor.
+    """Run a batched forward pass over cached features and return one flat advantage tensor.
 
     The cache's snapshot order matches the dataset's episode order, so the
     returned tensor can be re-split per episode by ``num_steps`` downstream.
@@ -1221,14 +1680,25 @@ def _predict_advantages_for_cache(
     model.eval()
     device = next(model.parameters()).device
     all_predicted: List[torch.Tensor] = []
+    produced = 0
     with torch.inference_mode():
         for shard_path in cache.shard_paths:
+            if max_snapshots is not None and produced >= max_snapshots:
+                break
             payload = torch.load(shard_path, weights_only=False)
             features = payload["features"]
             for start in range(0, features.shape[0], predict_batch_size):
-                batch_features = features[start:start + predict_batch_size].to(device, non_blocking=True)
+                if max_snapshots is not None and produced >= max_snapshots:
+                    break
+                end = start + predict_batch_size
+                if max_snapshots is not None:
+                    end = min(end, produced + (max_snapshots - produced))
+                batch_features = features[start:end].to(device, non_blocking=True)
+                if batch_features.shape[0] == 0:
+                    continue
                 predicted, _ = model.predict_from_features(batch_features)
                 all_predicted.append(predicted.detach().cpu())
+                produced += int(batch_features.shape[0])
     return torch.cat(all_predicted, dim=0)
 
 
@@ -1332,13 +1802,22 @@ def evaluate_batched_greedy_policy(
     log_interval: int,
     diagnostics_out: List[Dict[str, Any]] | None = None,
     predict_batch_size: int = 65536,
+    max_eval_episodes: int | None = None,
 ) -> GreedyPolicyMetrics:
     """Greedy eval using materialized cache features in batched forward passes."""
     started = time.time()
-    episode_metadata, total_steps = _collect_episode_metadata_and_step_count(dataset)
-    all_advantages = _predict_advantages_for_cache(model, cache, predict_batch_size)
+    episode_metadata, total_steps = _collect_episode_metadata_and_step_count(
+        dataset,
+        max_episodes=max_eval_episodes,
+    )
+    all_advantages = _predict_advantages_for_cache(
+        model,
+        cache,
+        predict_batch_size,
+        max_snapshots=total_steps,
+    )
     assert all_advantages.shape[0] == total_steps, (
-        f"Cache has {all_advantages.shape[0]} steps but packed dataset has {total_steps}"
+        f"Cache has {all_advantages.shape[0]} steps but truncated dataset has {total_steps}"
     )
     return _aggregate_greedy_rollout_metrics(
         episode_metadata,
@@ -1554,6 +2033,21 @@ def _materialize_or_load_caches(
     return train_cache, validation_cache
 
 
+def _effective_greedy_eval_step_interval(config: ControllerTrainConfig) -> int | None:
+    """Return the step interval for greedy eval, or None if disabled."""
+    if config.greedy_eval_step_interval is not None:
+        return config.greedy_eval_step_interval if config.greedy_eval_step_interval > 0 else None
+    if config.validation_step_interval is not None and config.validation_step_interval > 0:
+        return config.validation_step_interval
+    return None
+
+
+@dataclass
+class _StepEvalState:
+    best_greedy_regret: float = float("inf")
+    best_metadata: dict | None = None
+
+
 def _run_one_epoch(
     config: ControllerTrainConfig,
     epoch: int,
@@ -1564,12 +2058,46 @@ def _run_one_epoch(
     train_loader: DataLoader | None,
     bin_weights: torch.Tensor | None,
     bin_boundaries: torch.Tensor | None,
+    logger: ControllerTrainMetricsLogger | None = None,
+    validation_cache: MaterializedCache | None = None,
+    validation_loader: DataLoader | None = None,
+    validation_dataset: ControllerEpisodeDataset | None = None,
+    oracle_config: BudgetedOracleConfig | None = None,
+    step_eval_state: _StepEvalState | None = None,
 ) -> AdvantageMetrics:
     """Drive one training epoch, dispatching to the cached or live-encoder path.
 
     Cached path is used whenever the encoder is frozen (the common case);
     live path runs the encoder on every batch.
     """
+    after_step: Callable[[int, int], None] | None = None
+    step_interval = config.validation_step_interval
+    greedy_step_interval = _effective_greedy_eval_step_interval(config)
+    if (
+        logger is not None
+        and step_eval_state is not None
+        and validation_dataset is not None
+        and oracle_config is not None
+        and (
+            (step_interval is not None and step_interval > 0)
+            or greedy_step_interval is not None
+        )
+    ):
+        def after_step(epoch: int, n_batches: int) -> None:
+            _maybe_eval_at_training_step(
+                config,
+                epoch,
+                n_batches,
+                model,
+                device,
+                validation_cache,
+                validation_loader,
+                validation_dataset,
+                oracle_config,
+                logger,
+                step_eval_state,
+            )
+
     if train_cache is not None:
         train_metrics = _train_materialized_cache_epoch(
             model,
@@ -1585,6 +2113,9 @@ def _run_one_epoch(
             seed=config.seed,
             bin_weights=bin_weights,
             bin_boundaries=bin_boundaries,
+            max_batches=config.train_batches,
+            logger=logger,
+            after_step=after_step,
         )
     else:
         train_metrics = _train_epoch(
@@ -1596,6 +2127,9 @@ def _run_one_epoch(
             max_grad_norm=config.max_grad_norm,
             epoch=epoch,
             log_interval=config.log_interval,
+            max_batches=config.train_batches,
+            logger=logger,
+            after_step=after_step,
         )
     print(
         f"epoch={epoch}/{config.epochs} "
@@ -1610,19 +2144,32 @@ def _run_one_epoch(
     return train_metrics
 
 
-def _maybe_run_validation(
+def _train_batches_per_epoch(
+    config: ControllerTrainConfig,
+    train_cache: MaterializedCache | None,
+    train_loader: DataLoader | None,
+) -> tuple[int, int | None]:
+    """Return ``(batches run per epoch, full uncapped batches or None)``."""
+    if train_cache is not None:
+        full_batches = (train_cache.examples + config.batch_size - 1) // config.batch_size
+    elif train_loader is not None:
+        full_batches = len(train_loader)
+    else:
+        return 0, None
+    run_batches = full_batches
+    if config.train_batches is not None:
+        run_batches = min(full_batches, config.train_batches)
+    return run_batches, full_batches
+
+
+def _run_validation(
     config: ControllerTrainConfig,
     epoch: int,
     model: MetaController,
     device: torch.device,
     validation_cache: MaterializedCache | None,
     validation_loader: DataLoader | None,
-) -> None:
-    """Run validation if this epoch hits the validation interval. Reported but not used for checkpoint selection."""
-    if config.validation_interval <= 0:
-        return
-    if not (epoch % config.validation_interval == 0 or epoch == config.epochs):
-        return
+) -> AdvantageMetrics:
     if validation_cache is not None:
         validation_metrics = evaluate_materialized_cache_predictions(
             model,
@@ -1630,6 +2177,7 @@ def _maybe_run_validation(
             device=device,
             batch_size=config.batch_size,
             sign_loss_weight=config.sign_loss_weight,
+            max_batches=config.max_validation_batches,
         )
     else:
         validation_metrics = evaluate_advantage_predictions(
@@ -1637,6 +2185,7 @@ def _maybe_run_validation(
             validation_loader,
             device=device,
             sign_loss_weight=config.sign_loss_weight,
+            max_batches=config.max_validation_batches,
         )
     print(
         f"validation_epoch={epoch}/{config.epochs} "
@@ -1648,34 +2197,103 @@ def _maybe_run_validation(
         f"validation_snapshots={validation_metrics.examples}",
         flush=True,
     )
+    return validation_metrics
 
 
-def _maybe_run_greedy_eval_and_save_best(
+def _maybe_run_validation(
+    config: ControllerTrainConfig,
+    epoch: int,
+    model: MetaController,
+    device: torch.device,
+    validation_cache: MaterializedCache | None,
+    validation_loader: DataLoader | None,
+) -> AdvantageMetrics | None:
+    """Run validation if this epoch hits the validation interval. Reported but not used for checkpoint selection."""
+    if config.validation_step_interval is not None and config.validation_step_interval > 0:
+        return None
+    if config.validation_interval <= 0:
+        return None
+    if not (epoch % config.validation_interval == 0 or epoch == config.epochs):
+        return None
+    return _run_validation(
+        config,
+        epoch,
+        model,
+        device,
+        validation_cache,
+        validation_loader,
+    )
+
+
+def _maybe_eval_at_training_step(
+    config: ControllerTrainConfig,
+    epoch: int,
+    n_batches: int,
+    model: MetaController,
+    device: torch.device,
+    validation_cache: MaterializedCache | None,
+    validation_loader: DataLoader | None,
+    validation_dataset: ControllerEpisodeDataset,
+    oracle_config: BudgetedOracleConfig,
+    logger: ControllerTrainMetricsLogger | None,
+    step_eval_state: _StepEvalState,
+) -> None:
+    if n_batches <= 0:
+        return
+    validation_interval = config.validation_step_interval
+    greedy_interval = _effective_greedy_eval_step_interval(config)
+    run_validation = validation_interval is not None and validation_interval > 0 and n_batches % validation_interval == 0
+    run_greedy = greedy_interval is not None and n_batches % greedy_interval == 0
+    if not run_validation and not run_greedy:
+        return
+
+    validation_metrics: AdvantageMetrics | None = None
+    greedy_metrics: GreedyPolicyMetrics | None = None
+    if run_validation:
+        validation_metrics = _run_validation(
+            config,
+            epoch,
+            model,
+            device,
+            validation_cache,
+            validation_loader,
+        )
+    if run_greedy:
+        step_eval_state.best_greedy_regret, step_eval_state.best_metadata, greedy_metrics = _run_greedy_eval(
+            config,
+            epoch,
+            model,
+            validation_dataset,
+            validation_cache,
+            oracle_config,
+            save_best=True,
+            best_greedy_regret=step_eval_state.best_greedy_regret,
+            best_metadata=step_eval_state.best_metadata,
+        )
+    if logger is not None:
+        logger.after_epoch_eval(epoch, validation_metrics, greedy_metrics)
+
+
+def _run_greedy_eval(
     config: ControllerTrainConfig,
     epoch: int,
     model: MetaController,
     validation_dataset: ControllerEpisodeDataset,
     validation_cache: MaterializedCache | None,
     oracle_config: BudgetedOracleConfig,
+    *,
+    save_best: bool,
     best_greedy_regret: float,
     best_metadata: dict | None,
-) -> Tuple[float, dict | None]:
-    """Run the greedy policy rollout if this epoch hits the interval, save checkpoint on regret improvement.
-
-    Greedy eval is the primary checkpoint-selection metric. Diagnostics JSONL
-    is only emitted on the final epoch to keep the disk-write cost out of the
-    training loop. Returns the (possibly updated) best regret + best metadata.
-    """
-    if config.greedy_eval_interval <= 0:
-        return best_greedy_regret, best_metadata
-    if not (epoch % config.greedy_eval_interval == 0 or epoch == config.epochs):
-        return best_greedy_regret, best_metadata
+) -> Tuple[float, dict | None, GreedyPolicyMetrics]:
     if validation_cache is None:
         raise RuntimeError(
             "Greedy evaluation requires a materialized validation cache. "
             "Either drop --unfreeze-encoder or set --greedy-eval-interval 0."
         )
-    diagnostics: List[Dict[str, Any]] | None = [] if (epoch == config.epochs and config.output_diagnostics) else None
+    diagnostics: List[Dict[str, Any]] | None = (
+        [] if (save_best and epoch == config.epochs and config.output_diagnostics) else None
+    )
     greedy_metrics = evaluate_batched_greedy_policy(
         model,
         validation_dataset,
@@ -1683,6 +2301,7 @@ def _maybe_run_greedy_eval_and_save_best(
         oracle_config,
         log_interval=config.log_interval,
         diagnostics_out=diagnostics,
+        max_eval_episodes=config.max_greedy_eval_episodes,
     )
     print(
         f"greedy_epoch={epoch}/{config.epochs} "
@@ -1695,7 +2314,7 @@ def _maybe_run_greedy_eval_and_save_best(
         f"evaluated_episodes={greedy_metrics.evaluated_episodes}",
         flush=True,
     )
-    if greedy_metrics.average_regret < best_greedy_regret:
+    if save_best and greedy_metrics.average_regret < best_greedy_regret:
         best_greedy_regret = greedy_metrics.average_regret
         best_metadata = {
             "stage": "compute_advantage_controller",
@@ -1717,7 +2336,79 @@ def _maybe_run_greedy_eval_and_save_best(
             _save_checkpoint(config.output_checkpoint, model, best_metadata)
     if diagnostics is not None:
         _write_diagnostics(diagnostics, config.output_diagnostics)
-    return best_greedy_regret, best_metadata
+    return best_greedy_regret, best_metadata, greedy_metrics
+
+
+def _maybe_run_greedy_eval_and_save_best(
+    config: ControllerTrainConfig,
+    epoch: int,
+    model: MetaController,
+    validation_dataset: ControllerEpisodeDataset,
+    validation_cache: MaterializedCache | None,
+    oracle_config: BudgetedOracleConfig,
+    best_greedy_regret: float,
+    best_metadata: dict | None,
+) -> Tuple[float, dict | None, GreedyPolicyMetrics | None]:
+    if config.greedy_eval_interval <= 0:
+        return best_greedy_regret, best_metadata, None
+    if _effective_greedy_eval_step_interval(config) is not None:
+        return best_greedy_regret, best_metadata, None
+    if not (epoch % config.greedy_eval_interval == 0 or epoch == config.epochs):
+        return best_greedy_regret, best_metadata, None
+    best_greedy_regret, best_metadata, greedy_metrics = _run_greedy_eval(
+        config,
+        epoch,
+        model,
+        validation_dataset,
+        validation_cache,
+        oracle_config,
+        save_best=True,
+        best_greedy_regret=best_greedy_regret,
+        best_metadata=best_metadata,
+    )
+    return best_greedy_regret, best_metadata, greedy_metrics
+
+
+def _run_initial_eval(
+    config: ControllerTrainConfig,
+    model: MetaController,
+    device: torch.device,
+    validation_cache: MaterializedCache | None,
+    validation_loader: DataLoader | None,
+    validation_dataset: ControllerEpisodeDataset,
+    oracle_config: BudgetedOracleConfig,
+    logger: ControllerTrainMetricsLogger | None,
+) -> None:
+    """Validation + greedy baseline at ``n_batches=0`` before any training steps."""
+    print("[compute_advantage] stage=initial_eval", flush=True)
+    validation_metrics: AdvantageMetrics | None = None
+    greedy_metrics: GreedyPolicyMetrics | None = None
+    if config.validation_interval > 0 or (
+        config.validation_step_interval is not None and config.validation_step_interval > 0
+    ):
+        validation_metrics = _run_validation(
+            config,
+            0,
+            model,
+            device,
+            validation_cache,
+            validation_loader,
+        )
+    if config.greedy_eval_interval > 0 or _effective_greedy_eval_step_interval(config) is not None:
+        _, _, greedy_metrics = _run_greedy_eval(
+            config,
+            0,
+            model,
+            validation_dataset,
+            validation_cache,
+            oracle_config,
+            save_best=False,
+            best_greedy_regret=float("inf"),
+            best_metadata=None,
+        )
+    if logger is not None:
+        logger.after_epoch_eval(0, validation_metrics, greedy_metrics)
+        logger.maybe_refresh_plot()
 
 
 def _run_training_loop(
@@ -1741,6 +2432,34 @@ def _run_training_loop(
     # validation MSE.
     best_greedy_regret = float("inf")
     best_metadata: dict | None = None
+    step_eval_state = _StepEvalState()
+    logger = ControllerTrainMetricsLogger.from_config(config)
+    train_batches, full_train_batches = _train_batches_per_epoch(config, train_cache, train_loader)
+    if config.train_batches is not None and full_train_batches is not None:
+        print(
+            f"[compute_advantage] train_batches={train_batches} "
+            f"(capped from full_epoch={full_train_batches})",
+            flush=True,
+        )
+    else:
+        print(f"[compute_advantage] train_batches_per_epoch={train_batches}", flush=True)
+    if logger is not None:
+        logger.write_run_start(
+            config,
+            oracle_config,
+            train_batches_per_epoch=train_batches,
+            full_train_batches_per_epoch=full_train_batches,
+        )
+    _run_initial_eval(
+        config,
+        model,
+        device,
+        validation_cache,
+        validation_loader,
+        validation_dataset,
+        oracle_config,
+        logger,
+    )
     print("[compute_advantage] stage=train_start", flush=True)
 
     for epoch in range(1, config.epochs + 1):
@@ -1754,10 +2473,18 @@ def _run_training_loop(
             train_loader,
             bin_weights,
             bin_boundaries,
+            logger=logger,
+            validation_cache=validation_cache,
+            validation_loader=validation_loader,
+            validation_dataset=validation_dataset,
+            oracle_config=oracle_config,
+            step_eval_state=step_eval_state,
         )
         if scheduler is not None:
             scheduler.step()
-        _maybe_run_validation(
+        best_greedy_regret = step_eval_state.best_greedy_regret
+        best_metadata = step_eval_state.best_metadata
+        validation_metrics = _maybe_run_validation(
             config,
             epoch,
             model,
@@ -1765,7 +2492,7 @@ def _run_training_loop(
             validation_cache,
             validation_loader,
         )
-        best_greedy_regret, best_metadata = _maybe_run_greedy_eval_and_save_best(
+        best_greedy_regret, best_metadata, greedy_metrics = _maybe_run_greedy_eval_and_save_best(
             config,
             epoch,
             model,
@@ -1775,6 +2502,10 @@ def _run_training_loop(
             best_greedy_regret,
             best_metadata,
         )
+        if logger is not None:
+            logger.after_epoch_eval(epoch, validation_metrics, greedy_metrics)
+    if logger is not None:
+        logger.finish()
     return best_metadata
 
 
@@ -1847,5 +2578,51 @@ def main(config: ControllerTrainConfig) -> None:
 
 
 if __name__ == "__main__":
-    from cts._config import run_with_config_cli
-    run_with_config_cli(ControllerTrainConfig, main)
+    if len(sys.argv) > 1 and sys.argv[1] == "plot-metrics":
+        import argparse
+
+        sys.argv.pop(1)
+        plot_parser = argparse.ArgumentParser(description="Plot controller metrics from metrics YAML")
+        plot_parser.add_argument("metrics_path", help="Path to metrics.yaml from controller_train")
+        plot_parser.add_argument(
+            "-o",
+            "--output",
+            help="Output PNG path (default: training_curves.png next to metrics file)",
+        )
+        plot_parser.add_argument("--title", help="Optional plot title")
+        plot_args = plot_parser.parse_args()
+        logger = ControllerTrainMetricsLogger.from_metrics_path(
+            plot_args.metrics_path,
+            output_path=plot_args.output,
+            title=plot_args.title,
+        )
+        logger.refresh_plot(force=True)
+    elif len(sys.argv) > 1 and sys.argv[1] == "plot-metrics-compare":
+        import argparse
+
+        sys.argv.pop(1)
+        compare_parser = argparse.ArgumentParser(
+            description="Overlay controller val loss and regret curves across runs",
+        )
+        compare_parser.add_argument(
+            "metrics_paths",
+            nargs="+",
+            help="Paths to metrics.yaml files from controller_train",
+        )
+        compare_parser.add_argument(
+            "-o",
+            "--output",
+            required=True,
+            help="Output PNG path for the comparison plot",
+        )
+        compare_parser.add_argument("--title", help="Optional plot title")
+        compare_args = compare_parser.parse_args()
+        ControllerTrainMetricsLogger.plot_comparison(
+            compare_args.metrics_paths,
+            compare_args.output,
+            title=compare_args.title,
+        )
+    else:
+        from cts._config import run_with_config_cli
+
+        run_with_config_cli(ControllerTrainConfig, main)
