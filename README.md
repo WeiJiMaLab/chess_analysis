@@ -6,19 +6,19 @@ This home directory is the working root for a research thread that combines **la
 
 | Path | Role |
 | :--- | :--- |
-| `chess_analysis/` | DuckDB, figures; Slidev deck lives under `src/presentations/` |
-| `chess_analysis/src/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/src/metacontrol/` | **New Modular Pipeline** (Refactored from `lmcos/`) |
-| `chess_analysis/src/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
-| `chess_analysis/src/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
-| `chess_analysis/src/metacontrol/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
-| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`hl4291_slurm/`** (hl4291 topology pipeline), **`slurm/`** (ysagiv defaults) |
+| `chess_analysis/` | DuckDB, figures; Slidev deck lives under `analysis/presentations/` |
+| `chess_analysis/analysis/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
+| `chess_analysis/analysis/metacontrol/` | **New Modular Pipeline** (Refactored from `lmcos/`) |
+| `chess_analysis/analysis/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
+| `chess_analysis/analysis/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
+| `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
+| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`slurm/`** (ysagiv della defaults) |
 | `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
-| `chess_analysis/src/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
+| `chess_analysis/analysis/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
-For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/src/README.md`. The latter documents **code layout** (`src/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
+For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/analysis/README.md`. The latter documents **code layout** (`analysis/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
-**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/src/README.md` §4.
+**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/analysis/README.md` §4.
 
 ---
 
@@ -44,7 +44,7 @@ A future layer is a **full planning head** (which node to expand, etc.) on the s
 
 ## 2. Human behavioral track (context for “broad implications”)
 
-Work under `chess_analysis/src/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `src/presentations/lmcos-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
+Work under `chess_analysis/analysis/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `analysis/presentations/lmcos-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
 The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
@@ -126,9 +126,9 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates live under `chess_analysis/lmcos/slurm/`.
 
-### 4.4 Modular Metacontrol Pipeline (`src/metacontrol/`)
+### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
 
-The project has been refactored into a modular structure under `src/metacontrol/` to enforce strict decoupling and didactic clarity:
+The project has been refactored into a modular structure under `analysis/metacontrol/` to enforce strict decoupling and didactic clarity:
 
 - **`core/`**: Fundamental data structures (`tree.py`, `tensorizer.py`) and schemas (`schemas.py`).
 - **`data/`**: Pipeline logic for tree generation (`generator.py`), meta-control DP derivation (`targets_mc.py`), and GNN target computation (`targets_gnn.py`).
@@ -139,9 +139,9 @@ The new `TreeSearch` class in `generator.py` provides a clean, method-based API 
 
 **Root sampling and single-tree export (2026-05):**
 
-- **Lichess roots:** `src/metacontrol/scripts/sample.py` (`ChessSampler`) writes filtered FEN rows; an example row is kept at `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv` when integration tests run.
-- **One-tree pipeline:** `src/metacontrol/scripts/generate_and_profile.py` reads that CSV (or `--csv`), runs `TreeSearch` + targets + `TreeTensorizer`, and saves `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/example_tree_00001.pt` by default. Use `--no-profile` for wall time only; otherwise it prints cumulative `cProfile` stats and writes `generate_and_profile.pstats` alongside the shard.
-- **`.pt` layout vs `ysagiv`:** Legacy controller shards on the cluster use `format="cts_budgeted_controller_episode_shard_v4"` with RL replay pointer tensors (`trajectory_node_ptr`, `episode_step_ptr`, …) and flattened `target_advantages` across many trajectories. Metacontrol’s Phase~1 export uses `format="metacontrol_single_tree_v1"`, the same five-wide `node_features` (`value`, WDL, `wdl_var` pad), `edge_child` as `int32`, and **omits** trajectory pointers. It adds explicit tensors `mc_halt_rewards`, `mc_dp_values`, `edge_wdl_targets`, and per-snapshot `target_advantages`; `oracle_values` here are **per-node** GNN consolidated values (not the legacy per-episode oracle scalars). See `src/metacontrol/README.md` and `src/metacontrol/migration.md`.
+- **Lichess roots:** `analysis/metacontrol/scripts/sample.py` (`ChessSampler`) writes filtered FEN rows; an example row is kept at `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv` when integration tests run.
+- **One-tree pipeline:** `analysis/metacontrol/scripts/generate_and_profile.py` reads that CSV (or `--csv`), runs `TreeSearch` + targets + `TreeTensorizer`, and saves `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/example_tree_00001.pt` by default. Use `--no-profile` for wall time only; otherwise it prints cumulative `cProfile` stats and writes `generate_and_profile.pstats` alongside the shard.
+- **`.pt` layout vs `ysagiv`:** Legacy controller shards on the cluster use `format="cts_budgeted_controller_episode_shard_v4"` with RL replay pointer tensors (`trajectory_node_ptr`, `episode_step_ptr`, …) and flattened `target_advantages` across many trajectories. Metacontrol’s Phase~1 export uses `format="metacontrol_single_tree_v1"`, the same five-wide `node_features` (`value`, WDL, `wdl_var` pad), `edge_child` as `int32`, and **omits** trajectory pointers. It adds explicit tensors `mc_halt_rewards`, `mc_dp_values`, `edge_wdl_targets`, and per-snapshot `target_advantages`; `oracle_values` here are **per-node** GNN consolidated values (not the legacy per-episode oracle scalars). See `analysis/metacontrol/README.md` and `analysis/metacontrol/migration.md`.
 
 ### 4.5 Engine Providers and Abstraction (`core/providers.py`)
 
@@ -161,7 +161,7 @@ This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, al
 
 ### 4.6 Testing and Validation
 
-The project maintains a comprehensive test suite (`src/metacontrol/tests/`) that covers unit, engine, and integration scenarios (run `pytest src/metacontrol/tests -m "not integration"` for a fast slice; include `test_sampler.py` for DuckDB smoke tests):
+The project maintains a comprehensive test suite (`analysis/metacontrol/tests/`) that covers unit, engine, and integration scenarios (run `pytest analysis/metacontrol/tests -m "not integration"` for a fast slice; include `test_sampler.py` for DuckDB smoke tests):
 - **Core Logic & Target Derivation**:
   - `test_targets_mc.py` verifies the DP algorithm, including a simulation demonstrating that when a tree expansion discovers a mate-in-2, the backward DP properly assigns a massive positive "continue advantage" to earlier snapshots.
   - `test_targets_gnn.py` ensures target consolidation is accurate, validating that terminal checkmate states correctly map to a WDL of `(1.0, 0.0, 0.0)` from the parent's perspective.
@@ -178,7 +178,7 @@ The pipeline has been "hardened" for production-scale data generation:
 
 Run the full validation suite:
 ```bash
-pytest src/metacontrol/tests/core/test_providers.py src/metacontrol/tests/data/test_search_quality.py src/metacontrol/tests/data/test_pipeline.py src/metacontrol/tests/data/test_generator.py
+pytest analysis/metacontrol/tests/core/test_providers.py analysis/metacontrol/tests/data/test_search_quality.py analysis/metacontrol/tests/data/test_pipeline.py analysis/metacontrol/tests/data/test_generator.py
 ```
 
 ---
@@ -221,7 +221,7 @@ These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers an
 | `04_pretrain_tutorial.ipynb` | Supervised pretraining and losses |
 | `05_meta_controller_tutorial.ipynb` | Halt/continue and economy of thought |
 | `lmcos/demos/understanding.md` | GNN wiring, slot encodings, dense recursive WDL head |
-| `src/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+| `analysis/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
 
 Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
 
@@ -248,8 +248,8 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/src/README.md`** (pipeline CLIs under **`src/slurm/scripts/`**); for meta-controller code and tutorial-style **Graphviz** tree diagrams, see **`lmcos/`** (for example **`lmcos/demos/helper_tensorization.py`** and the demo notebooks).
+For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/analysis/README.md`** (pipeline CLIs under **`analysis/slurm/scripts/`**); for meta-controller code and tutorial-style **Graphviz** tree diagrams, see **`lmcos/`** (for example **`lmcos/demos/helper_tensorization.py`** and the demo notebooks).
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `src/` layout (analysis under DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `analysis/` layout (analysis under DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*

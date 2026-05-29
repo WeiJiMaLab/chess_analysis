@@ -1,8 +1,8 @@
-"""Pytest bootstrap: put ``src/`` on ``sys.path`` so ``import cts.*`` works without ``pip install -e .``."""
+"""Pytest bootstrap: repo root on ``sys.path`` so ``import cts`` resolves via ``cts/__init__.py``."""
 
 import sys
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parent / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))

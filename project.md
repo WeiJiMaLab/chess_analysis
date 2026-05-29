@@ -115,9 +115,9 @@ A **DP oracle** labels actions from the **global** peak of $R(k)$: **CONTINUE** 
 | Halt/Continue RL | `cts_rl.py` |
 
 Tutorials under `lmcos/demos/` mirror this curriculum; see **`lmcos/demos/understanding.md`** for glossary (Oracle, thinking cost $C$, TreeBatch, slot encoding) and diagram vocabulary (Indigo vs. Emerald, hollow vs. filled boxes).
-# Coding style in `src/` (chess_analysis)
+# Coding style in `analysis/` (chess_analysis)
 
-This note describes how Python (and notebook) code in `src/` is written. It is descriptive, not a strict linter profile.
+This note describes how Python (and notebook) code in `analysis/` is written. It is descriptive, not a strict linter profile.
 
 ## Design priorities
 
@@ -142,7 +142,7 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
 
 ## Role of the code
 
-`src/` mixes **small runnable scripts**, **importable analysis utilities**, and **Jupyter notebooks**. Domain logic and operational safety stay visible rather than hidden behind abstractions.
+`analysis/` mixes **small runnable scripts**, **importable analysis utilities**, and **Jupyter notebooks**. Domain logic and operational safety stay visible rather than hidden behind abstractions.
 
 ## Language and typing
 

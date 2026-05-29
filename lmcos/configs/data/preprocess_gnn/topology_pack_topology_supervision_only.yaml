@@ -1,7 +1,0 @@
-# 5-column node_features + flat topology_targets shards (topology encoder pretraining).
-topology_supervision_shard: true
-topology_features: false
-split_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split
-output_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_topology_only
-shard_size: 2000
-log_interval: 1

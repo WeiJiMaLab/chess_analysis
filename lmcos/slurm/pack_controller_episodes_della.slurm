@@ -23,7 +23,7 @@ conda activate CTS
 set -u
 
 cd "${PROJECT_DIR}"
-export PYTHONPATH="${PROJECT_DIR}/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="${PROJECT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "config=${CONFIG}"
 echo "hostname=$(hostname)"
