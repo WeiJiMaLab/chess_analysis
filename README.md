@@ -6,19 +6,18 @@ This home directory is the working root for a research thread that combines **la
 
 | Path | Role |
 | :--- | :--- |
-| `chess_analysis/` | DuckDB, figures; Slidev deck lives under `analysis/presentations/` |
-| `chess_analysis/analysis/` | **Analysis** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/analysis/metacontrol/` | **New Modular Pipeline** (Refactored from `lmcos/`) |
-| `chess_analysis/analysis/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
-| `chess_analysis/analysis/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
+| `chess_analysis/` | DuckDB, figures; Slidev deck lives under `human_analytics/presentations/` |
+| `chess_analysis/human_analytics/` | **Human analytics** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
+| `chess_analysis/human_analytics/metacontrol/` | Modular tree-search export (refactored from `lmcos/`) |
+| `chess_analysis/human_analytics/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
+| `chess_analysis/human_analytics/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
-| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`slurm/`** (ysagiv della defaults) |
-| `chess_analysis/lmcos/demos/` | Tutorial notebooks (`01_`–`05_`) and `understanding.md` |
-| `chess_analysis/analysis/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
+| `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`slurm/`** (stage-organized della scripts + **`slurm/configs/`** run YAMLs) |
+| `chess_analysis/human_analytics/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
-For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/analysis/README.md`. The latter documents **code layout** (`analysis/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
+For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/human_analytics/README.md`. The latter documents **code layout** (`human_analytics/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
-**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/analysis/README.md` §4.
+**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/human_analytics/README.md` §4.
 
 ---
 
@@ -38,13 +37,13 @@ The implementation is **deliberately narrower**: **meta-control of search only**
 
 **Central empirical questions** include: Can a **simple** halt/continue policy learn (near-)optimal control given a **TreeNN** encoding? Which encoding or **cost architecture** (linear vs budget-aware) supports learning? How does behavior relate to **human** time allocation and engine-based **VOC** (value of computation) from the behavioral track?
 
-A future layer is a **full planning head** (which node to expand, etc.) on the same representation; the lab notebook and `demos/05_meta_controller_tutorial.ipynb` are aligned with that roadmap.
+A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see `lmcos/LAB_NOTEBOOK.md` for the roadmap.
 
 ---
 
 ## 2. Human behavioral track (context for “broad implications”)
 
-Work under `chess_analysis/analysis/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `analysis/presentations/lmcos-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
+Work under `chess_analysis/human_analytics/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `human_analytics/presentations/lmcos-overview/` connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
 The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
@@ -118,7 +117,7 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 ### 4.2 Oracle data construction (pretrain)
 
-- **Mode (research):** **dynamic growth** — run a full **oracle** search (e.g. large node budget), then take a **prefix** of the expansion sequence as input and **consolidate** deep statistics from the full tree as **supervised targets** (prefix / deep targets: `cts_pretrain.py`, demos `01`–`02`).
+- **Mode (research):** **dynamic growth** — run a full **oracle** search (e.g. large node budget), then take a **prefix** of the expansion sequence as input and **consolidate** deep statistics from the full tree as **supervised targets** (prefix / deep targets in `cts_pretrain.py`).
 - **Targets:** Scalar value backups and, after fixes in 2026-04-10, **search-consolidated per-edge WDL** targets (visit-weighted, perspective-correct) stored as `edge_wdl_targets`, not raw value-head slices at a node in isolation.
 - **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see `LAB_NOTEBOOK`).
 
@@ -211,17 +210,12 @@ These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers an
 
 ---
 
-## 6. Demos, talks, and notebooks
+## 6. Talks and notebooks
 
 | Resource | Content |
 | :--- | :--- |
-| `lmcos/demos/01_prefix_tutorial.ipynb` | Prefix sampling and deep target consolidation |
-| `02_tensorization_tutorial.ipynb` | Flat-forest batching |
-| `03_gnn_tutorial.ipynb` | Bidirectional GNN “heartbeat” |
-| `04_pretrain_tutorial.ipynb` | Supervised pretraining and losses |
-| `05_meta_controller_tutorial.ipynb` | Halt/continue and economy of thought |
-| `lmcos/demos/understanding.md` | GNN wiring, slot encodings, dense recursive WDL head |
 | `analysis/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+| `lmcos/LAB_NOTEBOOK.md` | CTS experiment log, pipeline stages, cluster run IDs |
 
 Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
 
@@ -248,8 +242,8 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/analysis/README.md`** (pipeline CLIs under **`analysis/slurm/scripts/`**); for meta-controller code and tutorial-style **Graphviz** tree diagrams, see **`lmcos/`** (for example **`lmcos/demos/helper_tensorization.py`** and the demo notebooks).
+For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/human_analytics/README.md`** (pipeline CLIs under **`human_analytics/slurm/scripts/`**); for meta-controller code see **`lmcos/`** (`src/`, stage-organized **`slurm/`**, **`configs/`**).
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `analysis/` layout (analysis under DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `human_analytics/` layout (DuckDB dashboards + Slurm CLIs), metacontrol single-tree export and sampler notes (2026-05-11).*

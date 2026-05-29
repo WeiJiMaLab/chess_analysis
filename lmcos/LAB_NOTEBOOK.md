@@ -12,7 +12,7 @@ Later, the same tree representation is meant to support a full planning head who
 
 ### Repo structure
 
-The **`cts`** Python package maps to **`src/`** (subpackages `core/`, `data/`, `models/`, `train/`, `analysis/`). A thin **`cts/__init__.py`** at the repo root sets ``__path__`` so ``import cts`` and ``python3 -m cts.*`` work with ``PYTHONPATH=${PROJECT_DIR}``.
+The **`cts`** Python package maps **`src/`** to `cts.core`, `cts.data`, `cts.models`, and `cts.train`; post-hoc diagnostics live in top-level **`analysis/`** (imported as `cts.analysis`). Use `pip install -e .` or `PYTHONPATH=${PROJECT_DIR}` so `import cts` and `python3 -m cts.*` resolve via `pyproject.toml` `package-dir`.
 
 - `cts.core` — shared substrate (`SearchTree`, tensorizer, feature schema, lc0 providers).
 - `cts.data` — data generation and preprocessing. FEN sampling (`cts.data.sample_fens`), FEN filtering (`cts.data.validate_fens`), tree generation (`cts.data.build_tree`), the encoder-pretrain target chain (`cts.data.preprocess_gnn.split` and `.pack`), and the controller-target chain (`cts.data.preprocess_mc.pack` and `.materialize`).
@@ -20,16 +20,16 @@ The **`cts`** Python package maps to **`src/`** (subpackages `core/`, `data/`, `
 - `cts.train` — training loops (`cts.train.gnn_pretrain` for encoder pretraining, `cts.train.controller_train` for fitted-Q controller training).
 - `cts.analysis` — diagnostics, plotting, and evaluation tools (the main analyzer `cts.analysis.analyze_budgeted_controller_run` is split across themed sub-modules under `cts.analysis._budgeted/`).
 
-Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-validated YAML config. SLURM scripts in `slurm/` collapse to `python3 -m cts.X.Y --config "${CONFIG}"`. Sibling YAMLs in `configs/` parameterize each entry point (one base config per stage, plus variants per experiment — the diff between two experiments is the diff between their YAMLs). Tests live under `tests/` (`pytest tests/`). Tree generation is the only stage with an orchestrator (`scripts/submit_generate_dataset_shards.py`) because lc0 is slow and shard parallelism is essential.
+Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-validated YAML config. SLURM scripts live under `slurm/<stage>/` and take ``CONFIG`` pointing at matching YAMLs under `slurm/configs/<stage>/`. Tests live under `tests/` (`pytest tests/`). Tree generation uses `slurm/1_preprocess_data/submit_generate_dataset_shards.py` as a local orchestrator (slices FENs → many `sbatch` calls).
 
 **Workspace layout (sibling checkout `chess_analysis/`):**
 
 | Path | Role |
 |------|------|
-| `lmcos/` | This repo — **`src/`** (`cts` package), **`cts/`** import shim, `configs/`, ysagiv `slurm/` wrappers |
-| `chess_analysis/analysis/` | Human move-time analytics (DuckDB ETL, figures, Slidev deck) and modular `metacontrol/` refactor — **not** `lmcos/src/` |
+| `lmcos/` | This repo — **`src/`** (pipeline `cts` subpackages), **`analysis/`** (`cts.analysis`), **`slurm/`** (scripts + configs) |
+| `chess_analysis/human_analytics/` | Human move-time analytics (DuckDB ETL, figures, Slidev deck, `metacontrol/`) — **not** `lmcos/src/` |
 
-Pipeline docs for ysagiv Slurm stages: `slurm/README.md`. Experiment history: this notebook.
+**Onboarding:** [`REPO_STRUCTURE.md`](REPO_STRUCTURE.md) documents the 2026-05-29 layout refactor (benefits, tradeoffs, stage folders). Pipeline commands: [`slurm/README.md`](slurm/README.md). Config placeholders: [`slurm/configs/README.md`](slurm/configs/README.md).
 
 ### Pipeline stages
 
@@ -3460,7 +3460,7 @@ Commands (replot only, no retrain) — **retired with proxy scripts**:
 **`chess_analysis/` directory shuffle:**
 
 - Removed the short-lived CTS proxy tree (`2a_make_cache.py`, `2b_*`, `analysis/slurm/submit_2a.sh`, …).
-- Renamed **`chess_analysis/src/` → `chess_analysis/analysis/`** so human move-time analytics / metacontrol code is not confused with **`lmcos/src/`**.
+- Renamed **`chess_analysis/src/` → `chess_analysis/human_analytics/`** (via interim `analysis/`) so human move-time analytics / metacontrol code is not confused with **`lmcos/src/`**.
 - Flattened **`lmcos/src/cts/` → `lmcos/src/`**; kept **`import cts`** via root **`cts/__init__.py`** ``__path__`` shim.
 
 **`lmcos/` cleanup (same day, branch `jordan`):**
@@ -3469,3 +3469,17 @@ Commands (replot only, no retrain) — **retired with proxy scripts**:
 - Deleted alternate Slurm paths (compute-advantage, encoder KL audit, prefix derive, rewrite_compact, filter_packed, planning-cost / entropy sweeps) and all **`configs/analysis/`** YAMLs.
 - Removed **`HANDOFF.md`** — pipeline order now in **`slurm/README.md`**; experiment history stays in this notebook.
 - Kept ysagiv main-chain **`slurm/`** wrappers and core **`src/`** package unchanged (Slurm ``PYTHONPATH=${PROJECT_DIR}``).
+
+**Later same day — slurm/config layout:**
+
+- Removed **`demos/`** (stale tutorial notebooks and helpers).
+- Reorganized **`slurm/`** into stage folders: `1_preprocess_data/`, `2_pretrain_encoder/`, `3_preprocess_root/`, `4_supervised_controller/`; logs under **`slurm/logs/`**.
+- Removed ysagiv stub **`configs/**/*.yaml`**; empty stage dirs mirror slurm layout (add hl4291 run configs as needed). See **`configs/README.md`**.
+- Removed **`scripts/`** — the only remaining orchestrator (`submit_generate_dataset_shards.py`) lives in **`slurm/1_preprocess_data/`** next to its wrapper shell script.
+- Renamed **`chess_analysis/analysis/` → `chess_analysis/human_analytics/`** to avoid clashing with `lmcos/analysis/` (CTS post-hoc diagnostics).
+
+**Later same day — package layout finalization:**
+
+- Moved **`lmcos/src/analysis/` → `lmcos/analysis/`** (still imported as `cts.analysis`; pipeline code stays in `src/`).
+- Moved **`lmcos/configs/` → `lmcos/slurm/configs/`** so cluster YAMLs sit next to Slurm scripts.
+- Removed root **`cts/`** import shim and **`cts.egg-info/`**; `import cts` now resolves via `pyproject.toml` `package-dir` (`src/` + `analysis/`) and `pip install -e .`.

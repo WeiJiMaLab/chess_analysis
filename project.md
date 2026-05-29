@@ -114,10 +114,10 @@ A **DP oracle** labels actions from the **global** peak of $R(k)$: **CONTINUE** 
 | Bidirectional sweep | `GNN.py` |
 | Halt/Continue RL | `cts_rl.py` |
 
-Tutorials under `lmcos/demos/` mirror this curriculum; see **`lmcos/demos/understanding.md`** for glossary (Oracle, thinking cost $C$, TreeBatch, slot encoding) and diagram vocabulary (Indigo vs. Emerald, hollow vs. filled boxes).
-# Coding style in `analysis/` (chess_analysis)
+See **`lmcos/LAB_NOTEBOOK.md`** and **`lmcos/slurm/README.md`** for the CTS pipeline curriculum and stage layout.
+# Coding style in `human_analytics/` (chess_analysis)
 
-This note describes how Python (and notebook) code in `analysis/` is written. It is descriptive, not a strict linter profile.
+This note describes how Python (and notebook) code in `human_analytics/` is written. It is descriptive, not a strict linter profile.
 
 ## Design priorities
 
@@ -142,7 +142,7 @@ All visualizations aimed at analysis and presentation must follow the **Poster D
 
 ## Role of the code
 
-`analysis/` mixes **small runnable scripts**, **importable analysis utilities**, and **Jupyter notebooks**. Domain logic and operational safety stay visible rather than hidden behind abstractions.
+`human_analytics/` mixes **small runnable scripts**, **importable analysis utilities**, and **Jupyter notebooks**. Domain logic and operational safety stay visible rather than hidden behind abstractions.
 
 ## Language and typing
 

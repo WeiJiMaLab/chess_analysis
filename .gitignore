@@ -47,7 +47,7 @@ engines/
 weights/
 
 # Slurm
-analysis/slurm/logs/
+human_analytics/slurm/logs/
 *.out
 *.err
 slurm-*.out
