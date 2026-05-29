@@ -29,30 +29,55 @@ Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-v
 | `lmcos/` | This repo — **`src/`** (pipeline `cts` subpackages), **`analysis/`** (`cts.analysis`), **`slurm/`** (scripts + configs) |
 | `chess_analysis/human_analytics/` | Human move-time analytics (DuckDB ETL, figures, Slidev deck, `metacontrol/`) — **not** `lmcos/src/` |
 
-**Onboarding:** Pipeline commands: [`slurm/README.md`](slurm/README.md). Run YAMLs: [`slurm/configs/README.md`](slurm/configs/README.md). Workspace overview: [`../README.md`](../README.md).
+**Onboarding:** Workspace overview: [`../README.md`](../README.md). Pipeline commands: [`slurm/README.md`](slurm/README.md). Run YAMLs: [`slurm/configs/README.md`](slurm/configs/README.md).
 
-### 2026-05-29 — Fitted-Q controller ablation runs (hl4291, ysagiv caches)
+### 2026-05-29 — Repo layout refactor + stage-4 controller ablation harness (hl4291)
 
-Intent:
-- Compare stage **4** (`cts.train.controller_train`) encoder/input variants on ysagiv read-only materialized caches with step-based metrics and validation (not epoch-only).
+**Why today:** After the `jordan`-branch layout shuffle we needed (a) a clear separation between pipeline code, Slurm wrappers, and run artifacts, and (b) a repeatable way to compare encoder/input variants on ysagiv read-only materialized caches without ad-hoc smoke scripts or hand-edited job lists.
 
-Three ablation configs under `slurm/configs/4_supervised_controller/`:
+#### A. Layout refactor (morning)
 
-| Config | Display name | Encoder | `controller_inputs` |
-|--------|--------------|---------|---------------------|
+| Change | What | Why |
+|--------|------|-----|
+| Package layout | `lmcos/src/` → `cts.*`; diagnostics in `lmcos/analysis/` (`cts.analysis`) | Pipeline modules vs one-off analysis were conflated under old paths; imports should mirror stage ownership. |
+| Slurm mirrors stages | `slurm/{1_preprocess_data,2_pretrain_encoder,3_preprocess_root,4_supervised_controller}/` + matching `slurm/configs/<stage>/` | One folder per pipeline stage; CONFIG YAML path is the single source of truth for a run. |
+| Removed | `REPO_STRUCTURE.md`, `HANDOFF.md`, retired proxy plot/watch scripts under `analysis/` | Onboarding belongs in README + slurm README; metrics plotting moved into `controller_train`. |
+| Docs | Collapsed root `project.md` into `chess_analysis/README.md` | Single workspace overview for CMC intent, formalism, and code map. |
+
+#### B. Controller training harness (afternoon)
+
+**Scientific intent:** Compare three fitted-Q controller variants on the **full** ysagiv train/validation materialized caches (not truncated smoke plumbing):
+
+| Config file | Display name (`metrics_run_name`) | Encoder checkpoint | `controller_inputs` |
+|-------------|-----------------------------------|--------------------|------------------------|
 | `legacy_root_budget.yaml` | `legacy[root+budget]` | `tree_encoder_child_wdl_async_k1_rerun.pt` | `[z_t, T_t]` |
 | `subtree_weighting_root_budget.yaml` | `subtree-weighting[root+budget]` | `tree_encoder_child_wdl_async_k1_subtree_weighted.pt` | `[z_t, T_t]` |
-| `subtree_weighting_root.yaml` | `subtree-weighting[root]` | same | `[z_t]` |
+| `subtree_weighting_root.yaml` | `subtree-weighting[root]` | same subtree-weighted encoder | `[z_t]` |
 
-Each config sets `metrics_run_name` to the display name (plot title / comparison legend).
+**Training knobs (all three):** `epochs: 3`, `batch_size: 18000`, full pass over train cache each epoch (no `train_batches` cap), `validation_step_interval: 100`, `greedy_eval_step_interval: 100` → full validation MSE + full greedy regret (~30k val episodes) every 100 gradient steps; epoch-end eval disabled when step intervals are set.
 
-Shared training knobs (full train pass each epoch; full ysagiv validation cache + greedy eval):
-- `batch_size = 18000`, `epochs = 3`
-- `metrics_log_interval = 20`, `log_interval = 10`
-- `validation_step_interval = 100`, `greedy_eval_step_interval = 100` (full validation + greedy regret every 100 gradient steps; epoch eval disabled)
-- `ControllerTrainMetricsLogger` in `cts.train.controller_train` writes human-readable metrics to `slurm/outputs/4_supervised_controller/<run>.yaml` and refreshes `<run>.png` in the same flat stage dir every `plot_refresh_step_interval` steps (defaults to `validation_step_interval`)
+**Code changes in `cts.train.controller_train`:**
 
-Parallel submit (one GPU job per YAML in `slurm/configs/4_supervised_controller/`, plus comparison plot with `afterok`, `VENV_DIR=/home/hl4291/venv`):
+| Change | Why |
+|--------|-----|
+| `ControllerTrainMetricsLogger` (replaces separate JSONL writer + external plot scripts) | One object writes human-readable `metrics.yaml`, refreshes curve PNG on eval steps, supports CLI replot (`plot-metrics`, `plot-metrics-compare`). |
+| Metrics format: YAML (`run_start` + `batches` list) | Easier to diff and hand-inspect than JSONL; comparison overlay reads the same file. |
+| `validation_step_interval` / `greedy_eval_step_interval` | Epoch-only eval hid learning dynamics; step-based eval matches how we actually monitor long runs. |
+| `metrics_run_name` | Plot titles and comparison legends use human labels like `legacy[root+budget]` instead of checkpoint stems. |
+| Optional `train_batches` (unset = full epoch) | Keeps a cap knob for future short runs without mislabeling full-epoch ablations as "smoke." |
+| Default curve path: `<run>.png` beside `<run>.yaml` in the same flat stage output dir | Artifacts for one run stay co-located. |
+
+**Slurm / ops:**
+
+| Piece | Path / behavior | Why |
+|-------|-----------------|-----|
+| Submit all stage-4 YAMLs | `./slurm/4_supervised_controller/submit_configs.sh` globs `slurm/configs/4_supervised_controller/*.yaml` | Adding a variant = drop a YAML; no script edit. |
+| Comparison plot | Slurm job with `--dependency=afterok:` on all train jobs | Aggregate val-loss + regret overlay appears automatically when runs finish. |
+| Slurm stdout/stderr | Flat `slurm/logs/%x_%j.out` (gitignored) | True logs only; no nested run folders. |
+| Run artifacts | Flat `slurm/outputs/4_supervised_controller/` — `<run>.yaml`, `<run>.png`, `comparison.png` (tracked in git) | Mirrors stage layout under `slurm/outputs/<stage>/`; metrics and curves stay visible in the repo without mixing with Slurm noise. |
+| Python env on hl4291 della | `VENV_DIR=/home/hl4291/venv` (no `CTS` / `cts_supervised` conda) | Only venv has working torch+CUDA for hl4291; documented in slurm README. |
+
+**Submit:**
 
 ```bash
 cd /home/hl4291/chess_analysis/lmcos
@@ -61,21 +86,14 @@ export VENV_DIR=/home/hl4291/venv
 # → slurm/outputs/4_supervised_controller/comparison.png
 ```
 
-Post-hoc replot:
+**Replot one run:**
 
 ```bash
 python3 -m cts.train.controller_train plot-metrics \
   slurm/outputs/4_supervised_controller/subtree_weighting_root_budget.yaml
 ```
 
-Code changes:
-- Replaced `max_train_batches_per_epoch` with `train_batches` (optional cap on gradient steps per epoch; unset = full pass).
-- Added `validation_step_interval` and `greedy_eval_step_interval` — full validation and greedy eval during the train loop when `n_batches % interval == 0`; disables epoch-end eval when step intervals are set.
-- Unified `ControllerTrainMetricsLogger` — single object for YAML metrics logging and plot refresh; standalone replot via `python3 -m cts.train.controller_train plot-metrics …`.
-- Added `metrics_run_name` for human-readable plot titles / comparison legends.
-- Metrics format changed from JSONL to YAML (`run_start` + `batches` list).
-- Removed separate `TrainingMetricsWriter` and `cts.analysis.plot_controller_train_metrics` / `watch_controller_train_metrics`.
-- Slurm ablation jobs use `VENV_DIR=/home/hl4291/venv` (no `CTS` / `cts_supervised` conda env on hl4291 della).
+**Rename arc (for git history):** early "smoke" configs (`smoke_*`) → ablation display names → generic `submit_configs.sh`; dropped misleading `train_batches: 1000` once we recognized the run was already a full epoch on this cache (~996 steps).
 
 ### Pipeline stages
 

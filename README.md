@@ -1,6 +1,8 @@
-# Workspace overview: chess behavior, value of computation, and learned search control
+# Chess Meta-control (CMC): workspace overview
 
-This home directory is the working root for a research thread that combines **large-scale human chess analytics** in `chess_analysis/` with a neural **meta-controller** codebase **`chess_analysis/lmcos/`** (learned metacontrol over search). The long-form experimental record is `chess_analysis/lmcos/LAB_NOTEBOOK.md`. This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
+This repository is the working root for **Chess Meta-control (CMC)**—research that combines **large-scale human chess analytics** in `human_analytics/` with a neural **meta-controller** in **`lmcos/`** (learned metacontrol over search). The long-form experimental record is `lmcos/LAB_NOTEBOOK.md`. This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
+
+**Objective (control layer).** Build a **meta-controller** that manages the trade-off between **thinking** (expanding a Leela/lc0 search tree) and **acting** (playing a move). At the control layer this is an **optimal stopping** problem: is the move-quality we might discover worth the compute we are about to spend? The `lmcos` stack implements this as **representation learning first** (GNN over search trees), then **offline fitted-Q / advantage regression** on teacher traces—not yet full self-play PPO at production scale.
 
 **Primary code locations**
 
@@ -109,11 +111,14 @@ The Bellman backup matches the same halt-vs-continue pattern with **state-depend
 
 ## 4. Tree representation and pretraining (TreeNN / GNN)
 
-### 4.1 Encoding
+### 4.1 Encoding and two-phase message passing
 
-Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-forest** layout with parent/child pointers, packed into **fat shards** for I/O efficiency. A **TreeNN**-style model (`GNN.py`, `TreeMHA.py`) runs **rounds** of message passing: **upward** (children → parent, attention + **GRU** updates) and **downward** (parent → children), in **topological** order, so evidence aggregates to the **root** representation used for readouts and control.
+Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-forest** layout with parent/child pointers, packed into **fat shards** for I/O efficiency. A **TreeNN**-style model (`GNN.py`, `TreeMHA.py`) runs **rounds** of message passing in **topological** order (not one synchronous blur of all neighbors):
 
-**Slot encodings** (sinusoidal / learned) disambiguate **child order** (canonical ordering by UCI) for **per-edge** prediction heads—relevant to **child-WDL** pretraining (predict consolidated **win/draw/loss** targets per edge).
+1. **Upward sweep (child → parent):** children aggregate via **multi-head attention**; each parent updates with a **GRU** (“what did my children discover?”).
+2. **Downward sweep (parent → child):** the parent summary is **linearly projected** and broadcast; each child updates with the **same GRU** (“given global context, how should my local move-vector change?”).
+
+**Slot encodings** (sinusoidal / learned) disambiguate **child order** (canonical UCI ordering) for **per-edge** prediction heads—central to **child-WDL** pretraining, where **every parent→child edge** in a batch contributes a cross-entropy signal (not just the root), giving dense gradients for subtree structure.
 
 ### 4.2 Oracle data construction (pretrain)
 
@@ -123,7 +128,7 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `chess_analysis/lmcos/slurm/` (`slurm/configs/<stage>/`). Stage **4** ablation configs (`legacy_root_budget.yaml`, `subtree_weighting_root_budget.yaml`, `subtree_weighting_root.yaml`; display names `legacy[root+budget]`, etc.) train 3 epochs on ysagiv materialized caches with validation every 100 steps; see `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
 
 ### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
 
@@ -238,12 +243,45 @@ The project sits at the intersection of several named research areas. Useful **q
 
 ## 8. How to work in this workspace
 
-- **Environment:** Prefer a dedicated venv/conda (see `chess_analysis/README.md`; cluster jobs may use `trm` / `cts_supervised`-style envs as in the lab).
-- **Tests:** `chess_analysis/lmcos/test_*.py` cover plumbing, oracles, fitted-Q, probes; run with `python -m pytest` from a configured environment.
+- **Environment:** hl4291 della uses `/home/hl4291/venv` for stage-4 jobs (`VENV_DIR`); ysagiv jobs may use `cts_supervised` conda. Activate locally with `source .venv/bin/activate` from repo root when available.
+- **Tests:** `lmcos/tests/` cover plumbing, oracles, fitted-Q, probes; run `pytest tests/` from `lmcos/` with `PYTHONPATH` set.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis/human_analytics/README.md`** (pipeline CLIs under **`human_analytics/slurm/scripts/`**); for meta-controller code see **`lmcos/`** (`src/`, **`analysis/`**, stage-organized **`slurm/`**, **`slurm/configs/`**).
+For day-to-day commands: **`human_analytics/README.md`** (DuckDB ETL, figures); **`lmcos/slurm/README.md`** (pipeline Slurm); **`lmcos/LAB_NOTEBOOK.md`** (experiments).
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `lmcos/slurm/` controller ablation configs, and `human_analytics/` layout (2026-05-29).*
+## 9. Division of responsibilities
+
+| Area | Lead | Scope |
+| :--- | :--- | :--- |
+| **Infrastructure & integration** | Yotam | lc0/tree export, GNN core (bidirectional sweeps, slot encodings, batching), RL training paths |
+| **Validation & psychology** | Jordan | Baselines, human alignment (move time, clock regimes), controller ablations, diagnostics |
+
+---
+
+## 10. Development roadmap (high level)
+
+1. **Data path** — Leela/lc0 trees → tensorization → GNN forward pass (stages 1–3 under `lmcos/slurm/`).
+2. **Supervised encoder** — prefix vs oracle WDL; frozen `tree_encoder` checkpoint.
+3. **Offline meta-control** — fitted advantage / budgeted oracle on materialized caches; greedy regret eval.
+4. **Psychometric validation** — compare learned stopping to human Lichess move-time and engine VOC.
+
+Current production focus is **stage 3–4** on ysagiv read-only caches (hl4291 della, `VENV_DIR=/home/hl4291/venv`).
+
+---
+
+## 11. Code map (`lmcos`)
+
+| Concept | Module / path |
+| :--- | :--- |
+| Tree generation & encoder pretrain CLI | `cts.data.build_tree` |
+| Controller episode pack / materialize | `cts.data.preprocess_mc` |
+| Fitted-Q controller train + metrics plots | `cts.train.controller_train` |
+| Slurm stage wrappers + run YAMLs | `lmcos/slurm/`, `lmcos/slurm/configs/` |
+| Post-hoc budgeted-run analysis | `cts.analysis.analyze_budgeted_controller_run` |
+| Human analytics pipeline & figures | `human_analytics/` (see `human_analytics/README.md`) |
+
+---
+
+*Last updated 2026-05-29: collapsed `project.md` into this file; see `lmcos/LAB_NOTEBOOK.md` for today's controller harness changes.*

@@ -193,5 +193,5 @@ Tree tensorization and encoding live under **`lmcos/src/`** (`cts.core`, `cts.mo
 
 ## 9. Related docs
 
-- **`chess_human_analytics/README.md`** — workspace-wide context (behavior + **`lmcos`** meta-controller thread).
+- **`../README.md`** — workspace-wide CMC overview (behavior + `lmcos` meta-controller).
 - **`lmcos/LAB_NOTEBOOK.md`** — dated experiments for the neural search-control line.
