@@ -88,7 +88,7 @@ class ControllerTrainConfig(BaseModel):
     output_diagnostics: Optional[str] = None
     metrics_path: Optional[str] = None
     metrics_run_name: Optional[str] = None  # plot title / comparison legend; default: output_checkpoint stem
-    metrics_plot_path: Optional[str] = None  # default: training_curves.png beside metrics_path
+    metrics_plot_path: Optional[str] = None  # default: <run>.png beside metrics YAML in the same stage dir
     plot_refresh_step_interval: Optional[int] = None  # default: validation_step_interval
     metrics_log_interval: int = 10
     train_batches: Optional[int] = None  # gradient steps per epoch; unset = full pass over train data
@@ -334,6 +334,14 @@ def _metric_series(
     return xs, ys
 
 
+def _default_metrics_plot_path(metrics_path: Path) -> Path:
+    """Same stage dir: ``<run>.yaml`` → ``<run>.png``."""
+    metrics_path = Path(metrics_path)
+    if metrics_path.suffix in {".yaml", ".yml"}:
+        return metrics_path.with_suffix(".png")
+    return metrics_path.with_name("training_curves.png")
+
+
 @dataclass
 class ControllerTrainMetricsLogger:
     """Single sink for controller training metrics: YAML log + curve plot refresh."""
@@ -459,14 +467,16 @@ class ControllerTrainMetricsLogger:
         if not config.metrics_path:
             return None
         metrics_path = Path(config.metrics_path)
-        plot_path = Path(config.metrics_plot_path or metrics_path.with_name("training_curves.png"))
+        plot_path = Path(config.metrics_plot_path or _default_metrics_plot_path(metrics_path))
         plot_interval = config.plot_refresh_step_interval
         if plot_interval is None:
             plot_interval = config.validation_step_interval
         run_name = (
             config.metrics_run_name
-            or (Path(config.output_checkpoint).stem if config.output_checkpoint else metrics_path.parent.name)
+            or (Path(config.output_checkpoint).stem if config.output_checkpoint else metrics_path.stem)
         )
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
         return cls(
             metrics_path=metrics_path,
             plot_path=plot_path,
@@ -485,7 +495,7 @@ class ControllerTrainMetricsLogger:
         title: str | None = None,
     ) -> ControllerTrainMetricsLogger:
         metrics_path = Path(metrics_path)
-        plot_path = Path(output_path) if output_path is not None else metrics_path.with_name("training_curves.png")
+        plot_path = Path(output_path) if output_path is not None else _default_metrics_plot_path(metrics_path)
         return cls(metrics_path=metrics_path, plot_path=plot_path, title=title)
 
     def refresh_plot(self, *, force: bool = False) -> bool:
@@ -2587,7 +2597,7 @@ if __name__ == "__main__":
         plot_parser.add_argument(
             "-o",
             "--output",
-            help="Output PNG path (default: training_curves.png next to metrics file)",
+            help="Output PNG path (default: <run>.png beside metrics YAML)",
         )
         plot_parser.add_argument("--title", help="Optional plot title")
         plot_args = plot_parser.parse_args()

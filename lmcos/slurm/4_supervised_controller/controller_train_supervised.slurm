@@ -15,7 +15,7 @@ PROJECT_DIR="${PROJECT_DIR:-/home/hl4291/chess_analysis/lmcos}"
 VENV_DIR="${VENV_DIR:-/home/hl4291/venv}"
 CONDA_ENV="${CONDA_ENV:-}"
 
-mkdir -p "${PROJECT_DIR}/slurm/logs"
+mkdir -p "${PROJECT_DIR}/slurm/logs" "${PROJECT_DIR}/slurm/outputs/4_supervised_controller"
 
 set +u
 module --force purge >/dev/null 2>&1 || true

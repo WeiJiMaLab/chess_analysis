@@ -2,7 +2,9 @@
 
 Cluster wrappers for the CTS pipeline on della. Each script takes a `CONFIG` env var pointing at a YAML under `slurm/configs/<stage>/`.
 
-**Logs:** `slurm/logs/` (gitignored except `.gitkeep`).
+**Logs:** `slurm/logs/` — flat Slurm stdout/stderr (gitignored).
+
+**Outputs:** `slurm/outputs/<stage>/` — flat per-stage artifacts (tracked in git). Stage 4 example: `<run>.yaml`, `<run>.png`, `comparison.png` under `slurm/outputs/4_supervised_controller/`.
 
 ## Stage folders
 
@@ -20,7 +22,7 @@ Tree generation example:
 
 ```bash
 cd /home/hl4291/chess_analysis/lmcos
-mkdir -p slurm/logs
+mkdir -p slurm/logs slurm/outputs/4_supervised_controller
 export CONFIG="$PWD/slurm/configs/1_preprocess_data/build_tree.yaml"
 ./slurm/1_preprocess_data/submit_generate_dataset.sh --config "$CONFIG" --submit
 ```
@@ -45,9 +47,9 @@ Materialize uses parallel workers via `WORKER_INDEX` env override (see script co
 | Script | Module |
 |--------|--------|
 | `controller_train_supervised.slurm` | `cts.train.controller_train` |
-| `submit_smoke_controller_parallel.sh` | Submit three smoke configs in parallel |
+| `submit_configs.sh` | Submit all configs in `slurm/configs/4_supervised_controller/` in parallel |
 
-#### Smoke configs (hl4291, ysagiv read-only caches)
+#### Ablation configs (hl4291, ysagiv read-only caches)
 
 | YAML | Display name | Encoder | Controller inputs |
 |------|--------------|---------|-------------------|
@@ -55,15 +57,15 @@ Materialize uses parallel workers via `WORKER_INDEX` env override (see script co
 | `subtree_weighting_root_budget.yaml` | `subtree-weighting[root+budget]` | subtree-weighted async k=1 | `[z_t, T_t]` |
 | `subtree_weighting_root.yaml` | `subtree-weighting[root]` | subtree-weighted async k=1 | `[z_t]` |
 
-All three use `train_batches: 1000`, `batch_size: 18000`, `metrics_log_interval: 20`, `validation_step_interval: 100`, and `greedy_eval_step_interval: 100`. `ControllerTrainMetricsLogger` writes `metrics.yaml` and refreshes `training_curves.png` every 100 steps.
+All three use `epochs: 3`, `batch_size: 18000`, `metrics_log_interval: 20`, `validation_step_interval: 100`, and `greedy_eval_step_interval: 100`. `ControllerTrainMetricsLogger` writes `slurm/outputs/4_supervised_controller/<run>.yaml` and refreshes `<run>.png` every 100 steps.
 
-Submit all three in parallel (comparison plot auto-submits with `afterok` when training finishes):
+Submit all configs in parallel (comparison plot auto-submits with `afterok` when training finishes):
 
 ```bash
 cd /home/hl4291/chess_analysis/lmcos
 export VENV_DIR=/home/hl4291/venv
-./slurm/4_supervised_controller/submit_smoke_controller_parallel.sh
-# → slurm/logs/4_supervised_controller/smoke_comparison.png
+./slurm/4_supervised_controller/submit_configs.sh
+# → slurm/outputs/4_supervised_controller/comparison.png
 ```
 
 Slurm stdout/stderr land in `slurm/logs/` (job-level `%x_%j.out`).

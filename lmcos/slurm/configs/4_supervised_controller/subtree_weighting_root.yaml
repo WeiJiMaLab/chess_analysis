@@ -1,4 +1,4 @@
-# Smoke: subtree-weighted encoder, controller inputs [z_t] only.
+# Ablation: subtree-weighted encoder, controller inputs [z_t] only.
 # Display name: subtree-weighting[root]
 
 packed_train_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
@@ -8,7 +8,8 @@ materialized_train_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/train_ca
 materialized_validation_cache: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/validation_cache_subtree_weighted.pt
 output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/checkpoints/fittedq_subtree_weighting_root.pt
 output_diagnostics: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/checkpoints/fittedq_subtree_weighting_root_diagnostics.jsonl
-metrics_path: /home/hl4291/chess_analysis/lmcos/slurm/logs/4_supervised_controller/subtree_weighting_root/metrics.yaml
+metrics_path: slurm/outputs/4_supervised_controller/subtree_weighting_root.yaml
+metrics_plot_path: slurm/outputs/4_supervised_controller/subtree_weighting_root.png
 metrics_run_name: subtree-weighting[root]
 
 device: cuda
@@ -25,8 +26,7 @@ unfreeze_encoder: false
 
 batch_size: 18000
 episode_batch_size: 4
-epochs: 1
-train_batches: 1000
+epochs: 3
 learning_rate: 1.0e-3
 min_lr: 0.0
 weight_decay: 0.0

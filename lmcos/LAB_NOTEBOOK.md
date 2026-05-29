@@ -31,12 +31,12 @@ Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-v
 
 **Onboarding:** Pipeline commands: [`slurm/README.md`](slurm/README.md). Run YAMLs: [`slurm/configs/README.md`](slurm/configs/README.md). Workspace overview: [`../README.md`](../README.md).
 
-### 2026-05-29 — Fitted-Q controller smoke runs (hl4291, ysagiv caches)
+### 2026-05-29 — Fitted-Q controller ablation runs (hl4291, ysagiv caches)
 
 Intent:
-- End-to-end check of stage **4** (`cts.train.controller_train`) on ysagiv read-only materialized caches after the layout refactor, with step-based metrics and validation (not epoch-only).
+- Compare stage **4** (`cts.train.controller_train`) encoder/input variants on ysagiv read-only materialized caches with step-based metrics and validation (not epoch-only).
 
-Three smoke configs under `slurm/configs/4_supervised_controller/`:
+Three ablation configs under `slurm/configs/4_supervised_controller/`:
 
 | Config | Display name | Encoder | `controller_inputs` |
 |--------|--------------|---------|---------------------|
@@ -46,36 +46,36 @@ Three smoke configs under `slurm/configs/4_supervised_controller/`:
 
 Each config sets `metrics_run_name` to the display name (plot title / comparison legend).
 
-Shared training knobs (only **train steps** truncated; full ysagiv validation cache + greedy eval):
-- `batch_size = 18000`, `epochs = 1`, `train_batches = 1000`
+Shared training knobs (full train pass each epoch; full ysagiv validation cache + greedy eval):
+- `batch_size = 18000`, `epochs = 3`
 - `metrics_log_interval = 20`, `log_interval = 10`
 - `validation_step_interval = 100`, `greedy_eval_step_interval = 100` (full validation + greedy regret every 100 gradient steps; epoch eval disabled)
-- `ControllerTrainMetricsLogger` in `cts.train.controller_train` writes human-readable `metrics.yaml` and refreshes `training_curves.png` every `plot_refresh_step_interval` steps (defaults to `validation_step_interval`)
+- `ControllerTrainMetricsLogger` in `cts.train.controller_train` writes human-readable metrics to `slurm/outputs/4_supervised_controller/<run>.yaml` and refreshes `<run>.png` in the same flat stage dir every `plot_refresh_step_interval` steps (defaults to `validation_step_interval`)
 
-Parallel submit (three GPU jobs + comparison plot with `afterok`, `VENV_DIR=/home/hl4291/venv`):
+Parallel submit (one GPU job per YAML in `slurm/configs/4_supervised_controller/`, plus comparison plot with `afterok`, `VENV_DIR=/home/hl4291/venv`):
 
 ```bash
 cd /home/hl4291/chess_analysis/lmcos
 export VENV_DIR=/home/hl4291/venv
-./slurm/4_supervised_controller/submit_smoke_controller_parallel.sh
-# → slurm/logs/4_supervised_controller/smoke_comparison.png
+./slurm/4_supervised_controller/submit_configs.sh
+# → slurm/outputs/4_supervised_controller/comparison.png
 ```
 
-Metrics YAML → `slurm/logs/4_supervised_controller/<run>/metrics.yaml`; plot is written beside it during training. Post-hoc replot:
+Post-hoc replot:
 
 ```bash
 python3 -m cts.train.controller_train plot-metrics \
-  slurm/logs/4_supervised_controller/subtree_weighting_root_budget/metrics.yaml
+  slurm/outputs/4_supervised_controller/subtree_weighting_root_budget.yaml
 ```
 
 Code changes:
-- Replaced `max_train_batches_per_epoch` with `train_batches` (cap gradient steps per epoch).
+- Replaced `max_train_batches_per_epoch` with `train_batches` (optional cap on gradient steps per epoch; unset = full pass).
 - Added `validation_step_interval` and `greedy_eval_step_interval` — full validation and greedy eval during the train loop when `n_batches % interval == 0`; disables epoch-end eval when step intervals are set.
 - Unified `ControllerTrainMetricsLogger` — single object for YAML metrics logging and plot refresh; standalone replot via `python3 -m cts.train.controller_train plot-metrics …`.
 - Added `metrics_run_name` for human-readable plot titles / comparison legends.
 - Metrics format changed from JSONL to YAML (`run_start` + `batches` list).
 - Removed separate `TrainingMetricsWriter` and `cts.analysis.plot_controller_train_metrics` / `watch_controller_train_metrics`.
-- Slurm smoke jobs use `VENV_DIR=/home/hl4291/venv` (no `CTS` / `cts_supervised` conda env on hl4291 della).
+- Slurm ablation jobs use `VENV_DIR=/home/hl4291/venv` (no `CTS` / `cts_supervised` conda env on hl4291 della).
 
 ### Pipeline stages
 

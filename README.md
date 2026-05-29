@@ -123,7 +123,7 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `chess_analysis/lmcos/slurm/` (`slurm/configs/<stage>/`). Stage **4** smoke configs (`legacy_root_budget.yaml`, `subtree_weighting_root_budget.yaml`, `subtree_weighting_root.yaml`; display names `legacy[root+budget]`, etc.) train 1000 steps on ysagiv materialized caches with validation every 100 steps; see `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `chess_analysis/lmcos/slurm/` (`slurm/configs/<stage>/`). Stage **4** ablation configs (`legacy_root_budget.yaml`, `subtree_weighting_root_budget.yaml`, `subtree_weighting_root.yaml`; display names `legacy[root+budget]`, etc.) train 3 epochs on ysagiv materialized caches with validation every 100 steps; see `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
 
 ### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
 
@@ -246,4 +246,4 @@ For day-to-day commands and paths inside `chess_analysis`, use **`chess_analysis
 
 ---
 
-*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `lmcos/slurm/` smoke controller configs, and `human_analytics/` layout (2026-05-29).*
+*Last updated to reflect `lmcos/LAB_NOTEBOOK.md`, `lmcos/slurm/` controller ablation configs, and `human_analytics/` layout (2026-05-29).*

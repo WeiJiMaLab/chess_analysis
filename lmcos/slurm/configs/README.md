@@ -11,7 +11,7 @@ YAML configs for `python3 -m cts.<module> --config …`. Each file is a Pydantic
 | `3_preprocess_root/` | Pack controller episodes, materialize/merge embedding caches | `cts.data.preprocess_mc.pack`, `cts.data.preprocess_mc.materialize` |
 | `4_supervised_controller/` | Fitted-Q controller training | `cts.train.controller_train` |
 
-### Stage 4 smoke configs
+### Stage 4 ablation configs
 
 | File | Display name | Purpose |
 |------|--------------|---------|
@@ -19,7 +19,7 @@ YAML configs for `python3 -m cts.<module> --config …`. Each file is a Pydantic
 | `subtree_weighting_root_budget.yaml` | `subtree-weighting[root+budget]` | Subtree-weighted encoder, inputs `[z_t, T_t]` |
 | `subtree_weighting_root.yaml` | `subtree-weighting[root]` | Subtree-weighted encoder, inputs `[z_t]` only |
 
-Common keys: `train_batches`, `validation_step_interval`, `greedy_eval_step_interval`, `metrics_log_interval`, `metrics_path` (`.yaml`), `metrics_run_name` (plot title / comparison legend). `ControllerTrainMetricsLogger` writes metrics and refreshes `training_curves.png` on eval steps; replot with `python3 -m cts.train.controller_train plot-metrics …`.
+Common keys: `epochs`, `validation_step_interval`, `greedy_eval_step_interval`, `metrics_log_interval`, `metrics_path` (`slurm/outputs/4_supervised_controller/<run>.yaml`), `metrics_plot_path` (`slurm/outputs/4_supervised_controller/<run>.png`), `metrics_run_name`. `ControllerTrainMetricsLogger` writes metrics and refreshes curves on eval steps; replot with `python3 -m cts.train.controller_train plot-metrics …`.
 
 Example:
 
