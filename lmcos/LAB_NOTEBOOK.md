@@ -12,7 +12,7 @@ Later, the same tree representation is meant to support a full planning head who
 
 ### Repo structure
 
-The codebase lives under `src/cts/` with five subpackages:
+The **`cts`** Python package maps **`src/`** to `cts.core`, `cts.data`, `cts.models`, and `cts.train`; post-hoc diagnostics live in top-level **`analysis/`** (imported as `cts.analysis`). Use `pip install -e .` or `PYTHONPATH=${PROJECT_DIR}` so `import cts` and `python3 -m cts.*` resolve via `pyproject.toml` `package-dir`.
 
 - `cts.core` — shared substrate (`SearchTree`, tensorizer, feature schema, lc0 providers).
 - `cts.data` — data generation and preprocessing. FEN sampling (`cts.data.sample_fens`), FEN filtering (`cts.data.validate_fens`), tree generation (`cts.data.build_tree`), the encoder-pretrain target chain (`cts.data.preprocess_gnn.split` and `.pack`), and the controller-target chain (`cts.data.preprocess_mc.pack` and `.materialize`).
@@ -20,7 +20,80 @@ The codebase lives under `src/cts/` with five subpackages:
 - `cts.train` — training loops (`cts.train.gnn_pretrain` for encoder pretraining, `cts.train.controller_train` for fitted-Q controller training).
 - `cts.analysis` — diagnostics, plotting, and evaluation tools (the main analyzer `cts.analysis.analyze_budgeted_controller_run` is split across themed sub-modules under `cts.analysis._budgeted/`).
 
-Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-validated YAML config. SLURM scripts in `slurm/` collapse to `python3 -m cts.X.Y --config "${CONFIG}"`. Sibling YAMLs in `configs/` parameterize each entry point (one base config per stage, plus variants per experiment — the diff between two experiments is the diff between their YAMLs). Tests live under `tests/` (`pytest tests/`). Tree generation is the only stage with an orchestrator (`scripts/submit_generate_dataset_shards.py`) because lc0 is slow and shard parallelism is essential.
+Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-validated YAML config. SLURM scripts live under `slurm/<stage>/` and take ``CONFIG`` pointing at matching YAMLs under `slurm/configs/<stage>/`. Tests live under `tests/` (`pytest tests/`). Tree generation uses `slurm/1_preprocess_data/submit_generate_dataset_shards.py` as a local orchestrator (slices FENs → many `sbatch` calls).
+
+**Workspace layout (sibling checkout `chess_analysis/`):**
+
+| Path | Role |
+|------|------|
+| `lmcos/` | This repo — **`src/`** (pipeline `cts` subpackages), **`analysis/`** (`cts.analysis`), **`slurm/`** (scripts + configs) |
+| `chess_analysis/human_analytics/` | Human move-time analytics (DuckDB ETL, figures, Slidev deck, `metacontrol/`) — **not** `lmcos/src/` |
+
+**Onboarding:** Workspace overview: [`../README.md`](../README.md). Pipeline commands: [`slurm/README.md`](slurm/README.md). Run YAMLs: [`slurm/configs/README.md`](slurm/configs/README.md).
+
+### 2026-05-29 — Repo layout refactor + stage-4 controller ablation harness (hl4291)
+
+**Why today:** After the `jordan`-branch layout shuffle we needed (a) a clear separation between pipeline code, Slurm wrappers, and run artifacts, and (b) a repeatable way to compare encoder/input variants on ysagiv read-only materialized caches without ad-hoc smoke scripts or hand-edited job lists.
+
+#### A. Layout refactor (morning)
+
+| Change | What | Why |
+|--------|------|-----|
+| Package layout | `lmcos/src/` → `cts.*`; diagnostics in `lmcos/analysis/` (`cts.analysis`) | Pipeline modules vs one-off analysis were conflated under old paths; imports should mirror stage ownership. |
+| Slurm mirrors stages | `slurm/{1_preprocess_data,2_pretrain_encoder,3_preprocess_root,4_supervised_controller}/` + matching `slurm/configs/<stage>/` | One folder per pipeline stage; CONFIG YAML path is the single source of truth for a run. |
+| Removed | `REPO_STRUCTURE.md`, `HANDOFF.md`, retired proxy plot/watch scripts under `analysis/` | Onboarding belongs in README + slurm README; metrics plotting moved into `controller_train`. |
+| Docs | Collapsed root `project.md` into `chess_analysis/README.md` | Single workspace overview for CMC intent, formalism, and code map. |
+
+#### B. Controller training harness (afternoon)
+
+**Scientific intent:** Compare three fitted-Q controller variants on the **full** ysagiv train/validation materialized caches (not truncated smoke plumbing):
+
+| Config file | Display name (`metrics_run_name`) | Encoder checkpoint | `controller_inputs` |
+|-------------|-----------------------------------|--------------------|------------------------|
+| `legacy_root_budget.yaml` | `legacy[root+budget]` | `tree_encoder_child_wdl_async_k1_rerun.pt` | `[z_t, T_t]` |
+| `subtree_weighting_root_budget.yaml` | `subtree-weighting[root+budget]` | `tree_encoder_child_wdl_async_k1_subtree_weighted.pt` | `[z_t, T_t]` |
+| `subtree_weighting_root.yaml` | `subtree-weighting[root]` | same subtree-weighted encoder | `[z_t]` |
+
+**Training knobs (all three):** `epochs: 3`, `batch_size: 18000`, full pass over train cache each epoch (no `train_batches` cap), `validation_step_interval: 100`, `greedy_eval_step_interval: 100` → full validation MSE + full greedy regret (~30k val episodes) every 100 gradient steps; epoch-end eval disabled when step intervals are set.
+
+**Code changes in `cts.train.controller_train`:**
+
+| Change | Why |
+|--------|-----|
+| `ControllerTrainMetricsLogger` (replaces separate JSONL writer + external plot scripts) | One object writes human-readable `metrics.yaml`, refreshes curve PNG on eval steps, supports CLI replot (`plot-metrics`, `plot-metrics-compare`). |
+| Metrics format: YAML (`run_start` + `batches` list) | Easier to diff and hand-inspect than JSONL; comparison overlay reads the same file. |
+| `validation_step_interval` / `greedy_eval_step_interval` | Epoch-only eval hid learning dynamics; step-based eval matches how we actually monitor long runs. |
+| `metrics_run_name` | Plot titles and comparison legends use human labels like `legacy[root+budget]` instead of checkpoint stems. |
+| Optional `train_batches` (unset = full epoch) | Keeps a cap knob for future short runs without mislabeling full-epoch ablations as "smoke." |
+| Default curve path: `<run>.png` beside `<run>.yaml` in the same flat stage output dir | Artifacts for one run stay co-located. |
+
+**Slurm / ops:**
+
+| Piece | Path / behavior | Why |
+|-------|-----------------|-----|
+| Submit all stage-4 YAMLs | `./slurm/4_supervised_controller/submit_configs.sh` globs `slurm/configs/4_supervised_controller/*.yaml` | Adding a variant = drop a YAML; no script edit. |
+| Comparison plot | Slurm job with `--dependency=afterok:` on all train jobs | Aggregate val-loss + regret overlay appears automatically when runs finish. |
+| Slurm stdout/stderr | Flat `slurm/logs/%x_%j.out` (gitignored) | True logs only; no nested run folders. |
+| Run artifacts | Flat `slurm/outputs/4_supervised_controller/` — `<run>.yaml`, `<run>.png`, `comparison.png` (tracked in git) | Mirrors stage layout under `slurm/outputs/<stage>/`; metrics and curves stay visible in the repo without mixing with Slurm noise. |
+| Python env on hl4291 della | `VENV_DIR=/home/hl4291/venv` (no `CTS` / `cts_supervised` conda) | Only venv has working torch+CUDA for hl4291; documented in slurm README. |
+
+**Submit:**
+
+```bash
+cd /home/hl4291/chess_analysis/lmcos
+export VENV_DIR=/home/hl4291/venv
+./slurm/4_supervised_controller/submit_configs.sh
+# → slurm/outputs/4_supervised_controller/comparison.png
+```
+
+**Replot one run:**
+
+```bash
+python3 -m cts.train.controller_train plot-metrics \
+  slurm/outputs/4_supervised_controller/subtree_weighting_root_budget.yaml
+```
+
+**Rename arc (for git history):** early "smoke" configs (`smoke_*`) → ablation display names → generic `submit_configs.sh`; dropped misleading `train_batches: 1000` once we recognized the run was already a full epoch on this cache (~996 steps).
 
 ### Pipeline stages
 
@@ -3395,7 +3468,9 @@ Caveats:
 
 ## 2026-05-28 (hl4291 — Stage 2b proxy analysis on ysagiv caches)
 
-Cheap offline proxy runs to compare the three May-2026 controller recipes without re-submitting full 20-epoch Slurm training. Code lives in the sibling repo checkout `chess_analysis/analysis/` (not under `lmcos/`): train with `2b_train_controller.py`, plot with `2b_plot_loss.py`, regret curves from synced Slurm logs via `plot_controller_regret_curves.py`.
+> **2026-05-29:** The short-lived proxy scripts (`2b_train_controller.py`, `2b_plot_loss.py`, …) lived in a separate `chess_analysis/analysis/` CTS folder that was removed when that directory was repurposed for human move-time analytics (`chess_analysis/src/` → `chess_analysis/analysis/`). **Scratch outputs below are unchanged**; rerun would use `lmcos` entry points or a fresh hl4291 wrapper.
+
+Cheap offline proxy runs to compare the three May-2026 controller recipes without re-submitting full 20-epoch Slurm training. Code at the time lived in `chess_analysis/analysis/` (not under `lmcos/`): train with `2b_train_controller.py`, plot with `2b_plot_loss.py`, regret curves from synced Slurm logs via `plot_controller_regret_curves.py`.
 
 ### Setup
 
@@ -3407,7 +3482,7 @@ Three named variants mirror the subtree-weighted comparison above:
 | `subtree_weight_root` | subtree-weighted | `[z_t]` | 0.076 |
 | `no_subtree_weight_root+budget` | rerun | `[z_t, T_t]` | ~0.22–0.29 |
 
-Each proxy run: **1000 training batches** (~6% of one full epoch over the train materialized cache), **eval every 200 batches** on the **full validation cache** for advantage MSE and on the **first 3000 validation episodes** for policy regret. Checkpoints and per-batch metrics JSON are written under hl4291 scratch.
+Each proxy run: **1000 training batches** (~6% of one full epoch over the train materialized cache), **eval every 50 batches** on the **full validation cache** for advantage MSE and on the **first 3000 validation episodes** for policy regret. Checkpoints and per-batch metrics JSON are written under hl4291 scratch.
 
 **Policy regret metric (proxy eval):** expected regret under **probabilistic stopping**, not the production greedy rule. At step `t`, stop with probability `P(stop) = σ(−A_t / τ)` (`τ = 1` default); any remaining probability mass stops on the final step. Expected return is computed exactly as `Σ_t P(stop at t) × R(t)`; regret = `oracle_value − E[return]`. This is smoother than halting at the first `A ≤ 0` and can rank variants differently from greedy regret when validation MSE and stop-step accuracy diverge (notably `z_t`-only: high irreducible MSE but moderate greedy regret on full Slurm runs).
 
@@ -3415,9 +3490,9 @@ Each proxy run: **1000 training batches** (~6% of one full epoch over the train 
 
 | Variant | Train adv. MSE (final batch) | Val adv. MSE | Expected regret |
 |---|---|---|---|
-| `subtree_weight_root+budget` | 0.012 | **0.013** | **0.247** |
-| `subtree_weight_root` | 0.374 | 0.313 | 0.274 |
-| `no_subtree_weight_root+budget` | 0.031 | 0.030 | 0.326 |
+| `subtree_weight_root+budget` | 0.015 | **0.013** | **0.238** |
+| `subtree_weight_root` | 0.374 | 0.314 | 0.281 |
+| `no_subtree_weight_root+budget` | 0.031 | 0.030 | 0.325 |
 
 Takeaways aligned with the full Slurm grid:
 
@@ -3425,7 +3500,7 @@ Takeaways aligned with the full Slurm grid:
 - **`z_t` only:** train/val MSE stays ~0.31 (structural ceiling without `T_t`), but expected regret (0.274) is still better than the rerun ablation — consistent with subtree-weighted `z_t` carrying halt/continue signal even when scalar targets are not fully predictable.
 - **Loss ≠ regret:** ranking by validation MSE does not match ranking by policy regret; the proxy tooling logs both on the same batch index so curves can be compared directly.
 
-Plots: `chess_analysis/analysis/outputs/2b/` (`overlay_loss.png`, `overlay_regret.png`, `overlay_val_mse.png`, per-variant `*_loss.png` / `*_eval.png`).
+Plots (retired 2026-05-29): ~~`chess_analysis/analysis/outputs/2b/`~~ — proxy scripts removed with directory shuffle.
 
 Inputs:
 - ysagiv materialized caches and configs (read-only), same paths as the 2026-05-21 controller entries.
@@ -3434,12 +3509,41 @@ Inputs:
 Outputs:
 - `/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/2b/{variant}_controller.pt` — proxy checkpoints (1000 batches).
 - `/scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/2b/{variant}_metrics.json` — train loss curves + periodic val MSE / expected regret.
-- `chess_analysis/analysis/outputs/2b/*.png` — figures from `2b_plot_loss.py`.
-- `chess_analysis/analysis/logs/cts-fittedq_852714{6,7}.out`, `cts-fittedq_8533204.out` — copied Slurm logs for full-run greedy regret curves.
+- ~~`chess_analysis/analysis/outputs/2b/*.png`~~ — figures from retired `2b_plot_loss.py` (removed 2026-05-29).
+- ~~`chess_analysis/analysis/logs/cts-fittedq_852714{6,7}.out`~~ — copied Slurm logs for full-run greedy regret curves (removed 2026-05-29).
 
-Commands (replot only, no retrain):
+Commands (replot only, no retrain) — **retired with proxy scripts**:
 
 ```bash
-cd /home/hl4291/chess_analysis
-python3 analysis/2b_plot_loss.py
+# removed 2026-05-29
+# python3 analysis/2b_plot_loss.py
 ```
+
+## 2026-05-29 (repo layout — `analysis/` rename, lmcos cleanup)
+
+**`chess_analysis/` directory shuffle:**
+
+- Removed the short-lived CTS proxy tree (`2a_make_cache.py`, `2b_*`, `analysis/slurm/submit_2a.sh`, …).
+- Renamed **`chess_analysis/src/` → `chess_analysis/human_analytics/`** (via interim `analysis/`) so human move-time analytics / metacontrol code is not confused with **`lmcos/src/`**.
+- Flattened **`lmcos/src/cts/` → `lmcos/src/`**; kept **`import cts`** via root **`cts/__init__.py`** ``__path__`` shim.
+
+**`lmcos/` cleanup (same day, branch `jordan`):**
+
+- Deleted **`hl4291_slurm/`** and orphaned hl4291 / topology experiment configs.
+- Deleted alternate Slurm paths (compute-advantage, encoder KL audit, prefix derive, rewrite_compact, filter_packed, planning-cost / entropy sweeps) and all **`configs/analysis/`** YAMLs.
+- Removed **`HANDOFF.md`** — pipeline order now in **`slurm/README.md`**; experiment history stays in this notebook.
+- Kept ysagiv main-chain **`slurm/`** wrappers and core **`src/`** package unchanged (Slurm ``PYTHONPATH=${PROJECT_DIR}``).
+
+**Later same day — slurm/config layout:**
+
+- Removed **`demos/`** (stale tutorial notebooks and helpers).
+- Reorganized **`slurm/`** into stage folders: `1_preprocess_data/`, `2_pretrain_encoder/`, `3_preprocess_root/`, `4_supervised_controller/`; logs under **`slurm/logs/`**.
+- Removed ysagiv stub **`configs/**/*.yaml`**; empty stage dirs mirror slurm layout (add hl4291 run configs as needed). See **`configs/README.md`**.
+- Removed **`scripts/`** — the only remaining orchestrator (`submit_generate_dataset_shards.py`) lives in **`slurm/1_preprocess_data/`** next to its wrapper shell script.
+- Renamed **`chess_analysis/analysis/` → `chess_analysis/human_analytics/`** to avoid clashing with `lmcos/analysis/` (CTS post-hoc diagnostics).
+
+**Later same day — package layout finalization:**
+
+- Moved **`lmcos/src/analysis/` → `lmcos/analysis/`** (still imported as `cts.analysis`; pipeline code stays in `src/`).
+- Moved **`lmcos/configs/` → `lmcos/slurm/configs/`** so cluster YAMLs sit next to Slurm scripts.
+- Removed root **`cts/`** import shim and **`cts.egg-info/`**; `import cts` now resolves via `pyproject.toml` `package-dir` (`src/` + `analysis/`) and `pip install -e .`.

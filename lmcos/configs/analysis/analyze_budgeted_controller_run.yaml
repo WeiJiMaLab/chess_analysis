@@ -1,7 +1,0 @@
-diagnostics_path: null
-log_path: null
-output_dir: null
-report_mode: full
-path_rewrite: []
-max_state_rows: 500000
-state_sample_seed: 0

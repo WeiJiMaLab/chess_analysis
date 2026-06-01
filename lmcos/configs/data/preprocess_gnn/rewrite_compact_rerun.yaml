@@ -1,5 +1,0 @@
-source_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_oracle96_trace_filtered
-in_place: true
-num_workers: 16
-log_interval: 1000
-skip_existing: false

@@ -1,6 +1,0 @@
-# Random train/val manifests for generated_trees_50k (seeded shuffle, then val fraction).
-source_root: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/generated_trees_50k
-split_root: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/pretrain_split_50k_nodetargets
-validation_fraction: 0.1
-seed: 42
-clear: true

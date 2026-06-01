@@ -1,4 +1,0 @@
-source_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_smoke
-split_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_smoke
-validation_fraction: 0.2
-seed: 0

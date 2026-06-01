@@ -1,8 +1,9 @@
 .DS_Store
 __pycache__/
+*.egg-info/
 .pytest_cache/
 analysis_outputs/
-logs/
+slurm/logs/
 weights/
 
 # Agent / IDE config — never committed

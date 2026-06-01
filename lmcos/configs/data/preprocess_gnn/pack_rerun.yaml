@@ -1,7 +1,0 @@
-split_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_split_oracle96_trace_filtered_rerun
-output_root: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/pretrain_packed_oracle96_trace_filtered_rerun
-shard_size: 2000
-num_workers: 16
-log_interval: 1
-single_shard: false
-clear: false

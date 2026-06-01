@@ -384,7 +384,7 @@ class SupervisedBranchTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            env = dict(os.environ, PYTHONPATH=str(repo_root / "src"))
+            env = dict(os.environ, PYTHONPATH=str(repo_root))
             result = subprocess.run(
                 [
                     sys.executable,
@@ -437,7 +437,7 @@ class SupervisedBranchTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            env = dict(os.environ, PYTHONPATH=str(repo_root / "src"))
+            env = dict(os.environ, PYTHONPATH=str(repo_root))
             result = subprocess.run(
                 [
                     sys.executable,

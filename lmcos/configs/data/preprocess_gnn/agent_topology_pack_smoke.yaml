@@ -1,9 +1,0 @@
-# Smoke: few v3 `.pt` trees → packed shards + topology targets (matches 50k template).
-split_root: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/topology_pack_smoke_manual/split_smoke
-output_root: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/data/topology_pack_smoke_manual/packed_topology
-topology_features: true
-topology_supervision_shard: true
-single_shard: true
-clear: true
-shard_size: 2000
-log_interval: 1

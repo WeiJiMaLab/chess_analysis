@@ -1,0 +1,2104 @@
+run_start:
+  run_name: subtree-weighting[root]
+  packed_train_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train_manifest.json
+  packed_validation_data: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/validation_manifest.json
+  encoder_checkpoint: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/checkpoints/tree_encoder_child_wdl_async_k1_subtree_weighted.pt
+  output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/checkpoints/fittedq_subtree_weighting_root.pt
+  controller_inputs:
+  - z_t
+  device: cuda
+  epochs: 3
+  train_batches_per_epoch: 996
+  full_train_batches_per_epoch: 996
+  train_batches: null
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  max_validation_batches: null
+  max_greedy_eval_episodes: null
+  metrics_log_interval: 20
+  oracle_type: budgeted_controller_v1
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  budget_seed: 0
+  budget_buckets:
+  - name: scramble
+    min_time: 1
+    max_time: 3
+  - name: medium-small
+    min_time: 4
+    max_time: 10
+  - name: medium-large
+    min_time: 11
+    max_time: 25
+  - name: large
+    min_time: 26
+    max_time: 60
+  - name: very-large
+    min_time: 61
+    max_time: 120
+batches:
+- n_batches: 0
+  epoch: 0
+  epochs: 3
+  validation:
+    total_loss: 0.4165380189251528
+    advantage_mse: 0.34563446234612966
+    sign_bce: 0.7090355330226848
+    mean_abs_advantage_error: 0.21748451024370408
+    sign_accuracy: 0.12956262938330176
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.0990205680705191
+    first_action_accuracy: 0.8329742082925237
+    average_return: -1.0132728830570121
+    average_oracle_value: 0.3535118290306837
+    average_regret: 1.366784712087696
+    average_expansions: 30.131635651322235
+    evaluated_episodes: 30630
+- n_batches: 20
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.39795351465188145
+    advantage_mse: 0.3329146238036347
+    sign_bce: 0.6503888584952175
+    mean_abs_advantage_error: 0.25153198413646827
+    sign_accuracy: 0.8411991879567394
+    snapshots: 358109
+- n_batches: 40
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.39054124626129777
+    advantage_mse: 0.3259542608096009
+    sign_bce: 0.645869808709334
+    mean_abs_advantage_error: 0.25234174245420804
+    sign_accuracy: 0.8538670226208711
+    snapshots: 716197
+- n_batches: 60
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3883456423653431
+    advantage_mse: 0.32402695550828875
+    sign_bce: 0.6431868349758306
+    mean_abs_advantage_error: 0.2540408044147774
+    sign_accuracy: 0.8598859877594907
+    snapshots: 1072341
+- n_batches: 80
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3862660436050249
+    advantage_mse: 0.3221310857072725
+    sign_bce: 0.6413495447163964
+    mean_abs_advantage_error: 0.2551611027471406
+    sign_accuracy: 0.8644202988213106
+    snapshots: 1430487
+- n_batches: 100
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38528421825276604
+    advantage_mse: 0.3212797747868066
+    sign_bce: 0.6400443970906873
+    mean_abs_advantage_error: 0.2555421315145581
+    sign_accuracy: 0.8693227738288465
+    snapshots: 1786700
+- n_batches: 100
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.3782129879726011
+    advantage_mse: 0.3151301684133581
+    sign_bce: 0.6308281588269123
+    mean_abs_advantage_error: 0.26558354842612203
+    sign_accuracy: 0.8800958930829877
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7508651648710415
+    first_action_accuracy: 0.8830558276199804
+    average_return: 0.24435081369598324
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.10916101533470045
+    average_expansions: 1.5790728044400915
+    evaluated_episodes: 30630
+- n_batches: 120
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38446225353638447
+    advantage_mse: 0.3205561072165693
+    sign_bce: 0.6390614229508634
+    mean_abs_advantage_error: 0.25638901719816287
+    sign_accuracy: 0.8715175121586634
+    snapshots: 2144767
+- n_batches: 140
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3835223614159581
+    advantage_mse: 0.31970007865829125
+    sign_bce: 0.6382227883459495
+    mean_abs_advantage_error: 0.2562889224159143
+    sign_accuracy: 0.874669554912657
+    snapshots: 2501172
+- n_batches: 160
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38276295482922923
+    advantage_mse: 0.3190009396941396
+    sign_bce: 0.637620114855289
+    mean_abs_advantage_error: 0.25651109579090137
+    sign_accuracy: 0.8765370359166577
+    snapshots: 2859481
+- n_batches: 180
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38224735208083593
+    advantage_mse: 0.31851791879226277
+    sign_bce: 0.637294299752088
+    mean_abs_advantage_error: 0.2564689027862497
+    sign_accuracy: 0.8777791935754554
+    snapshots: 3217660
+- n_batches: 200
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38175085788311863
+    advantage_mse: 0.31805016998968244
+    sign_bce: 0.6370068469879457
+    mean_abs_advantage_error: 0.25632513347578056
+    sign_accuracy: 0.8787371469738129
+    snapshots: 3565989
+- n_batches: 200
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.3767174880825011
+    advantage_mse: 0.3134007656247911
+    sign_bce: 0.6331672059826602
+    mean_abs_advantage_error: 0.2573968260153894
+    sign_accuracy: 0.8900879019927388
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7736206333659811
+    first_action_accuracy: 0.8888018282729351
+    average_return: 0.266405955496467
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.0871058735342167
+    average_expansions: 1.0937969311132876
+    evaluated_episodes: 30630
+- n_batches: 220
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3809948332585089
+    advantage_mse: 0.3173113650047958
+    sign_bce: 0.6368346519226745
+    mean_abs_advantage_error: 0.25620924339734835
+    sign_accuracy: 0.8792324489815161
+    snapshots: 3924117
+- n_batches: 240
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38071665800827
+    advantage_mse: 0.3170563962366248
+    sign_bce: 0.6366025877882789
+    mean_abs_advantage_error: 0.2564093669556502
+    sign_accuracy: 0.8799889446717266
+    snapshots: 4280289
+- n_batches: 260
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3804373085941119
+    advantage_mse: 0.31679124051079083
+    sign_bce: 0.636460649745859
+    mean_abs_advantage_error: 0.25650929621268076
+    sign_accuracy: 0.8806074985474407
+    snapshots: 4638365
+- n_batches: 280
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.38008552169024235
+    advantage_mse: 0.3164531703863364
+    sign_bce: 0.6363234815921018
+    mean_abs_advantage_error: 0.25642935994538263
+    sign_accuracy: 0.8812491065482952
+    snapshots: 4994674
+- n_batches: 300
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3798551775107297
+    advantage_mse: 0.31623345331733715
+    sign_bce: 0.636217211609333
+    mean_abs_advantage_error: 0.2564617584833556
+    sign_accuracy: 0.8814775306612366
+    snapshots: 5352850
+- n_batches: 300
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.376198707738553
+    advantage_mse: 0.31235434223227015
+    sign_bce: 0.6384436358558788
+    mean_abs_advantage_error: 0.24849151212336884
+    sign_accuracy: 0.8896243768103175
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7834149526607901
+    first_action_accuracy: 0.8825987593862227
+    average_return: 0.27097112654156624
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08254070248911745
+    average_expansions: 1.0180541952334312
+    evaluated_episodes: 30630
+- n_batches: 320
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.379300789678905
+    advantage_mse: 0.3156857588698681
+    sign_bce: 0.6361502759508614
+    mean_abs_advantage_error: 0.25609827170777205
+    sign_accuracy: 0.8818171104957931
+    snapshots: 5710869
+- n_batches: 340
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.378949388978441
+    advantage_mse: 0.31534157938680885
+    sign_bce: 0.6360780640340558
+    mean_abs_advantage_error: 0.25616886163154917
+    sign_accuracy: 0.8819735899779381
+    snapshots: 6067015
+- n_batches: 360
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37849609206934764
+    advantage_mse: 0.31489923680626736
+    sign_bce: 0.6359685193889247
+    mean_abs_advantage_error: 0.25607411374397393
+    sign_accuracy: 0.8825325872950405
+    snapshots: 6425050
+- n_batches: 380
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3785009536621379
+    advantage_mse: 0.31491787755404566
+    sign_bce: 0.6358307272317345
+    mean_abs_advantage_error: 0.2560750933346101
+    sign_accuracy: 0.8832494286127607
+    snapshots: 6781303
+- n_batches: 400
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3783742362305657
+    advantage_mse: 0.3148031501257778
+    sign_bce: 0.6357108266585278
+    mean_abs_advantage_error: 0.25596327696496735
+    sign_accuracy: 0.8838346861471482
+    snapshots: 7139317
+- n_batches: 400
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.3757435708994524
+    advantage_mse: 0.3123758032174045
+    sign_bce: 0.6336776354273537
+    mean_abs_advantage_error: 0.2556963742715625
+    sign_accuracy: 0.8915508378060367
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7843290891283056
+    first_action_accuracy: 0.8868429644139733
+    average_return: 0.267010212503896
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08650161652678771
+    average_expansions: 1.2037218413320274
+    evaluated_episodes: 30630
+- n_batches: 420
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3783265021327082
+    advantage_mse: 0.3147691973926427
+    sign_bce: 0.6355730142176139
+    mean_abs_advantage_error: 0.25583990049739297
+    sign_accuracy: 0.884511252396057
+    snapshots: 7495648
+- n_batches: 440
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37805892006616826
+    advantage_mse: 0.3145113571821397
+    sign_bce: 0.6354755958039007
+    mean_abs_advantage_error: 0.2558109015217845
+    sign_accuracy: 0.8849268260322771
+    snapshots: 7853681
+- n_batches: 460
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3779912035502436
+    advantage_mse: 0.3144543417823383
+    sign_bce: 0.6353685855892408
+    mean_abs_advantage_error: 0.2558675402770806
+    sign_accuracy: 0.8853534691754148
+    snapshots: 8211692
+- n_batches: 480
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3779788198752361
+    advantage_mse: 0.31445443346784074
+    sign_bce: 0.6352438319791097
+    mean_abs_advantage_error: 0.25601838235349655
+    sign_accuracy: 0.88576919588508
+    snapshots: 8555792
+- n_batches: 500
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37782438717729955
+    advantage_mse: 0.31430999756937905
+    sign_bce: 0.6351438633350402
+    mean_abs_advantage_error: 0.25596686815276276
+    sign_accuracy: 0.8862267838009359
+    snapshots: 8913873
+- n_batches: 500
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.375336394129125
+    advantage_mse: 0.3122083534464306
+    sign_bce: 0.6312803730895957
+    mean_abs_advantage_error: 0.25851853400881875
+    sign_accuracy: 0.8938579767230658
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7888997714658831
+    first_action_accuracy: 0.8867776689520078
+    average_return: 0.26974466164118865
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08376716738949504
+    average_expansions: 1.1769180541952333
+    evaluated_episodes: 30630
+- n_batches: 520
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3776134110598981
+    advantage_mse: 0.3141097717680074
+    sign_bce: 0.6350363606122641
+    mean_abs_advantage_error: 0.255942311495097
+    sign_accuracy: 0.8866424471662796
+    snapshots: 9270216
+- n_batches: 540
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3773954791435877
+    advantage_mse: 0.31390050824254423
+    sign_bce: 0.6349496784622553
+    mean_abs_advantage_error: 0.255855315186447
+    sign_accuracy: 0.8870111021351985
+    snapshots: 9628238
+- n_batches: 560
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3775433113924823
+    advantage_mse: 0.31405442441346326
+    sign_bce: 0.6348888401160014
+    mean_abs_advantage_error: 0.2559226622155652
+    sign_accuracy: 0.8873470511940948
+    snapshots: 9984550
+- n_batches: 580
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.377515467482266
+    advantage_mse: 0.31403308143453046
+    sign_bce: 0.6348238305748636
+    mean_abs_advantage_error: 0.2559535654391489
+    sign_accuracy: 0.8875687891685045
+    snapshots: 10342653
+- n_batches: 600
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3774484558378572
+    advantage_mse: 0.31397355988155523
+    sign_bce: 0.6347489297040262
+    mean_abs_advantage_error: 0.2560193260329472
+    sign_accuracy: 0.8878069730653027
+    snapshots: 10699025
+- n_batches: 600
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.3757952320276704
+    advantage_mse: 0.31232820258077487
+    sign_bce: 0.6346702518658127
+    mean_abs_advantage_error: 0.2509117436906874
+    sign_accuracy: 0.8915854448897922
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7734247469800849
+    first_action_accuracy: 0.8838393731635651
+    average_return: 0.24632067480600742
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.10719115422467627
+    average_expansions: 1.8459027097616716
+    evaluated_episodes: 30630
+- n_batches: 620
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3773838537711823
+    advantage_mse: 0.31391482017720257
+    sign_bce: 0.634690305796832
+    mean_abs_advantage_error: 0.2560020740298801
+    sign_accuracy: 0.8881099800191063
+    snapshots: 11057063
+- n_batches: 640
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37739212594813426
+    advantage_mse: 0.31393411619722256
+    sign_bce: 0.6345800673716824
+    mean_abs_advantage_error: 0.2559867277143713
+    sign_accuracy: 0.8886309165000816
+    snapshots: 11415089
+- n_batches: 660
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37725847216681596
+    advantage_mse: 0.31380519642650784
+    sign_bce: 0.6345327277049141
+    mean_abs_advantage_error: 0.2559414819204187
+    sign_accuracy: 0.8888876901352981
+    snapshots: 11771486
+- n_batches: 680
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37717905707946914
+    advantage_mse: 0.31373005243153407
+    sign_bce: 0.6344900160852315
+    mean_abs_advantage_error: 0.25591834158562377
+    sign_accuracy: 0.8891543301999771
+    snapshots: 12129486
+- n_batches: 700
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3770643400219152
+    advantage_mse: 0.31361618054591384
+    sign_bce: 0.6344815655431948
+    mean_abs_advantage_error: 0.25591859826679086
+    sign_accuracy: 0.889133448101058
+    snapshots: 12475052
+- n_batches: 700
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.37530582880265784
+    advantage_mse: 0.312105516821501
+    sign_bce: 0.6320030876652825
+    mean_abs_advantage_error: 0.2602275511886979
+    sign_accuracy: 0.8951059291372768
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.795266079007509
+    first_action_accuracy: 0.8816193274567418
+    average_return: 0.27272305782351525
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08078877120716847
+    average_expansions: 1.0451518119490695
+    evaluated_episodes: 30630
+- n_batches: 720
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.376935710755004
+    advantage_mse: 0.31348668564701593
+    sign_bce: 0.6344902220929185
+    mean_abs_advantage_error: 0.2558560984374022
+    sign_accuracy: 0.889271797387732
+    snapshots: 12833063
+- n_batches: 740
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37686136312355717
+    advantage_mse: 0.31341603614288616
+    sign_bce: 0.6344532407076825
+    mean_abs_advantage_error: 0.25587511258736956
+    sign_accuracy: 0.8893786770760325
+    snapshots: 13189148
+- n_batches: 760
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3767754115949445
+    advantage_mse: 0.313334493718878
+    sign_bce: 0.6344091488467771
+    mean_abs_advantage_error: 0.2558554244189722
+    sign_accuracy: 0.889587418436948
+    snapshots: 13547188
+- n_batches: 780
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3767238236141448
+    advantage_mse: 0.31328570428027336
+    sign_bce: 0.6343811629525572
+    mean_abs_advantage_error: 0.25588988081922687
+    sign_accuracy: 0.889627688455257
+    snapshots: 13905290
+- n_batches: 800
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37662860056593667
+    advantage_mse: 0.3131938771766412
+    sign_bce: 0.6343472035057482
+    mean_abs_advantage_error: 0.2558180581469175
+    sign_accuracy: 0.8898834530542956
+    snapshots: 14261635
+- n_batches: 800
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.37497422743711256
+    advantage_mse: 0.3118416860372959
+    sign_bce: 0.6313253881028044
+    mean_abs_advantage_error: 0.2577234970589981
+    sign_accuracy: 0.8965311117682961
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.798596147567744
+    first_action_accuracy: 0.8832190662748939
+    average_return: 0.2792352452447976
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.0742765837858861
+    average_expansions: 0.99213189683317
+    evaluated_episodes: 30630
+- n_batches: 820
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37653286325767577
+    advantage_mse: 0.31310100472287317
+    sign_bce: 0.6343185559909428
+    mean_abs_advantage_error: 0.2557538190635858
+    sign_accuracy: 0.8900428236157737
+    snapshots: 14619737
+- n_batches: 840
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37649695924392707
+    advantage_mse: 0.3130720756190131
+    sign_bce: 0.6342488068313303
+    mean_abs_advantage_error: 0.25570092802918704
+    sign_accuracy: 0.890407779416533
+    snapshots: 14976136
+- n_batches: 860
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3765717637459617
+    advantage_mse: 0.31315315306782254
+    sign_bce: 0.6341860772812652
+    mean_abs_advantage_error: 0.25574387557119127
+    sign_accuracy: 0.8906711268772576
+    snapshots: 15334403
+- n_batches: 880
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37643941825150895
+    advantage_mse: 0.3130203508885696
+    sign_bce: 0.6341906441366845
+    mean_abs_advantage_error: 0.25571326620011897
+    sign_accuracy: 0.8906348237114907
+    snapshots: 15690671
+- n_batches: 900
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3763583761859399
+    advantage_mse: 0.3129392129990158
+    sign_bce: 0.6341916019856836
+    mean_abs_advantage_error: 0.25571055391084985
+    sign_accuracy: 0.8906097905503594
+    snapshots: 16048822
+- n_batches: 900
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.3748879256572482
+    advantage_mse: 0.311545009779773
+    sign_bce: 0.633429118015827
+    mean_abs_advantage_error: 0.25518698858406025
+    sign_accuracy: 0.8979562943993155
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7901403852432256
+    first_action_accuracy: 0.8831864185439112
+    average_return: 0.27497090063015145
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07854092840053224
+    average_expansions: 0.9596800522363695
+    evaluated_episodes: 30630
+- n_batches: 920
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37624092235212686
+    advantage_mse: 0.3128253786300013
+    sign_bce: 0.6341554074145953
+    mean_abs_advantage_error: 0.25564077541064084
+    sign_accuracy: 0.8907742995139403
+    snapshots: 16407036
+- n_batches: 940
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3762315733221875
+    advantage_mse: 0.3128167779279105
+    sign_bce: 0.6341479242209468
+    mean_abs_advantage_error: 0.255669067650601
+    sign_accuracy: 0.8907731943172723
+    snapshots: 16763147
+- n_batches: 960
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.37625536005319027
+    advantage_mse: 0.31284315536091356
+    sign_bce: 0.6341220172021904
+    mean_abs_advantage_error: 0.2556294679099265
+    sign_accuracy: 0.890951550109941
+    snapshots: 17121463
+- n_batches: 980
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.3762870745519461
+    advantage_mse: 0.31287988404381734
+    sign_bce: 0.6340718754528547
+    mean_abs_advantage_error: 0.2556404918152972
+    sign_accuracy: 0.8911717014749114
+    snapshots: 17477660
+- n_batches: 1000
+  epoch: 1
+  epochs: 3
+  train:
+    total_loss: 0.376226814472229
+    advantage_mse: 0.3128224279964119
+    sign_bce: 0.6340438346480771
+    mean_abs_advantage_error: 0.2556020427780036
+    sign_accuracy: 0.891334297310526
+    snapshots: 17835830
+- n_batches: 1000
+  epoch: 1
+  epochs: 3
+  validation:
+    total_loss: 0.374743123849233
+    advantage_mse: 0.31154278795513485
+    sign_bce: 0.6320033294198794
+    mean_abs_advantage_error: 0.2577447400256903
+    sign_accuracy: 0.8994538372963687
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7918707149853085
+    first_action_accuracy: 0.8852432255958211
+    average_return: 0.27156007433030976
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08195175470037394
+    average_expansions: 1.0229840026118184
+    evaluated_episodes: 30630
+- n_batches: 1020
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37513686887963793
+    advantage_mse: 0.31190892460145836
+    sign_bce: 0.6322794307731145
+    mean_abs_advantage_error: 0.25601166577694756
+    sign_accuracy: 0.8971334977446302
+    snapshots: 268027
+- n_batches: 1040
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.375551636495737
+    advantage_mse: 0.31244958902103653
+    sign_bce: 0.6310204747470044
+    mean_abs_advantage_error: 0.25528213845048453
+    sign_accuracy: 0.9038688784276653
+    snapshots: 626228
+- n_batches: 1060
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3750595665802144
+    advantage_mse: 0.3119317461662333
+    sign_bce: 0.6312781923778922
+    mean_abs_advantage_error: 0.25496435819424484
+    sign_accuracy: 0.9038289226393051
+    snapshots: 984350
+- n_batches: 1080
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3750929595051352
+    advantage_mse: 0.31196677889798485
+    sign_bce: 0.6312617845294045
+    mean_abs_advantage_error: 0.2545595057693269
+    sign_accuracy: 0.9039812034982379
+    snapshots: 1340675
+- n_batches: 1100
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37395078936096243
+    advantage_mse: 0.31078166195255313
+    sign_bce: 0.6316912439563823
+    mean_abs_advantage_error: 0.25386215155147024
+    sign_accuracy: 0.9023559489757293
+    snapshots: 1698721
+- n_batches: 1100
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.374847078609473
+    advantage_mse: 0.31158612109067113
+    sign_bce: 0.6326095590578684
+    mean_abs_advantage_error: 0.25441394521444266
+    sign_accuracy: 0.8975546424878508
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7907933398628796
+    first_action_accuracy: 0.8845249755142017
+    average_return: 0.2640708082969049
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08944102073377881
+    average_expansions: 1.3183806725432583
+    evaluated_episodes: 30630
+- n_batches: 1120
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37376189892954925
+    advantage_mse: 0.3105749808547188
+    sign_bce: 0.6318691541736162
+    mean_abs_advantage_error: 0.2538395092937156
+    sign_accuracy: 0.9017765726765575
+    snapshots: 2054968
+- n_batches: 1140
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37418909498586744
+    advantage_mse: 0.31099484788860515
+    sign_bce: 0.6319424439875537
+    mean_abs_advantage_error: 0.2541115454821565
+    sign_accuracy: 0.9015322518819037
+    snapshots: 2413115
+- n_batches: 1160
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3742241479774266
+    advantage_mse: 0.31100516851196885
+    sign_bce: 0.632189766695264
+    mean_abs_advantage_error: 0.25432242768992547
+    sign_accuracy: 0.9002371826915723
+    snapshots: 2758633
+- n_batches: 1180
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37439771816543127
+    advantage_mse: 0.3111616685153755
+    sign_bce: 0.632360470103642
+    mean_abs_advantage_error: 0.2548907347271255
+    sign_accuracy: 0.898772901811611
+    snapshots: 3116784
+- n_batches: 1200
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37406681337255515
+    advantage_mse: 0.31080546724131936
+    sign_bce: 0.6326134342594404
+    mean_abs_advantage_error: 0.2548409971686158
+    sign_accuracy: 0.897540419528067
+    snapshots: 3472950
+- n_batches: 1200
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.3751829290639744
+    advantage_mse: 0.3122915427651395
+    sign_bce: 0.628913828570233
+    mean_abs_advantage_error: 0.26151743545981976
+    sign_accuracy: 0.898163936901848
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7889324191968659
+    first_action_accuracy: 0.8831211230819458
+    average_return: 0.27053757729216643
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08297425173851725
+    average_expansions: 1.0495592556317337
+    evaluated_episodes: 30630
+- n_batches: 1220
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743438758676742
+    advantage_mse: 0.31109619562819685
+    sign_bce: 0.6324767773959863
+    mean_abs_advantage_error: 0.25501735909209766
+    sign_accuracy: 0.8978956333759578
+    snapshots: 3831129
+- n_batches: 1240
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37430512952818623
+    advantage_mse: 0.3110549879746202
+    sign_bce: 0.6325013886038406
+    mean_abs_advantage_error: 0.2551200010166484
+    sign_accuracy: 0.8977293668867595
+    snapshots: 4189140
+- n_batches: 1260
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3744099769080088
+    advantage_mse: 0.3111623386412693
+    sign_bce: 0.632476357373665
+    mean_abs_advantage_error: 0.25508430031118173
+    sign_accuracy: 0.8979675171482009
+    snapshots: 4545229
+- n_batches: 1280
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743500510479787
+    advantage_mse: 0.31110282929822586
+    sign_bce: 0.6324721914471735
+    mean_abs_advantage_error: 0.2550764834131574
+    sign_accuracy: 0.897993623760252
+    snapshots: 4903517
+- n_batches: 1300
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37416361876314924
+    advantage_mse: 0.31091765402124893
+    sign_bce: 0.6324596203188282
+    mean_abs_advantage_error: 0.2549689786713958
+    sign_accuracy: 0.8982456340481032
+    snapshots: 5259735
+- n_batches: 1300
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.37458273454131724
+    advantage_mse: 0.3115881714389266
+    sign_bce: 0.6299455971311022
+    mean_abs_advantage_error: 0.2601470139482053
+    sign_accuracy: 0.9002844073064992
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7976820111002285
+    first_action_accuracy: 0.8834476003917727
+    average_return: 0.2762372726556507
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.077274556375033
+    average_expansions: 0.9648383937316356
+    evaluated_episodes: 30630
+- n_batches: 1320
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3740822756501215
+    advantage_mse: 0.3108392794183874
+    sign_bce: 0.6324299359701706
+    mean_abs_advantage_error: 0.2549711346003835
+    sign_accuracy: 0.8983877174888579
+    snapshots: 5617874
+- n_batches: 1340
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37400029407716456
+    advantage_mse: 0.3107578668298013
+    sign_bce: 0.6324242439620893
+    mean_abs_advantage_error: 0.2549358458318372
+    sign_accuracy: 0.8983790340021547
+    snapshots: 5974092
+- n_batches: 1360
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3740478305558954
+    advantage_mse: 0.31080365634402934
+    sign_bce: 0.6324417140695932
+    mean_abs_advantage_error: 0.25499010615874046
+    sign_accuracy: 0.8983370308557828
+    snapshots: 6332168
+- n_batches: 1380
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743187277888059
+    advantage_mse: 0.3110860597472782
+    sign_bce: 0.6323266525669198
+    mean_abs_advantage_error: 0.25507917742493524
+    sign_accuracy: 0.8988000074138203
+    snapshots: 6690208
+- n_batches: 1400
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37444867513411545
+    advantage_mse: 0.3112258830852358
+    sign_bce: 0.6322278916441824
+    mean_abs_advantage_error: 0.2551116119575804
+    sign_accuracy: 0.8991392256465174
+    snapshots: 7046446
+- n_batches: 1400
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.3744066647128894
+    advantage_mse: 0.3110618552779056
+    sign_bce: 0.6334480838378503
+    mean_abs_advantage_error: 0.2544400383465999
+    sign_accuracy: 0.8980737487441823
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7962128632060071
+    first_action_accuracy: 0.8866797257590597
+    average_return: 0.2739384091514524
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07957341987923132
+    average_expansions: 1.1217760365654588
+    evaluated_episodes: 30630
+- n_batches: 1420
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743100640513558
+    advantage_mse: 0.31108610349649846
+    sign_bce: 0.6322395757804669
+    mean_abs_advantage_error: 0.2550788991011784
+    sign_accuracy: 0.8991715451143473
+    snapshots: 7404507
+- n_batches: 1440
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37419201553910547
+    advantage_mse: 0.3109694148278517
+    sign_bce: 0.6322259774683952
+    mean_abs_advantage_error: 0.25506701964770917
+    sign_accuracy: 0.8991744182135937
+    snapshots: 7760709
+- n_batches: 1460
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3741766909007987
+    advantage_mse: 0.31095064439734427
+    sign_bce: 0.6322604355222875
+    mean_abs_advantage_error: 0.25496831364269873
+    sign_accuracy: 0.8992493914492382
+    snapshots: 8118879
+- n_batches: 1480
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37424347221103627
+    advantage_mse: 0.31101630301306976
+    sign_bce: 0.6322716630608504
+    mean_abs_advantage_error: 0.25506083587510986
+    sign_accuracy: 0.8991704767015599
+    snapshots: 8474988
+- n_batches: 1500
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37432631404756744
+    advantage_mse: 0.311096451458787
+    sign_bce: 0.6322985966961103
+    mean_abs_advantage_error: 0.25512253095841264
+    sign_accuracy: 0.8989980694528298
+    snapshots: 8833247
+- n_batches: 1500
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.37518568880308895
+    advantage_mse: 0.31185248259626885
+    sign_bce: 0.6333320433363699
+    mean_abs_advantage_error: 0.25416262347200286
+    sign_accuracy: 0.896107437167169
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.8009467841984982
+    first_action_accuracy: 0.8883774077701599
+    average_return: 0.27298547086543323
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08052635816525044
+    average_expansions: 1.2406137773424748
+    evaluated_episodes: 30630
+- n_batches: 1520
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37432948228281315
+    advantage_mse: 0.3111027299044616
+    sign_bce: 0.6322674938603904
+    mean_abs_advantage_error: 0.2551190847180955
+    sign_accuracy: 0.8991359458676851
+    snapshots: 9179286
+- n_batches: 1540
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743776357124269
+    advantage_mse: 0.3111485611545171
+    sign_bce: 0.6322907159103042
+    mean_abs_advantage_error: 0.2551163024416319
+    sign_accuracy: 0.8990551479205546
+    snapshots: 9535355
+- n_batches: 1560
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37443943566246135
+    advantage_mse: 0.31121278416946135
+    sign_bce: 0.632266485241089
+    mean_abs_advantage_error: 0.25515318654899966
+    sign_accuracy: 0.8990625717631001
+    snapshots: 9893664
+- n_batches: 1580
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37445406541356097
+    advantage_mse: 0.31122822243164294
+    sign_bce: 0.6322583997301342
+    mean_abs_advantage_error: 0.2550784018259403
+    sign_accuracy: 0.8991290775586152
+    snapshots: 10249822
+- n_batches: 1600
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743996253766247
+    advantage_mse: 0.31117746524531437
+    sign_bce: 0.632221571137987
+    mean_abs_advantage_error: 0.255064478931039
+    sign_accuracy: 0.8992612394740035
+    snapshots: 10607903
+- n_batches: 1600
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.37483277222845274
+    advantage_mse: 0.31171419455539484
+    sign_bce: 0.6311857460750933
+    mean_abs_advantage_error: 0.25578905905538657
+    sign_accuracy: 0.8976437819460088
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7830884753509632
+    first_action_accuracy: 0.8879856349983676
+    average_return: 0.26802240879415484
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08548942023652883
+    average_expansions: 1.1630427685275873
+    evaluated_episodes: 30630
+- n_batches: 1620
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743383248885954
+    advantage_mse: 0.31111609855325534
+    sign_bce: 0.6322222340826906
+    mean_abs_advantage_error: 0.25503464166207235
+    sign_accuracy: 0.8992543595713566
+    snapshots: 10964266
+- n_batches: 1640
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37430707957203513
+    advantage_mse: 0.3110876926873812
+    sign_bce: 0.6321938383115708
+    mean_abs_advantage_error: 0.25507962879868157
+    sign_accuracy: 0.8993543886697146
+    snapshots: 11322292
+- n_batches: 1660
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3743493746469395
+    advantage_mse: 0.3111296612547203
+    sign_bce: 0.632197103302624
+    mean_abs_advantage_error: 0.25501825452671306
+    sign_accuracy: 0.899397241818836
+    snapshots: 11680306
+- n_batches: 1680
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37438757250887666
+    advantage_mse: 0.31117086564440605
+    sign_bce: 0.6321670379511121
+    mean_abs_advantage_error: 0.25500798127295565
+    sign_accuracy: 0.899545899809841
+    snapshots: 12036771
+- n_batches: 1700
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3745240620525883
+    advantage_mse: 0.3113097669533847
+    sign_bce: 0.6321429204929203
+    mean_abs_advantage_error: 0.25503706182651725
+    sign_accuracy: 0.8996604583288154
+    snapshots: 12394944
+- n_batches: 1700
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.3747746173525449
+    advantage_mse: 0.31170087647598793
+    sign_bce: 0.6307373820529865
+    mean_abs_advantage_error: 0.2584040914879581
+    sign_accuracy: 0.8988277636902477
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7969637610186092
+    first_action_accuracy: 0.8802481227554685
+    average_return: 0.27629388684876977
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07721794218191395
+    average_expansions: 0.9462291870714985
+    evaluated_episodes: 30630
+- n_batches: 1720
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37451360194822303
+    advantage_mse: 0.31129790566729265
+    sign_bce: 0.6321569316565692
+    mean_abs_advantage_error: 0.2550572262758884
+    sign_accuracy: 0.8995808191777167
+    snapshots: 12751299
+- n_batches: 1740
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3745828103620998
+    advantage_mse: 0.3113658861030479
+    sign_bce: 0.6321692107426131
+    mean_abs_advantage_error: 0.25507803145896146
+    sign_accuracy: 0.8995268248290719
+    snapshots: 13109310
+- n_batches: 1760
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3745540591185586
+    advantage_mse: 0.31133562887570104
+    sign_bce: 0.632184270094879
+    mean_abs_advantage_error: 0.25505463558946534
+    sign_accuracy: 0.8995046548857426
+    snapshots: 13457688
+- n_batches: 1780
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3744757142236556
+    advantage_mse: 0.3112570118148617
+    sign_bce: 0.6321869918156118
+    mean_abs_advantage_error: 0.2550352144895402
+    sign_accuracy: 0.8995024220949374
+    snapshots: 13815726
+- n_batches: 1800
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37445414305238633
+    advantage_mse: 0.31123418104389255
+    sign_bce: 0.6321995881774997
+    mean_abs_advantage_error: 0.2550378532210842
+    sign_accuracy: 0.8994511024346061
+    snapshots: 14171861
+- n_batches: 1800
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.3747363254849803
+    advantage_mse: 0.3114608763133384
+    sign_bce: 0.6327544649235137
+    mean_abs_advantage_error: 0.255404447839875
+    sign_accuracy: 0.8959312556498686
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7958210904342148
+    first_action_accuracy: 0.886549134835129
+    average_return: 0.26415473406336465
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08935709496731901
+    average_expansions: 1.4289911851126347
+    evaluated_episodes: 30630
+- n_batches: 1820
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37440534246881024
+    advantage_mse: 0.3111877377785995
+    sign_bce: 0.6321760148131909
+    mean_abs_advantage_error: 0.25507181287849356
+    sign_accuracy: 0.8994877954391681
+    snapshots: 14529937
+- n_batches: 1840
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3742749501205792
+    advantage_mse: 0.311055608137943
+    sign_bce: 0.6321933871400696
+    mean_abs_advantage_error: 0.25506100707927937
+    sign_accuracy: 0.8993705483133875
+    snapshots: 14888037
+- n_batches: 1860
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37413030264660446
+    advantage_mse: 0.3109099567681049
+    sign_bce: 0.6322034258289898
+    mean_abs_advantage_error: 0.25501463729418855
+    sign_accuracy: 0.899281283908239
+    snapshots: 15244267
+- n_batches: 1880
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3741764971304085
+    advantage_mse: 0.31095483019545644
+    sign_bce: 0.63221663591244
+    mean_abs_advantage_error: 0.25504222329114995
+    sign_accuracy: 0.8992397372215991
+    snapshots: 15602500
+- n_batches: 1900
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37417727354206726
+    advantage_mse: 0.31095647113909414
+    sign_bce: 0.6322079911580306
+    mean_abs_advantage_error: 0.25504170573300805
+    sign_accuracy: 0.899255219071515
+    snapshots: 15958921
+- n_batches: 1900
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.37433220683828394
+    advantage_mse: 0.3111770742486949
+    sign_bce: 0.6315512847280418
+    mean_abs_advantage_error: 0.25506632945007046
+    sign_accuracy: 0.8999718948531925
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7987920339536402
+    first_action_accuracy: 0.8886712373490042
+    average_return: 0.2775871248398107
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.075924704190873
+    average_expansions: 1.033365981064316
+    evaluated_episodes: 30630
+- n_batches: 1920
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37417839966976263
+    advantage_mse: 0.3109590302267023
+    sign_bce: 0.6321936619375453
+    mean_abs_advantage_error: 0.25501093717293016
+    sign_accuracy: 0.8994013424153093
+    snapshots: 16317007
+- n_batches: 1940
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3742059248115588
+    advantage_mse: 0.3109872612358978
+    sign_bce: 0.6321866036634282
+    mean_abs_advantage_error: 0.25502295977287154
+    sign_accuracy: 0.8993378817229182
+    snapshots: 16673154
+- n_batches: 1960
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3742013556782693
+    advantage_mse: 0.3109816794395937
+    sign_bce: 0.6321967304643262
+    mean_abs_advantage_error: 0.2550061539783154
+    sign_accuracy: 0.8993740961814166
+    snapshots: 17031211
+- n_batches: 1980
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.37425561607703856
+    advantage_mse: 0.3110382862220841
+    sign_bce: 0.6321732672353645
+    mean_abs_advantage_error: 0.25502640010025124
+    sign_accuracy: 0.899457554664617
+    snapshots: 17389402
+- n_batches: 2000
+  epoch: 2
+  epochs: 3
+  train:
+    total_loss: 0.3742906194703175
+    advantage_mse: 0.3110744497017907
+    sign_bce: 0.6321616665771345
+    mean_abs_advantage_error: 0.25497980199685005
+    sign_accuracy: 0.8995607436083828
+    snapshots: 17745900
+- n_batches: 2000
+  epoch: 2
+  epochs: 3
+  validation:
+    total_loss: 0.37453701031617687
+    advantage_mse: 0.31146280195228154
+    sign_bce: 0.6307420778309565
+    mean_abs_advantage_error: 0.2580058361704244
+    sign_accuracy: 0.9002340697301277
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7935683969964088
+    first_action_accuracy: 0.8889324191968658
+    average_return: 0.26594307179235993
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08756875723832377
+    average_expansions: 1.2258896506692785
+    evaluated_episodes: 30630
+- n_batches: 2020
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3722391724586487
+    advantage_mse: 0.30902054607868196
+    sign_bce: 0.6321862041950226
+    mean_abs_advantage_error: 0.2531226009130478
+    sign_accuracy: 0.9004444444444445
+    snapshots: 180000
+- n_batches: 2040
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3712227870347796
+    advantage_mse: 0.3080619968620367
+    sign_bce: 0.6316078536938973
+    mean_abs_advantage_error: 0.2540145146844971
+    sign_accuracy: 0.9017542682096918
+    snapshots: 536349
+- n_batches: 2060
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3716860431318294
+    advantage_mse: 0.30848264894904814
+    sign_bce: 0.6320338805063488
+    mean_abs_advantage_error: 0.25432726336959477
+    sign_accuracy: 0.9003205475806876
+    snapshots: 894407
+- n_batches: 2080
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3727844146067904
+    advantage_mse: 0.30956437203194065
+    sign_bce: 0.6322003811240908
+    mean_abs_advantage_error: 0.25509338166256
+    sign_accuracy: 0.8985324129459858
+    snapshots: 1250488
+- n_batches: 2100
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37295557435045007
+    advantage_mse: 0.30974540263501926
+    sign_bce: 0.63210167126786
+    mean_abs_advantage_error: 0.2552421098683862
+    sign_accuracy: 0.8987376869301951
+    snapshots: 1608555
+- n_batches: 2100
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.37477016308617456
+    advantage_mse: 0.311213200865878
+    sign_bce: 0.6355696033282422
+    mean_abs_advantage_error: 0.24896224921637208
+    sign_accuracy: 0.8974235550493833
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.799902056807052
+    first_action_accuracy: 0.8860920666013712
+    average_return: 0.2756237697590685
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07788805927161521
+    average_expansions: 1.1166503428011754
+    evaluated_episodes: 30630
+- n_batches: 2120
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3728494274086976
+    advantage_mse: 0.3096225257685977
+    sign_bce: 0.6322689724381997
+    mean_abs_advantage_error: 0.25474446726040434
+    sign_accuracy: 0.8984229131158143
+    snapshots: 1966664
+- n_batches: 2140
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3728589823415475
+    advantage_mse: 0.3096514466659803
+    sign_bce: 0.6320753154314791
+    mean_abs_advantage_error: 0.2547795898193714
+    sign_accuracy: 0.8988371452333027
+    snapshots: 2323076
+- n_batches: 2160
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3729268729421766
+    advantage_mse: 0.30971988363901676
+    sign_bce: 0.6320698529101871
+    mean_abs_advantage_error: 0.2549132425669605
+    sign_accuracy: 0.8988770498651326
+    snapshots: 2681152
+- n_batches: 2180
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37318915350750326
+    advantage_mse: 0.30997441753550653
+    sign_bce: 0.6321473233160941
+    mean_abs_advantage_error: 0.254913896786066
+    sign_accuracy: 0.8989580613864444
+    snapshots: 3037511
+- n_batches: 2200
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3732410468939752
+    advantage_mse: 0.31002232509072775
+    sign_bce: 0.6321871823764252
+    mean_abs_advantage_error: 0.2550147837088232
+    sign_accuracy: 0.8986669595994282
+    snapshots: 3395546
+- n_batches: 2200
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3742069296690738
+    advantage_mse: 0.3111841928630079
+    sign_bce: 0.6302273602732421
+    mean_abs_advantage_error: 0.2586852788264093
+    sign_accuracy: 0.8996625284984091
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7945151811949069
+    first_action_accuracy: 0.8872020894547828
+    average_return: 0.277352637230725
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.0761591917999587
+    average_expansions: 1.0159647404505388
+    evaluated_episodes: 30630
+- n_batches: 2220
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37308561793055295
+    advantage_mse: 0.3098695874148738
+    sign_bce: 0.6321602717346533
+    mean_abs_advantage_error: 0.25491955241072106
+    sign_accuracy: 0.8987056070772256
+    snapshots: 3743840
+- n_batches: 2240
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37273899937198834
+    advantage_mse: 0.30952213381951693
+    sign_bce: 0.6321686260370782
+    mean_abs_advantage_error: 0.2547480736855941
+    sign_accuracy: 0.898795764061812
+    snapshots: 4101854
+- n_batches: 2260
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37257789041878064
+    advantage_mse: 0.3093651401496693
+    sign_bce: 0.632127473595915
+    mean_abs_advantage_error: 0.25479044429006353
+    sign_accuracy: 0.8990196315838094
+    snapshots: 4459956
+- n_batches: 2280
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3729217979501406
+    advantage_mse: 0.3097104967803464
+    sign_bce: 0.6321129814421871
+    mean_abs_advantage_error: 0.2550217981681244
+    sign_accuracy: 0.898926431511164
+    snapshots: 4816274
+- n_batches: 2300
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37267029572159344
+    advantage_mse: 0.309461345602481
+    sign_bce: 0.6320894706035095
+    mean_abs_advantage_error: 0.2549694627253476
+    sign_accuracy: 0.8991092452045497
+    snapshots: 5174488
+- n_batches: 2300
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3743996356315584
+    advantage_mse: 0.31131845048399137
+    sign_bce: 0.6308118124013189
+    mean_abs_advantage_error: 0.25841556258756077
+    sign_accuracy: 0.9003357935823785
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.8012732615083251
+    first_action_accuracy: 0.8807378387202089
+    average_return: 0.2747311848525197
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07878064417816404
+    average_expansions: 0.987724453150506
+    evaluated_episodes: 30630
+- n_batches: 2320
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37261545903511256
+    advantage_mse: 0.3094075848759993
+    sign_bce: 0.6320787108814205
+    mean_abs_advantage_error: 0.2548858316909573
+    sign_accuracy: 0.8992860728146422
+    snapshots: 5530536
+- n_batches: 2340
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3728926481131342
+    advantage_mse: 0.3096833794242268
+    sign_bce: 0.632092657096352
+    mean_abs_advantage_error: 0.25485956629764417
+    sign_accuracy: 0.8995293103123276
+    snapshots: 5888593
+- n_batches: 2360
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3729514246383804
+    advantage_mse: 0.3097388659927806
+    sign_bce: 0.6321255582086944
+    mean_abs_advantage_error: 0.2549375427357283
+    sign_accuracy: 0.8991202526365278
+    snapshots: 6244861
+- n_batches: 2380
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37311567961419956
+    advantage_mse: 0.309900504181573
+    sign_bce: 0.6321517269434047
+    mean_abs_advantage_error: 0.2549537439289668
+    sign_accuracy: 0.8990084704820436
+    snapshots: 6602930
+- n_batches: 2400
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.373203115498062
+    advantage_mse: 0.30998566601129446
+    sign_bce: 0.6321744664431249
+    mean_abs_advantage_error: 0.2549974529719436
+    sign_accuracy: 0.8988176257329414
+    snapshots: 6961163
+- n_batches: 2400
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3746320069420531
+    advantage_mse: 0.3117123266377184
+    sign_bce: 0.6291967822242698
+    mean_abs_advantage_error: 0.2601692619969714
+    sign_accuracy: 0.8992126364095885
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7912830558276199
+    first_action_accuracy: 0.8878550440744368
+    average_return: 0.26997373399515456
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08353809503552914
+    average_expansions: 1.2019588638589618
+    evaluated_episodes: 30630
+- n_batches: 2420
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37333753369251116
+    advantage_mse: 0.3101205660560991
+    sign_bce: 0.6321696471229155
+    mean_abs_advantage_error: 0.2549838137292309
+    sign_accuracy: 0.8989426679816753
+    snapshots: 7317569
+- n_batches: 2440
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.373534601185948
+    advantage_mse: 0.31032273818113076
+    sign_bce: 0.6321186029964704
+    mean_abs_advantage_error: 0.25500039062856483
+    sign_accuracy: 0.8992584607892529
+    snapshots: 7675791
+- n_batches: 2460
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3736515667099208
+    advantage_mse: 0.31044818229422433
+    sign_bce: 0.6320338159015644
+    mean_abs_advantage_error: 0.25499424356590145
+    sign_accuracy: 0.8996416886201899
+    snapshots: 8032120
+- n_batches: 2480
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37365716676486066
+    advantage_mse: 0.3104531625105687
+    sign_bce: 0.6320400163741826
+    mean_abs_advantage_error: 0.25496209049473756
+    sign_accuracy: 0.8997680727511883
+    snapshots: 8390131
+- n_batches: 2500
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3735884909017692
+    advantage_mse: 0.3103860438890456
+    sign_bce: 0.6320244427459822
+    mean_abs_advantage_error: 0.25487178977788694
+    sign_accuracy: 0.900009055286641
+    snapshots: 8746272
+- n_batches: 2500
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.37462611429993814
+    advantage_mse: 0.3111382699005868
+    sign_bce: 0.6348784122947178
+    mean_abs_advantage_error: 0.24972679242451562
+    sign_accuracy: 0.8986264133847616
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.803983023179889
+    first_action_accuracy: 0.8876918054195233
+    average_return: 0.28059364770630607
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07291818132437765
+    average_expansions: 1.047894221351616
+    evaluated_episodes: 30630
+- n_batches: 2520
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3735841389885574
+    advantage_mse: 0.3103807994297222
+    sign_bce: 0.6320333679999278
+    mean_abs_advantage_error: 0.2549059300915336
+    sign_accuracy: 0.8999715853642329
+    snapshots: 9104463
+- n_batches: 2540
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3735550215570454
+    advantage_mse: 0.3103530164958365
+    sign_bce: 0.6320200230360122
+    mean_abs_advantage_error: 0.25490094642212147
+    sign_accuracy: 0.8999790650367196
+    snapshots: 9462639
+- n_batches: 2560
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37354220046736747
+    advantage_mse: 0.3103419663692988
+    sign_bce: 0.6320023124492756
+    mean_abs_advantage_error: 0.2548588283029664
+    sign_accuracy: 0.9000838794254646
+    snapshots: 9818856
+- n_batches: 2580
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3738825289579564
+    advantage_mse: 0.31068526586714934
+    sign_bce: 0.6319726026197203
+    mean_abs_advantage_error: 0.2549288150643314
+    sign_accuracy: 0.9002808318045458
+    snapshots: 10176910
+- n_batches: 2600
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37383738637195374
+    advantage_mse: 0.3106408724829004
+    sign_bce: 0.6319651106525179
+    mean_abs_advantage_error: 0.2548846556153719
+    sign_accuracy: 0.9003356764291122
+    snapshots: 10533358
+- n_batches: 2600
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.37434436304247914
+    advantage_mse: 0.3112275109403645
+    sign_bce: 0.6311684767798114
+    mean_abs_advantage_error: 0.2564376409849894
+    sign_accuracy: 0.8992514382913749
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7934704538034607
+    first_action_accuracy: 0.8851126346718903
+    average_return: 0.27878424326695117
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07472758576373251
+    average_expansions: 0.9158341495266079
+    evaluated_episodes: 30630
+- n_batches: 2620
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3738510411230563
+    advantage_mse: 0.31065426063426677
+    sign_bce: 0.6319677763076238
+    mean_abs_advantage_error: 0.25484340234388375
+    sign_accuracy: 0.9004008948519571
+    snapshots: 10891634
+- n_batches: 2640
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37392722400009576
+    advantage_mse: 0.3107345508407628
+    sign_bce: 0.631926702507304
+    mean_abs_advantage_error: 0.2549235976794348
+    sign_accuracy: 0.9004333157093325
+    snapshots: 11247919
+- n_batches: 2660
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37389509364633056
+    advantage_mse: 0.31070008403058574
+    sign_bce: 0.6319500673114542
+    mean_abs_advantage_error: 0.25488762553225186
+    sign_accuracy: 0.9003530604054163
+    snapshots: 11605946
+- n_batches: 2680
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37389918466947897
+    advantage_mse: 0.31070836496150434
+    sign_bce: 0.6319081692670523
+    mean_abs_advantage_error: 0.2548619518810024
+    sign_accuracy: 0.9005076709822628
+    snapshots: 11964048
+- n_batches: 2700
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.373986573319682
+    advantage_mse: 0.3107929112441113
+    sign_bce: 0.6319365938171185
+    mean_abs_advantage_error: 0.2548445060635046
+    sign_accuracy: 0.9004953722401942
+    snapshots: 12320432
+- n_batches: 2700
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.37462562125787147
+    advantage_mse: 0.3116919055079565
+    sign_bce: 0.6293371249041233
+    mean_abs_advantage_error: 0.2615132840902472
+    sign_accuracy: 0.8993468699465792
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.8000326477309827
+    first_action_accuracy: 0.8882794645772119
+    average_return: 0.2744938015315731
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.07901802749911059
+    average_expansions: 1.0811296114920013
+    evaluated_episodes: 30630
+- n_batches: 2720
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37403647543306096
+    advantage_mse: 0.31084220423540343
+    sign_bce: 0.6319426848770712
+    mean_abs_advantage_error: 0.2548871211417743
+    sign_accuracy: 0.9004906975069493
+    snapshots: 12678483
+- n_batches: 2740
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3739437123117308
+    advantage_mse: 0.3107488394020236
+    sign_bce: 0.6319487031222573
+    mean_abs_advantage_error: 0.25482726973882647
+    sign_accuracy: 0.9003927257885587
+    snapshots: 13034540
+- n_batches: 2760
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37385611351912595
+    advantage_mse: 0.31066241155276025
+    sign_bce: 0.6319369944634818
+    mean_abs_advantage_error: 0.25483101868413977
+    sign_accuracy: 0.9003694566567906
+    snapshots: 13392640
+- n_batches: 2780
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37386033990438283
+    advantage_mse: 0.31066833875141064
+    sign_bce: 0.6319199864526983
+    mean_abs_advantage_error: 0.25483113848709177
+    sign_accuracy: 0.9004709446655838
+    snapshots: 13748749
+- n_batches: 2800
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.373877232327593
+    advantage_mse: 0.3106900575403162
+    sign_bce: 0.6318717230520887
+    mean_abs_advantage_error: 0.2547899110808306
+    sign_accuracy: 0.9006808100818389
+    snapshots: 14106871
+- n_batches: 2800
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3742834587923025
+    advantage_mse: 0.31092767767925283
+    sign_bce: 0.6335577633919374
+    mean_abs_advantage_error: 0.2525940577768696
+    sign_accuracy: 0.9006860592179639
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7967025791707476
+    first_action_accuracy: 0.8877897486124714
+    average_return: 0.2761479096764284
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.0773639193542553
+    average_expansions: 1.0224289911851125
+    evaluated_episodes: 30630
+- n_batches: 2820
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3738449314318336
+    advantage_mse: 0.31065561772271705
+    sign_bce: 0.6318931115500486
+    mean_abs_advantage_error: 0.254743651783923
+    sign_accuracy: 0.9006211446347059
+    snapshots: 14465069
+- n_batches: 2840
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37388560895198786
+    advantage_mse: 0.310695478231724
+    sign_bce: 0.6319012822064077
+    mean_abs_advantage_error: 0.254792055329439
+    sign_accuracy: 0.9005116421425894
+    snapshots: 14810547
+- n_batches: 2860
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3739845184111483
+    advantage_mse: 0.3107985253326772
+    sign_bce: 0.6318599058982286
+    mean_abs_advantage_error: 0.2548183798036996
+    sign_accuracy: 0.9006359553068441
+    snapshots: 15168676
+- n_batches: 2880
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3739061497812325
+    advantage_mse: 0.3107196208766511
+    sign_bce: 0.6318652643093403
+    mean_abs_advantage_error: 0.25476053918003705
+    sign_accuracy: 0.9006513748437586
+    snapshots: 15524855
+- n_batches: 2900
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37402316372438765
+    advantage_mse: 0.3108373477743767
+    sign_bce: 0.6318581341873408
+    mean_abs_advantage_error: 0.2547777387644227
+    sign_accuracy: 0.9006646312336448
+    snapshots: 15882943
+- n_batches: 2900
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3742132990322708
+    advantage_mse: 0.3109372938875569
+    sign_bce: 0.6327600253203745
+    mean_abs_advantage_error: 0.25341116889233706
+    sign_accuracy: 0.9006011145578369
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7997061704211558
+    first_action_accuracy: 0.8860594188703885
+    average_return: 0.27182541339901634
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08168641563166737
+    average_expansions: 1.126803787136794
+    evaluated_episodes: 30630
+- n_batches: 2920
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3741044347314936
+    advantage_mse: 0.31092242035349926
+    sign_bce: 0.6318201183023762
+    mean_abs_advantage_error: 0.25477756597828677
+    sign_accuracy: 0.9008506796514322
+    snapshots: 16239133
+- n_batches: 2940
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37407509874691064
+    advantage_mse: 0.3108922424760383
+    sign_bce: 0.6318285364360801
+    mean_abs_advantage_error: 0.2547318769622824
+    sign_accuracy: 0.9008949594514803
+    snapshots: 16597400
+- n_batches: 2960
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.37407400982370564
+    advantage_mse: 0.31089176926112466
+    sign_bce: 0.631822379878785
+    mean_abs_advantage_error: 0.2547038769890876
+    sign_accuracy: 0.9009209821607631
+    snapshots: 16953640
+- n_batches: 2980
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3740791255288769
+    advantage_mse: 0.31089781258450616
+    sign_bce: 0.6318131030472729
+    mean_abs_advantage_error: 0.2547487423244262
+    sign_accuracy: 0.9009081035549851
+    snapshots: 17299679
+- n_batches: 3000
+  epoch: 3
+  epochs: 3
+  train:
+    total_loss: 0.3740111494629502
+    advantage_mse: 0.31082783260212016
+    sign_bce: 0.6318331422808663
+    mean_abs_advantage_error: 0.2547086425725171
+    sign_accuracy: 0.9008158981349743
+    snapshots: 17657719
+- n_batches: 3000
+  epoch: 3
+  epochs: 3
+  validation:
+    total_loss: 0.3743590495077315
+    advantage_mse: 0.31112991497245157
+    sign_bce: 0.632291327931373
+    mean_abs_advantage_error: 0.2538489183353874
+    sign_accuracy: 0.899214733808604
+    snapshots: 953562
+  greedy:
+    exact_stop_step_accuracy: 0.7994123408423115
+    first_action_accuracy: 0.8877571008814887
+    average_return: 0.270884654837228
+    average_oracle_value: 0.3535118290306837
+    average_regret: 0.08262717419345567
+    average_expansions: 1.2438459027097617
+    evaluated_episodes: 30630
