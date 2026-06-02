@@ -74,13 +74,22 @@ def evaluate_position(
     engine: chess.engine.SimpleEngine,
     depth_deep: int = 5,
     depth_shallow: int = 1,
+    nodes_deep: int | None = None,
+    nodes_shallow: int | None = None,
 ) -> PositionEval:
     """
     Evaluate one (position, move) pair and return all engine quantities.
 
+    Limit type is controlled by the nodes_* parameters:
+      - If nodes_deep / nodes_shallow are given, use node-budget limits
+        (Limit(nodes=N)) instead of depth limits.  This means the effective
+        search depth scales inversely with branching factor, so the VOC
+        comparison becomes sensitive to position complexity.
+      - Default (nodes_* = None): depth-based limits.
+
     Engine call budget (2–4 total):
-      1. depth_shallow multipv=1  →  a_shallow  (VOC denominator move)
-      2. depth_deep   multipv=2  →  e_win_best, e_win_second_best, a_deep;
+      1. shallow limit multipv=1  →  a_shallow  (VOC denominator move)
+      2. deep limit   multipv=2  →  e_win_best, e_win_second_best, a_deep;
                                     also covers e_win_taken and V_deep(a_shallow)
                                     if either falls in the top-2 lines
       3. root_moves=[move_taken] fallback  (only if move_taken not in top-2)
@@ -90,15 +99,19 @@ def evaluate_position(
         p = 0.5 if not board.is_checkmate() else 0.0
         return PositionEval(e_win_best=p, e_win_second_best=p, e_win_taken=p, voc=0.0)
 
+    use_nodes = nodes_deep is not None
+    limit_shallow = chess.engine.Limit(nodes=nodes_shallow or 1) if use_nodes else chess.engine.Limit(depth=depth_shallow)
+    limit_deep = chess.engine.Limit(nodes=nodes_deep) if use_nodes else chess.engine.Limit(depth=depth_deep)
+
     # --- Step 1: shallow search → a_shallow ---
-    shallow_info = engine.analyse(board, chess.engine.Limit(depth=depth_shallow), multipv=1)
+    shallow_info = engine.analyse(board, limit_shallow, multipv=1)
     if not shallow_info:
         return PositionEval(None, None, None, None)
     pv_shallow = shallow_info[0].get("pv")
     a_shallow = pv_shallow[0] if pv_shallow else None
 
     # --- Step 2: deep search multipv=2 ---
-    deep_info = engine.analyse(board, chess.engine.Limit(depth=depth_deep), multipv=2)
+    deep_info = engine.analyse(board, limit_deep, multipv=2)
     if not deep_info:
         return PositionEval(None, None, None, None)
 
@@ -124,12 +137,12 @@ def evaluate_position(
 
     # --- Step 3: fallback for e_win_taken ---
     if e_win_taken is None:
-        fb = engine.analyse(board, chess.engine.Limit(depth=depth_deep), root_moves=[move])
+        fb = engine.analyse(board, limit_deep, root_moves=[move])
         e_win_taken = _win_prob(fb, board) if fb else None
 
     # --- Step 4: fallback for V_deep(a_shallow) ---
     if a_shallow is not None and v_deep_shallow is None:
-        fb = engine.analyse(board, chess.engine.Limit(depth=depth_deep), root_moves=[a_shallow])
+        fb = engine.analyse(board, limit_deep, root_moves=[a_shallow])
         v_deep_shallow = _win_prob(fb, board) if fb else None
 
     # VOC
