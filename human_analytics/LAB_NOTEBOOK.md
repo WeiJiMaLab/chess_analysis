@@ -92,14 +92,22 @@ Avoids a separate `root_moves` fallback call for "near-optimal" moves.
 **MQ sign convention:**  
 MQ ≤ 0 always. This is the negation of the standard "centipawn loss" concept, expressed in win-probability units. MQ = 0 means the optimal move was played. Can be flipped to `error = −MQ ≥ 0` for visualisation if preferred.
 
-#### `voc_mq_analysis.py` (renamed from `voc_mq_exploration.py`)
+#### `slurm/scripts/build_pos_with_engine_eval.py`
 
-Exploratory script: samples middlegame positions (`move_ply > 10`) from `processed_moves_nonzero`, evaluates MQ and VOC, plots:
-- `mq_vs_clock.png` — MQ vs player clock time
-- `rt_vs_voc.png` — log(RT) vs VOC
-- `voc_distribution.png` — histogram of VOC
-- `voc_variance_dist.png` — histogram of per-position VOC std (for n_repeats > 1)
-- `voc_mean_vs_std.png` — scatter of VOC mean vs std
+Unified engine evaluation pipeline (replaces `script_engine_eval.py` and the earlier `voc_mq_eval.py`). Applies Russek et al. filters; computes all six quantities per position.
+
+Subcommands:
+- `eval` — SLURM shard (`--shard-id K --total-shards N`) or local smoke test (`--n-total 10000 --n-workers 10`)
+- `merge` — combines output parquets → `pos_with_engine_eval` table in personal.db
+
+#### `voc_mq_analysis.py`
+
+Pure analysis/plotting script. Reads `pos_with_engine_eval` from personal.db (no engine calls). Produces figures in `figures/mq_voc/`:
+- `voc_hist.png` — distribution of VOC
+- `mq_hist.png` — distribution of MQ
+- `toptwo_hist.png` — distribution of top-2 gap
+- `rt_vs_voc.png` — log(RT) vs VOC with trend
+- `mq_vs_clock.png` — MQ vs player clock with trend
 
 #### `timing_comparison.py`
 
@@ -107,7 +115,7 @@ Times both engines at depths [1, 5, 10] on a small middlegame sample and extrapo
 
 #### `human_analytics/tests/test_engine_analysis.py`
 
-9 unit tests for MQ and VOC contracts (sign, non-positivity, blunder detection, forced-move VOC=0, tactical VOC>0). All pass against Stockfish SF14.
+9 unit tests for MQ and VOC contracts (sign, non-positivity, blunder detection, forced-move VOC=0, tactical VOC>0). All pass against Stockfish SF14 after the PositionEval refactor.
 
 ---
 
@@ -187,6 +195,108 @@ Positions sampled from ply 15–75, one eval per position.
 
 **Correlation log(RT) vs VOC:** r=0.197 (n=100) — in the expected direction. Higher VOC → more thinking time. Small-sample estimate, but directionally consistent with Russek et al.
 Figures in `figures/voc_mq_analysis/`.
+
+## pos_with_engine_eval: what is computed
+
+For each filtered move (ply 15–75, opponent_clock ≥ 60s) the following are computed by `evaluate_position()` in **2–4 engine calls**:
+
+| Column | Formula | Range | Interpretation |
+|---|---|---|---|
+| `e_win_best` | V_deep(a_deep) | [0, 1] | Win prob of objectively best move (depth_deep=5) |
+| `e_win_second_best` | V_deep(rank-2 move) | [0, 1] | Win prob of second-best move |
+| `e_win_taken` | V_deep(move_taken) | [0, 1] | Win prob of the move actually played |
+| `voc` | e_win_best − V_deep(a_shallow) | [0, 1] | Gain from deep search vs committing to depth-1 best |
+| `mq` | e_win_taken − e_win_best | [−1, 0] | How suboptimal was the played move (0 = optimal) |
+| `toptwo` | e_win_best − e_win_second_best | [0, 1] | How decisively the best move beats 2nd-best |
+
+All win probabilities are from the **side to move's perspective** before the move is made.
+Engine call budget: (1) depth_shallow=1 multipv=1 → a_shallow; (2) depth_deep=5 multipv=2 → a_deep, e_win_best, e_win_second_best; (3–4) optional root_moves fallbacks for e_win_taken and V_deep(a_shallow) if not in top-2.
+
+## build_pos_with_engine_eval smoke test — 10K positions, 10 workers (2026-06-02)
+
+Filters: ply 15–75, opponent_clock ≥ 60s. Stockfish depth=5.
+
+**Timing:**
+- Evaluation: **17.7s** for 10K positions → **565 pos/s** with 10 workers (0.0018s/pos)
+- Wall clock: 51s total (sampling the JOIN costs ~30s; pre-materialised shard mode avoids this in SLURM)
+- Extrapolation (evaluation only): 100K → ~3 min, 1M → ~30 min at 10 workers
+
+**Timing:** 10K positions in **16.7s** → **597 pos/s** (10 workers, Stockfish depth=5/1)
+
+**Output statistics (n=10,000, all 6 quantities):**
+
+| Column | Mean | Std | p50 |
+|---|---|---|---|
+| `e_win_best` | +0.593 | 0.398 | +0.595 |
+| `e_win_taken` | +0.477 | 0.409 | +0.490 |
+| `voc` | +0.098 | 0.212 | +0.000 |
+| `mq` | −0.117 | 0.235 | +0.000 |
+| `toptwo` | +0.122 | 0.217 | +0.011 |
+
+- Pearson r(log RT, VOC) = **+0.086** (n=10K)
+- Loaded into `pos_with_engine_eval` table in personal.db
+- Figures in `figures/mq_voc/`
+
+## 2026-06-02: Plot standardization + full 100K analysis
+
+### Plot conventions
+- All figures flat in `figures/` (no subfolders); named `x_vs_y.png` or `x_histogram.png`
+- Histograms: 50 bars, dashed lines at mean (black) and median (gray), title = `n = X moves`
+- Bivariate plots: Analyzer 2×2 dashboard (raw trend | quantile bins | ×2 by ply tertile)
+- "log" not "ln" in all axis labels
+- No scatter in background of bivariate plots
+
+### Structural cleanup
+- Removed redundant `script_engine_eval.py` and `script_merge_evals.py` (replaced by `build_pos_with_engine_eval.py`)
+- `build_pos_with_engine_eval.py` merge now adds `ply_tertiles` (ntile(3) by move_ply) to `pos_with_engine_eval` for Analyzer compatibility
+
+### MQ sign fix
+MQ was occasionally positive due to aspiration window differences between Stockfish's multipv=2 search and the root_moves fallback search. Clamped to `min(0, e_win_taken - e_win_best)` in `PositionEval.mq` property.
+
+### 100K evaluation results (Stockfish depth=5/1, ply 15–75, opponent_clock ≥ 60s)
+
+| Column | Mean | Std | p50 |
+|---|---|---|---|
+| `e_win_best` | +0.593 | 0.397 | +0.585 |
+| `e_win_second_best` | +0.470 | 0.401 | +0.487 |
+| `e_win_taken` | +0.480 | 0.408 | +0.490 |
+| `VOC` | +0.100 | 0.216 | +0.000 |
+| `MQ` | −0.116 | 0.227 | +0.000 |
+| `toptwo` | +0.123 | 0.214 | +0.013 |
+
+- VOC non-trivial (>0.005): **33%** of positions
+- MQ non-trivial: **38%** of moves
+- r(log RT, VOC) = **+0.097** (n=100K) — in the expected direction
+- r(MQ, clock) = **−0.098** (n=100K) — see below
+
+### MQ vs clock: finding and interpretation
+
+**Expected:** more clock → more time available → better move → MQ closer to 0 (positive r).
+
+**Observed:** r(MQ, clock) = −0.098, and this is **negative within every ply tertile**:
+
+| Tertile | Ply range | r(MQ, clock) |
+|---|---|---|
+| 1 | 15–31 | −0.024 |
+| 2 | 32–49 | −0.037 |
+| 3 | 50–75 | −0.007 |
+
+**Interpretation:** Players with more clock remaining at a given ply have been playing quickly up to that point — moving through low-VOC (book/simple) positions without spending much time. Their intuitive choices in those positions deviate from depth-5's specific tactical preferences, giving more negative MQ. Players with less clock have been burning time on high-VOC (complex) positions, and their deliberate moves align better with depth-5. This is consistent with VOC theory: the MQ-clock relationship is mediated by the complexity (VOC) of the positions being played. At depth=15 (Russek et al.), this effect may differ since the engine's deeper evaluation more closely tracks human strategic understanding.
+
+### VOC vs Russek et al. effect sizes
+
+| | Our result (depth=5, n=100K) | Russek et al. (depth=15, n=519M) |
+|---|---|---|
+| r(log RT, VOC) | +0.097 | Positive (similar magnitude, Figure 2) |
+| Engine | Stockfish | Stockfish |
+| Depth | 5 | 15 |
+| VOC non-zero | 33% | Higher (depth=15 finds more tactics) |
+
+Our shallower depth (5 vs 15) produces a noisier VOC estimate — ~67% of positions have VOC=0 vs fewer at depth=15. The effect direction is consistent. Increasing depth to 15 would sharpen VOC discrimination and likely increase r.
+
+### Figures produced
+All in `figures/` (flat):
+`clock_vs_movetime`, `clock_opp_vs_movetime`, `npossiblemoves_vs_movetime`, `pieces_exc_pawns_vs_movetime`, `self_pieces_exc_pawns_vs_movetime`, `ply_vs_movetime`, `ply_vs_pinstant`, `movetime_histogram`, `log_movetime_histogram`, `voc_histogram`, `mq_histogram`, `toptwo_histogram`, `voc_vs_movetime`, `mq_vs_clock`.
 
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)

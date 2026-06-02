@@ -428,8 +428,7 @@ class Analyzer:
         apply_poster_style()
         fig, ax = plt.subplots(figsize=(22, 18))
         self.plot_quantile_heatmap(ax, alpha_mode=heatmap_alpha_mode)
-        subtitle = f"{self.n_games:,} games | {self.n_moves:,} moves"
-        fig.suptitle(f"{self.title}\n{subtitle}", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
+        fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
         plt.tight_layout(rect=[0, 0, 1, 0.94])
         out_dir = os.path.dirname(output_path)
         if out_dir:
@@ -490,8 +489,7 @@ class Analyzer:
         else:
             raise ValueError(f"Unsupported layout: {layout}")
 
-        subtitle = f"{self.n_games:,} games | {self.n_moves:,} moves"
-        fig.suptitle(f"{self.title}\n{subtitle}", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
+        fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
 
         plt.tight_layout(rect=[0, 0, 1, 0.94])
         out_dir = os.path.dirname(output_path)

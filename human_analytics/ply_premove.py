@@ -31,9 +31,8 @@ def main():
         title="Instant Move Arc: Probability vs Game Stage"
     )
     
-    # Save Plots
-    figures_dir = os.path.join(src_dir, "figures", "ply_instantmove")
-    analyzer.save_dashboard(os.path.join(figures_dir, "combined.png"), layout='1x2')
+    figures_dir = os.path.join(src_dir, "figures")
+    analyzer.save_dashboard(os.path.join(figures_dir, "ply_vs_pinstant.png"), layout="1x2")
     
     conn.close()
 
