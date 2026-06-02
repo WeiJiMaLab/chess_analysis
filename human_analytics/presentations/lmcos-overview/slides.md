@@ -146,26 +146,26 @@ math: katex
 
 # What the engine gives us
 
-<table class="text-xs w-full mt-6 border-collapse">
+<table class="text-xs max-w-2xl mt-6 border-collapse">
   <thead>
     <tr class="border-b border-gray-300">
-      <th class="text-left py-2 pr-6 font-semibold">Quantity</th>
-      <th class="text-left py-2 pr-6 font-semibold">Formula</th>
-      <th class="text-left py-2 font-semibold">Interpretation</th>
+      <th class="text-left py-2 pr-5 font-bold">Quantity</th>
+      <th class="text-left py-2 pr-5 font-bold">Formula</th>
+      <th class="text-left py-2 font-bold">Interpretation</th>
     </tr>
   </thead>
   <tbody class="text-[11px] opacity-90">
-    <tr><td class="py-1.5 pr-6 font-mono">e_win_best</td><td class="pr-6">V<sub>deep</sub>(a<sub>deep</sub>)</td><td>Win prob of objectively best move</td></tr>
-    <tr><td class="py-1.5 pr-6 font-mono">e_win_second_best</td><td class="pr-6">V<sub>deep</sub>(rank-2)</td><td>Win prob of second-best move</td></tr>
-    <tr><td class="py-1.5 pr-6 font-mono">e_win_taken</td><td class="pr-6">V<sub>deep</sub>(move played)</td><td>Win prob of the actual move</td></tr>
+    <tr><td class="py-1.5 pr-5 font-mono">e_win_best</td><td class="pr-5">V<sub>deep</sub>(a<sub>deep</sub>)</td><td>Win prob of objectively best move</td></tr>
+    <tr><td class="py-1.5 pr-5 font-mono">e_win_second_best</td><td class="pr-5">V<sub>deep</sub>(rank-2)</td><td>Win prob of second-best move</td></tr>
+    <tr><td class="py-1.5 pr-5 font-mono">e_win_taken</td><td class="pr-5">V<sub>deep</sub>(move played)</td><td>Win prob of the actual move</td></tr>
     <tr class="border-t border-gray-200 text-accent font-semibold">
-      <td class="py-1.5 pr-6 font-mono">VOC</td><td class="pr-6">e_win_best − V<sub>deep</sub>(a<sub>shallow</sub>)</td><td>Gain from deep over shallow best &nbsp;(≥ 0)</td>
+      <td class="py-1.5 pr-5 font-mono">VOC</td><td class="pr-5">e_win_best − V<sub>deep</sub>(a<sub>shallow</sub>)</td><td>Gain from deep over shallow best &nbsp;(≥ 0)</td>
     </tr>
     <tr class="text-accent font-semibold">
-      <td class="py-1.5 pr-6 font-mono">MQ</td><td class="pr-6">e_win_taken − e_win_best</td><td>How suboptimal was the move played &nbsp;(≤ 0)</td>
+      <td class="py-1.5 pr-5 font-mono">MQ</td><td class="pr-5">e_win_taken − e_win_best</td><td>How suboptimal was the move played &nbsp;(≤ 0)</td>
     </tr>
     <tr class="text-accent font-semibold">
-      <td class="py-1.5 pr-6 font-mono">toptwo</td><td class="pr-6">e_win_best − e_win_second_best</td><td>How decisive is the best move &nbsp;(≥ 0)</td>
+      <td class="py-1.5 pr-5 font-mono">toptwo</td><td class="pr-5">e_win_best − e_win_second_best</td><td>How decisive is the best move &nbsp;(≥ 0)</td>
     </tr>
   </tbody>
 </table>
@@ -246,14 +246,27 @@ math: katex
 
 # Correlation matrix
 
-<div class="grid grid-cols-[62fr_38fr] gap-8 items-center h-[calc(100%-3.5rem)]">
+<div class="grid grid-cols-[60fr_40fr] gap-8 items-center h-[calc(100%-3.5rem)]">
   <img class="w-full object-contain max-h-[72vh]" src="/figures/correlation_matrix.png" />
-  <div class="space-y-3 text-xs leading-relaxed">
-    <div class="font-semibold text-sm mb-2">n = 1,000,000 · Pearson r</div>
-    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>VOC ↔ MQ</b> r = −0.42 — positions where deep search helps are also ones where humans blunder more</div>
-    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>toptwo ↔ MQ</b> r = −0.30 — decisive positions penalise errors more heavily</div>
-    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>Ply ↔ own material</b> r = −0.81 — as expected: pieces leave the board over the game</div>
-    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>log(RT)</b> correlates positively with branching (0.20) and VOC (0.10); negatively with toptwo (−0.06) and MQ (−0.12)</div>
+  <div>
+    <div class="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-2">n = 1,000,000 · Pearson r</div>
+    <table class="text-xs w-full border-collapse">
+      <thead>
+        <tr class="border-b border-gray-200">
+          <th class="text-left py-1 pr-3 font-bold">Pair</th>
+          <th class="text-right py-1 font-bold">r</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="py-1 pr-3 opacity-80">Ply ↔ own material</td><td class="text-right font-mono text-red-500 font-semibold">−0.81</td></tr>
+        <tr><td class="py-1 pr-3 opacity-80">VOC ↔ MQ</td><td class="text-right font-mono text-red-500 font-semibold">−0.42</td></tr>
+        <tr><td class="py-1 pr-3 opacity-80">toptwo ↔ MQ</td><td class="text-right font-mono text-red-400 font-semibold">−0.30</td></tr>
+        <tr class="border-t border-gray-100"><td class="py-1 pr-3 opacity-80">branching ↔ log(RT)</td><td class="text-right font-mono text-blue-600 font-semibold">+0.20</td></tr>
+        <tr><td class="py-1 pr-3 opacity-80">VOC ↔ log(RT)</td><td class="text-right font-mono text-blue-400 font-semibold">+0.10</td></tr>
+        <tr><td class="py-1 pr-3 opacity-80">MQ ↔ log(RT)</td><td class="text-right font-mono text-red-300 font-semibold">−0.12</td></tr>
+        <tr><td class="py-1 pr-3 opacity-80">toptwo ↔ log(RT)</td><td class="text-right font-mono text-red-300 font-semibold">−0.06</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -261,26 +274,25 @@ math: katex
 
 # Summary
 
-<div class="mt-6 max-w-3xl space-y-4">
-  <div class="grid grid-cols-2 gap-6 text-sm">
-    <div class="p-3 bg-neutral-soft border-l-2 border-accent">
-      <b class="text-accent text-xs uppercase tracking-wider">Confirmed</b>
-      <ul class="mt-2 list-disc pl-4 space-y-1 text-xs">
-        <li>log(RT) ∝ VOC &nbsp;—&nbsp; r = +0.096 ✓</li>
-        <li>VOC spike at 0, right-skewed tail ✓</li>
-        <li>More clock → more thinking ✓</li>
-        <li>Branching & material drive deliberation ✓</li>
-      </ul>
-    </div>
-    <div class="p-3 bg-neutral-soft border-l-2 border-amber-500">
-      <b class="text-amber-700 text-xs uppercase tracking-wider">Open</b>
-      <ul class="mt-2 list-disc pl-4 space-y-1 text-xs">
-        <li>MQ–clock is negative within all ply tertiles</li>
-        <li>67% zero-VOC at depth=5 → need depth=15</li>
-        <li>E[ΔUC] (expected VOC) not yet computed</li>
-        <li>Scale to full 88M-position dataset</li>
-      </ul>
-    </div>
+<div class="mt-4 max-w-3xl space-y-4 text-sm">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent">
+    <b class="text-accent text-xs uppercase tracking-wider">Key results</b>
+    <ul class="mt-2 list-none space-y-1 text-xs">
+      <li>✓ <b>log(RT) ∝ VOC</b> — r = +0.096 (n=1M): humans think longer when computation pays</li>
+      <li>✓ <b>Branching is the strongest RT predictor</b> — r = +0.20; more options → more deliberation</li>
+      <li>✓ <b>Decisive positions → faster play</b> — toptwo ↔ log(RT) = −0.06, contrasting VOC</li>
+      <li>✓ <b>VOC ↔ MQ = −0.42</b> — positions where thinking matters are also where humans err</li>
+      <li>⚠ <b>MQ–clock is negative</b> (within all ply tertiles) — more time → worse depth-5 MQ; likely a depth artefact and VOC-mediated selection effect</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400">
+    <b class="text-amber-700 text-xs uppercase tracking-wider">Open questions</b>
+    <ul class="mt-2 list-none space-y-1 text-xs text-amber-900">
+      <li>? <b>VOC_depth vs VOC_budget</b> — does a node-budget limit change correlations with branching / material?</li>
+      <li>? <b>Depth=15</b> — 67% zero-VOC at depth=5; deeper search needed to replicate Russek et al. fully</li>
+      <li>? <b>E[ΔUC]</b> — expected VOC over the top-5 depth-1 candidates (explains RT even when ΔUC=0)</li>
+      <li>? <b>Full 88M dataset</b> — current analyses are on 1M sample</li>
+    </ul>
   </div>
 </div>
 

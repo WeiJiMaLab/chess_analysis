@@ -146,7 +146,7 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
 
     apply_poster_style()
     fig, ax = plt.subplots(figsize=(10, 8))
-    im = ax.imshow(corr.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+    im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
     ax.set_xticks(range(n_vars))
     ax.set_xticklabels(corr.columns, fontsize=11, rotation=30, ha="right")
     ax.set_yticks(range(n_vars))
