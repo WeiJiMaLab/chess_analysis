@@ -11,7 +11,6 @@ import chess.engine
 import chess.svg
 import duckdb
 import matplotlib.pyplot as plt
-import dask.dataframe as dd
 from IPython.display import SVG, display
 
 # Constants

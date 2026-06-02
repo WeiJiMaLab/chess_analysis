@@ -18,14 +18,14 @@ import unittest
 )
 class TestPipelineCompareSmoke(unittest.TestCase):
     def test_legacy_new_nonzero_games_match_short_window(self) -> None:
-        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         scratch = os.environ.get(
             "PIPELINE_COMPARE_SCRATCH",
             "/scratch/gpfs/GRIFFITHS/hl4291/tmp/pipeline_smoke_unittest",
         )
         cmd = [
             sys.executable,
-            os.path.join(repo, "src", "slurm", "scripts", "tests", "compare_legacy_new_pipeline_smoke.py"),
+            os.path.join(repo, "human_analytics", "slurm", "scripts", "tests", "compare_legacy_new_pipeline_smoke.py"),
             "--clean",
             "--scratch-base",
             scratch,
@@ -38,7 +38,7 @@ class TestPipelineCompareSmoke(unittest.TestCase):
             "--memory-limit",
             "12GB",
         ]
-        env = {**os.environ, "PYTHONPATH": os.path.join(repo, "src")}
+        env = {**os.environ, "PYTHONPATH": os.path.join(repo, "human_analytics")}
         p = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, text=True, timeout=7200)
         self.assertEqual(p.returncode, 0, msg=p.stdout + "\n" + p.stderr)
         self.assertIn("delta: +0", p.stdout)

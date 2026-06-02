@@ -17,10 +17,10 @@ N_BINS = 60
 
 def create_histogram_bins(conn, table_name, value_col, out_table, n_bins=N_BINS):
     """
-    Build equal-width histogram bins and counts in SQL.
+    Build equal-width histogram bins and counts in a TEMPORARY SQL table.
     """
     conn.execute(f"""
-        CREATE OR REPLACE TABLE {out_table} AS
+        CREATE OR REPLACE TEMPORARY TABLE {out_table} AS
         WITH stats AS (
             SELECT
                 min({value_col}) AS min_v,
@@ -78,13 +78,13 @@ def main():
     # Create temporary view with computed log-transform
     conn.execute(f"CREATE OR REPLACE TEMPORARY VIEW _summary_view AS SELECT *, ln(move_time + {EPSILON}) as ln_move_time FROM {base_table}")
     
-    create_histogram_bins(conn, "_summary_view", "move_time", "_move_time_hist_bins")
-    create_histogram_bins(conn, "_summary_view", "ln_move_time", "_ln_move_time_hist_bins")
+    create_histogram_bins(conn, "_summary_view", "move_time", "_move_time_hist_bins_tmp")
+    create_histogram_bins(conn, "_summary_view", "ln_move_time", "_ln_move_time_hist_bins_tmp")
 
     # 5. Load binned data
     print("Loading binned histograms...")
-    df_move_bins = conn.execute("SELECT * FROM _move_time_hist_bins ORDER BY bin_idx").df()
-    df_ln_move_bins = conn.execute("SELECT * FROM _ln_move_time_hist_bins ORDER BY bin_idx").df()
+    df_move_bins = conn.execute("SELECT * FROM _move_time_hist_bins_tmp ORDER BY bin_idx").df()
+    df_ln_move_bins = conn.execute("SELECT * FROM _ln_move_time_hist_bins_tmp ORDER BY bin_idx").df()
     conn.close()
 
     # 6. Plotting
