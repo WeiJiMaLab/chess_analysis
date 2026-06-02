@@ -122,6 +122,62 @@ def plot_voc_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -> N
     analyzer.save_dashboard(output_path)
 
 
+def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
+    """Pearson correlation matrix: ply, branching, own material, VOC, toptwo, MQ, log(RT)."""
+    df = conn.execute(f"""
+        SELECT p.move_ply, p.n_possible_moves, pm.n_self_pieces_exc_pawns,
+               p.voc, p.toptwo, p.mq, ln(p.move_time) AS log_T
+        FROM {_TABLE} p
+        JOIN processed_moves_nonzero pm ON p.gid = pm.gid AND p.move_ply = pm.move_ply
+        WHERE p.move_time > 0
+    """).df()
+
+    labels = {
+        "move_ply": "Ply",
+        "n_possible_moves": "Branching",
+        "n_self_pieces_exc_pawns": "Own material",
+        "voc": "VOC",
+        "toptwo": "toptwo",
+        "mq": "MQ",
+        "log_T": "log(RT)",
+    }
+    corr = df[list(labels)].corr().rename(columns=labels, index=labels)
+    n_vars = len(corr)
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(corr.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+    ax.set_xticks(range(n_vars))
+    ax.set_xticklabels(corr.columns, fontsize=11, rotation=30, ha="right")
+    ax.set_yticks(range(n_vars))
+    ax.set_yticklabels(corr.index, fontsize=11)
+    for i in range(n_vars):
+        for j in range(n_vars):
+            val = corr.values[i, j]
+            color = "white" if abs(val) > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                    fontsize=9, color=color,
+                    fontweight="bold" if i == j else "normal")
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Pearson r", fontsize=11)
+    ax.set_title(f"Correlation matrix  (n = {len(df):,})", fontsize=13, pad=12)
+    plt.tight_layout()
+    _save(output_path)
+
+
+def plot_toptwo_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
+    """log(RT) vs toptwo — 2×2 dashboard stratified by ply tertile."""
+    analyzer = Analyzer(
+        db_conn=conn,
+        table_name=_VIEW,
+        x_var=Variable(column="toptwo", is_log=False, name="toptwo"),
+        y_var=Variable(column="move_time", is_log=True, name="RT"),
+        filter_query="move_time > 0",
+        title="toptwo vs. log(RT)",
+    )
+    analyzer.save_dashboard(output_path)
+
+
 def plot_mq_vs_clock(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
     """MQ vs player clock time — 2×2 dashboard stratified by ply tertile."""
     analyzer = Analyzer(
@@ -204,7 +260,9 @@ def main(argv: list[str] | None = None) -> None:
     plot_mq_histogram(df, os.path.join(out, "mq_histogram.png"))
     plot_toptwo_histogram(df, os.path.join(out, "toptwo_histogram.png"))
     plot_voc_vs_movetime(conn, os.path.join(out, "voc_vs_movetime.png"))
+    plot_toptwo_vs_movetime(conn, os.path.join(out, "toptwo_vs_movetime.png"))
     plot_mq_vs_clock(conn, os.path.join(out, "mq_vs_clock.png"))
+    plot_correlation_matrix(conn, os.path.join(out, "correlation_matrix.png"))
 
     conn.close()
 

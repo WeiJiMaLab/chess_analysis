@@ -118,20 +118,6 @@ math: katex
 
 ---
 
-# Does richer material drive longer thinking?
-
-<div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
-  <div class="space-y-4 text-sm">
-    <div><span class="label">x</span> Non-pawn pieces on board</div>
-    <div><span class="label">y</span> log(Move Time)</div>
-    <div><span class="label">Expect</span> More pieces → more interactions → more thinking</div>
-    <div class="finding"><span class="label">Finding</span> Positive; compresses in the endgame tertile as material drops and positions simplify.</div>
-  </div>
-  <img class="w-full object-contain max-h-[72vh]" src="/figures/pieces_exc_pawns_vs_movetime.png" />
-</div>
-
----
-
 # Does your own material count matter?
 
 <div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
@@ -230,6 +216,20 @@ math: katex
 
 ---
 
+# Does a decisive best move mean more or less thinking?
+
+<div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
+  <div class="space-y-4 text-sm">
+    <div><span class="label">x</span> toptwo = e_win_best − e_win_second_best &nbsp;(≥ 0)</div>
+    <div><span class="label">y</span> log(Move Time)</div>
+    <div><span class="label">Expect</span> Ambiguous — decisive positions may need more search to find, or may be quickly recognised</div>
+    <div class="finding"><span class="label">Finding</span> <b>r = −0.064</b> (n = 1M) — negative. When one move is clearly superior, players deliberate less. Contrast: VOC is positive, as players think more when computation could flip the best move.</div>
+  </div>
+  <img class="w-full object-contain max-h-[72vh]" src="/figures/toptwo_vs_movetime.png" />
+</div>
+
+---
+
 # Does more time mean better moves?
 
 <div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
@@ -240,6 +240,21 @@ math: katex
     <div class="finding"><span class="label">Finding</span> <b>r = −0.091</b> (n = 1M) — counterintuitive. More clock → worse MQ, even within ply tertiles. Mediated by VOC: fast-played book positions hurt depth-5 MQ.</div>
   </div>
   <img class="w-full object-contain max-h-[72vh]" src="/figures/mq_vs_clock.png" />
+</div>
+
+---
+
+# Correlation matrix
+
+<div class="grid grid-cols-[62fr_38fr] gap-8 items-center h-[calc(100%-3.5rem)]">
+  <img class="w-full object-contain max-h-[72vh]" src="/figures/correlation_matrix.png" />
+  <div class="space-y-3 text-xs leading-relaxed">
+    <div class="font-semibold text-sm mb-2">n = 1,000,000 · Pearson r</div>
+    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>VOC ↔ MQ</b> r = −0.42 — positions where deep search helps are also ones where humans blunder more</div>
+    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>toptwo ↔ MQ</b> r = −0.30 — decisive positions penalise errors more heavily</div>
+    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>Ply ↔ own material</b> r = −0.81 — as expected: pieces leave the board over the game</div>
+    <div class="p-2 bg-neutral-soft rounded text-[11px]"><b>log(RT)</b> correlates positively with branching (0.20) and VOC (0.10); negatively with toptwo (−0.06) and MQ (−0.12)</div>
+  </div>
 </div>
 
 ---
