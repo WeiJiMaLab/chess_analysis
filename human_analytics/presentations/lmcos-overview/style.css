@@ -57,6 +57,26 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
   border-radius: 0.75rem;
 }
 
+/* Left-panel metadata labels for the x/y/expect/finding layout */
+.label {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  opacity: 0.7;
+  margin-right: 0.4rem;
+}
+
+.finding {
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-accent);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 0.5rem;
+  line-height: 1.5;
+}
+
 /* Tiny label when comparing architecture diagram presets */
 .architecture-preset-caption {
   font-size: 10px;
