@@ -272,6 +272,44 @@ math: katex
 
 ---
 
+# What are we really trying to show?
+
+<div class="mt-4 max-w-3xl space-y-4 text-sm">
+  <div class="p-4 bg-neutral-soft border-l-4 border-accent rounded">
+    <div class="text-accent font-bold uppercase tracking-widest text-[10px] mb-2">Core question</div>
+    <div class="text-lg font-semibold">
+      opt_num_think_steps(s) &nbsp;↔&nbsp; actual_num_think_steps(s)
+    </div>
+    <div class="mt-2 text-xs opacity-70">
+      <b>Left:</b> normatively optimal computation depth — where marginal gain = marginal cost under the reward–compute tradeoff.<br>
+      <b>Right:</b> observed think time (RT) — a proxy for internal evaluation steps.
+    </div>
+  </div>
+
+  <div class="text-xs opacity-60 font-semibold uppercase tracking-widest mt-2">Everything else is a proxy for the left side</div>
+
+  <table class="text-xs w-full border-collapse mt-1">
+    <thead>
+      <tr class="border-b border-gray-200">
+        <th class="text-left py-1 pr-4 font-bold">Proxy</th>
+        <th class="text-left py-1 pr-4 font-bold">What it captures</th>
+        <th class="text-left py-1 font-bold">Quality</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="py-1 pr-4 font-mono">gain_depth</td><td class="pr-4 opacity-80">V_5(a_5) − V_5(a_1): total gain from deeper search</td><td class="text-amber-600">crude</td></tr>
+      <tr><td class="py-1 pr-4 font-mono">gain_budget</td><td class="pr-4 opacity-80">V_96(a_96) − V_96(a_1): same with node budget</td><td class="text-amber-600">crude</td></tr>
+      <tr><td class="py-1 pr-4 font-mono">entropy_topk</td><td class="pr-4 opacity-80">H(softmax over top-K shallow Q-values): candidate uncertainty</td><td class="text-blue-600">better</td></tr>
+      <tr><td class="py-1 pr-4 font-mono">marginal_gain(d)</td><td class="pr-4 opacity-80">V(d+1) − V(d): slope of benefit curve at depth d</td><td class="text-blue-600">better</td></tr>
+      <tr><td class="py-1 pr-4 font-mono">E[ΔUC]</td><td class="pr-4 opacity-80">Expected gain weighted by P(choose k | shallow)</td><td class="text-green-600 font-semibold">best (Russek et al.)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="text-xs opacity-60 mt-2">Current analyses use gain_depth and gain_budget. entropy_topk, marginal_gain, and E[ΔUC] are next.</div>
+</div>
+
+---
+
 # Summary
 
 <div class="mt-4 max-w-3xl space-y-4 text-sm">

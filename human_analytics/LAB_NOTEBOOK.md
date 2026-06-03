@@ -298,6 +298,87 @@ Our shallower depth (5 vs 15) produces a noisier VOC estimate — ~67% of positi
 All in `figures/` (flat):
 `clock_vs_movetime`, `clock_opp_vs_movetime`, `npossiblemoves_vs_movetime`, `pieces_exc_pawns_vs_movetime`, `self_pieces_exc_pawns_vs_movetime`, `ply_vs_movetime`, `ply_vs_pinstant`, `movetime_histogram`, `log_movetime_histogram`, `voc_histogram`, `mq_histogram`, `toptwo_histogram`, `voc_vs_movetime`, `mq_vs_clock`.
 
+## Theoretical framework: what are we really trying to show? (2026-06-03)
+
+### The core question
+
+$$\text{opt\_num\_think\_steps}(s) \leftrightarrow \text{actual\_num\_think\_steps}(s)$$
+
+where:
+- **opt_num_think_steps** — the normatively optimal amount of computation for position *s*, defined under a reward–computation tradeoff: the depth (or budget) *d\** where the marginal gain from one more step equals the marginal cost of that step
+- **actual_num_think_steps** — the observed think time (RT) in seconds, as a proxy for the number of internal evaluation steps
+
+Everything else in this project is a **proxy for the left side**. The empirical hypothesis is that rational agents allocate computation in proportion to how much it normatively helps.
+
+---
+
+### Hierarchy of proxies for opt_num_think_steps
+
+**Crude proxies** (compare two fixed depth points, ignoring cost):
+
+| Proxy | Description | Limitation |
+|---|---|---|
+| `gain_depth` = V_5(a_5) − V_5(a_1) | Total gain from depth=5 vs depth=1 | Arbitrary depth comparison; no marginal structure |
+| `gain_budget` = V_96(a_96) − V_96(a_1) | Same with node-budget limits | Same; budget limit still arbitrary |
+
+**Better proxy** (captures the marginal value curve):
+
+> `marginal_gain(d)` = V(d+1) − V(d) — how much does *one more* computation step improve the outcome?
+>
+> opt_num_think_steps is where `marginal_gain(d) = cost`. The proxy needs to approximate this slope, not just the total difference between two endpoints.
+
+Computing `marginal_gain` at multiple depths (d=1,2,3,5,10,15) gives the **benefit curve**, and the optimal stopping point is where it crosses the cost line. Our gain_depth measures the area under this curve between depth 1 and 5, not the slope at the operating point.
+
+---
+
+### Why the current formulation misses the core
+
+**gain_depth/gain_budget capture only search-depth uncertainty**: "does going deeper on the best move help?" They miss:
+
+1. **Candidate-set uncertainty** — the noise from not knowing *which* move to evaluate deeply. A position with 10 near-equal candidates has high uncertainty even if depth-1 and depth-5 agree on the winner.
+
+2. **Position-dependent noise** — the reliability σ(position) of the shallow estimator varies. For a tactical position, V_1(a) is a noisy estimate of V*(a); for a quiet endgame it is not. β = 1/σ² is not a free parameter but should emerge from the position's actual evaluation noise.
+
+3. **Satisficing stopping rule** — agents don't compute to certainty; they stop when confidence is *sufficient*. Even at depth=5, uncertainty remains. The stopping rule is:
+   $$T = \min\{d : P(a_d = a^* \mid s) \geq \theta\}$$
+   where θ is the agent's satisficing threshold ("80% sure"), not a fixed depth. This means the observed RT is the *time to threshold crossing*, not a fixed budget.
+
+Together, this is a **Drift-Diffusion / sequential stopping** process: evidence for each candidate accumulates as a noisy drift; the decision fires when one candidate's evidence crosses a threshold. High-uncertainty positions take longer to reach threshold.
+
+---
+
+### What E[ΔUC] adds (Russek et al. Figures 4–5)
+
+$$E[\Delta\text{UC}] = V_\text{deep}(a_\text{deep}) - \sum_k P(a_k \mid \text{shallow}) \cdot V_\text{deep}(a_k)$$
+
+where $P(a_k \mid \text{shallow}) \propto \exp(\beta \cdot V_\text{shallow}(a_k))$ over the top-*K* candidates.
+
+This does incorporate candidate-set noise through β. But β should not be a free tuning parameter — it should equal 1/σ²(position), the empirically estimated noise in the agent's shallow evaluator. The softmax also does not collapse at deep depth — even V_deep is uncertain; the agent simply stops when σ_d is small enough relative to θ.
+
+---
+
+### Next analysis targets
+
+- [ ] **marginal_gain curve**: evaluate positions at depths {1, 2, 3, 5, 10, 15}; compute V(d+1)−V(d) at each step; fit where the curve flattens
+- [ ] **entropy_topk**: run multipv=K at depth=1; compute entropy of softmax(β·V_shallow) over top-K moves; compare with RT
+- [ ] **E[ΔUC]** with top-5 candidates: implement Russek et al. Figures 4–5 variant
+- [ ] **Estimate β from data**: regress human move choices against softmax(β·V_shallow) to calibrate decision temperature
+- [ ] **Compare** opt_num_think_steps (normative, from marginal curve) vs actual RT: does the marginal-gain crossing point predict RT better than gain_depth?
+
+---
+
+### Connection to the lmcos architecture
+
+The **DP Oracle** in lmcos computes opt_num_think_steps exactly (under known cost C):
+$$V^*(s) = \max\bigl(V(s),\; \mathbb{E}[V^*(\text{child})] - C\bigr)$$
+
+The human data provides actual_num_think_steps. The fundamental validation is:
+$$r\bigl(\text{DP-Oracle opt depth},\; \text{human RT}\bigr) > r\bigl(\text{gain\_depth},\; \text{human RT}\bigr)$$
+
+The current analyses (gain_depth, gain_budget, entropy_topk) are stepping stones toward computing the left side of this correlation properly.
+
+---
+
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)
 - [ ] Add `opponent_clock_time >= 60s` filter to match Russek et al.
