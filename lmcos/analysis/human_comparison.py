@@ -96,11 +96,16 @@ def extract_tree_features(t: dict) -> dict | None:
         else:
             toptwo = float("nan")
 
-        # gain_depth_equiv: best Q at final step - best Q at step 0
-        q_step0 = q_trace[0]
+        # gain_depth_equiv: best Q at final step - best Q at step 1 (first non-zero)
+        # Step 0 is always zero (no evaluations yet); use step 1 as the "shallow" baseline
+        first_nonzero_steps = (q_trace.sum(dim=1) != 0).nonzero(as_tuple=True)[0]
         best_q_final = final_q[final_best].item()
-        best_q_step0 = q_step0.max().item() if q_step0.max().item() != 0 else float("nan")
-        gain_depth = best_q_final - best_q_step0 if not np.isnan(best_q_step0) else float("nan")
+        if len(first_nonzero_steps) > 0:
+            q_shallow = q_trace[first_nonzero_steps[0].item()]
+            best_q_shallow = q_shallow.max().item()
+            gain_depth = best_q_final - best_q_shallow
+        else:
+            gain_depth = float("nan")
 
         return {
             "fen": fen,
@@ -177,7 +182,7 @@ def plot_feature_vs_min_expansions(df: pd.DataFrame, x_col: str, x_label: str, o
     apply_poster_style()
     sub = df.dropna(subset=[x_col, "min_expansions", "move_ply"])
     sub = sub.copy()
-    sub["ply_tertile"] = pd.qcut(sub["move_ply"], q=3, labels=[1, 2, 3]).astype(int)
+    sub["ply_tertile"] = pd.Categorical(pd.qcut(sub["move_ply"], q=3, duplicates="drop")).codes + 1
 
     r = np.corrcoef(sub[x_col], sub["min_expansions"])[0, 1] if len(sub) > 2 else float("nan")
     fig, ax = plt.subplots(figsize=(16, 10))
