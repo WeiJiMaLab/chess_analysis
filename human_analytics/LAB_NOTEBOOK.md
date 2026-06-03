@@ -357,6 +357,31 @@ This does incorporate candidate-set noise through β. But β should not be a fre
 
 ---
 
+### min_expansions — the most natural proxy so far
+
+$$d^*(s) = \min\bigl\{d : a_d(s) = a_\infty(s)\bigr\}$$
+
+where $a_d$ = argmax V_d (best move at depth $d$), $a_\infty$ = best move at "truth" depth (e.g. depth=15).
+
+**min_expansions** is the minimum number of search steps needed before you would make the *same decision* as you would with much longer thought. It is the **first hitting time** of the eventually-correct action under iterative deepening.
+
+**Why this is the cleanest proxy yet:**
+- Avoids continuous value comparisons — asks only about decision identity (which move), not numerical difference
+- Directly in units of compute steps; maps naturally onto opt_num_think_steps
+- min_expansions = 1 → trivially easy (no computation needed); min_expansions = 5 → genuinely needs depth to resolve
+- Sidesteps the V_shallow noise problem — you don't need to trust numerical estimates, only move identity
+
+**Two variants:**
+- *First convergence:* min{d : a_d = a_∞} — when do you first arrive at the right answer?
+- *Stable convergence:* min{d : ∀d' ≥ d, a_d' = a_∞} — when do you commit and stay? (preferred for RT comparison — a fleeting correct answer at depth 3 overturned at depth 4 should not count as resolved)
+
+**Relationship to existing proxies:**
+- gain_depth > 0 → min_expansions > 1 (necessary but not sufficient; value gap and decision flip are related but not identical)
+- entropy_topk ↑ → min_expansions ↑ (more candidate ambiguity → longer to converge)
+- min_expansions is a direct operationalisation of opt_num_think_steps under the assumption that you should think until you'd make the same decision as with unlimited compute
+
+**Implementation:** Stockfish's iterative deepening naturally visits every depth on the way to depth D. Python-chess `engine.analysis()` (streaming) returns the PV at each depth step, so min_expansions can be extracted from a single engine call.
+
 ### Next analysis targets
 
 - [ ] **marginal_gain curve**: evaluate positions at depths {1, 2, 3, 5, 10, 15}; compute V(d+1)−V(d) at each step; fit where the curve flattens

@@ -301,6 +301,11 @@ math: katex
       <tr><td class="py-1 pr-4 font-mono">gain_budget</td><td class="pr-4 opacity-80">V_96(a_96) − V_96(a_1): same with node budget</td><td class="text-amber-600">crude</td></tr>
       <tr><td class="py-1 pr-4 font-mono">entropy_topk</td><td class="pr-4 opacity-80">H(softmax over top-K shallow Q-values): candidate uncertainty</td><td class="text-blue-600">better</td></tr>
       <tr><td class="py-1 pr-4 font-mono">marginal_gain(d)</td><td class="pr-4 opacity-80">V(d+1) − V(d): slope of benefit curve at depth d</td><td class="text-blue-600">better</td></tr>
+      <tr class="border-t border-gray-200 font-semibold">
+        <td class="py-1 pr-4 font-mono text-green-700">min_expansions</td>
+        <td class="pr-4 opacity-90">min{d : a_d = a_∞} — steps to stable optimal decision</td>
+        <td class="text-green-600">best so far</td>
+      </tr>
       <tr><td class="py-1 pr-4 font-mono">E[ΔUC]</td><td class="pr-4 opacity-80">Expected gain weighted by P(choose k | shallow)</td><td class="text-green-600 font-semibold">best (Russek et al.)</td></tr>
     </tbody>
   </table>
