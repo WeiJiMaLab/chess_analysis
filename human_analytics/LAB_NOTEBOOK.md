@@ -540,6 +540,119 @@ Before coding, need to confirm paths on cluster:
 
 ---
 
+## Synthesis: Two stories and how they relate (2026-06-03)
+
+Before continuing analysis, it is worth stepping back to be precise about what we are claiming and what the findings could mean. There are two distinct narratives running in parallel, and conflating them produces confusion.
+
+---
+
+### Story 1: The human behavioral story (descriptive)
+
+**What we have established:**
+
+We have 1M positions from high-ELO (≥2000) rapid chess (10+0), filtered to ply 15–75, opponent clock ≥60s. For each position, we measure log(RT) (how long the player thought) and four board features:
+
+| Feature | r with log(RT) | Interpretation |
+|---|---|---|
+| Branching factor | +0.20 | Wider candidate set → longer thinking |
+| Own material | +0.04 | More pieces → more interactions to reason about |
+| gain_depth (ΔUC@5) | +0.10 | Positions where deeper search demonstrably helps → longer thinking |
+| toptwo | −0.06 | Decisive positions (one clearly best move) → less thinking |
+
+**What this does NOT tell us:**
+
+- Whether humans are thinking optimally. This is purely descriptive: longer thinking *correlates with* these features. Correlation ≠ optimality.
+- Whether these features are causes or proxies. Branching is correlated with position complexity (own material, r=+0.47), game stage (ply, r=−0.34). Each feature is a noisy proxy for some underlying concept of "hard position."
+- Whether the results generalize. The filters (10+0, ≥2000 ELO, ply 15–75, opponent clock ≥60s) select a specific slice of chess. Bullet players, beginners, or endgames might show different or reversed patterns.
+
+---
+
+### Story 2: The normative story (prescriptive)
+
+**What the DP oracle gives us:**
+
+The lmcos oracle solves:
+$$V^*(s) = \max\bigl(V_\text{halt}(s),\ V_\text{continue}(s) - C\bigr)$$
+and returns `oracle_stop_step` = the expansion count at which it is DP-optimal to halt, given the cost function (time_lambda=18.537, etc.).
+
+This is a *normative* answer to "when should you stop?" under the assumption that:
+1. The value of computation is the improvement in best-move WDL from further search
+2. The cost of computation is captured by the time cost function (convex in remaining budget)
+3. The agent is Lc0 running MCTS, not a human
+
+**The normative question:** Do board features (branching, material, gain_depth, toptwo) predict oracle_stop_step in the same direction as they predict human RT?
+
+- If **yes, same direction**: both the oracle and humans think harder in the same positions. This is *consistent* with human behavior being near-optimal under the same cost structure.
+- If **different directions for some features**: the oracle and humans are responding to different aspects of position complexity. This could mean humans are irrational, OR the cost function is miscalibrated for human cognition, OR the features don't mean the same thing to a neural-network MCTS engine as to a human.
+
+---
+
+### The key interpretive possibilities
+
+**Case A: Oracle and humans agree on all features.**
+- Best case for the "humans are quasi-optimal" narrative.
+- Caveat: agreement could be spurious if both are driven by the same low-level confound (e.g. tactical positions are both hard for MCTS and hard for humans for unrelated reasons).
+
+**Case B: Oracle and humans agree on some features (e.g. toptwo) but disagree on others (e.g. branching).**
+- This is the most likely case and the most informative.
+- Branching disagreement is structurally expected: Lc0 with MCTS is naturally sensitive to breadth (more branches = more exploration needed), while humans may be more sensitive to depth (tactical forcing lines) independently of breadth.
+- toptwo agreement would suggest both human and oracle stopping is sensitive to "decisiveness" — a clean theoretical alignment.
+
+**Case C: Oracle and humans systematically disagree.**
+- Either humans are fundamentally irrational about when to think, OR
+- The oracle's cost function (calibrated for Lc0 compute, not human RT) is simply not the right normative model for human deliberation, OR
+- The selection filters create sampling artifacts that break the comparison (see below).
+
+---
+
+### The confound: selection on game characteristics
+
+This is a critical open question. Our human dataset is:
+1. **10+0 time control** — these are rapid players with a specific time management strategy. They know they have 10 minutes and pace accordingly. This may induce regularities that wouldn't hold for bullet (3+0) or classical (90+30) games.
+2. **Both players ≥2000 ELO** — strong players. Their error rates are low (62% near-optimal MQ), their book knowledge is deep (opening positions may be systematically faster), and their time management may be more strategic.
+3. **Ply 15–75** — excludes opening book and late endgame. The features we study (branching, material) vary mostly in this range.
+4. **Opponent clock ≥60s** — this excludes time-scramble situations. In time scrambles, players behave differently regardless of board complexity.
+
+The key question: **Are the features we measure (branching, gain_depth, etc.) correlated with log(RT) because of their causal relationship to computation demand, or because of how these filters select positions?**
+
+For example: are complex middlegame positions (high branching) more likely to appear at move 25 (mid-game) when clock is still plentiful → players feel they can afford to think longer? This would produce the r=+0.20 correlation even if branching per se had no causal role.
+
+The only clean way to resolve this is to control for ply and clock simultaneously — which the Analyzer's ply-tertile stratification partially does. But the r's are not obviously different across tertiles for branching, suggesting the effect is not purely a ply confound.
+
+---
+
+### The lmcos training data vs human data
+
+There is a further disanalogy: the lmcos oracle is computed on trees generated by **Lc0 searching from sampled root FENs** (sampled_fens_2023_daily_seed42_n100.parquet — 100 FENs per day, broad coverage). The human data is from **specific moves played in Lichess games**, which are biased toward positions that arose in actual games (opening theory, popular middlegame structures). These may be different distributions of positions, making the comparison noisier.
+
+For a clean comparison: take the same FEN positions that appear in the human dataset AND have lmcos oracle solutions, and compare oracle_stop_step vs human RT for the same positions. This is the gold standard but requires overlap between the two datasets.
+
+---
+
+### Research agenda: what to do before more blind analysis
+
+**Clarify the claim you want to make:**
+
+Option A (weakest but most defensible): "Board features that predict human RT also predict oracle_stop_step in the same direction, suggesting that both are sensitive to the same underlying notion of position complexity."
+- This requires: oracle_stop_step computed for lmcos validation trees, correlations with board features.
+- Does NOT require: same positions as human data.
+
+Option B (stronger): "For the same board positions, humans think longer precisely when the oracle says to think longer."
+- This requires: overlap between human dataset and lmcos oracle solutions (same FENs).
+- Hard: the datasets are constructed differently.
+
+Option C (aspirational): "The lmcos controller, trained on the oracle, produces halt decisions that correlate with human RT."
+- This requires: running the trained controller on positions from the human dataset.
+- Feasible: feed human dataset FENs through Lc0 → controller → P(halt), compare with RT.
+
+**Questions to answer before implementing:**
+
+1. Is oracle_stop_step from the lmcos oracle expected to agree with human RT features at all, given that the cost function is calibrated for Lc0 (not humans)?
+2. Should we condition on starting_budget when computing oracle_stop_step? (Different budgets give different stopping steps — which budget is most comparable to human 10+0 time control?)
+3. Are the lmcos training positions a representative sample of chess positions or a biased sample (e.g. sampled more from complex tactical positions)?
+
+---
+
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)
 - [ ] Add `opponent_clock_time >= 60s` filter to match Russek et al.
