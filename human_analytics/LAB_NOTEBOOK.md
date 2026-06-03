@@ -404,6 +404,142 @@ The current analyses (gain_depth, gain_budget, entropy_topk) are stepping stones
 
 ---
 
+## Implementation plan: lmcos ↔ human_analytics comparison (2026-06-03)
+
+### The key bridge
+
+The lmcos materialized controller cache already contains `oracle_stop_step` per episode — the exact output of the DP Oracle, which is the *normative* optimal number of think steps under the model's reward-computation tradeoff. This is `opt_think_steps`. We do **not** need to run Lc0 on the human dataset positions; we can work entirely from the lmcos validation shards.
+
+**Comparison structure:**
+
+```
+Same position features (computed from root FEN)
+     ↓                    ↓                    ↓
+log(RT)          oracle_stop_step      model_predicted_stop
+[human]          [normative, exact]    [lmcos controller output]
+```
+
+If all three correlate with the same features in the same directions, the validation is complete: humans, the normative ideal, and the learned controller all agree on when to think longer.
+
+---
+
+### What exists in the lmcos packed data
+
+**Per-node scalar features** (from `lmcos/src/core/schema.py`):
+- `value`, `wdl_win`, `wdl_draw`, `wdl_loss`, `wdl_var`
+
+**Per-node metadata:**
+- `fen` — board position at that node (root node has the root FEN)
+- `depth` — plies from root (root = 0, children = 1, …)
+
+**Per-episode controller cache** (from `lmcos/src/train/controller_train.py`):
+- `oracle_stop_steps` — DP Oracle optimal halt step (**this is opt_think_steps**)
+- `z_root` — pre-computed encoder embedding of the root node (for fast controller inference)
+
+**Trainable outputs:**
+- `P(halt | z_root)` — the trained halt controller prediction
+- `predicted_stop_step` = first expansion step where `P(halt) > 0.5`
+
+---
+
+### Position features computable from root FEN
+
+The root node's FEN allows extraction of the **same features used in human_analytics** using the existing regex-based functions:
+
+| Feature | Source | Human_analytics analog |
+|---|---|---|
+| `n_possible_moves` | `chess.Board(root_fen).legal_moves` count | branching factor |
+| `n_self_pieces_exc_pawns` | FEN regex `[RNBQK]` for white / `[rnbqk]` for black | own material |
+| `move_ply` | FEN halfmove field or game metadata | game stage |
+
+### Tree features computable from the tree structure
+
+| Feature | Computation | Human_analytics analog |
+|---|---|---|
+| `gain_depth_equiv` | `root_wdl_win_at_max_depth - root_wdl_win_at_depth_1` | gain_depth |
+| `toptwo_equiv` | `max(children_wdl) - second_max(children_wdl)` over root children | toptwo |
+| `child_wdl_var` | `var(wdl_win over root children)` | candidate-set uncertainty / entropy_topk |
+| `tree_size` | total nodes in episode | quasi-cost of search |
+
+---
+
+### Implementation plan (3 steps)
+
+**Step 1: Extract features from lmcos validation episodes**
+
+Write `lmcos/analysis/human_comparison_features.py`:
+
+```python
+def extract_episode_features(packed_episode_path: str) -> pd.DataFrame:
+    """
+    Load packed lmcos episodes and extract per-episode features.
+    Returns DataFrame with columns:
+        root_fen, oracle_stop_step,
+        n_possible_moves, n_self_pieces_exc_pawns, move_ply,
+        gain_depth_equiv, toptwo_equiv, child_wdl_var, tree_size
+    """
+```
+
+- Load from the materialized cache directory (same path used by `ControllerEpisodeDataset`)
+- For each episode: get root node FEN + oracle_stop_step + tree structure
+- Compute position features using `chess.Board(root_fen)` (same as human_analytics)
+- Compute tree features from the node scalar_features dict
+
+**Step 2: Get model predictions**
+
+```python
+def add_model_predictions(df: pd.DataFrame, checkpoint_path: str) -> pd.DataFrame:
+    """
+    Load trained halt controller; run on z_root embeddings from cache;
+    add predicted_stop_step column.
+    """
+```
+
+- Load the controller checkpoint from `lmcos/slurm/outputs/4_supervised_controller/`
+- Run on `z_root` tensors (already materialized — no re-encoding needed)
+- `predicted_stop_step` = argmax of P(halt) over expansion steps, or first step > 0.5
+
+**Step 3: Make the comparison plots**
+
+Use the `_bin_trend` / `_plot_with_trend` utilities already in `human_analytics/utils/` (or inline equivalents) to produce:
+
+For each position feature in {n_possible_moves, n_self_pieces_exc_pawns, gain_depth_equiv, toptwo_equiv}:
+
+```
+Figure: 3-panel comparison
+  Left:   feature → log(RT)            [human data, from pos_with_engine_eval joined with processed_moves]
+  Middle: feature → oracle_stop_step   [lmcos normative]
+  Right:  feature → predicted_stop_step [lmcos controller]
+```
+
+Expected qualitative agreement:
+- `n_possible_moves` → **positive** in all three (more branching → more compute)
+- `gain_depth_equiv` → **positive** in all three (more value in deeper search → more compute)
+- `toptwo_equiv` → **negative** in all three (decisive position → stop early)
+- `child_wdl_var` → **positive** (high candidate uncertainty → more compute)
+
+**If the signs match across all three columns, the validation is complete.**
+
+---
+
+### Data paths to locate
+
+Before coding, need to confirm paths on cluster:
+- [ ] Materialized controller cache: `$SCRATCH/hl4291/...` — check with `ls /scratch/gpfs/GRIFFITHS/hl4291/`
+- [ ] Best trained checkpoint: `lmcos/slurm/outputs/4_supervised_controller/` (already in repo)
+- [ ] Packed episode shards: same scratch path used in `lmcos/slurm/3_preprocess_root/`
+
+---
+
+### What we explicitly do NOT need
+
+- Running Lc0 on human dataset positions (no new inference needed)
+- Matching position FENs between human dataset and lmcos dataset (separate datasets are fine — we just need qualitative directional agreement, not position-level matching)
+- depth=15 or deeper engine evaluation (the lmcos tree search already goes as deep as the training pipeline generated)
+- A perfect normative theory of VOC (oracle_stop_step IS the normative answer under the lmcos reward function)
+
+---
+
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)
 - [ ] Add `opponent_clock_time >= 60s` filter to match Russek et al.
