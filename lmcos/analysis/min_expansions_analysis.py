@@ -160,8 +160,21 @@ def print_summary(df: pd.DataFrame) -> None:
     print("  → If positive: high gain_depth = oracle consistently correct about the best move\n")
 
 
+def _analysis_style() -> None:
+    plt.rcParams.update({
+        "font.size": 13, "axes.labelsize": 15, "axes.titlesize": 14,
+        "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.grid": True, "grid.alpha": 0.3,
+    })
+
+
+_ME_COLOR    = "#6366f1"   # indigo for min_expansions
+_HUMAN_COLOR = "#16a085"   # teal for human
+
+
 def plot_results(df: pd.DataFrame, output_dir: str) -> None:
-    apply_poster_style()
+    _analysis_style()
     os.makedirs(output_dir, exist_ok=True)
 
     features = [
@@ -183,17 +196,16 @@ def plot_results(df: pd.DataFrame, output_dir: str) -> None:
 
     x = np.arange(len(labels))
     width = 0.35
-    fig, ax = plt.subplots(figsize=(18, 10))
+    fig, ax = plt.subplots(figsize=(9, 5))
     ax.bar(x - width/2, me_r, width, label="min_expansions",
-           color=PHASE_COLORS[2], alpha=0.8)
+           color=_ME_COLOR, alpha=0.8)
     ax.bar(x + width/2, human_r, width, label="human log(RT)",
-           color=PHASE_COLORS[1], alpha=0.8)
-    ax.axhline(0, color="black", lw=1.5, linestyle="--")
-    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=FONT_SIZE_TICKS)
-    ax.set_ylabel("Pearson r", fontsize=FONT_SIZE_LABEL)
-    ax.set_title(f"Feature correlations: min_expansions vs human log(RT)  (n={len(df):,})",
-                 fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
+           color=_HUMAN_COLOR, alpha=0.8)
+    ax.axhline(0, color="black", lw=1.2, linestyle="--")
+    ax.set_xticks(x); ax.set_xticklabels(labels)
+    ax.set_ylabel("Pearson r")
+    ax.set_title(f"min_expansions vs human log(RT)  (n={len(df):,})")
+    ax.legend(loc="upper left", bbox_to_anchor=(0, 1), framealpha=0.9)
     plt.tight_layout()
     path1 = os.path.join(output_dir, "min_expansions_vs_human_rt.png")
     plt.savefig(path1, dpi=150, bbox_inches="tight"); plt.close()
@@ -201,26 +213,25 @@ def plot_results(df: pd.DataFrame, output_dir: str) -> None:
 
     # --- Figure 2: gain_depth vs min_expansions scatter + trend ---
     sub = df[["gain_depth_equiv", "min_expansions", "frac_correct"]].dropna()
-    fig, axes = plt.subplots(1, 2, figsize=(24, 10))
-    apply_poster_style()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    _analysis_style()
 
     for ax, y_col, y_label in [
         (axes[0], "min_expansions", "min_expansions"),
-        (axes[1], "frac_correct",   "frac steps correct (best == final_best)"),
+        (axes[1], "frac_correct",   "frac. steps where best == final"),
     ]:
         r = np.corrcoef(sub["gain_depth_equiv"], sub[y_col])[0, 1]
-        # Binned trend
         labels_bins = pd.qcut(sub["gain_depth_equiv"], q=20, labels=False, duplicates="drop")
         trend = sub.groupby(labels_bins)["gain_depth_equiv"].mean().values
         y_trend = sub.groupby(labels_bins)[y_col].mean().values
-        ax.scatter(sub["gain_depth_equiv"], sub[y_col], color=MAIN_COLOR, alpha=0.1, s=4)
-        ax.plot(trend, y_trend, color="black", lw=3)
-        ax.set_xlabel("gain_depth_equiv", fontsize=FONT_SIZE_LABEL)
-        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
-        ax.set_title(f"r = {r:+.3f}", fontsize=FONT_SIZE_LABEL)
+        ax.scatter(sub["gain_depth_equiv"], sub[y_col], color=_ME_COLOR, alpha=0.08, s=3)
+        ax.plot(trend, y_trend, color="black", lw=2.5)
+        ax.set_xlabel("gain_depth_equiv")
+        ax.set_ylabel(y_label)
+        ax.set_title(f"r = {r:+.3f}")
 
     fig.suptitle("Why is gain_depth negatively correlated with min_expansions?",
-                 fontsize=FONT_SIZE_LABEL + 2, y=1.02)
+                 fontsize=13, y=1.03)
     plt.tight_layout()
     path2 = os.path.join(output_dir, "min_expansions_gain_depth_diagnostic.png")
     plt.savefig(path2, dpi=150, bbox_inches="tight"); plt.close()

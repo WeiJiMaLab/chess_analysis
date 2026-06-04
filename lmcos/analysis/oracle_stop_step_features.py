@@ -168,15 +168,35 @@ def load_trees(trees_root: str, n_max: int, seed: int = 42) -> pd.DataFrame:
 # Plotting
 # ---------------------------------------------------------------------------
 
+def _analysis_style() -> None:
+    """Compact style for lmcos analysis figures (not poster scale)."""
+    plt.rcParams.update({
+        "font.size": 13,
+        "axes.labelsize": 15,
+        "axes.titlesize": 14,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 12,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+    })
+
+
+_ORACLE_COLOR = "#2563EB"   # blue for oracle
+_HUMAN_COLOR  = "#16a085"   # teal for human
+
+
 def plot_comparison_bar(df: pd.DataFrame, primary_budget: int, output_path: str) -> None:
     """Figure 1: r and r² for oracle_stop_step vs board features, vs human RT."""
-    apply_poster_style()
+    _analysis_style()
     col = f"oracle_stop_step_b{primary_budget}"
     features = [
-        ("n_possible_moves",        "Branching",    "branching"),
-        ("n_self_pieces_exc_pawns", "Material",     "material"),
-        ("gain_depth_equiv",        "gain_depth",   "gain_depth"),
-        ("toptwo_equiv",            "toptwo",       "toptwo"),
+        ("n_possible_moves",        "Branching",   "branching"),
+        ("n_self_pieces_exc_pawns", "Material",    "material"),
+        ("gain_depth_equiv",        "gain_depth",  "gain_depth"),
+        ("toptwo_equiv",            "toptwo",      "toptwo"),
     ]
 
     oracle_r, oracle_r2, human_r, labels = [], [], [], []
@@ -192,30 +212,22 @@ def plot_comparison_bar(df: pd.DataFrame, primary_budget: int, output_path: str)
 
     x = np.arange(len(labels))
     width = 0.35
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    fig, axes = plt.subplots(1, 2, figsize=(24, 12))
-
-    # Left: r comparison
-    ax = axes[0]
-    ax.bar(x - width/2, oracle_r, width, label=f"oracle_stop_step (budget={primary_budget})",
-           color=PHASE_COLORS[2], alpha=0.8)
-    ax.bar(x + width/2, human_r, width, label="human log(RT)", color=PHASE_COLORS[1], alpha=0.8)
-    ax.axhline(0, color="black", lw=1.5, linestyle="--")
-    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=FONT_SIZE_TICKS)
-    ax.set_ylabel("Pearson r", fontsize=FONT_SIZE_LABEL)
-    ax.set_title(f"Feature correlations: oracle vs human RT\nn = {len(df):,} trees", fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
-
-    # Right: r² comparison
-    ax = axes[1]
-    ax.bar(x - width/2, oracle_r2, width, label="oracle r²",
-           color=PHASE_COLORS[2], alpha=0.8)
-    ax.bar(x + width/2, [r**2 for r in human_r], width, label="human r²",
-           color=PHASE_COLORS[1], alpha=0.8)
-    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=FONT_SIZE_TICKS)
-    ax.set_ylabel("r²", fontsize=FONT_SIZE_LABEL)
-    ax.set_title("Variance explained", fontsize=FONT_SIZE_LABEL)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
+    for ax, yvals_oracle, yvals_human, ylabel, title in [
+        (axes[0], oracle_r,  human_r,            "Pearson r",
+         f"Feature correlations  (n={len(df):,}, budget={primary_budget})"),
+        (axes[1], oracle_r2, [r**2 for r in human_r], "r²", "Variance explained"),
+    ]:
+        b1 = ax.bar(x - width/2, yvals_oracle, width, color=_ORACLE_COLOR, alpha=0.8,
+                    label=f"oracle_stop_step (b={primary_budget})")
+        b2 = ax.bar(x + width/2, yvals_human, width, color=_HUMAN_COLOR, alpha=0.8,
+                    label="human log(RT)")
+        ax.axhline(0, color="black", lw=1.2, linestyle="--")
+        ax.set_xticks(x); ax.set_xticklabels(labels)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend(loc="upper left", bbox_to_anchor=(0, 1), framealpha=0.9)
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -226,28 +238,28 @@ def plot_comparison_bar(df: pd.DataFrame, primary_budget: int, output_path: str)
 
 def plot_correlation_matrix(df: pd.DataFrame, primary_budget: int, output_path: str) -> None:
     """Figure 2: correlation matrix of oracle_stop_step + lmcos tree features."""
-    apply_poster_style()
+    _analysis_style()
     col = f"oracle_stop_step_b{primary_budget}"
     cols = [col, "n_possible_moves", "n_self_pieces_exc_pawns", "toptwo_equiv", "gain_depth_equiv"]
-    labels = [f"oracle_stop\n(b={primary_budget})", "Branching", "Material", "toptwo", "gain_depth"]
+    labels = [f"oracle_stop (b={primary_budget})", "Branching", "Material", "toptwo", "gain_depth"]
     sub = df[cols].dropna()
 
     corr = sub.corr()
     corr.columns = labels; corr.index = labels
     n = len(corr)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
-    ax.set_xticks(range(n)); ax.set_xticklabels(labels, fontsize=11, rotation=30, ha="right")
-    ax.set_yticks(range(n)); ax.set_yticklabels(labels, fontsize=11)
+    ax.set_xticks(range(n)); ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.set_yticks(range(n)); ax.set_yticklabels(labels)
     for i in range(n):
         for j in range(n):
             val = corr.values[i, j]
             color = "white" if abs(val) > 0.5 else "black"
-            ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=9, color=color,
-                    fontweight="bold" if i == j else "normal")
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04).set_label("Pearson r", fontsize=11)
-    ax.set_title(f"lmcos tree feature correlations  (n={len(sub):,})", fontsize=13, pad=12)
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=9, color=color)
+    cbar = plt.colorbar(im, ax=ax, fraction=0.035, pad=0.04)
+    cbar.set_label("Pearson r")
+    ax.set_title(f"lmcos tree feature correlations  (n={len(sub):,})", pad=10)
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")

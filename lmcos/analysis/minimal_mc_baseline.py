@@ -193,22 +193,32 @@ def train_minimal_mc(
 # Plotting
 # ---------------------------------------------------------------------------
 
+def _analysis_style() -> None:
+    plt.rcParams.update({
+        "font.size": 13, "axes.labelsize": 15, "axes.titlesize": 14,
+        "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.grid": True, "grid.alpha": 0.3,
+    })
+
+
 def plot_sign_accuracy(train_acc: float, val_acc: float, output_path: str) -> None:
-    apply_poster_style()
-    fig, ax = plt.subplots(figsize=(14, 9))
+    _analysis_style()
+    fig, ax = plt.subplots(figsize=(8, 5))
     models = ["GNN+MC\n(baseline)", "Minimal MLC\n(train)", "Minimal MLC\n(val)"]
     accs = [_GNN_MC_SIGN_ACCURACY, train_acc, val_acc]
-    colors = [PHASE_COLORS[1], PHASE_COLORS[2], PHASE_COLORS[3]]
-    bars = ax.bar(models, accs, color=colors, alpha=0.8, width=0.5)
-    ax.axhline(_GNN_MC_SIGN_ACCURACY, color="black", linestyle="--", lw=2, label="GNN+MC baseline")
-    ax.axhline(0.80, color="red", linestyle=":", lw=2, label="Acceptance threshold (80%)")
+    colors = ["#6366f1", "#2563EB", "#16a085"]
+    bars = ax.bar(models, accs, color=colors, alpha=0.85, width=0.5, edgecolor="white")
+    ax.axhline(_GNN_MC_SIGN_ACCURACY, color="black", linestyle="--", lw=1.5,
+               label=f"GNN+MC baseline ({_GNN_MC_SIGN_ACCURACY:.1%})")
+    ax.axhline(0.80, color="red", linestyle=":", lw=1.5, label="Threshold (80%)")
     for bar, acc in zip(bars, accs):
-        ax.text(bar.get_x() + bar.get_width() / 2, acc + 0.005, f"{acc:.3f}",
-                ha="center", va="bottom", fontsize=FONT_SIZE_TICKS, fontweight="bold")
+        ax.text(bar.get_x() + bar.get_width() / 2, acc + 0.003, f"{acc:.3f}",
+                ha="center", va="bottom", fontsize=12, fontweight="bold")
     ax.set_ylim(0.5, 1.0)
-    ax.set_ylabel("Sign accuracy", fontsize=FONT_SIZE_LABEL)
-    ax.set_title("Minimal MC baseline vs GNN+MC", fontsize=FONT_SIZE_LABEL, pad=12)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
+    ax.set_ylabel("Sign accuracy")
+    ax.set_title("Minimal MLC vs GNN+MC sign accuracy")
+    ax.legend(loc="lower right", framealpha=0.9)
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -217,12 +227,12 @@ def plot_sign_accuracy(train_acc: float, val_acc: float, output_path: str) -> No
 
 
 def plot_weights(model: MinimalMC, feature_names: list[str], output_path: str) -> None:
-    apply_poster_style()
+    _analysis_style()
     W = model.net[0].weight.detach().abs().mean(dim=0).numpy()
-    fig, ax = plt.subplots(figsize=(14, 8))
-    ax.bar(feature_names, W, color=MAIN_COLOR, alpha=0.8)
-    ax.set_ylabel("Mean |weight| (first layer)", fontsize=FONT_SIZE_LABEL)
-    ax.set_title("Feature importance in minimal MC baseline", fontsize=FONT_SIZE_LABEL, pad=12)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.bar(feature_names, W, color="#2563EB", alpha=0.8, edgecolor="white")
+    ax.set_ylabel("Mean |weight| (first layer)")
+    ax.set_title("Feature importance — minimal MLC")
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
