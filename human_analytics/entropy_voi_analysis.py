@@ -113,10 +113,13 @@ def generate_command(args: argparse.Namespace) -> None:
     
     query = f"""
         SELECT fen, n_possible_moves, move_time
-        FROM {TABLE_PROCESSED_MOVES_NONZERO}
-        WHERE move_ply BETWEEN 15 AND 75
-          AND opponent_clock_time >= 60
-          AND move_time > 0
+        FROM (
+            SELECT fen, n_possible_moves, move_time
+            FROM {TABLE_PROCESSED_MOVES_NONZERO}
+            WHERE move_ply BETWEEN 15 AND 75
+              AND opponent_clock_time >= 60
+              AND move_time > 0
+        ) filtered
         USING SAMPLE {args.n_moves} ROWS (RESERVOIR, {args.seed})
     """
     print(f"Sampling {args.n_moves} positions using query...")

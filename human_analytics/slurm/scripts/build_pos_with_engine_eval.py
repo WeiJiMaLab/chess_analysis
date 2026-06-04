@@ -159,7 +159,6 @@ def _sample(db_path: str, n: int, seed: int = 42) -> list[dict]:
               AND pm.opponent_clock_time >= {_MIN_OPP_CLOCK}
         ) filtered
         USING SAMPLE {n} ROWS (RESERVOIR, {seed})
-        LIMIT {n}
     """).df()
     conn.close()
     return df.to_dict("records")

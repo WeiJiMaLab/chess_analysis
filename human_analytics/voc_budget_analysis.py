@@ -111,11 +111,15 @@ def _sample(db_path: str, n: int, seed: int = 99) -> pd.DataFrame:
         SELECT p.fen, p.gid, p.move_ply, p.move_uci, p.n_possible_moves,
                p.voc, p.toptwo, p.mq, p.move_time,
                pm.n_self_pieces_exc_pawns
-        FROM {_TABLE} p
-        JOIN processed_moves_nonzero pm ON p.gid = pm.gid AND p.move_ply = pm.move_ply
-        WHERE p.move_time > 0
+        FROM (
+            SELECT p.fen, p.gid, p.move_ply, p.move_uci, p.n_possible_moves,
+                   p.voc, p.toptwo, p.mq, p.move_time,
+                   pm.n_self_pieces_exc_pawns
+            FROM {_TABLE} p
+            JOIN processed_moves_nonzero pm ON p.gid = pm.gid AND p.move_ply = pm.move_ply
+            WHERE p.move_time > 0
+        ) filtered
         USING SAMPLE {n} ROWS (RESERVOIR, {seed})
-        LIMIT {n}
     """).df()
     conn.close()
     return df

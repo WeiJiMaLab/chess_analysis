@@ -43,18 +43,20 @@ def _sample(db_path: str, n: int, seed: int = 7) -> pd.DataFrame:
     df = conn.execute(f"""
         SELECT fen, move_uci, player_clock_time, move_time
         FROM (
-            SELECT fen, move_uci, player_clock_time, move_time, gid,
-                   ROW_NUMBER() OVER (PARTITION BY fen ORDER BY gid) AS _rn
+            SELECT fen, move_uci, player_clock_time, move_time
             FROM (
-                SELECT pm.fen, pm.player_clock_time, pm.move_time, pm.gid, m.move_uci
-                FROM {TABLE_PROCESSED_MOVES_NONZERO} pm
-                JOIN moves m ON pm.gid = m.gid AND pm.move_ply = m.move_ply
-                WHERE pm.move_ply > 10
-            ) filtered
-            USING SAMPLE {n} ROWS (RESERVOIR, {seed})
-        ) dedup
-        WHERE _rn = 1
-        LIMIT {n}
+                SELECT fen, move_uci, player_clock_time, move_time, gid,
+                       ROW_NUMBER() OVER (PARTITION BY fen ORDER BY gid) AS _rn
+                FROM (
+                    SELECT pm.fen, pm.player_clock_time, pm.move_time, pm.gid, m.move_uci
+                    FROM {TABLE_PROCESSED_MOVES_NONZERO} pm
+                    JOIN moves m ON pm.gid = m.gid AND pm.move_ply = m.move_ply
+                    WHERE pm.move_ply > 10
+                ) filtered
+            ) dedup
+            WHERE _rn = 1
+        ) deduped
+        USING SAMPLE {n} ROWS (RESERVOIR, {seed})
     """).df()
     conn.close()
     return df

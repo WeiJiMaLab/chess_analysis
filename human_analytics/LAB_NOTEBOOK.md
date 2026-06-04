@@ -227,13 +227,13 @@ Filters: ply 15–75, opponent_clock ≥ 60s. Stockfish depth=5.
 
 **Output statistics (n=10,000, all 6 quantities):**
 
-| Column | Mean | Std | p50 |
-|---|---|---|---|
-| `e_win_best` | +0.593 | 0.398 | +0.595 |
+| Column        | Mean   | Std   | p50    |
+| ---------------| --------| -------| --------|
+| `e_win_best`  | +0.593 | 0.398 | +0.595 |
 | `e_win_taken` | +0.477 | 0.409 | +0.490 |
-| `voc` | +0.098 | 0.212 | +0.000 |
-| `mq` | −0.117 | 0.235 | +0.000 |
-| `toptwo` | +0.122 | 0.217 | +0.011 |
+| `voc`         | +0.098 | 0.212 | +0.000 |
+| `mq`          | −0.117 | 0.235 | +0.000 |
+| `toptwo`      | +0.122 | 0.217 | +0.011 |
 
 - Pearson r(log RT, VOC) = **+0.086** (n=10K)
 - Loaded into `pos_with_engine_eval` table in personal.db
