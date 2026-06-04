@@ -388,12 +388,12 @@ math: katex
       <div>Join with <code>personal.db</code> on FEN → recover <code>log(RT)</code>. Plot oracle_stop_step vs log(RT). Does the oracle predict where humans think longer?</div>
     </div>
   </div>
-  <div class="text-xs opacity-60 mt-2">Status: 1K smoke test (644 FENs) currently running on SLURM (Job ID 9215248). FEN formatting resolved.</div>
+  <div class="text-xs opacity-60 mt-2">Status: 1K smoke test (644 FENs) running on SLURM (Job ID 9217163). Re-submitted after fixing a PUCT infinite loop bug in tree generation.</div>
 </div>
 
 ---
 
-# Analysis 2 — Minimal model
+# Analysis 2 — Tree-Statistic Summary & Minimal Model
 
 <div class="mt-4 max-w-3xl space-y-3 text-sm">
   <p class="font-semibold">Find the smallest architecture that trains end-to-end in hours. <b>Burning question: can we skip GNN pretraining entirely?</b></p>
@@ -416,7 +416,7 @@ math: katex
       <div>Success = acceptable GNN loss (&lt;pretrained baseline) + training time ≤2 hours on a single GPU.</div>
     </div>
   </div>
-  <div class="text-xs opacity-60 mt-2">Status: Config D ablation currently running on SLURM (Job ID 9215254) from scratch on a single GPU.</div>
+  <div class="text-xs opacity-60 mt-2">Status: Old Config D pretraining job (Job ID 9215254) cancelled to pivot first to A2.1 (Tree-Statistic Summaries) before attempting A2.2 (Tiny-GNN) as requested.</div>
 </div>
 
 ---
@@ -476,7 +476,61 @@ math: katex
       </div>
     </div>
   </div>
-  <div class="text-xs opacity-60 mt-2">Status: Configured, runs locally on CPU via python-chess (independent of GPU queue). Ready to start.</div>
+  <div class="text-xs opacity-60 mt-2">Status: Complete (10K scale-up). Run locally on Della with 16 CPU workers. Swept over θ ∈ [0, 0.1] on 6,494 valid traces.</div>
+</div>
+
+---
+
+# Analysis 4 — Results of 10K scale-up
+
+<div class="mt-4 text-sm max-w-3xl">
+  <div class="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-3">Pearson correlation (r) across θ thresholds (n = 6,494 multi-depth traces, β = 1.0)</div>
+  <table class="text-xs w-full border-collapse">
+    <thead>
+      <tr class="border-b-2 border-gray-300">
+        <th class="text-right py-2 pr-4 font-bold">θ threshold</th>
+        <th class="text-right py-2 pr-4 font-bold">r(d* with log RT)</th>
+        <th class="text-right py-2 pr-4 font-bold">r(d* with branching)</th>
+        <th class="text-right py-2 font-bold">Mean stopping depth (d*)</th>
+      </tr>
+    </thead>
+    <tbody class="text-[12px] font-mono">
+      <tr class="border-b border-gray-100">
+        <td class="py-2 pr-4 text-right">0.0</td>
+        <td class="py-2 pr-4 text-right">-0.029</td>
+        <td class="py-2 pr-4 text-right">-0.103</td>
+        <td class="py-2 text-right">2.46</td>
+      </tr>
+      <tr class="border-b border-gray-100 bg-green-50">
+        <td class="py-2 pr-4 text-right font-bold">0.001</td>
+        <td class="py-2 pr-4 text-right text-blue-600 font-bold">+0.014</td>
+        <td class="py-2 pr-4 text-right text-blue-600 font-bold">+0.101</td>
+        <td class="py-2 text-right font-bold">1.64</td>
+      </tr>
+      <tr class="border-b border-gray-100">
+        <td class="py-2 pr-4 text-right">0.005</td>
+        <td class="py-2 pr-4 text-right">-0.005</td>
+        <td class="py-2 pr-4 text-right">+0.039</td>
+        <td class="py-2 text-right">1.15</td>
+      </tr>
+      <tr class="border-b border-gray-100">
+        <td class="py-2 pr-4 text-right">0.01</td>
+        <td class="py-2 pr-4 text-right">-0.020</td>
+        <td class="py-2 pr-4 text-right">-0.017</td>
+        <td class="py-2 text-right">1.05</td>
+      </tr>
+      <tr>
+        <td class="py-2 pr-4 text-right">0.05</td>
+        <td class="py-2 pr-4 text-right">-0.018</td>
+        <td class="py-2 pr-4 text-right">-0.067</td>
+        <td class="py-2 text-right">1.00</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="mt-4 p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs space-y-1">
+    <p><b>Key Finding:</b> The strong initial correlation with log(RT) disappeared at the 10K scale. While the correlation with branching factor remains positive at θ = 0.001 ($r \approx 0.101$), the correlation with human log(RT) drops to near-zero ($r \approx 0.014$).</p>
+    <p><b>Implication:</b> This specific normative stopping rule based on full-strength engine policy-entropy reduction does not explain human deliberation time. This suggests that standard engine evaluations do not align well with human cognitive effort (supporting Analysis 3's weaker engine hypothesis).</p>
+  </div>
 </div>
 
 ---

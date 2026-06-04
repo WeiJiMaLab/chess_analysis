@@ -110,12 +110,14 @@ We expect that `oracle_stop_step` will positively correlate with human `log(RT)`
 
 ---
 
-## Analysis 2 — Tree-Statistic Summary (parallel, HIGH PRIORITY)
+## Analysis 2 — Tree-Statistic Summary & Minimal Model (parallel, HIGH PRIORITY)
 
-**Readiness (2026-06-04):** A0b passed, but strategy has pivoted. Old tiny-GNN approach abandoned and job cancelled.
+**Readiness (2026-06-04):** A0b passed, but strategy has pivoted to a two-stage complexity buildup. Old tiny-GNN job cancelled to start fresh.
 
 **Description**  
-Replacing the GNN head with a coarser / simpler tree-statistic summary to obviate the training of the GNN entirely. Instead of training a GNN (even a tiny one), we extract summary statistics directly from the tree structure (e.g. node counts, depth distributions, value aggregates) and feed these to the MC controller.
+We will build *up* in complexity to find the simplest meta-controller architecture that matches human deliberation without requiring massive GNN pretraining.
+*   **A2.1 (Tree-Statistic Summaries):** Replace the GNN head entirely with a coarser / simpler tree-statistic summary. We extract summary statistics directly from the tree structure (e.g. node counts, depth distributions, value aggregates) and feed these directly to the MC controller.
+*   **A2.2 (Tiny-GNN):** If tree statistics are insufficient, we step up complexity by training a minimal GNN (e.g., 16-dim embedding, 1 layer) from scratch to see if it captures topological features that summary statistics miss.
 *   **Data needed:**
     *   Existing packed training shards at `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train/` (191 shards) — use 10–20 shards (5–10%) as the ablation dataset
     *   Current config YAMLs at `lmcos/slurm/configs/4_supervised_controller/`
