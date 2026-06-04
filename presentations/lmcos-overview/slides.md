@@ -124,7 +124,7 @@ math: katex
 
 ---
 
-# Correlation matrix
+# Correlation matrix — the full picture
 
 <div class="grid grid-cols-[60fr_40fr] gap-8 items-center h-[calc(100%-3.5rem)]">
   <img class="w-full object-contain max-h-[72vh]" src="/figures/correlation_matrix.png" />
@@ -173,7 +173,7 @@ math: katex
     <div class="text-3xl font-bold text-amber-400 shrink-0 w-8">3</div>
     <div>
       <div class="text-base font-semibold">Branching beats VOC as an RT predictor</div>
-      <div class="text-sm opacity-70 mt-1">r = +0.20 vs +0.10. Width of the decision problem drives deliberation more than realized value of deeper search — inconsistent with a pure depth-based VOC model.</div>
+      <div class="text-sm opacity-70 mt-1">r = +0.20 vs +0.10. Width of the decision problem drives deliberation more than realized value of deeper search.</div>
     </div>
   </div>
 </div>
@@ -201,9 +201,66 @@ math: katex
     <p><b>The oracle target:</b> backward DP computes the optimal stopping step — the expansion count at which halting maximises expected value minus cost. This is <code>oracle_stop_step</code>. The GNN + MC controller learns to predict it.</p>
     <p class="text-xs opacity-70">Current accuracy: 80% exact stop-step, 90% sign. MC controller training: 52 seconds.</p>
   </div>
+</div>
+
+---
+
+# Data sources — the comparison problem
+
+<div class="mt-4 max-w-3xl text-sm">
+  <table class="text-xs w-full border-collapse">
+    <thead>
+      <tr class="border-b-2 border-gray-300">
+        <th class="text-left py-2 pr-4 font-bold w-1/4">Property</th>
+        <th class="text-left py-2 pr-4 font-bold">lmcos training positions</th>
+        <th class="text-left py-2 font-bold">Human behavioral data</th>
+      </tr>
+    </thead>
+    <tbody class="text-[11px]">
+      <tr class="border-b border-gray-100"><td class="py-1.5 pr-4 font-semibold">Source</td><td>100K FENs sampled from Lichess 2023</td><td>1.97M games from Lichess Oct–Dec 2023</td></tr>
+      <tr class="border-b border-gray-100"><td class="py-1.5 pr-4 font-semibold">ELO range</td><td>1800–2600 (broad)</td><td>Both ≥ 2000 (strong players only)</td></tr>
+      <tr class="border-b border-gray-100"><td class="py-1.5 pr-4 font-semibold">Time controls</td><td>All (bullet, blitz, rapid, classical)</td><td>10+0 only</td></tr>
+      <tr class="border-b border-gray-100"><td class="py-1.5 pr-4 font-semibold">Ply range</td><td>8–120</td><td>15–75 (excl. opening/endgame)</td></tr>
+      <tr class="border-b border-gray-100"><td class="py-1.5 pr-4 font-semibold">Engine</td><td>Lc0 t1-256x10 (~3000+ ELO)</td><td>Stockfish depth=5 (~2500+ ELO)</td></tr>
+      <tr><td class="py-1.5 pr-4 font-semibold">Target variable</td><td>oracle_stop_step (normative)</td><td>log(RT) (observed behavior)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded mt-4 text-xs">
+    <b>The datasets are different positions.</b> A0a gives a directional signal using lmcos trees. A1 (next) will generate oracle trees on the <i>same</i> positions as the human data — removing this disanalogy.
+  </div>
+</div>
+
+---
+
+# Two stopping criteria — a key tension
+
+<div class="mt-4 max-w-3xl space-y-4 text-sm">
+  <div class="grid grid-cols-2 gap-5">
+    <div class="p-4 bg-neutral-soft border-l-3 border-accent rounded">
+      <b class="text-accent text-xs uppercase tracking-wider">min_expansions</b>
+      <p class="text-sm italic mt-1">"If I keep thinking, my action won't change — so my realized reward can't change."</p>
+      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
+        <li>Stops when <b>action identity</b> stabilises</li>
+        <li>Matches Russek et al. (ΔUC = 0 when actions agree)</li>
+        <li class="font-semibold text-accent">→ Theoretically correct for single decisions</li>
+        <li class="text-red-600">r(gain_depth) = −0.557 — opposite of humans</li>
+      </ul>
+    </div>
+    <div class="p-4 bg-neutral-soft border-l-3 border-secondary rounded">
+      <b class="text-secondary text-xs uppercase tracking-wider">oracle_stop_step</b>
+      <p class="text-sm italic mt-1">"My Q-estimate is still improving — that outweighs the cost."</p>
+      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
+        <li>Stops when <b>Q-refinement</b> no longer justifies cost</li>
+        <li>What the lmcos model is trained on</li>
+        <li class="font-semibold text-secondary">→ Matches human RT direction (3/4 features)</li>
+        <li>r(gain_depth) = +0.797</li>
+      </ul>
+    </div>
+  </div>
 
   <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs">
-    <b>Important:</b> the lmcos training trees use FENs sampled from Lichess 2023 with ELO 1800–2600 and all time controls — a broader, different population than the human behavioral dataset (10+0, ≥2000 Elo). The datasets are not matched positions.
+    <b>The paradox:</b> min_expansions is the theoretically correct stopping criterion — but both humans and the oracle follow oracle_stop_step in practice. Neither stops when the action has stabilised. Why?
   </div>
 </div>
 
@@ -213,11 +270,11 @@ math: katex
 
 <div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
   <div class="space-y-3 text-sm">
-    <div><span class="label">What</span> Compute <code>oracle_stop_step</code> on 5K lmcos training trees using the actual DP oracle. Extract board features from root FEN.</div>
+    <div><span class="label">What</span> Compute <code>oracle_stop_step</code> on 5K lmcos training trees. Extract board features from root FEN.</div>
     <div><span class="label">x</span> Board features: branching, material, gain_depth, toptwo</div>
-    <div><span class="label">y</span> oracle_stop_step (DP-optimal number of expansions, budget=43)</div>
+    <div><span class="label">y</span> oracle_stop_step (DP-optimal expansions, budget=43)</div>
     <div><span class="label">Compare</span> r(feature, oracle_stop_step) vs r(feature, human log RT)</div>
-    <div class="finding"><span class="label">Finding</span> 3 of 4 features match direction. gain_depth is the strongest oracle predictor by far (r = +0.797). toptwo is the one mismatch.</div>
+    <div class="finding"><span class="label">Finding</span> 3 of 4 features match direction. gain_depth r = +0.797 for oracle vs +0.096 for humans. toptwo is the one mismatch.</div>
   </div>
   <img class="w-full object-contain max-h-[72vh]" src="/figures/oracle_stop_step_vs_human_rt.png" />
 </div>
@@ -265,39 +322,7 @@ math: katex
   </table>
   <div class="mt-3 p-3 bg-neutral-soft rounded text-xs space-y-1">
     <p><b>toptwo mismatch:</b> oracle continues longer when toptwo is large (refining the dominant move's Q-estimate). Humans stop faster (decisiveness = satisficing signal).</p>
-    <p><b>gain_depth gap (+0.797 vs +0.096):</b> oracle is defined to stop when Q-refinement no longer pays — so it's necessarily most sensitive to positions where Q is still changing. Humans track this signal, but weakly.</p>
-  </div>
-</div>
-
----
-
-# Two stopping criteria — and which is closer to VOC
-
-<div class="mt-4 max-w-3xl space-y-4 text-sm">
-  <div class="grid grid-cols-2 gap-5">
-    <div class="p-4 bg-neutral-soft border-l-3 border-accent rounded">
-      <b class="text-accent text-xs uppercase tracking-wider">min_expansions</b>
-      <p class="text-sm italic mt-1">"If I keep thinking, my action won't change — so my realized reward can't change."</p>
-      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
-        <li>Stops when <b>action identity</b> stabilises</li>
-        <li>Matches Russek et al. spirit (ΔUC = 0 when actions agree)</li>
-        <li class="font-semibold text-accent">→ Theoretically correct for single decisions</li>
-        <li class="text-red-600">But r(gain_depth) = −0.557 — opposite of humans</li>
-      </ul>
-    </div>
-    <div class="p-4 bg-neutral-soft border-l-3 border-secondary rounded">
-      <b class="text-secondary text-xs uppercase tracking-wider">oracle_stop_step</b>
-      <p class="text-sm italic mt-1">"My Q-estimate is still improving — that outweighs the cost."</p>
-      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
-        <li>Stops when <b>Q-refinement</b> no longer justifies cost</li>
-        <li>What the lmcos model is trained on</li>
-        <li class="font-semibold text-secondary">→ Matches human RT direction (3/4 features)</li>
-        <li>r(gain_depth) = +0.797</li>
-      </ul>
-    </div>
-  </div>
-  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs">
-    <b>The paradox:</b> min_expansions is the correct stopping criterion in theory — but both humans and the oracle follow oracle_stop_step in practice. Neither stops when the action has stabilised.
+    <p><b>gain_depth gap:</b> oracle is defined to stop when Q-refinement no longer pays — it is necessarily most sensitive to positions where Q is still changing. Humans track this, but weakly.</p>
   </div>
 </div>
 
@@ -306,7 +331,7 @@ math: katex
 # The epistemology of stopping
 
 <div class="mt-4 max-w-3xl space-y-3 text-sm">
-  <p class="opacity-80">At any step t, the agent faces three situations that are locally indistinguishable:</p>
+  <p class="opacity-80">At any step t, the agent faces three locally indistinguishable situations:</p>
 
   <div class="space-y-2">
     <div class="flex gap-3 items-start p-2.5 bg-green-50 border-l-2 border-green-400 rounded">
@@ -319,13 +344,13 @@ math: katex
     </div>
     <div class="flex gap-3 items-start p-2.5 bg-amber-50 border-l-2 border-amber-400 rounded">
       <span class="font-bold text-amber-700 w-5 shrink-0">3</span>
-      <div><b>Not converging.</b> Q plateaued — either genuinely ambiguous, or the better move hasn't been reached yet. <span class="text-amber-700 font-semibold">Unknown.</span></div>
+      <div><b>Not converging.</b> Q plateaued — either genuinely ambiguous, or the better move hasn't been reached. <span class="text-amber-700 font-semibold">Unknown.</span></div>
     </div>
   </div>
 
-  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded text-xs space-y-1">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded text-xs space-y-1 mt-1">
     <p><b>Circular problem:</b> "would stopping now change my action?" requires knowing what further search would reveal — which requires completing the search.</p>
-    <p><b>"Chasing tails":</b> in dominant positions, each expansion confirms the dominant move. Q keeps improving. Both humans and the oracle rationally continue — but the decision was already made. Systematic over-computation in dominant positions; under-computation in ambiguous ones.</p>
+    <p><b>"Chasing tails":</b> in dominant positions, Q keeps improving even after the decision is made. Both humans and the oracle rationally continue — systematic over-computation in dominant positions, under-computation in ambiguous ones.</p>
   </div>
 </div>
 
@@ -335,49 +360,118 @@ math: katex
   <div>
     <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Section III</div>
     <h1 class="text-4xl">Next Steps</h1>
-    <div class="mt-4 text-sm opacity-60 max-w-xl mx-auto">What each analysis would answer, and what from the current evidence motivates it</div>
   </div>
 </div>
 
 ---
 
-# What motivates the next analyses
+# Analysis 1 — Unify the datasets
 
 <div class="mt-4 max-w-3xl space-y-3 text-sm">
-  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
-    <b class="text-accent text-xs uppercase tracking-wider">Analysis 1 — Unify the datasets</b>
-    <p class="mt-1 text-xs">Run Yotam's lmcos pipeline (Lc0 trees + DP oracle) on positions from the <b>human behavioral dataset</b> (processed_moves_nonzero: 10+0, ≥2000 Elo, ply 15–75). Compare oracle_stop_step with actual human RT at the <i>same positions</i>. <b>Why not use Yotam's existing trees?</b> His dataset (ELO 1800–2600, all time controls) carries different human confounds than our filtered behavioral data. Unifying removes this disanalogy and enables a direct position-level test of "does the oracle predict where humans think longer?"</p>
-    <p class="mt-1 text-[11px] opacity-60 text-accent">Motivated by: A0a shows 3/4 features match — worth the SLURM cost to test at matched positions.</p>
+  <p class="font-semibold">Run Yotam's lmcos pipeline on positions from the human behavioral dataset. Compare oracle_stop_step with actual human RT at the <i>same positions</i>.</p>
+
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs mb-3">
+    <b>Why not use Yotam's existing trees?</b> His dataset (ELO 1800–2600, all time controls) carries different human confounds than the filtered behavioral data (10+0, ≥2000 Elo). Unifying removes this disanalogy and enables a direct position-level test.
   </div>
-  <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
-    <b class="text-secondary text-xs uppercase tracking-wider">Analysis 2 — Skip GNN pretraining</b>
-    <p class="mt-1 text-xs">Train a small MLP from random initialisation on the existing packed episodes. 4 raw scalars already achieve 86.4% sign accuracy (vs 90.1% GNN+MC). If a tiny model from scratch trains in hours not days, iteration speed improves dramatically.</p>
+
+  <div class="space-y-2">
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">1.</div>
+      <div>Extract FENs from <code>processed_moves_nonzero</code>. Verify 6-field FEN format. Start with 1K as a smoke test — must complete in minutes on A100.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">2.</div>
+      <div>Run <code>build_tree.py</code> (Lc0, budget=96) → generate oracle trees. Run <code>compute_budgeted_oracle()</code> → <code>oracle_stop_step</code> per position.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">3.</div>
+      <div>Join with <code>personal.db</code> on FEN → recover <code>log(RT)</code>. Plot oracle_stop_step vs log(RT). Does the oracle predict where humans think longer?</div>
+    </div>
   </div>
-  <div class="p-3 bg-neutral-soft border-l-2 border-amber-400 rounded">
-    <b class="text-amber-700 text-xs uppercase tracking-wider">Analysis 3 — Weaker engine (conditional on A1)</b>
-    <p class="mt-1 text-xs">If A1 shows no oracle-human correspondence, test Stockfish at ELO=2000 (matching the human player pool). Lc0 at 3000+ Elo trivially resolves positions a 2000-Elo human finds genuinely hard — engine strength may explain the mismatch.</p>
-  </div>
+  <div class="text-xs opacity-60 mt-2">Scale: 1K smoke → 10K main. Main blocker: 4-field vs 6-field FEN wiring.</div>
 </div>
 
 ---
 
-# Summary
+# Analysis 2 — Minimal model
 
-<div class="mt-4 max-w-3xl space-y-4 text-sm">
-  <div class="p-3 bg-neutral-soft border-l-2 border-accent">
-    <b class="text-accent text-xs uppercase tracking-wider">Key results</b>
-    <ul class="mt-2 list-none space-y-1 text-xs">
-      <li>✓ <b>log(RT) ∝ gain_depth</b> — r = +0.096 (n=1M): humans think longer when computation pays</li>
-      <li>✓ <b>Branching strongest RT predictor</b> — r = +0.20: width drives deliberation more than depth</li>
-      <li>✓ <b>oracle_stop_step matches human RT on 3/4 features</b> — directional signal from A0a</li>
-      <li>✓ <b>4 scalars → 86.4% sign accuracy</b> (vs 90.1% GNN+MC, gap = 3.7pp) — from A0b</li>
-      <li>⚠ <b>toptwo mismatch</b>: oracle and humans apply decisiveness differently</li>
-      <li>⚠ <b>Chasing tails</b>: both over-compute in dominant positions, under-compute in ambiguous ones</li>
-    </ul>
+<div class="mt-4 max-w-3xl space-y-3 text-sm">
+  <p class="font-semibold">Find the smallest architecture that trains end-to-end in hours. <b>Burning question: can we skip GNN pretraining entirely?</b></p>
+
+  <div class="p-3 bg-accent-soft border-l-2 border-accent rounded text-xs mb-3">
+    <b>Motivation from A0b:</b> 4 raw tree-stat scalars → MLP achieves <b>86.4% sign accuracy</b> (vs 90.1% GNN+MC, gap = 3.7pp). GNN adds only ~4pp. Training the full GNN took ~1+ days.
   </div>
-  <div class="p-3 bg-amber-50 border-l-2 border-amber-400">
-    <b class="text-amber-700 text-xs uppercase tracking-wider">Core open question</b>
-    <p class="mt-1 text-xs text-amber-900">Does oracle_stop_step predict human RT at the <i>same positions</i>? Analysis 1 will answer this by unifying the datasets — the only remaining confound between the two halves of this project.</p>
+
+  <div class="space-y-2">
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">1.</div>
+      <div>Train Config D (d_embed=16, 1 layer) from <b>random initialisation</b> on 10 existing training shards. Track GNN loss — does it converge in &lt;2 hours?</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">2.</div>
+      <div>If yes: skip pretraining entirely. If no: escalate to Config C (d_embed=32) until acceptable loss is reached.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">3.</div>
+      <div>Success = acceptable GNN loss (&lt;pretrained baseline) + training time ≤2 hours on a single GPU.</div>
+    </div>
+  </div>
+  <div class="text-xs opacity-60 mt-2">No new data needed. Config YAML changes only. Runs in parallel with Analysis 1.</div>
+</div>
+
+---
+
+# Analysis 3 — Weaker engine (conditional)
+
+<div class="mt-4 max-w-3xl space-y-3 text-sm">
+  <p class="font-semibold">Only pursue if Analysis 1 shows no correspondence between oracle_stop_step and human RT.</p>
+
+  <div class="p-3 bg-neutral-soft border-l-2 border-gray-400 rounded text-xs mb-3">
+    <b>Hypothesis:</b> Lc0 at ~3000 ELO trivially resolves positions that a 2000-ELO human finds hard. Matching engine strength to player ELO may improve alignment.
+  </div>
+
+  <div class="space-y-2">
+    <div class="flex gap-3 items-start">
+      <div class="text-amber-600 font-bold w-5 shrink-0">1.</div>
+      <div>Use Stockfish with <code>UCI_LimitStrength=true, UCI_Elo=2000</code> for tree building on the same 10K human FENs from A1.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-amber-600 font-bold w-5 shrink-0">2.</div>
+      <div>Centipawn → WDL: <code>pwin = 1/(1 + exp(−cp/400))</code>. Compute oracle_stop_step. Compare r(oracle, human RT) with A1 result.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-amber-600 font-bold w-5 shrink-0">3.</div>
+      <div>If alignment improves: retrain the full pipeline with the weaker engine — this becomes the human-aligned normative agent.</div>
+    </div>
+  </div>
+  <div class="text-xs opacity-60 mt-2">CPU-only. No consistency requirement with Lc0 frozen weights — fresh pipeline.</div>
+</div>
+
+---
+
+# The core open question
+
+<div class="mt-8 max-w-3xl space-y-5">
+  <div class="p-5 bg-neutral-soft border-2 border-accent rounded-lg text-center">
+    <div class="text-lg font-semibold">
+      oracle_stop_step(s) &nbsp;↔&nbsp; actual log RT(s)
+    </div>
+    <div class="text-sm opacity-70 mt-2">at the <b>same positions</b> s from the human behavioral dataset</div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4 text-sm">
+    <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+      <b class="text-accent text-xs uppercase tracking-wider">What we know so far</b>
+      <ul class="mt-2 text-xs list-disc pl-4 space-y-1 opacity-80">
+        <li>3/4 board features match direction between oracle and humans (A0a)</li>
+        <li>4 scalars achieve 86.4% oracle sign accuracy (A0b)</li>
+        <li>Both oracle and humans over-compute in dominant positions</li>
+      </ul>
+    </div>
+    <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded">
+      <b class="text-amber-700 text-xs uppercase tracking-wider">Analysis 1 will answer</b>
+      <p class="mt-2 text-xs text-amber-900">Run Yotam's pipeline on the human dataset FENs. A positive correlation between oracle_stop_step and log(RT) at matched positions → one paper. No correlation → two papers.</p>
+    </div>
   </div>
 </div>
 
