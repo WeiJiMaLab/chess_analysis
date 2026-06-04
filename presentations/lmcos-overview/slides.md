@@ -388,7 +388,7 @@ math: katex
       <div>Join with <code>personal.db</code> on FEN → recover <code>log(RT)</code>. Plot oracle_stop_step vs log(RT). Does the oracle predict where humans think longer?</div>
     </div>
   </div>
-  <div class="text-xs opacity-60 mt-2">Scale: 1K smoke → 10K main. Main blocker: 4-field vs 6-field FEN wiring.</div>
+  <div class="text-xs opacity-60 mt-2">Status: 1K smoke test (644 FENs) currently running on SLURM (Job ID 9215248). FEN formatting resolved.</div>
 </div>
 
 ---
@@ -416,7 +416,7 @@ math: katex
       <div>Success = acceptable GNN loss (&lt;pretrained baseline) + training time ≤2 hours on a single GPU.</div>
     </div>
   </div>
-  <div class="text-xs opacity-60 mt-2">No new data needed. Config YAML changes only. Runs in parallel with Analysis 1.</div>
+  <div class="text-xs opacity-60 mt-2">Status: Config D ablation currently running on SLURM (Job ID 9215254) from scratch on a single GPU.</div>
 </div>
 
 ---
@@ -445,6 +445,38 @@ math: katex
     </div>
   </div>
   <div class="text-xs opacity-60 mt-2">CPU-only. No consistency requirement with Lc0 frozen weights — fresh pipeline.</div>
+</div>
+
+---
+
+# Analysis 4 — Information-theoretic stopping (entropy VoI)
+
+<div class="mt-4 max-w-3xl space-y-3 text-sm">
+  <p class="font-semibold">Test policy entropy reduction as a normative stopping rule over Stockfish multi-depth search traces.</p>
+
+  <div class="p-3 bg-green-50 border-l-2 border-green-400 rounded text-xs mb-3">
+    <b>Motivation:</b> Human RT correlates with branching factor ($r \approx +0.20$). Expected VOC ($E[\Delta\text{UC}]$) incorporates candidate-set uncertainty, but requires tuning decision temperatures. Information gain (Shannon entropy reduction of the policy) offers a direct, parameter-free stopping signal.
+  </div>
+
+  <div class="space-y-2">
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">1.</div>
+      <div>Query Stockfish on 1K human positions for depths $d \in [1, 8]$. Extract Centipawns for all legal moves. Convert to win probabilities: $Q_{d, k} = 1/(1 + e^{-cp/400})$.</div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">2.</div>
+      <div>Compare two policy formulations $P_k(d) = \text{softmax}(\beta Q_d)$: 
+        <br>• <b>Approach A (Subset Softmax):</b> Evaluate over top-K moves returned by engine.
+        <br>• <b>Approach B (Neutral Imputation):</b> Evaluate over all legal moves, imputing unevaluated ones to $0.5$.
+      </div>
+    </div>
+    <div class="flex gap-3 items-start">
+      <div class="text-accent font-bold w-5 shrink-0">3.</div>
+      <div>Determine stopping depth $d^*$ where information gain drops below threshold: $H(d-1) - H(d) < \theta$. Correlate $d^*$ with human $log(RT)$ and branching factor.
+      </div>
+    </div>
+  </div>
+  <div class="text-xs opacity-60 mt-2">Status: Configured, runs locally on CPU via python-chess (independent of GPU queue). Ready to start.</div>
 </div>
 
 ---
