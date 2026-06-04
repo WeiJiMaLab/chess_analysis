@@ -286,6 +286,39 @@ math: katex
 
 ---
 
+# Two stopping criteria — and which is closer to VOC
+
+<div class="mt-4 max-w-3xl space-y-4 text-sm">
+  <div class="grid grid-cols-2 gap-5">
+    <div class="p-4 bg-neutral-soft border-l-3 border-accent rounded space-y-2">
+      <b class="text-accent text-xs uppercase tracking-wider">min_expansions</b>
+      <p class="text-sm italic">"If I keep thinking, my action won't change — so my realized reward can't change. There is no decision-theoretic value in continuing."</p>
+      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
+        <li>Stops when <b>action identity</b> has stabilised</li>
+        <li>Regret-free: additional compute cannot alter the chosen move</li>
+        <li>Matches Russek et al.: ΔUC = 0 when a_shallow = a_deep</li>
+        <li class="text-accent font-semibold">→ Closer to the spirit of VOC for human decisions</li>
+      </ul>
+    </div>
+    <div class="p-4 bg-neutral-soft border-l-3 border-secondary rounded space-y-2">
+      <b class="text-secondary text-xs uppercase tracking-wider">oracle_stop_step</b>
+      <p class="text-sm italic">"My estimate of my action's value is still improving — that improvement outweighs the cost. Continue, even though the action won't change."</p>
+      <ul class="text-xs list-disc pl-4 space-y-1 opacity-80 mt-2">
+        <li>Stops when <b>Q-value refinement</b> no longer justifies cost</li>
+        <li>Epistemic: MCTS Q(a) improves through deeper search even if action is fixed</li>
+        <li>Appropriate for multi-episode training (generalising across budgets)</li>
+        <li class="text-secondary font-semibold">→ What the lmcos model is trained on</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs mt-2">
+    <b class="text-amber-800">Implication:</b> The sign flip between our earlier (min_expansions) and current (oracle_stop_step) oracle analysis is not a mistake — they measure different things and their correlations with board features are near-inverses by construction. For the human comparison, <b>min_expansions may be the more natural target</b> since it directly asks "would thinking more change what I do?"
+  </div>
+</div>
+
+---
+
 # Analysis 0 — Results
 
 <div class="mt-4 max-w-3xl space-y-4 text-sm">
