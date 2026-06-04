@@ -1,0 +1,31 @@
+# Analysis 2: GNN pretraining ablation — Config D (smallest architecture, from scratch)
+# Tests whether a tiny GNN can learn child-WDL in < 2 hours without prior pretraining.
+
+command: pretrain-child-wdl-encoder
+
+# Training data: 10 filtered_shard directories (5% of full training set)
+train_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined/filtered_shard_00000
+validation_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined/filtered_shard_00019
+
+# Output checkpoint
+output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/chess/CTS/checkpoints/gnn_ablation_config_d.pt
+
+device: cuda
+
+# Config D: minimal architecture (vs baseline: d_embed=128, n_heads=4, hidden_layers=3)
+k: 1
+node_embed_hidden: 16
+d_embed: 16
+d_message: 16
+n_heads: 1
+d_att: 8
+decoder_hidden: 32
+
+batch_size: 32
+learning_rate: 1e-3
+weight_decay: 0.0
+epochs: 5
+num_workers: 0
+
+# Subtree-weighted loss — same as baseline training
+loss_weight_by_subtree_size: true
