@@ -319,6 +319,35 @@ math: katex
 
 ---
 
+# The epistemology of stopping
+
+<div class="mt-4 max-w-3xl space-y-3 text-sm">
+  <p class="opacity-80">At any step t during search, the agent faces three indistinguishable situations:</p>
+
+  <div class="space-y-2">
+    <div class="flex gap-3 items-start p-2 bg-green-50 border-l-2 border-green-400 rounded">
+      <span class="font-bold text-green-700 w-4 shrink-0">1</span>
+      <div><b>Converging to the right answer.</b> Q of the current best is rising; this IS the globally optimal move. <span class="text-green-700 font-semibold">→ Should stop.</span></div>
+    </div>
+    <div class="flex gap-3 items-start p-2 bg-red-50 border-l-2 border-red-400 rounded">
+      <span class="font-bold text-red-700 w-4 shrink-0">2</span>
+      <div><b>Converging to the wrong answer.</b> Q keeps rising — but a superior move exists in the unexplored region. Signal identical to case 1. <span class="text-red-700 font-semibold">→ Should keep going.</span></div>
+    </div>
+    <div class="flex gap-3 items-start p-2 bg-amber-50 border-l-2 border-amber-400 rounded">
+      <span class="font-bold text-amber-700 w-4 shrink-0">3</span>
+      <div><b>Not converging.</b> Q has plateaued — either the position is genuinely ambiguous, or search isn't reaching the better move. <span class="text-amber-700 font-semibold">→ Unknown action.</span></div>
+    </div>
+  </div>
+
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded mt-2 text-xs space-y-1">
+    <p><b>The circular problem:</b> the correct stopping criterion — "would stopping now change my action?" — requires knowing what further search would reveal. That requires completing the search.</p>
+    <p><b>The "chasing tails" effect:</b> Q-improvement is highest in dominant positions (cases 1 or 2). The agent rationally continues — but in dominant positions, the decision was already made. Each expansion confirms what was already known, not what was unknown.</p>
+    <p><b>The dissatisfying asymmetry:</b> cases 1 and 2 are indistinguishable locally. So is "stuck for good" vs "stuck temporarily" in case 3. The agent has no corrective signal for the cases where more compute is genuinely needed but the search looks unproductive.</p>
+  </div>
+</div>
+
+---
+
 # Analysis 0 — Results
 
 <div class="mt-4 max-w-3xl space-y-4 text-sm">

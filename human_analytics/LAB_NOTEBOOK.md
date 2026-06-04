@@ -730,6 +730,82 @@ The GNN adds only ~4pp. **Analysis 2 (skip GNN pretraining) is strongly motivate
 
 ---
 
+## The epistemology of stopping (2026-06-03)
+
+### The "chasing tails" phenomenon
+
+The min_expansions analysis revealed a systematic misallocation: both humans and
+the oracle (oracle_stop_step) spend *more* time in positions where the correct action
+became apparent *earlier* (high gain_depth, large min_expansions is small). This is
+the opposite of efficient computation.
+
+**The mechanism:** In dominant positions, each expansion further confirms the dominant
+move. Q keeps improving. The Q-refinement stopping signal — "is the search still
+teaching me something?" — keeps firing. The agent chases the tail of an asymptotically
+converging Q-estimate, spending many steps to learn that A is worth 0.92 rather than 0.85,
+even though they would have played A either way.
+
+In ambiguous positions, Q plateaus early (no move stands out). The refinement signal
+weakens. The agent stops — but these are exactly the positions that warrant more compute.
+
+### The three epistemic cases
+
+At any point during search, an agent faces uncertainty across three situations:
+
+1. **Converging to the right answer.** Q of the current best keeps rising; the best
+   move *is* the globally optimal move. The agent should stop.
+
+2. **Converging to the wrong answer.** Q of the current best keeps rising, but there
+   is a globally superior move in the unexplored region. The agent should keep going.
+   But the observable signal (Q-improvement) is identical to case 1.
+
+3. **Not converging.** Q of the current best has plateaued. The agent might eventually
+   converge with more search, or might not. The signal (low Q-improvement) is consistent
+   with "position is genuinely ambiguous" and also with "best move exists but search isn't
+   finding it."
+
+### The fundamental asymmetry
+
+The Q-refinement signal is observable. The *reason* for it is not. Cases 1 and 2 produce
+identical signals but require opposite actions. Cases 3 and "nothing better exists" also
+produce identical signals but require opposite actions.
+
+The correct stopping criterion — *would stopping now cause me to make a wrong decision?* —
+requires knowing what further search would reveal. But knowing that requires completing the
+search. **This is circular**: you need to search to know whether to stop searching.
+
+There is no symmetric information available. The agent can observe:
+- Whether Q is currently improving (local signal)
+- How many children have been evaluated (partial observability of search coverage)
+
+The agent cannot observe:
+- Whether the unexplored region contains a superior move (requires completing the search)
+- Whether continued Q-improvement reflects refinement of the true best move or refinement
+  of a false leader that will eventually be overturned
+
+### The Q-refinement rule as a rational but biased heuristic
+
+Using Q-improvement as the stopping signal is the only locally observable proxy. It is
+rational in the Bayesian sense — "keep going while learning." But it is systematically
+biased because it correlates with positions where the search has already effectively
+terminated (dominant move found and just being confirmed), not with positions where
+search is genuinely needed (ambiguous, no clear winner).
+
+**Prediction:** the worst blunders (large negative MQ) should cluster in low gain_depth
+positions — where both oracle and human stopped early because Q plateaued, but the true
+best move was not yet found. This is testable from `pos_with_engine_eval`.
+
+### Connection to VOC and E[ΔUC]
+
+This framing clarifies why Russek et al.'s E[ΔUC] (expected VOC) is the right measure.
+E[ΔUC] asks: "given my current distribution over which move I might play (determined by
+the shallow Q-values and a softmax temperature β), how much value do I *expect* to gain
+from deeper search?" This is exactly the estimate of P(deeper search changes my action)
+× E[gain from the change. It tries to directly estimate what the Q-refinement rule
+cannot observe: the probability that continued search would alter the decision.
+
+---
+
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)
 - [ ] Add `opponent_clock_time >= 60s` filter to match Russek et al.
