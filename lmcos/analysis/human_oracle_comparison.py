@@ -128,7 +128,11 @@ def _tree_index(path: str) -> int | None:
 
 
 def _load_manifest(manifest_path: str) -> pd.DataFrame:
-    df = pd.read_parquet(manifest_path)
+    path = Path(manifest_path)
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path)
+    else:
+        df = pd.read_csv(path)
     required = {"index", "gid", "move_ply", "move_time", "full_fen"}
     missing = required - set(df.columns)
     if missing:
