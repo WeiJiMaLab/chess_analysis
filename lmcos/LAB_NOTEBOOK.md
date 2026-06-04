@@ -31,6 +31,32 @@ Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-v
 
 **Onboarding:** Workspace overview: [`../README.md`](../README.md). Pipeline commands: [`slurm/README.md`](slurm/README.md). Run YAMLs: [`slurm/configs/README.md`](slurm/configs/README.md).
 
+### 2026-06-04 — A1 & A2 SLURM Submissions (hl4291)
+
+**Why now:** A0a and A0b passed, clearing both A1 (human trees + oracle comparison) and A2 (minimal GNN scratch training ablation) to run in parallel on SLURM.
+
+**Wrapper & Config fixes:**
+- **Environment activation:** The Della SLURM scripts (`generate_dataset_shard.slurm` and `pretrain_child_wdl_encoder_della.slurm`) were hardcoded to `conda activate CTS`. Since user `hl4291` uses a Python virtual environment at `/home/hl4291/venv`, both scripts were updated to check for and activate `VENV_DIR` if present, falls back gracefully.
+- **A1 Resuming:** Added `resume: true` to the config [human_trees_1k_smoke.yaml](file:///home/hl4291/chess_analysis/lmcos/slurm/configs/1_preprocess_data/human_trees_1k_smoke.yaml). The previous partial run generated 390 out of 644 trees (from `000000_root_0.pt` to `000389_root_389.pt`) locally on the login node. Resuming avoids wasting GPU/CPU cycles on already completed trees.
+
+**Submissions:**
+- **A1 (Human Trees 1K Smoke):** Submitted as **Job ID `9215210`** using [generate_dataset_shard.slurm](file:///home/hl4291/chess_analysis/lmcos/slurm/1_preprocess_data/generate_dataset_shard.slurm) pointing at `human_trees_1k_smoke.yaml`.
+- **A2 (GNN pretraining ablation):** Submitted as **Job ID `9215212`** using [pretrain_child_wdl_encoder_della.slurm](file:///home/hl4291/chess_analysis/lmcos/slurm/2_pretrain_encoder/pretrain_child_wdl_encoder_della.slurm) pointing at `gnn_ablation_config_d.yaml`.
+
+### 2026-06-04 — Analysis 0 complete (human↔oracle direction + minimal MC)
+
+Cross-project summary, readiness for Analyses 1–2, and human RT context: [`../human_analytics/LAB_NOTEBOOK.md`](../human_analytics/LAB_NOTEBOOK.md) (§ Analysis 0 results, § Analysis readiness). Work queue: [`../proposed_next_steps.md`](../proposed_next_steps.md).
+
+| Script | Role |
+|--------|------|
+| [`analysis/oracle_stop_step_features.py`](analysis/oracle_stop_step_features.py) | A0a: `compute_budgeted_oracle` on `filtered_shard` trees; correlate `oracle_stop_step` with board features vs human RT |
+| [`analysis/minimal_mc_baseline.py`](analysis/minimal_mc_baseline.py) | A0b: 4 scalar features → MLP vs GNN+MC sign accuracy |
+| [`analysis/min_expansions_analysis.py`](analysis/min_expansions_analysis.py) | Supplementary: why `min_expansions` ≠ DP `oracle_stop_step` |
+
+Tests: `tests/test_oracle_stop_step_features.py`, `tests/test_minimal_mc_baseline.py` (25/25). Figures under `analysis/figures/` when scripts are run locally.
+
+**Outcomes:** A1 **go** (3/4 directional feature matches on lmcos trees). A2 **go** (minimal MC val sign acc 86.4% vs 90.1% GNN+MC). A1 still needs human FEN tree generation + `human_oracle_comparison.py`. A2 still needs Config D YAML (`unfreeze_encoder: true` path already in `controller_train.py`).
+
 ### 2026-05-29 — Repo layout refactor + stage-4 controller ablation harness (hl4291)
 
 **Why today:** After the `jordan`-branch layout shuffle we needed (a) a clear separation between pipeline code, Slurm wrappers, and run artifacts, and (b) a repeatable way to compare encoder/input variants on ysagiv read-only materialized caches without ad-hoc smoke scripts or hand-edited job lists.

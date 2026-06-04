@@ -12,7 +12,9 @@
 set -euo pipefail
 : "${CONFIG:?CONFIG env var required (path to YAML config)}"
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ysagiv/chess/cts/async_soph}"
+PROJECT_DIR="${PROJECT_DIR:-/home/hl4291/chess_analysis/lmcos}"
+VENV_DIR="${VENV_DIR:-/home/hl4291/venv}"
+CONDA_ENV="${CONDA_ENV:-}"
 
 mkdir -p "${PROJECT_DIR}/slurm/logs"
 
@@ -21,8 +23,17 @@ module --force purge >/dev/null 2>&1 || true
 module load anaconda3/2023.3
 module load cudatoolkit/12.8
 export PS1="${PS1:-}"
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate CTS
+if [[ -n "${CONDA_ENV}" ]]; then
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate "${CONDA_ENV}"
+  echo "python_env=conda:${CONDA_ENV}"
+elif [[ -f "${VENV_DIR}/bin/activate" ]]; then
+  source "${VENV_DIR}/bin/activate"
+  echo "python_env=venv:${VENV_DIR}"
+else
+  echo "Set CONDA_ENV or VENV_DIR to a valid Python environment." >&2
+  exit 1
+fi
 set -u
 
 cd "${PROJECT_DIR}"

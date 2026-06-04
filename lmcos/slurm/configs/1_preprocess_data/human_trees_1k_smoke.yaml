@@ -16,3 +16,4 @@ max_nodes: 96
 seed: 42
 multipv: 8
 max_depth: 4
+resume: true

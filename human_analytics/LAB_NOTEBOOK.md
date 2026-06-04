@@ -4,6 +4,8 @@ Tracks analyses, decisions, and open questions for the human chess decision-maki
 Repository root: `/home/hl4291/chess_analysis/`  
 Database: `/scratch/gpfs/GRIFFITHS/hl4291/personal.db` (DuckDB)
 
+**Cross-repo analyses (lmcos):** Scripts under `lmcos/analysis/`, tests under `lmcos/tests/`, figures at `lmcos/analysis/figures/` (generated locally; not always committed). Pipeline/engine details: `lmcos/LAB_NOTEBOOK.md`. Planned work queue: `proposed_next_steps.md`.
+
 ---
 
 ## Dataset
@@ -406,11 +408,9 @@ The current analyses (gain_depth, gain_budget, entropy_topk) are stepping stones
 
 ## Implementation plan: lmcos ↔ human_analytics comparison (2026-06-03)
 
-### The key bridge
+**Status (2026-06-04):** Superseded for the directional go/no-go by **Analysis 0a** (`lmcos/analysis/oracle_stop_step_features.py`), which recomputes `oracle_stop_step` from `filtered_shard` trees (WDL halt rewards) rather than packed-shard labels. **Analysis 0b** (`lmcos/analysis/minimal_mc_baseline.py`) answers whether the GNN is necessary. Same-position human↔oracle comparison remains **Analysis 1** (not started). See [Analysis 0 results](#analysis-0-results-2026-06-03) and [Analysis readiness](#analysis-readiness-2026-06-04).
 
-The lmcos materialized controller cache already contains `oracle_stop_step` per episode — the exact output of the DP Oracle, which is the *normative* optimal number of think steps under the model's reward-computation tradeoff. This is `opt_think_steps`. We do **not** need to run Lc0 on the human dataset positions; we can work entirely from the lmcos validation shards.
-
-**Comparison structure:**
+### The key bridge (target end state)
 
 ```
 Same position features (computed from root FEN)
@@ -419,7 +419,7 @@ log(RT)          oracle_stop_step      model_predicted_stop
 [human]          [normative, exact]    [lmcos controller output]
 ```
 
-If all three correlate with the same features in the same directions, the validation is complete: humans, the normative ideal, and the learned controller all agree on when to think longer.
+A0a tested the middle column on **lmcos training trees** (not human positions). A1 will align all three on **human FENs**.
 
 ---
 
@@ -655,78 +655,92 @@ Option C (aspirational): "The lmcos controller, trained on the oracle, produces 
 
 ## Analysis 0 results (2026-06-03)
 
-### What was done
+**Status: complete.** Removed from `proposed_next_steps.md` (2026-06-04). Go/no-go: **proceed with Analysis 1** (directional oracle–human agreement); **proceed with Analysis 2** (GNN likely redundant for halt/continue).
 
-Implemented and ran both Analysis 0a and 0b as described in `proposed_next_steps.md`.
-Scripts: `lmcos/analysis/oracle_stop_step_features.py` and `lmcos/analysis/minimal_mc_baseline.py`.
-Tests: `lmcos/tests/test_oracle_stop_step_features.py` and `lmcos/tests/test_minimal_mc_baseline.py` — **25/25 passing**.
+### Implementation (as built)
+
+| Piece | Path | Notes |
+|---|---|---|
+| A0a script | `lmcos/analysis/oracle_stop_step_features.py` | Default `--n-trees 5000`, primary budget **43** (medium-large bucket); also sweeps bucket reps `[2, 7, 18, 43, 90]` |
+| A0b script | `lmcos/analysis/minimal_mc_baseline.py` | Default `--n-trees 2000` train / `--n-val-trees 500`; budget **43** |
+| Supplementary | `lmcos/analysis/min_expansions_analysis.py` | Explains sign flip vs DP oracle (not part of A0 gate) |
+| Data | `.../generated_trees_combined/filtered_shard*/` | **Not** packed controller shards; same `.pt` tree format as tree generation |
+| Oracle | `src/data/preprocess_mc/oracle.py` → `compute_budgeted_oracle()` | `halt_rewards[t] = oracle_root_q_trace[t, oracle_best_move_index[t]]` (WDL); `tree_sizes = [1]*T` |
+| Human r baseline | `_HUMAN_R` in A0a script | From `pos_with_engine_eval` + board features (branching +0.195, material +0.039, gain_depth +0.096, toptwo −0.064) |
+| Tests | `test_oracle_stop_step_features.py`, `test_minimal_mc_baseline.py` | **25/25 passing** (`pytest` from `lmcos/`) |
+
+**Approximation (documented in A0a):** halt rewards use **WDL** from `oracle_root_q_trace`; packing used centipawn-derived values. Packed `oracle_stop_steps` agreement is tested in unit tests (±1 step tolerance).
 
 ### Analysis 0a: oracle_stop_step vs board features (n=5K lmcos trees, budget=43)
 
-Used `compute_budgeted_oracle()` with `BudgetedOracleConfig()` defaults to compute
-`policy.optimal_stop_step` for each filtered_shard tree. Compared feature correlations
-against established human RT correlations from `pos_with_engine_eval` (n=1M).
-
-`oracle_stop_step`: mean=11.7, std=10.3, range=[0,43] — good variance.
-
 | Feature | Oracle r | Human r | Direction match |
 |---|---|---|---|
-| branching | +0.165 | +0.195 | ✓ |
-| material | +0.154 | +0.039 | ✓ |
-| gain_depth | **+0.797** | +0.096 | ✓ |
-| toptwo | +0.436 | −0.064 | ✗ |
+| branching (`n_possible_moves`) | +0.165 | +0.195 | ✓ |
+| material (`n_self_pieces_exc_pawns`) | +0.154 | +0.039 | ✓ |
+| gain_depth (`gain_depth_equiv`) | **+0.797** | +0.096 | ✓ |
+| toptwo (`toptwo_equiv`) | +0.436 | −0.064 | ✗ |
 
-**Key findings:**
-- **3/4 features match direction** → A1 (human FEN trees) is motivated
-- **gain_depth correlation is huge** (r=+0.797): the oracle continues longest precisely in positions where search still changes the best move's Q-value — this is exactly what the oracle is designed to be sensitive to. Humans show the same direction weakly (+0.096)
-- **toptwo mismatch is interpretable**: oracle continues longer when toptwo is large (kept searching to verify the winner); humans stop faster when toptwo is large (decisiveness = satisficing signal). Different stopping criteria, both coherent
-- Budget sensitivity: branching correlation stable at r≈+0.13–0.17 for budgets 7–90; budget=2 is too small to discriminate positions meaningfully
+`oracle_stop_step`: mean=11.7, std=10.3, range=[0, 43].
 
-**Clarification: why earlier `min_expansions` analysis gave all-flipped signs**
+**Interpretation:**
+- **3/4 directional matches** on lmcos trees vs human RT proxies → worth generating human-position trees (A1)
+- **gain_depth:** oracle strongly continues where Q still improves; humans weakly in the same direction
+- **toptwo mismatch:** oracle keeps searching to refine Q when two moves are close; humans treat large toptwo as “decided” → shorter RT (satisficing)
+- Budget 2 too small to discriminate; budgets 7–90 give stable branching r (~+0.13–0.17)
 
-An earlier attempt (`human_comparison.py`, now deleted) used `min_expansions` = first stable
-convergence of `oracle_best_move_index` — the step where the oracle stopped changing its
-choice of best move. This is NOT the DP-optimal stopping step. The current analysis uses
-`compute_budgeted_oracle()`, which is the actual oracle the model is trained on.
+**Figures:** `lmcos/analysis/figures/oracle_stop_step_vs_human_rt.png`, `oracle_stop_step_correlation_matrix.png`
 
-`min_expansions` and `oracle_stop_step` measure nearly opposite things:
-- `min_expansions`: stability of the best-move *identity* — when does the oracle commit to a move?
-- `oracle_stop_step`: cost-optimality of stopping — when does the marginal gain drop below the marginal cost?
-
-In positions where oracle_stop_step is large (value still rising → keep computing), the best-move identity often stabilises early (min_expansions is small — the oracle knew which move was best, but kept refining its Q-estimate). This near-inversion explains the sign reversal across all features.
-
-**Figures produced:**
-- `lmcos/analysis/figures/oracle_stop_step_vs_human_rt.png` — bar chart with r and r²
-- `lmcos/analysis/figures/oracle_stop_step_correlation_matrix.png` — lmcos tree feature matrix
+**Not the DP oracle:** `min_expansions` (stable `oracle_best_move_index`) inverts signs vs `oracle_stop_step`; see `min_expansions_analysis.py`.
 
 ### Analysis 0b: minimal MC baseline (n=2K train / 500 val trees)
 
-Replaced GNN encoder with 4 scalar tree-stat features per snapshot
-(best_q, wdl_var, t_norm, budget_rem_norm) and trained a small MLP (2 layers × 64 units)
-matching the MC head architecture. Targets computed via `compute_budgeted_oracle()`.
+Per-snapshot features: `best_q`, `wdl_var` (evaluated root children), `t_norm`, `budget_rem_norm`.  
+MLP: 2×64, same depth as MC head; targets = `sign(compute_budgeted_oracle().target_advantages)`.
 
 | Model | Sign accuracy |
 |---|---|
-| GNN+MC (baseline) | **90.1%** |
+| GNN+MC (baseline, from training logs) | **90.1%** |
 | Minimal MLC (train) | 87.4% |
 | Minimal MLC (val) | **86.4%** |
 
-- Gap = 3.7pp. **Above 80% threshold** → GNN is not strictly necessary
-- Inference: 0.054 ms/snapshot (vs full GNN+MC which requires tree encoding)
-- Training converged cleanly: loss 0.53 → 0.37 over 20 epochs, no instability
+Val **above 80% go/no-go**; gap 3.7 pp. Inference ~0.054 ms/snapshot (synthetic batch timing in script).
 
-**Key finding:** 86% of the oracle's halt/continue signal is captured by 4 raw scalars.
-The GNN adds only ~4pp. **Analysis 2 (skip GNN pretraining) is strongly motivated.**
+**Figures:** `minimal_mc_sign_accuracy.png`, `minimal_mc_weights.png` (optional `minimal_mc_timing.png` mentioned in docstring; main() currently saves the two above)
 
-**Figures produced:**
-- `lmcos/analysis/figures/minimal_mc_sign_accuracy.png`
-- `lmcos/analysis/figures/minimal_mc_weights.png`
+**Note vs original plan:** A0b uses **filtered_shard trees** + on-the-fly oracle targets, not packed validation `target_advantages` shards. Same supervision definition, faster to wire.
 
-### What is left to do
+---
 
-- **Analysis 1** (human FEN trees): motivated by A0a directional match. Generate 1K then 10K Lc0 trees from `processed_moves_nonzero`. FEN format wiring is the main blocker (4-field vs 6-field FEN). See `proposed_next_steps.md` for full procedure.
-- **Analysis 2** (skip GNN pretraining): strongly motivated by A0b. Create Config D (d_embed=16) and train from random init using `gnn_pretrain.py` on 10 shards — verify whether loss converges in <2 hours. The key code question: does `controller_train.py` support joint GNN+MC training without pre-materialisation?
-- **Analysis 3** (weaker engine): on hold until A1 gives a directional answer on the human-oracle comparison.
+## Analysis readiness (2026-06-04)
+
+### Analysis 1 — Human FEN trees + oracle vs log(RT)
+
+| Criterion | Status |
+|---|---|
+| A0a go/no-go (≥3/4 feature directions) | **Pass** (3/4; toptwo known mismatch) |
+| Human FEN source | **Ready** — `processed_moves_nonzero` in `personal.db` (ply 15–75, opp_clock ≥ 60s) |
+| FEN format | **Likely OK** — 4-field FEN loads in `python-chess` (`Board(fen).is_valid()`); `build_tree.py` reads newline FENs; confirm castling/ep in join key before 10K scale |
+| Tree generation | **Not run** — need SLURM config pointing at human FEN file, ysagiv weights, budget=96 |
+| Extraction / plots | **Not implemented** — `human_oracle_comparison.py` and tests still to write |
+| Smoke test gate | **Required** — 1K trees must finish in ~15 min on A100 before 10K |
+
+**Verdict:** **Ready to start** Step 1 (FEN export + format check) and Step 2 (1K smoke SLURM). Do not scale to 10K until smoke passes.
+
+### Analysis 2 — Minimal model / skip GNN pretraining
+
+| Criterion | Status |
+|---|---|
+| A0b go/no-go (val sign acc ≥ 80%) | **Pass** (86.4%) |
+| Joint GNN+MC training | **Supported** — `controller_train.py` has live-encoder path when `unfreeze_encoder: true` (skips materialized cache) |
+| Config D YAML | **Not created** — no `subtree_weighting_root_scratch_D.yaml` yet |
+| Ablation data | **Ready** — ysagiv packed train shards (subsample 10–20 for first run) |
+| Success metric | GNN loss on subsample vs pretrained baseline (needs baseline number from ysagiv run) |
+
+**Verdict:** **Ready to start** once Config D YAML + 10-shard manifest paths are set; can run **in parallel** with A1 (different GPU jobs).
+
+### Analysis 3 — Weaker engine
+
+**On hold** until A1 reports `r(oracle_stop_step, log RT)` on matched human positions.
 
 ---
 
