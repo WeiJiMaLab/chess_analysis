@@ -234,24 +234,22 @@ We expect that the entropy-based stopping depth $d^*$ will have a strong positiv
 - A table comparing Pearson $r(d^*, \text{branching})$ and $r(d^*, \text{log RT})$ across different thresholds $\theta \in [0.0, 0.001, 0.005, 0.01, 0.05, 0.1]$ and $\beta = 1.0$.
 
 **Procedure**  
-*Step 1: Implement Stockfish multi-depth trace extraction*
-1. [35 min] In `human_analytics/entropy_voi_analysis.py`, write `query_stockfish_multidepth(board, max_depth)` using `chess.engine.SimpleEngine`:
+*Phase 1: Data Generation (Multi-Depth Snapshot Extraction & Caching)*
+1. [25 min] In `human_analytics/entropy_voi_analysis.py`, write `query_stockfish_multidepth(board, max_depth)` using `chess.engine.SimpleEngine`:
    - Run Stockfish analysis up to `max_depth` (default: 8).
    - For each depth $d \in [1, \text{max\_depth}]$, query the evaluation of all legal moves (using `multipv=len(legal_moves)`).
    - Convert centipawn scores to win probabilities: $Q_{d, k} = 1 / (1 + \exp(-cp / 400))$.
    - Return a Q-value matrix of shape `(max_depth, n_legal_moves)`.
-2. [20 min] Write the entropy and stopping calculation:
+2. [15 min] Set up data sampling to load 1,000 moves from `processed_moves_nonzero` in `personal.db` (joined with `moves` table to get UCI, RT, etc.).
+3. [30 min] Execute the data generation script locally using Python's multiprocessing pool to query Stockfish in parallel. Cache the generated dataset (Q-value matrices paired with FEN, RT, and branching factor) to a file (e.g., `/scratch/gpfs/GRIFFITHS/hl4291/tmp/sf_multidepth_traces_1k.pkl`).
+
+*Phase 2: Modeling & Optimization (Entropy Calculation, Sweeps, and Plotting)*
+4. [20 min] Write the offline analysis functions to load the cached traces:
    - For **Approach B (Neutral Imputation)**: For any move not returned or having a score of 0, impute $Q_{d, k} = 0.5$.
    - Compute policy $P_k(d) = \text{softmax}(\beta \cdot Q_d)$.
    - Compute Shannon entropy $H(d) = -\sum_k P_k(d) \log P_k(d)$.
    - The stopping depth $d^*$ is the first $d \ge 1$ where $H(d-1) - H(d) < \theta$.
-3. [15 min] Set up data sampling to load 1,000 moves from `processed_moves_nonzero` in `personal.db` (joined with `moves` table to get UCI and RT).
-
-*Step 2: Run evaluations and correlation analysis*
-4. [30 min] Run the multi-depth Stockfish queries over the 1,000 sampled positions using multi-processing.
-5. [15 min] Run sweeps over $\theta \in [0.0, 0.001, 0.005, 0.01, 0.05, 0.1]$ with $\beta = 1.0$. Calculate Pearson correlations with branching factor and human log(RT) and print a markdown summary table.
-
-*Step 3: Plotting and visualization*
+5. [15 min] Run sweeps over $\theta \in [0.0, 0.001, 0.005, 0.01, 0.05, 0.1]$ and $\beta = 1.0$. Calculate Pearson correlations with branching factor and human log(RT) and print a markdown summary table.
 6. [15 min] Generate `human_analytics/figures/entropy_voi_trajectories.png` showing $H(d)$ and $IG(d)$ over depth steps for 3 selected positions.
 7. [15 min] Generate `human_analytics/figures/entropy_voi_vs_human_rt.png` showing the side-by-side Pearson correlations of the best entropy stopping depth $d^*$ vs human log(RT) across the key board features.
 
