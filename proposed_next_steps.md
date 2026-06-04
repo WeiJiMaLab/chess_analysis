@@ -4,7 +4,7 @@
 A3 is conditional on A1 finding a mismatch.
 
 **Template per analysis:**
-> brief description · rationale · data · expected output · procedure (atomic tasks with times) · total estimate · notes/warnings/open questions
+> brief description · rationale · data · expected output · procedure (atomic tasks with times) · total estimate · **tests** · notes/warnings/open questions
 
 ---
 
@@ -30,6 +30,7 @@ function is not the right normative model for human deliberation.
 - Script: `lmcos/analysis/oracle_stop_step_features.py`
 - Figure: 2-column table / bar plot comparing r(oracle_stop_step, feature) vs
   r(log RT, feature) for branching, material, gain_depth_equiv, toptwo_equiv
+- J: integrated column into the correlation matrix as well would be helpful, quantifying r-squared would be helpful
 - Go/no-go signal for Analysis 1
 
 **Procedure:**
@@ -45,10 +46,23 @@ function is not the right normative model for human deliberation.
 
 **Total estimate:** ~1.5–2 hours
 
+**Tests to write** (`lmcos/tests/test_oracle_stop_step_features.py`):
+- `oracle_stop_step` ∈ [0, budget] for every tree — catch out-of-range values
+- `halt_rewards` are all in [0, 1] (WDL range) — catch feature indexing bugs
+- Starting position FEN (known) → `n_possible_moves = 20`, `n_self_pieces_exc_pawns = 8`
+- Determinism: same tree loaded twice gives identical `oracle_stop_step`
+- Trivial case: if `halt_rewards` is constant, `oracle_stop_step = 0` (halt immediately — no improvement from continuing)
+- Monotone case: if `halt_rewards` is strictly increasing and cost is very low, `oracle_stop_step` should be near `budget`
+- J: reverse case -- if cost is higher than halt rewards should always halt
+- J: can check correctness of
+- Correlation signs are reproducible: re-running on a different random seed gives the same sign pattern (not necessarily same magnitudes)
+
 **Implementation notes / warnings / open questions:**
 - `starting_budget=60` is the mid-range of the "large" bucket (26–60 expansions). Should
   also test `budget=10` and `budget=96` to check sensitivity — oracle_stop_step depends
   on budget and we want to know how much.
+  - would keep as close as possible to existing target -- the sensitivity here I believe may be intentional because you may need to 
+  restrict the budget to stay within a range where the estimates are valid
 - **Counterfactual:** If r(oracle_stop_step, branching) is negative here but positive for
   humans, it does not conclusively mean A1 will fail — the data sources differ (lmcos trees
   from diverse time controls, ELO 1800–2600 vs human 10+0 ≥2000). A directional mismatch
@@ -67,12 +81,14 @@ function is not the right normative model for human deliberation.
 
 **Brief:** Test whether a simple linear model over raw tree scalar statistics can
 predict the oracle's halt/continue decision as well as the full GNN + MC pipeline.
+- J: would probably need to be a logistic regression, I think -- linear model wouldn't cut it - since the decision is halt or continue, I think I would simply match the style of the current MC but instead of input of root_embed it inputs the vector tree statistics
 
 **Rationale / goal:**
 If LR achieves ≥85% sign accuracy (current GNN+MC: 90%), the GNN is not adding
 meaningful representational capacity over what is already visible in scalar statistics.
 This would make "skip GNN pretraining" (Analysis 2) the obvious path and might even
 suggest a much simpler model is the endpoint.
+- J: I would be fine with around 80% sign accuracy, even. I would also run some timing tests here.
 
 **Data needed:**
 - Packed validation episode shards at
@@ -103,6 +119,15 @@ suggest a much simpler model is the endpoint.
 6. [20 min] Plot coefficient magnitudes and sign accuracy by budget bucket
 
 **Total estimate:** ~1.5 hours
+
+**Tests to write** (`lmcos/tests/test_lr_advantage_baseline.py`):
+- Feature matrix shape = `(n_snapshots, n_features)` with no NaNs — catch indexing bugs
+- Labels are binary `{−1, +1}` only — catch sign/encoding errors
+- LR coefficient signs: `best_q` positive (higher Q → halt better), `remaining_budget` positive (more budget → continue worth it)
+- Training accuracy > 60% on training shards — if LR can't beat chance, features are wrong
+- No data leakage: held-out shard indices never appear in training set
+- Comparison validity: LR and GNN+MC evaluated on identical held-out snapshot sets
+- Reproducibility: two runs with same seed → sign accuracy within 0.1%
 
 **Implementation notes / warnings / open questions:**
 - **step_node_cutoffs** is the key field — it gives the node count in the tree at each
@@ -185,6 +210,15 @@ insufficient, A1 generates the ground-truth data for the comparison.
 
 **Total estimate:** ~4–6 hours (dominated by SLURM wait time)
 
+**Tests to write** (`lmcos/tests/test_human_oracle_comparison.py`):
+- Generated tree `root_position_spec` matches the input FEN exactly — catch pipeline routing bugs
+- `oracle_root_q_trace` shape = [96, n_legal_moves] for every tree — catch budget or branching mismatches
+- `oracle_stop_step` ∈ [0, 96] for all generated trees
+- FEN join recovers correct RT: spot-check 10 positions where gid+move_ply are known
+- All input FENs are valid chess positions — `chess.Board(fen).is_valid()` = True for all
+- No duplicate FENs in the sample (dedup assertion)
+- `log(RT)` and `oracle_stop_step` are defined for the same set of positions — no join mismatches producing NaN pairs
+
 **Implementation notes / warnings / open questions:**
 - **FEN format mismatch:** `processed_moves_nonzero.fen` is a 4-field FEN (no halfmove/fullmove).
   `build_tree.py` may expect a 6-field full FEN. Check the pipeline input format before
@@ -253,6 +287,15 @@ most important analysis for unblocking future work regardless of A1 outcomes.
 
 **Total estimate:** ~4–8 hours (including SLURM wait)
 
+**Tests to write** (`lmcos/tests/test_minimal_model.py`):
+- Config D forward pass output shape = `(batch, 1)` — same interface as Config A
+- Parameter count: Config D has <1/64 of Config A's parameters — verify architecture is actually smaller, not a config bug
+- GNN loss decreases over first 100 training steps — confirm learning is happening and not diverging
+- `unfreeze_encoder=true` actually modifies GNN parameters: assert param tensors differ before vs after one gradient step
+- MC sign accuracy > 60% after 1 epoch on 10 shards — better than random chance
+- Training reproducible: two runs with same seed → GNN loss within 1%
+- No NaN losses at any training step — catch numerical instability from small embedding dimensions
+
 **Implementation notes / warnings / open questions:**
 - **Critical code question:** Does `controller_train.py` support joint GNN+MC training
   from scratch, or does it always expect pre-materialized z_root embeddings? If it
@@ -317,6 +360,15 @@ more aligned with human cognitive difficulty.
 4. [30 min] Compare correlations with human RT and with Analysis 1 results.
 
 **Total estimate:** ~4–6 hours (including code changes)
+
+**Tests to write** (`lmcos/tests/test_sf2000_oracle.py`):
+- Centipawn → WDL conversion is monotone: `pwin(−1000) < pwin(0) < pwin(+1000)`
+- `pwin(cp=0) ≈ 0.5` within ±0.01 — drawn position equals probability
+- `pwin(cp=+1000) > 0.95` — decisive winning advantage
+- `oracle_stop_step` ∈ [0, 96] for all SF2000 trees
+- SF2000 trees have the same key structure as Lc0 trees — format compatibility check before running oracle
+- Stockfish at ELO=2000 fails on a known puzzle where SF14 full-strength succeeds — confirm limiter is active
+- `r(oracle_stop_step_SF2000, oracle_stop_step_Lc0)` is in (0.1, 0.9) — they should partially agree but not perfectly
 
 **Implementation notes / warnings / open questions:**
 - **Centipawn → WDL calibration:** The constant 400 gives approximately correct WDL
