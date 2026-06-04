@@ -13,6 +13,10 @@
 
 ---
 
+# Thread 2: LMCOS
+
+This thread contains the codebase for generating trees and training the meta-control architecture, focusing on simplifying and improving the model.
+
 ## Analysis 0 — COMPLETE (2026-06-03)
 
 Results and implementation details: **`human_analytics/LAB_NOTEBOOK.md`** (§ Analysis 0 results, § Analysis readiness).
@@ -25,6 +29,10 @@ Results and implementation details: **`human_analytics/LAB_NOTEBOOK.md`** (§ An
 Tests: `lmcos/tests/test_oracle_stop_step_features.py`, `test_minimal_mc_baseline.py` (25/25 pass).
 
 ---
+
+# Thread 1: Human Data Analytics
+
+This thread focuses on empirical evaluation of human behavioral data and testing cognitive models (like entropy stopping) against it.
 
 ## Analysis 1 — Fair comparison: oracle on human board positions
 
@@ -95,16 +103,19 @@ We expect that `oracle_stop_step` will positively correlate with human `log(RT)`
 *   **Open question: how does build_tree.py accept FEN input?** The existing pipeline reads from a text file of FENs (one per line). Confirm this is how `generate_dataset_shard.slurm` is configured.
 *   **Warning:** The generated trees will not have human behavioral metadata (RT, clock). The join step (Step 8) requires matching on FEN string. FEN strings are position-unique only if castling rights and en passant are included — confirm the join key.
 *   **Counterfactual:** If oracle_stop_step does NOT correlate with log(RT): proceed to Analysis 3 (weaker engine). Also update the slides to present the 4-case interpretation.
-*   **Background:** The existing training trees were generated from sampled_root_fens_2023.txt which came from Lichess 2023 games with broad ELO/time-control filters. The human positions here come from a narrower slice (10+0, ≥2000 ELO). Distribution shift may affect results.
+**Status / Results (2026-06-04):**
+*   **Job ID:** `9215248` (submitted to Della `gputest` partition, currently `RUNNING`).
+*   **Progress:** Resumed from the 390 generated trees in `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_1k/` by setting `resume: true`.
+*   **Discussion:** This smoke test verifies the pipeline's FEN formatting compatibility (6-field FENs successfully routed and read by Lc0 search). Once completed, `human_oracle_comparison.py` will run to verify that the oracle outputs are consistent before scaling up to 10K.
 
 ---
 
-## Analysis 2 — Minimal model (parallel, HIGH PRIORITY)
+## Analysis 2 — Tree-Statistic Summary (parallel, HIGH PRIORITY)
 
-**Readiness (2026-06-04):** A0b passed. `controller_train.py` supports `unfreeze_encoder: true` (live encoder, no cache). **Blocker:** create Config D YAML + 10-shard subsample manifest; record pretrained GNN loss baseline for comparison.
+**Readiness (2026-06-04):** A0b passed, but strategy has pivoted. Old tiny-GNN approach abandoned and job cancelled.
 
 **Description**  
-Find the smallest architecture + training regime that runs end-to-end in hours rather than days. The burning question is whether GNN pretraining can be skipped.
+Replacing the GNN head with a coarser / simpler tree-statistic summary to obviate the training of the GNN entirely. Instead of training a GNN (even a tiny one), we extract summary statistics directly from the tree structure (e.g. node counts, depth distributions, value aggregates) and feed these to the MC controller.
 *   **Data needed:**
     *   Existing packed training shards at `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_combined_nomaint_no_xaba/train/` (191 shards) — use 10–20 shards (5–10%) as the ablation dataset
     *   Current config YAMLs at `lmcos/slurm/configs/4_supervised_controller/`
@@ -156,6 +167,12 @@ A smaller GNN (e.g. 16-dim embedding, 1 head, 1 layer) trained jointly/online fr
 *   **Warning:** The MC controller (52 seconds) uses pre-materialized embeddings. If we move to joint training, each training step requires a GNN forward pass — much slower per step. With a 16-dim GNN this may still be fast; with a 128-dim GNN it would not.
 *   **Background:** The current two-stage design (pretrain GNN → materialize → train MC) was chosen to make MC training I/O-light and GPU-bound on the MLP. This design assumed the GNN was slow. With a 16-dim GNN, joint training may be faster than the two-stage pipeline overall.
 
+**Status / Results (2026-06-04):**
+*   **Job ID:** `9215254` (submitted to Della `gputest` partition, currently `RUNNING`).
+*   **Progress:** Training has started successfully:
+    `[child-wdl-pretrain] epoch=1/5 phase=train batch=26/63 seen_examples=832 seen_edges=3072064 total_loss=1.065431 target_entropy=0.609526 loss_gap=0.455905`
+*   **Discussion:** This is testing whether a tiny GNN (embedding dimension 16, 1 layer) trained from scratch can achieve an acceptable loss gap quickly (within 2 hours). If successful, GNN pretraining can be skipped in future iterations, dramatically speeding up the modeling cycle.
+
 ---
 
 ## Analysis 3 — Weaker engine (conditional, on hold)
@@ -206,6 +223,10 @@ We expect that an engine matching human strength (SF ELO 2000) will yield an `or
 *   **Open question:** should we also retrain the GNN + MC with SF2000 trees if alignment improves? This would produce a fully human-aligned normative agent — potentially the paper's main contribution. This would require significant compute.
 *   **Counterfactual:** If SF2000 oracle also fails to align with human RT, the mismatch is fundamental (human deliberation is not captured by any engine's VOC) rather than an engine-strength artifact. This strengthens the case for two separate papers.
 
+**Status / Results (2026-06-04):**
+*   **Status:** **On hold** (conditional on A1 results).
+*   **Discussion:** If A1 (high-strength Lc0 oracle) shows poor correlation with human RT (possibly due to Lc0 seeing through the positions instantly), we will activate A3. This will query Stockfish ELO 2000 on the same human positions and convert CP to WDL win probabilities using the logistic mapping to check if a human-matched strength engine yields better cognitive alignment.
+
 ---
 
 ## Analysis 4 — Information-theoretic stopping (entropy VoI)
@@ -252,6 +273,12 @@ We expect that the entropy-based stopping depth $d^*$ will have a strong positiv
 5. [15 min] Run sweeps over $\theta \in [0.0, 0.001, 0.005, 0.01, 0.05, 0.1]$ and $\beta = 1.0$. Calculate Pearson correlations with branching factor and human log(RT) and print a markdown summary table.
 6. [15 min] Generate `human_analytics/figures/entropy_voi_trajectories.png` showing $H(d)$ and $IG(d)$ over depth steps for 3 selected positions.
 7. [15 min] Generate `human_analytics/figures/entropy_voi_vs_human_rt.png` showing the side-by-side Pearson correlations of the best entropy stopping depth $d^*$ vs human log(RT) across the key board features.
+
+**Status / Results (2026-06-04):**
+*   **Status:** **10K Scale-Up Completed**.
+*   **Progress:** The CPU-only SLURM script `entropy_voi_10k.slurm` was executed successfully, generating traces for 6,494 available positions. The offline modeling sweep was run on the full dataset and plots/tables were generated in `human_analytics/figures/`.
+*   **Timing Analysis (10,000 Moves):** The data generation of 6,494 valid multi-depth traces completed in 238.6 seconds (0.037s/position) using 16 CPU workers (~4 minutes total). Scaling A4 without GPU resources is highly efficient.
+*   **Discussion (Alignment with Expectation):** With the larger 6,500-move sample, the initial strong correlations disappeared. Using $\beta = 1.0$ and $\theta = 0.001$, the correlation with the `branching factor` remains somewhat positive ($r \approx 0.101$), but the correlation with `log(RT)` dropped to near-zero ($r \approx 0.014$). At $\theta = 0.005$, the correlation with `log(RT)` is slightly negative ($r \approx -0.005$). This is an important finding: it suggests that while entropy reduction might correlate with the objective branching factor, this specific normative stopping rule does not strongly explain human deliberation time (RT). We may need to perform a more exhaustive sweep over the temperature $\beta$, or this could strengthen the case that standard engine evaluations do not align well with human cognitive effort (supporting Analysis 3).
 
 **Testing**  
 *   **Tests to write** (`human_analytics/tests/test_entropy_voi.py`):

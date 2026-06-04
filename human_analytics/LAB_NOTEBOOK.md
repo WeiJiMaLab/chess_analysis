@@ -831,3 +831,29 @@ cannot observe: the probability that continued search would alter the decision.
 - [ ] Determine required depth for lc0 to produce meaningful non-zero VOC
 
 ---
+
+## 2026-06-04 Cleanup Log
+
+The following files and directories were permanently deleted during a repository cleanup and restructuring process. They are logged here so their paths can be tracked in case they need to be recreated or restored from backup.
+
+### Scratch Data Directories (`/scratch/gpfs/GRIFFITHS/hl4291/tmp/`)
+- `pipeline_smoke_dec_edge_a/`
+- `pipeline_smoke_oct_dec31/`
+- `pipeline_smoke/`
+- `pipeline_smoke_full_compare/`
+- `pipeline_smoke_boundary/`
+- `chess_analysis_legacy_3953ad/`
+- `legacy_3953ad_work/`
+- `pos_with_engine_eval/`
+- `pos_with_engine_eval_100k/`
+- `pos_with_engine_eval_1m/`
+- `load_moves/`
+- `load_moves_20260422_173541_1318563/`
+- `ld_moves_shard/`
+- `voc_mq_eval/`
+
+### Orphan Scripts and Smoke Tests (`human_analytics/`)
+- `slurm/scripts/tests/compare_legacy_new_pipeline_smoke.py`
+- `slurm/scripts/tests/boundary_gid_diagnose.py`
+- `tests/test_pipeline_compare_smoke.py`
+- `tests/test_preprocess_shard_pipeline.py`
