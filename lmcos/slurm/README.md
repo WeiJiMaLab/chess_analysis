@@ -80,4 +80,4 @@ export VENV_DIR=/home/hl4291/venv
 export PYTHONPATH="${PROJECT_DIR}${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-See [`LAB_NOTEBOOK.md`](../LAB_NOTEBOOK.md) for experiment history and [`../README.md`](../README.md) for workspace overview.
+See [`labnotebook.md`](../../labnotebook.md) and [`reports/`](../../reports/) for experiment history and [`../../README.md`](../../README.md) for workspace overview.
