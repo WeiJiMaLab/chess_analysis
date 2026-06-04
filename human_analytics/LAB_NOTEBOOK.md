@@ -653,6 +653,83 @@ Option C (aspirational): "The lmcos controller, trained on the oracle, produces 
 
 ---
 
+## Analysis 0 results (2026-06-03)
+
+### What was done
+
+Implemented and ran both Analysis 0a and 0b as described in `proposed_next_steps.md`.
+Scripts: `lmcos/analysis/oracle_stop_step_features.py` and `lmcos/analysis/minimal_mc_baseline.py`.
+Tests: `lmcos/tests/test_oracle_stop_step_features.py` and `lmcos/tests/test_minimal_mc_baseline.py` — **25/25 passing**.
+
+### Analysis 0a: oracle_stop_step vs board features (n=5K lmcos trees, budget=43)
+
+Used `compute_budgeted_oracle()` with `BudgetedOracleConfig()` defaults to compute
+`policy.optimal_stop_step` for each filtered_shard tree. Compared feature correlations
+against established human RT correlations from `pos_with_engine_eval` (n=1M).
+
+`oracle_stop_step`: mean=11.7, std=10.3, range=[0,43] — good variance.
+
+| Feature | Oracle r | Human r | Direction match |
+|---|---|---|---|
+| branching | +0.165 | +0.195 | ✓ |
+| material | +0.154 | +0.039 | ✓ |
+| gain_depth | **+0.797** | +0.096 | ✓ |
+| toptwo | +0.436 | −0.064 | ✗ |
+
+**Key findings:**
+- **3/4 features match direction** → A1 (human FEN trees) is motivated
+- **gain_depth correlation is huge** (r=+0.797): the oracle continues longest precisely in positions where search still changes the best move's Q-value — this is exactly what the oracle is designed to be sensitive to. Humans show the same direction weakly (+0.096)
+- **toptwo mismatch is interpretable**: oracle continues longer when toptwo is large (kept searching to verify the winner); humans stop faster when toptwo is large (decisiveness = satisficing signal). Different stopping criteria, both coherent
+- Budget sensitivity: branching correlation stable at r≈+0.13–0.17 for budgets 7–90; budget=2 is too small to discriminate positions meaningfully
+
+**Clarification: why earlier `min_expansions` analysis gave all-flipped signs**
+
+An earlier attempt (`human_comparison.py`, now deleted) used `min_expansions` = first stable
+convergence of `oracle_best_move_index` — the step where the oracle stopped changing its
+choice of best move. This is NOT the DP-optimal stopping step. The current analysis uses
+`compute_budgeted_oracle()`, which is the actual oracle the model is trained on.
+
+`min_expansions` and `oracle_stop_step` measure nearly opposite things:
+- `min_expansions`: stability of the best-move *identity* — when does the oracle commit to a move?
+- `oracle_stop_step`: cost-optimality of stopping — when does the marginal gain drop below the marginal cost?
+
+In positions where oracle_stop_step is large (value still rising → keep computing), the best-move identity often stabilises early (min_expansions is small — the oracle knew which move was best, but kept refining its Q-estimate). This near-inversion explains the sign reversal across all features.
+
+**Figures produced:**
+- `lmcos/analysis/figures/oracle_stop_step_vs_human_rt.png` — bar chart with r and r²
+- `lmcos/analysis/figures/oracle_stop_step_correlation_matrix.png` — lmcos tree feature matrix
+
+### Analysis 0b: minimal MC baseline (n=2K train / 500 val trees)
+
+Replaced GNN encoder with 4 scalar tree-stat features per snapshot
+(best_q, wdl_var, t_norm, budget_rem_norm) and trained a small MLP (2 layers × 64 units)
+matching the MC head architecture. Targets computed via `compute_budgeted_oracle()`.
+
+| Model | Sign accuracy |
+|---|---|
+| GNN+MC (baseline) | **90.1%** |
+| Minimal MLC (train) | 87.4% |
+| Minimal MLC (val) | **86.4%** |
+
+- Gap = 3.7pp. **Above 80% threshold** → GNN is not strictly necessary
+- Inference: 0.054 ms/snapshot (vs full GNN+MC which requires tree encoding)
+- Training converged cleanly: loss 0.53 → 0.37 over 20 epochs, no instability
+
+**Key finding:** 86% of the oracle's halt/continue signal is captured by 4 raw scalars.
+The GNN adds only ~4pp. **Analysis 2 (skip GNN pretraining) is strongly motivated.**
+
+**Figures produced:**
+- `lmcos/analysis/figures/minimal_mc_sign_accuracy.png`
+- `lmcos/analysis/figures/minimal_mc_weights.png`
+
+### What is left to do
+
+- **Analysis 1** (human FEN trees): motivated by A0a directional match. Generate 1K then 10K Lc0 trees from `processed_moves_nonzero`. FEN format wiring is the main blocker (4-field vs 6-field FEN). See `proposed_next_steps.md` for full procedure.
+- **Analysis 2** (skip GNN pretraining): strongly motivated by A0b. Create Config D (d_embed=16) and train from random init using `gnn_pretrain.py` on 10 shards — verify whether loss converges in <2 hours. The key code question: does `controller_train.py` support joint GNN+MC training without pre-materialisation?
+- **Analysis 3** (weaker engine): on hold until A1 gives a directional answer on the human-oracle comparison.
+
+---
+
 ## Open items / next steps
 - [ ] Align ply filter to 15–75 (matching Russek et al.)
 - [ ] Add `opponent_clock_time >= 60s` filter to match Russek et al.

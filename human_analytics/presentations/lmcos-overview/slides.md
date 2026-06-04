@@ -286,6 +286,38 @@ math: katex
 
 ---
 
+# Analysis 0 — Results
+
+<div class="mt-4 max-w-3xl space-y-4 text-sm">
+  <div class="grid grid-cols-2 gap-4">
+    <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+      <b class="text-accent text-xs uppercase tracking-wider">0a — Oracle vs human RT features (n=5K)</b>
+      <table class="text-xs w-full mt-2 border-collapse">
+        <thead><tr class="border-b border-gray-200"><th class="text-left py-1 pr-2">Feature</th><th class="text-right pr-2">Oracle r</th><th class="text-right pr-2">Human r</th><th class="text-right">Match</th></tr></thead>
+        <tbody>
+          <tr><td class="py-0.5 pr-2">branching</td><td class="text-right pr-2 text-blue-600">+0.165</td><td class="text-right pr-2 text-blue-600">+0.195</td><td class="text-right text-green-600">✓</td></tr>
+          <tr><td class="py-0.5 pr-2">material</td><td class="text-right pr-2 text-blue-600">+0.154</td><td class="text-right pr-2 text-blue-500">+0.039</td><td class="text-right text-green-600">✓</td></tr>
+          <tr><td class="py-0.5 pr-2">gain_depth</td><td class="text-right pr-2 font-bold text-blue-700">+0.797</td><td class="text-right pr-2 text-blue-500">+0.096</td><td class="text-right text-green-600">✓</td></tr>
+          <tr><td class="py-0.5 pr-2">toptwo</td><td class="text-right pr-2 text-blue-500">+0.436</td><td class="text-right pr-2 text-red-400">−0.064</td><td class="text-right text-amber-500">✗</td></tr>
+        </tbody>
+      </table>
+      <p class="mt-2 text-[11px] opacity-70">3/4 directions match → A1 is motivated. gain_depth r=+0.797: oracle is extremely sensitive to search value. toptwo mismatch: oracle verifies winner; humans satisfice on decisiveness.</p>
+    </div>
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary text-xs uppercase tracking-wider">0b — Minimal MC baseline (4 scalars → MLP)</b>
+      <div class="mt-2 space-y-1 text-xs">
+        <div class="flex justify-between"><span>GNN+MC baseline</span><span class="font-mono font-bold">90.1%</span></div>
+        <div class="flex justify-between"><span>Minimal MLC (val)</span><span class="font-mono font-bold text-accent">86.4%</span></div>
+        <div class="flex justify-between text-[11px] opacity-60 mt-1"><span>Gap</span><span>3.7pp</span></div>
+        <div class="flex justify-between text-[11px] opacity-60"><span>Inference</span><span>0.054 ms/snap</span></div>
+      </div>
+      <p class="mt-2 text-[11px] opacity-70">86% of the oracle's halt/continue signal captured by 4 raw scalars. GNN adds only ~4pp. → Skip GNN pretraining (A2) is strongly motivated.</p>
+    </div>
+  </div>
+</div>
+
+---
+
 # Analysis 1 — The fair comparison
 
 <div class="mt-4 max-w-3xl space-y-3 text-sm">
