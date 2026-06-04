@@ -28,9 +28,8 @@ function is not the right normative model for human deliberation.
 
 **Expected output:**
 - Script: `lmcos/analysis/oracle_stop_step_features.py`
-- Figure: 2-column table / bar plot comparing r(oracle_stop_step, feature) vs
-  r(log RT, feature) for branching, material, gain_depth_equiv, toptwo_equiv
-- J: integrated column into the correlation matrix as well would be helpful, quantifying r-squared would be helpful
+- Figure 1: bar chart comparing r(oracle_stop_step, feature) vs r(log RT, feature) for branching, material, gain_depth_equiv, toptwo_equiv — also reporting r² for each
+- Figure 2: extended correlation matrix that adds `oracle_stop_step` as a new row/column alongside the existing human features (branching, material, VOC, MQ, toptwo, log RT)
 - Go/no-go signal for Analysis 1
 
 **Procedure:**
@@ -51,18 +50,14 @@ function is not the right normative model for human deliberation.
 - `halt_rewards` are all in [0, 1] (WDL range) — catch feature indexing bugs
 - Starting position FEN (known) → `n_possible_moves = 20`, `n_self_pieces_exc_pawns = 8`
 - Determinism: same tree loaded twice gives identical `oracle_stop_step`
-- Trivial case: if `halt_rewards` is constant, `oracle_stop_step = 0` (halt immediately — no improvement from continuing)
-- Monotone case: if `halt_rewards` is strictly increasing and cost is very low, `oracle_stop_step` should be near `budget`
-- J: reverse case -- if cost is higher than halt rewards should always halt
-- J: can check correctness of
-- Correlation signs are reproducible: re-running on a different random seed gives the same sign pattern (not necessarily same magnitudes)
+- Trivial case: constant `halt_rewards` → `oracle_stop_step = 0` (no gain from continuing)
+- Monotone case: strictly increasing `halt_rewards`, very low cost → `oracle_stop_step` near `budget`
+- Reverse case: time cost > max possible halt reward improvement → `oracle_stop_step = 0` always (always halt immediately — cost dominates)
+- Correctness check: for episodes present in both the filtered_shard trees AND the packed shard `oracle_stop_steps`, compare our computed value against the ground-truth label from the packed shard — they should agree within ±1 step (accounting for the WDL vs centipawn approximation)
+- Correlation signs reproducible: two different random seeds give the same sign pattern for each feature
 
 **Implementation notes / warnings / open questions:**
-- `starting_budget=60` is the mid-range of the "large" bucket (26–60 expansions). Should
-  also test `budget=10` and `budget=96` to check sensitivity — oracle_stop_step depends
-  on budget and we want to know how much.
-  - would keep as close as possible to existing target -- the sensitivity here I believe may be intentional because you may need to 
-  restrict the budget to stay within a range where the estimates are valid
+- Use budget values drawn from the existing `DEFAULT_BUDGET_BUCKETS` (scramble: 1–3, medium-small: 4–10, medium-large: 11–25, large: 26–60, very-large: 61–120) rather than arbitrary values. The cost function is calibrated to these ranges — testing outside them may give invalid oracle estimates. For A0a, use one representative value per bucket (e.g. 2, 7, 18, 43, 90) rather than arbitrary round numbers.
 - **Counterfactual:** If r(oracle_stop_step, branching) is negative here but positive for
   humans, it does not conclusively mean A1 will fail — the data sources differ (lmcos trees
   from diverse time controls, ELO 1800–2600 vs human 10+0 ≥2000). A directional mismatch
@@ -77,18 +72,21 @@ function is not the right normative model for human deliberation.
 
 ---
 
-## Analysis 0b — Logistic regression baseline
+## Analysis 0b — Minimal MC baseline (tree-stats → MLP → halt/continue)
 
-**Brief:** Test whether a simple linear model over raw tree scalar statistics can
-predict the oracle's halt/continue decision as well as the full GNN + MC pipeline.
-- J: would probably need to be a logistic regression, I think -- linear model wouldn't cut it - since the decision is halt or continue, I think I would simply match the style of the current MC but instead of input of root_embed it inputs the vector tree statistics
+**Brief:** Replace the GNN encoder with raw tree scalar statistics and test whether
+a small MLP (matching the MC architecture) can predict halt/continue as well as the
+full GNN + MC pipeline. This is not a generic "linear model" test — it specifically
+mirrors the MC's architecture (same MLP head, same training target) but replaces
+the z_root embedding with a hand-crafted feature vector from the tree.
 
 **Rationale / goal:**
-If LR achieves ≥85% sign accuracy (current GNN+MC: 90%), the GNN is not adding
-meaningful representational capacity over what is already visible in scalar statistics.
-This would make "skip GNN pretraining" (Analysis 2) the obvious path and might even
-suggest a much simpler model is the endpoint.
-- J: I would be fine with around 80% sign accuracy, even. I would also run some timing tests here.
+If this minimal baseline achieves ≥80% sign accuracy (current GNN+MC: 90%), the GNN
+encoder is not adding meaningful representational capacity over what is directly visible
+in raw tree statistics. This makes "skip GNN pretraining" (Analysis 2) the obvious path
+and suggests a much simpler model may be sufficient. Also run timing tests: how fast is
+the minimal baseline vs the full GNN+MC at inference? If it's 10× faster and nearly as
+accurate, the speedup may justify the accuracy loss.
 
 **Data needed:**
 - Packed validation episode shards at
@@ -99,42 +97,42 @@ suggest a much simpler model is the endpoint.
 
 **Expected output:**
 - Script: `lmcos/analysis/lr_advantage_baseline.py`
-- Metric: sign accuracy of LR vs GNN+MC (90%) on held-out shards
-- Figure: LR coefficient plot (which tree statistics matter most?)
-- Decision: if LR ≥ 85% → GNN is likely redundant for advantage prediction
+- Metric: sign accuracy of minimal baseline vs GNN+MC (90%) on held-out shards
+- Timing: inference speed of minimal baseline vs GNN+MC (ms/snapshot)
+- Figure: feature importance / weight magnitude plot
+- Decision: if baseline ≥ 80% → GNN is likely redundant; also report timing speedup
 
 **Procedure:**
-1. [20 min] Load 8 validation shards; extract per-snapshot features:
-   - `n_nodes` from `step_node_cutoffs` (this field gives cumulative node counts per snapshot)
-   - `root_branching` = number of root children (from `child_ptr` at root index)
-   - `best_q` = root node's `wdl_win` feature (from `node_features[root_index, 1]`)
-   - `wdl_var` = root node's `wdl_var` feature (from `node_features[root_index, 4]`)
-   - `remaining_budget` from `starting_budgets - snapshot_index`
-   - `move_ply` = not directly available in packed shard; skip or derive from FEN if needed
-2. [10 min] Construct `(X, y)` matrix: X = [n_nodes, root_branching, best_q, wdl_var,
-   remaining_budget], y = sign(target_advantages) (+1 = continue better, −1 = halt better)
-3. [10 min] Train sklearn logistic regression with L2 regularization on 7 shards
+1. [20 min] Load 8 validation shards; extract per-snapshot scalar features:
+   - `n_nodes` from `step_node_cutoffs`
+   - `root_branching` from `child_ptr` at root index
+   - `best_q` = root `wdl_win` (from `node_features[root_index, 1]`)
+   - `wdl_var` = root `wdl_var` (from `node_features[root_index, 4]`)
+   - `remaining_budget` = `starting_budget - snapshot_index`
+2. [10 min] Construct `(X, y)`: X = feature vector, y = sign(target_advantages)
+3. [30 min] Train a small feedforward MLP (same depth/width as the MC head, e.g. 2 layers × 64 units)
+   on 7 shards — mirroring the MC architecture but replacing z_root with the raw feature vector
 4. [5 min] Evaluate sign accuracy on 1 held-out shard
-5. [10 min] Compare with GNN+MC baseline (90% sign accuracy from training logs)
-6. [20 min] Plot coefficient magnitudes and sign accuracy by budget bucket
+5. [10 min] Time inference: measure ms/snapshot for minimal baseline vs full GNN+MC
+6. [10 min] Compare both accuracy and speed against GNN+MC baseline
+7. [20 min] Plot feature weight magnitudes
 
-**Total estimate:** ~1.5 hours
+**Total estimate:** ~1.5–2 hours
 
 **Tests to write** (`lmcos/tests/test_lr_advantage_baseline.py`):
 - Feature matrix shape = `(n_snapshots, n_features)` with no NaNs — catch indexing bugs
 - Labels are binary `{−1, +1}` only — catch sign/encoding errors
-- LR coefficient signs: `best_q` positive (higher Q → halt better), `remaining_budget` positive (more budget → continue worth it)
-- Training accuracy > 60% on training shards — if LR can't beat chance, features are wrong
+- MLP output shape = `(n_snapshots, 1)` — same as MC head
+- Training accuracy > 60% on training shards — if MLP can't beat chance, features are wrong
 - No data leakage: held-out shard indices never appear in training set
-- Comparison validity: LR and GNN+MC evaluated on identical held-out snapshot sets
+- Comparison validity: minimal MLP and full GNN+MC evaluated on identical held-out snapshot sets
+- Timing test: minimal MLP inference < 5 ms/snapshot (should be much faster than GNN+MC)
 - Reproducibility: two runs with same seed → sign accuracy within 0.1%
 
 **Implementation notes / warnings / open questions:**
 - **step_node_cutoffs** is the key field — it gives the node count in the tree at each
   snapshot. Double-check this is cumulative from step 0 (not incremental).
-- **Open question:** should we also try random forest / gradient boosting to test
-  nonlinearity? If LR fails but RF succeeds, the signal is nonlinear in tree stats
-  and a small MLP might suffice instead of the full GNN.
+- If the MLP fails to reach 80%: the signal is genuinely nonlinear or requires richer tree structure than the scalar statistics capture. Next step would be a slightly deeper or wider MLP before concluding the GNN is necessary — stick to simple feedforward architectures for now.
 - **Warning:** `move_ply` is not directly in the packed shard. Options: (a) skip it,
   (b) reconstruct from the source tree path's filename (contains a tree index that
   might encode ply), (c) use `root_wdl_var` as a proxy for position complexity instead.
