@@ -55,16 +55,18 @@ We expect that `oracle_stop_step` will positively correlate with human `log(RT)`
 
 **Procedure**  
 *Step 1: Extract human FENs*
-1. [10 min] SQL: sample 1K FENs from `processed_moves_nonzero` with `move_ply BETWEEN 15 AND 75` and `opponent_clock_time >= 60`, joined with `moves` for `move_uci`, `player_clock_time`, `move_time`. Save as text file in same format as `sampled_root_fens_2023.txt`.
-2. [10 min] Verify the FEN format is compatible with `build_tree.py` (the script expects 6-field full FENs — `processed_moves_nonzero.fen` is 4-field; need `halfmove` and `fullmove`). Fix if needed.
+1. [10 min] SQL: sample 1K FENs from `processed_moves_nonzero` with `move_ply BETWEEN 15 AND 75` and `opponent_clock_time >= 60`, joined with `moves` for `move_uci`, `player_clock_time`, `move_time`. Save as text file in same format as `sampled_root_fens_2023.txt`. **[Status: Complete — exported 644 valid FENs to `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_fens_1k.txt`]**
+2. [10 min] Verify the FEN format is compatible with `build_tree.py` (the script expects 6-field full FENs — `processed_moves_nonzero.fen` is 4-field; need `halfmove` and `fullmove`). Fix if needed. **[Status: Complete — formatting verified and loads correctly]**
 
 *Step 2: Generate 1K trees (smoke test)*
-3. [5 min] Set up SLURM job using `generate_dataset_shard.slurm` template, pointing at the human FEN file and ysagiv's Lc0 weights. Target budget: 96 expansions.
-4. [5–30 min compute] Run on A100. **Must complete within ~15 min for 1K positions** — if slower, there is a batching problem that needs fixing before scaling to 10K.
+3. [5 min] Set up SLURM job using `generate_dataset_shard.slurm` template, pointing at the human FEN file and ysagiv's Lc0 weights. Target budget: 96 expansions. **[Status: Wrapper fixed to support VENV_DIR; config human_trees_1k_smoke.yaml updated to resume: true]**
+4. [5–30 min compute] Run on A100. **Must complete within ~15 min for 1K positions** — if slower, there is a batching problem that needs fixing before scaling to 10K. **[Status: Running on Della as Job ID 9215248 since 14:19 PM, June 4]**
 5. [15 min] Verify output trees have same format as filtered_shard trees (contains `oracle_root_q_trace`, `oracle_best_move_index`, `root_position_spec`).
 
 *Step 3: Scale to 10K*
-6. [10 min setup + ~1–2 h compute] If Step 2 is fast: SLURM array with 10 jobs, 1K each.
+6. [10 min setup + ~1–2 h compute] If Step 2 is fast: Scale using a SLURM job array or the `submit_generate_dataset_shards.py` wrapper script. 
+   - *Job Array Method:* Add `#SBATCH --array=0-9` and map `$SLURM_ARRAY_TASK_ID` to range offsets via `--start-index` and `--end-index` (e.g. `START=$((SLURM_ARRAY_TASK_ID * 1000))` and `END=$((START + 1000))`) to process 10 shards in parallel.
+   - *Orchestrator Method:* Run `./slurm/1_preprocess_data/submit_generate_dataset.sh --config slurm/configs/1_preprocess_data/human_trees_10k.yaml --shard-size 1000 --submit` to submit 10 parallel shard jobs.
 
 *Step 4: Compute oracle_stop_step and join with behavioral data*
 7. [30 min] Run `compute_budgeted_oracle()` on all generated trees → `oracle_stop_step` per position.
