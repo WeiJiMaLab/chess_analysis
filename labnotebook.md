@@ -21,6 +21,23 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## 2026-06-05 {#2026-06-05}
+
+A0a corrected and rerun on all 39,668 trees; definitions, features, and code audited.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **LMCOS A0a** — corrected `oracle_stop_step` + features; all 39,668 trees; scatter plots | Two bugs fixed; rerun at full scale (missed half the shards with old glob) | ✅ **4/4 RT directions** correct. gain_depth r=**+0.233** ✓; toptwo r=**−0.290** ✓; branching/material r≈0.01 (tiny, correct dir). r(oss, ce)=**0.525**. Branching/material near-zero expected: oracle driven by value landscape (toptwo/gain_depth), not structural complexity. 72/72 tests. | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS A0b** — halt_rewards fix + optimal_stop eval | Establish minimal-MC anchor with correct oracle labels | ⏳ Code fixed 2026-06-05; correct re-run ⬜ **todo** (2026-06-03 run invalid) | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS code audit** — pack-path oracle labels; shared `board_tree_features.py`; removed analysis-layer oracle wrappers | Single source of truth: `pack.py` + `oracle.py` | ✅ Done | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS A1 smoke** — 497 clean trees (1K job cut at 1h wall); corrected bugs from A0a in `human_oracle_comparison.py`; generated 10K FENs; submitted 20-shard 10K job | Smoke confirms direction before 10K spend | ✅ r(oss, log RT) = **+0.091** ✓; stale-tree guard added; 10K jobs 9266775–9266794 running | [(R-A1)](reports/analysis-1-human-oracle.md) |
+
+**Two bugs corrected in original A0a (2026-06-03 results no longer valid):**  
+(1) halt_rewards used `oracle_root_q_trace[s, best_idx[s]]` (evolving MCTS Q-estimates) instead of `oracle_root_q_trace[-1][best_idx[s]]` (teacher's fixed Q-values = `oracle_final_root_q_values`).  
+(2) gain_depth used a mixed-regime formula: final Q for the numerator, evolving Q at first nonzero step for the denominator. Corrected to native Lc0 VOC = `Q_final[best_idx[-1]] − Q_final[best_idx[1]]`.
+
+---
+
 ## 2026-06-04 {#2026-06-04}
 
 Notebook + reports restructure; A1 1K trees done; A4 entropy VoI at scale; A2 tiny-GNN pretrain started.
@@ -38,12 +55,12 @@ Notebook + reports restructure; A1 1K trees done; A4 entropy VoI at scale; A2 ti
 
 ## 2026-06-03 {#2026-06-03}
 
-Analysis 0 complete; theoretical framing for stopping proxies.
+Analysis 0 initial run; theoretical framing for stopping proxies. **A0a results superseded by 2026-06-05 corrections.**
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
-| **LMCOS A0a** — `oracle_stop_step` vs board features (5K trees, budget 43) | Directional match before human-FEN spend | ✅ **3/4** directions; gain_depth r=+0.797 oracle | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
-| **LMCOS A0b** — minimal MLP vs GNN+MC sign accuracy | Test GNN necessity | ✅ Val **86.4%**; GNN+MC **90.1%** | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS A0a** — initial run, 5K trees, budget 43 | Directional match before human-FEN spend | ❌ Results invalid — two bugs in halt_rewards and gain_depth formula. See 2026-06-05. | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS A0b** — minimal MLP vs GNN+MC sign accuracy | Test GNN necessity | ❌ Invalid (wrong halt_rewards); correct re-run ⬜ **todo** | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
 | **Human theory** — stopping proxies, chasing tails, E[ΔUC] | Claims A/B/C | ✅ Documented | [(R-THEORY)](reports/human-theory-stopping.md) |
 
 ---

@@ -399,7 +399,7 @@ math: katex
   <p class="font-semibold">Find the smallest architecture that trains end-to-end in hours. <b>Burning question: can we skip GNN pretraining entirely?</b></p>
 
   <div class="p-3 bg-accent-soft border-l-2 border-accent rounded text-xs mb-3">
-    <b>Motivation from A0b:</b> 4 raw tree-stat scalars → MLP achieves <b>86.4% sign accuracy</b> (vs 90.1% GNN+MC, gap = 3.7pp). GNN adds only ~4pp. Training the full GNN took ~1+ days.
+    <b>Motivation from A0b:</b> 4 raw tree-stat scalars → MLP vs GNN+MC sign accuracy. Correct A0b re-run is <b>⬜ todo</b> (2026-06-03 run invalid — wrong halt_rewards). GNN+MC packed baseline ≈ 90.1%.
   </div>
 
   <div class="space-y-2">
@@ -549,8 +549,8 @@ math: katex
     <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
       <b class="text-accent text-xs uppercase tracking-wider">What we know so far</b>
       <ul class="mt-2 text-xs list-disc pl-4 space-y-1 opacity-80">
-        <li>3/4 board features match direction between oracle and humans (A0a)</li>
-        <li>4 scalars achieve 86.4% oracle sign accuracy (A0b)</li>
+        <li>4/4 board features match direction between oracle and humans (A0a, corrected)</li>
+        <li>A0b minimal MLP vs GNN+MC — correct re-run ⬜ todo</li>
         <li>Both oracle and humans over-compute in dominant positions</li>
       </ul>
     </div>

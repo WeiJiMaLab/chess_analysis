@@ -140,6 +140,20 @@ class BudgetedOraclePolicy:
         return self.values[0]
 
 
+def predicted_stop_from_advantages(advantages: Sequence[float]) -> int:
+    """Greedy halt step from a per-step advantage trace (controller evaluation rule).
+
+    Returns the first step where ``advantage <= 0``, or the last step if the trace
+    never crosses zero. Matches ``controller_train.py`` episode evaluation.
+    """
+    predicted_stop = len(advantages) - 1
+    for step_index, value in enumerate(advantages):
+        if float(value) <= 0.0:
+            predicted_stop = step_index
+            break
+    return predicted_stop
+
+
 def maintenance_cost(num_nodes: int, config: BudgetedOracleConfig) -> float:
     """Size-dependent per-step cost: ``scale * (n / ref) ** exponent``."""
     if num_nodes <= 0:

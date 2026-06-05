@@ -1,16 +1,20 @@
 """
-Analysis: min_expansions vs board features.
+Analysis: converged_expansions vs board features.
 
-min_expansions(t) = first step t >= 1 at which oracle_best_move_index[t] == final_best
-                    AND oracle_best_move_index[s] == final_best for all s > t.
+converged_expansions(best_idx) = first step t >= 1 at which oracle_best_move_index[t] == final_best
+                                 AND oracle_best_move_index[s] == final_best for all s > t.
+                                 = 1 + last step where the MCTS deviated from its final recommendation.
 
 Step 0 is excluded — at step 0 all Q-values are zero, so argmax = 0 is an
 initialisation artifact, not a meaningful evaluation.
 
-Key question: why is min_expansions *negatively* correlated with gain_depth_equiv?
+Relationship to oracle_stop_step:
+    oracle_stop_step <= converged_expansions always.
+    Equal iff no MCTS oscillation after first correct recommendation (~43% of trees).
+    See tests/test_oracle_stop_vs_min_expansions.py.
 
 Usage (from lmcos/):
-    python analysis/min_expansions_analysis.py --n-trees 5000
+    python analysis/converged_expansions_analysis.py --n-trees 5000
 """
 from __future__ import annotations
 
@@ -28,68 +32,45 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
-from analysis.oracle_stop_step_features import (
-    extract_board_features,
-    extract_tree_features,
-)
-from utils.helpers import apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS
+from analysis.board_tree_features import HUMAN_RT_CORRELATIONS, extract_board_features, extract_tree_features
+from utils.helpers import analysis_style
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 
-# Human RT correlations for comparison
-_HUMAN_R = {
-    "branching": +0.195,
-    "material":  +0.039,
-    "gain_depth": +0.096,
-    "toptwo":    -0.064,
-}
+def converged_expansions(best_idx: torch.Tensor) -> int:
+    """First step t >= 1 at which oracle_best_move_index permanently equals final_best.
 
-
-def min_expansions(best_idx: torch.Tensor) -> int:
-    """
-    First step t >= 1 at which oracle_best_move_index[t] == final_best
-    and never deviates from final_best thereafter.
-
-    Excludes step 0 (all-zero Q-trace → argmax = 0 is an artifact).
-
-    Returns 1 if the oracle immediately committed to the final best at step 1
-    and never changed its mind.
+    = 1 + last step where the MCTS deviated from its final recommendation.
+    Excludes step 0 (all-zero Q-trace → argmax = 0 is an initialisation artifact).
+    Returns 1 if the oracle immediately committed to final_best at step 1 and never changed.
     """
     if len(best_idx) < 2:
         return 1
 
     final = best_idx[-1].item()
-    # Consider only steps 1..T-1 (skip step 0)
-    relevant = best_idx[1:]                              # shape [T-1]
+    relevant = best_idx[1:]                              # shape [T-1], skip step 0
     wrong_steps = (relevant != final).nonzero(as_tuple=True)[0]
 
     if len(wrong_steps) == 0:
-        # Already correct at step 1, never deviates
         return 1
 
-    # Last wrong step in relevant is at index wrong_steps[-1],
-    # which corresponds to actual step wrong_steps[-1] + 1.
-    # First stable step = last wrong step + 1.
     last_wrong_actual = int(wrong_steps[-1].item()) + 1   # convert back to step index
     return last_wrong_actual + 1
 
 
 def process_tree(t: dict) -> dict | None:
-    """Extract board/tree features + min_expansions from one filtered_shard tree."""
+    """Extract board/tree features + converged_expansions from one filtered_shard tree."""
     try:
         fen = t["root_position_spec"]
         board_feats = extract_board_features(fen)
         tree_feats = extract_tree_features(t)
 
         best_idx = t["oracle_best_move_index"]           # [T]
-        me = min_expansions(best_idx)
+        ce = converged_expansions(best_idx)
         T = len(best_idx)
 
-        # Also store final best move's Q and num evaluations as diagnostics
         final_best = best_idx[-1].item()
-        q = t["oracle_root_q_trace"]
-        q_best_over_time = q[:, final_best]              # Q of the final best move at each step
 
         # Count steps where the final best was the CURRENT best (how stable was it?)
         steps_correct = int((best_idx[1:] == final_best).sum().item())
@@ -97,9 +78,9 @@ def process_tree(t: dict) -> dict | None:
         return {
             **board_feats,
             **tree_feats,
-            "min_expansions": me,
+            "converged_expansions": ce,
             "budget": T,
-            "steps_correct": steps_correct,   # steps where best == final_best (excluding step 0)
+            "steps_correct": steps_correct,
             "frac_correct": steps_correct / max(T - 1, 1),
         }
     except Exception:
@@ -127,13 +108,13 @@ def load_trees(trees_root: str, n_max: int, seed: int = 42) -> pd.DataFrame:
 
 
 def print_summary(df: pd.DataFrame) -> None:
-    me = df["min_expansions"].dropna()
+    ce = df["converged_expansions"].dropna()
     budget = df["budget"].dropna()
     print(f"\n{'='*65}")
-    print(f"min_expansions analysis  n = {len(df):,}")
-    print(f"  min_expansions: mean={me.mean():.1f}  std={me.std():.1f}  p50={me.median():.0f}")
-    print(f"  budget:         mean={budget.mean():.1f}  (always 96 for these trees)")
-    print(f"  frac_correct:   mean={df['frac_correct'].mean():.3f}  "
+    print(f"converged_expansions analysis  n = {len(df):,}")
+    print(f"  converged_expansions: mean={ce.mean():.1f}  std={ce.std():.1f}  p50={ce.median():.0f}")
+    print(f"  budget:               mean={budget.mean():.1f}  (always 96 for these trees)")
+    print(f"  frac_correct:         mean={df['frac_correct'].mean():.3f}  "
           f"(fraction of steps where best == final)")
     print(f"{'='*65}")
 
@@ -144,37 +125,27 @@ def print_summary(df: pd.DataFrame) -> None:
         ("toptwo_equiv",            "toptwo",       "toptwo"),
     ]
     for feat_col, feat_label, human_key in features:
-        sub = df[[feat_col, "min_expansions"]].dropna()
+        sub = df[[feat_col, "converged_expansions"]].dropna()
         if len(sub) < 5:
             continue
-        r = np.corrcoef(sub[feat_col], sub["min_expansions"])[0, 1]
-        r_human = _HUMAN_R[human_key]
+        r = np.corrcoef(sub[feat_col], sub["converged_expansions"])[0, 1]
+        r_human = HUMAN_RT_CORRELATIONS[human_key]
         match = "✓ SAME" if (r * r_human) > 0 else "✗ DIFFER"
-        print(f"  {feat_label:<14} min_exp r={r:+.4f}   human r={r_human:+.4f}   {match}")
+        print(f"  {feat_label:<14} conv_exp r={r:+.4f}   human r={r_human:+.4f}   {match}")
 
-    # The key: is the negative gain_depth correlation driven by same-move refinement?
-    sub = df[["gain_depth_equiv", "min_expansions", "frac_correct"]].dropna()
+    sub = df[["gain_depth_equiv", "converged_expansions", "frac_correct"]].dropna()
     print(f"\n  r(gain_depth, frac_correct) = "
           f"{np.corrcoef(sub['gain_depth_equiv'], sub['frac_correct'])[0,1]:+.4f}")
-    print("  → If negative: high gain_depth positions keep the same best move for fewer steps")
-    print("  → If positive: high gain_depth = oracle consistently correct about the best move\n")
+    print("  → Negative: high gain_depth positions keep the same best move for fewer steps")
+    print("  → Positive: high gain_depth = oracle consistently correct about the best move\n")
 
 
-def _analysis_style() -> None:
-    plt.rcParams.update({
-        "font.size": 13, "axes.labelsize": 15, "axes.titlesize": 14,
-        "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.3,
-    })
-
-
-_ME_COLOR    = "#6366f1"   # indigo for min_expansions
+_CE_COLOR    = "#6366f1"   # indigo for converged_expansions
 _HUMAN_COLOR = "#16a085"   # teal for human
 
 
 def plot_results(df: pd.DataFrame, output_dir: str) -> None:
-    _analysis_style()
+    analysis_style()
     os.makedirs(output_dir, exist_ok=True)
 
     features = [
@@ -184,56 +155,53 @@ def plot_results(df: pd.DataFrame, output_dir: str) -> None:
         ("toptwo_equiv",            "toptwo",      "toptwo"),
     ]
 
-    # --- Figure 1: comparison bar chart (min_expansions vs human RT) ---
-    me_r, human_r, labels = [], [], []
+    ce_r, human_r, labels = [], [], []
     for feat_col, feat_label, human_key in features:
-        sub = df[[feat_col, "min_expansions"]].dropna()
+        sub = df[[feat_col, "converged_expansions"]].dropna()
         if len(sub) < 5:
             continue
-        me_r.append(np.corrcoef(sub[feat_col], sub["min_expansions"])[0, 1])
-        human_r.append(_HUMAN_R[human_key])
+        ce_r.append(np.corrcoef(sub[feat_col], sub["converged_expansions"])[0, 1])
+        human_r.append(HUMAN_RT_CORRELATIONS[human_key])
         labels.append(feat_label)
 
     x = np.arange(len(labels))
     width = 0.35
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.bar(x - width/2, me_r, width, label="min_expansions",
-           color=_ME_COLOR, alpha=0.8)
+    ax.bar(x - width/2, ce_r, width, label="converged_expansions",
+           color=_CE_COLOR, alpha=0.8)
     ax.bar(x + width/2, human_r, width, label="human log(RT)",
            color=_HUMAN_COLOR, alpha=0.8)
     ax.axhline(0, color="black", lw=1.2, linestyle="--")
     ax.set_xticks(x); ax.set_xticklabels(labels)
     ax.set_ylabel("Pearson r")
-    ax.set_title(f"min_expansions vs human log(RT)  (n={len(df):,})")
+    ax.set_title(f"converged_expansions vs human log(RT)  (n={len(df):,})")
     ax.legend(loc="upper left", bbox_to_anchor=(0, 1), framealpha=0.9)
     plt.tight_layout()
-    path1 = os.path.join(output_dir, "min_expansions_vs_human_rt.png")
+    path1 = os.path.join(output_dir, "converged_expansions_vs_human_rt.png")
     plt.savefig(path1, dpi=150, bbox_inches="tight"); plt.close()
     print(f"✅ {path1}")
 
-    # --- Figure 2: gain_depth vs min_expansions scatter + trend ---
-    sub = df[["gain_depth_equiv", "min_expansions", "frac_correct"]].dropna()
+    sub = df[["gain_depth_equiv", "converged_expansions", "frac_correct"]].dropna()
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    _analysis_style()
+    analysis_style()
 
     for ax, y_col, y_label in [
-        (axes[0], "min_expansions", "min_expansions"),
-        (axes[1], "frac_correct",   "frac. steps where best == final"),
+        (axes[0], "converged_expansions", "converged_expansions"),
+        (axes[1], "frac_correct",         "frac. steps where best == final"),
     ]:
         r = np.corrcoef(sub["gain_depth_equiv"], sub[y_col])[0, 1]
         labels_bins = pd.qcut(sub["gain_depth_equiv"], q=20, labels=False, duplicates="drop")
         trend = sub.groupby(labels_bins)["gain_depth_equiv"].mean().values
         y_trend = sub.groupby(labels_bins)[y_col].mean().values
-        ax.scatter(sub["gain_depth_equiv"], sub[y_col], color=_ME_COLOR, alpha=0.08, s=3)
+        ax.scatter(sub["gain_depth_equiv"], sub[y_col], color=_CE_COLOR, alpha=0.08, s=3)
         ax.plot(trend, y_trend, color="black", lw=2.5)
         ax.set_xlabel("gain_depth_equiv")
         ax.set_ylabel(y_label)
         ax.set_title(f"r = {r:+.3f}")
 
-    fig.suptitle("Why is gain_depth negatively correlated with min_expansions?",
-                 fontsize=13, y=1.03)
+    fig.suptitle("gain_depth vs converged_expansions", fontsize=13, y=1.03)
     plt.tight_layout()
-    path2 = os.path.join(output_dir, "min_expansions_gain_depth_diagnostic.png")
+    path2 = os.path.join(output_dir, "converged_expansions_gain_depth_diagnostic.png")
     plt.savefig(path2, dpi=150, bbox_inches="tight"); plt.close()
     print(f"✅ {path2}")
 

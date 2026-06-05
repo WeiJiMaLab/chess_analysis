@@ -2,8 +2,9 @@
 Analysis 2.1: Tree-Statistic Summary MC Baseline.
 
 Extracts richer tree-level statistics from prefixes (snapshot trees) and trains
-a tabular baseline model (MLP) to predict target advantages. Compares results
-with the GNN+MC baseline (90.1%) and the A0b Minimal MC baseline (86.4%).
+a tabular baseline model (MLP) to predict target advantages. Compares against
+the GNN+MC packed-controller baseline (90.1%). A0b minimal-MC comparison is
+deferred until a correct A0b re-run (2026-06-03 run used wrong halt_rewards).
 
 Features per snapshot:
   1. tree_size             - total nodes in prefix tree
@@ -39,12 +40,13 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
-from src.data.preprocess_mc.oracle import (
-    BudgetedOracleConfig,
-    compute_budgeted_oracle,
+from src.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
+from src.data.preprocess_mc.oracle import BudgetedOracleConfig, predicted_stop_from_advantages
+from src.data.preprocess_mc.pack import (
+    budgeted_oracle_from_trajectory,
+    build_compact_trajectory_from_payload,
 )
 from src.core.tree import SearchTree
-from src.data.preprocess_gnn.teacher_targets import PretrainExample
 from utils.helpers import apply_poster_style
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
@@ -52,8 +54,8 @@ _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 _CONFIG = BudgetedOracleConfig()
 
 _PRIMARY_BUDGET = 43
+# GNN+MC baseline from packed controller training (subtree_weighting_root; labels always correct)
 _GNN_MC_SIGN_ACCURACY = 0.901
-_A0B_SIGN_ACCURACY = 0.864
 
 
 class TreeStatsMC(nn.Module):
@@ -117,42 +119,38 @@ def extract_snapshot_features(t: dict, budget: int) -> tuple[np.ndarray, np.ndar
       y: shape (T,) targets (advantage sign)
     """
     # Rehydrate the tree from the record format
-    # Using RawPretrainExampleRecord if it's saved in that format
-    from src.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
-    
-    # Check if tree key is present or if we need to load via Record
-    if "parent_index" in t:
-        record = RawPretrainExampleRecord.from_payload(t)
-        example = record.to_pretrain_example()
-        tree = example.tree
-    else:
-        # Legacy/direct dict
-        tree = t["tree"]
+    record = RawPretrainExampleRecord.from_payload(t)
+    example = record.to_pretrain_example()
+    tree = example.tree
 
-    q = t["oracle_root_q_trace"]       # [T, n_children]
+    q = t["oracle_root_q_trace"]
     best_idx = t["oracle_best_move_index"]
-    T = min(len(q), budget)
-
-    halt_rewards = [float(q[s, best_idx[s].item()].item()) for s in range(T)]
-    tree_sizes = [1] * T
-
-    policy = compute_budgeted_oracle(halt_rewards, tree_sizes, T, _CONFIG)
+    trajectory = build_compact_trajectory_from_payload(t)
+    if trajectory is None:
+        raise ValueError("Tree has no controller trajectory (no root expansion).")
+    halt_rewards = trajectory["halt_rewards"]
+    root_rank = int(trajectory["first_decision_expansion_count"]) - 1
+    num_steps = min(len(halt_rewards), budget)
+    policy = budgeted_oracle_from_trajectory(trajectory, budget, _CONFIG)
     advantages = np.array(policy.target_advantages, dtype=np.float32)
     y = np.sign(advantages).astype(np.float32)
-    y[y == 0] = 1.0  # ties -> halt
+    y[y == 0] = 1.0
+    halt_slice = [float(value) for value in halt_rewards[:num_steps]]
 
-    X = np.zeros((T, 12), dtype=np.float32)
-    for s in range(T):
+    X = np.zeros((num_steps, 12), dtype=np.float32)
+    for s in range(num_steps):
+        trace_step = root_rank + s
         # Reconstruct prefix tree at step s
         # In build_tree, step s corresponds to s expansions
-        prefix_tree = tree.clone_expansion_prefix(s)
+        prefix_tree = tree.clone_expansion_prefix(trace_step)
         
         # Get 10 statistics
-        stats = extract_tree_stats_from_prefix(prefix_tree, q[s], best_idx[s].item(), T)
+        stats = extract_tree_stats_from_prefix(prefix_tree, q[trace_step], best_idx[trace_step].item(), num_steps)
+        stats[9] = halt_slice[s]  # root_best_q from pack trajectory halt_rewards
         
         X[s, :10] = stats
-        X[s, 10] = s / max(T - 1, 1)            # t normalised
-        X[s, 11] = (T - s) / T                  # remaining_budget normalised
+        X[s, 10] = s / max(num_steps - 1, 1)            # t normalised
+        X[s, 11] = (num_steps - s) / num_steps          # remaining_budget normalised
 
     return X, y
 
@@ -226,9 +224,9 @@ def plot_comparison_bar(train_acc: float, val_acc: float, output_path: str) -> N
         "axes.grid": True, "grid.alpha": 0.3,
     })
     fig, ax = plt.subplots(figsize=(8, 5))
-    models = ["GNN+MC\n(baseline)", "A0b Minimal\n(MLP, 4 stats)", "A2.1 Rich Tree\n(MLP, 12 stats)"]
-    accs = [_GNN_MC_SIGN_ACCURACY, _A0B_SIGN_ACCURACY, val_acc]
-    colors = ["#6366f1", "#f59e0b", "#10b981"]
+    models = ["GNN+MC\n(baseline)", "A2.1 train", "A2.1 val"]
+    accs = [_GNN_MC_SIGN_ACCURACY, train_acc, val_acc]
+    colors = ["#6366f1", "#2563EB", "#10b981"]
     bars = ax.bar(models, accs, color=colors, alpha=0.85, width=0.5, edgecolor="white")
     ax.axhline(_GNN_MC_SIGN_ACCURACY, color="black", linestyle="--", lw=1.5,
                label=f"GNN+MC baseline ({_GNN_MC_SIGN_ACCURACY:.1%})")
@@ -271,10 +269,11 @@ def main() -> None:
     val_acc = compute_sign_accuracy(y_val, model(torch.from_numpy(X_val)).detach().numpy().ravel())
 
     print(f"\n{'='*60}")
-    print(f"A2.1 Rich Tree Statistics Baseline Results:")
-    print(f"  GNN+MC baseline sign accuracy: {_GNN_MC_SIGN_ACCURACY:.3f}")
-    print(f"  A0b Minimal (4 stats) sign acc: {_A0B_SIGN_ACCURACY:.3f}")
-    print(f"  A2.1 Rich Tree (12 stats) val acc: {val_acc:.3f}")
+    print("A2.1 Rich Tree Statistics Baseline Results:")
+    print(f"  GNN+MC baseline sign accuracy:     {_GNN_MC_SIGN_ACCURACY:.3f}")
+    print(f"  A2.1 Rich Tree (12 stats) train:   {train_acc:.3f}")
+    print(f"  A2.1 Rich Tree (12 stats) val:     {val_acc:.3f}")
+    print(f"  (A0b minimal-MC comparison pending correct re-run — see R-A0)")
     print(f"{'='*60}\n")
 
     plot_comparison_bar(train_acc, val_acc, os.path.join(str(_FIGURES_DIR), "tree_stats_baseline_accuracy.png"))

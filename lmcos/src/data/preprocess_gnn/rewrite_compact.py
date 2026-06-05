@@ -31,6 +31,9 @@ from cts.data.preprocess_gnn.teacher_targets import (
 
 _LEGACY_RAW_FORMAT_TAGS = (
     "cts_raw_pretrain_example_v1",
+    "cts_raw_pretrain_example_v2",
+    "cts_raw_pretrain_example_v3",
+    "cts_raw_pretrain_example_v4",
     RAW_PRETRAIN_FORMAT,
 )
 

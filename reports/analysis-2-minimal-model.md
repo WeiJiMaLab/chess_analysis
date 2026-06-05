@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Description** | Build complexity **up**: **A2.1** tree-statistic summaries → MC (no GNN); **A2.2** tiny GNN from scratch if summaries insufficient. Parallel to A1. |
-| **Rationale** | GNN pretrain ~1+ day blocks iteration; A0b showed 86.4% sign acc without full encoder — find minimum viable architecture. |
+| **Rationale** | GNN pretrain ~1+ day blocks iteration; A0b will test whether raw tree stats match GNN+MC without full encoder — find minimum viable architecture. |
 | **Expectation** | Acceptable **GNN loss** (or tree-stat baseline) within ≤2 h GPU; joint `unfreeze_encoder` path viable for 16-dim GNN. |
 | **Open questions / notes** | Need ysagiv pretrained GNN loss baseline for “acceptable.” Job **9215254** started tiny child-WDL pretrain (see notebook). Config D YAML still missing. |
 
@@ -15,6 +15,7 @@
 
 | Step | Status |
 |------|--------|
+| **A0b** Re-run `minimal_mc_baseline.py` with corrected halt_rewards | ⬜ todo |
 | **A2.1** Tree-statistic features → MC (no GNN head) | ⬜ incomplete |
 | **A2.2** Config D YAML (`subtree_weighting_root_scratch_D.yaml`, d_embed=16, unfreeze) | ⬜ incomplete |
 | Verify `controller_train.py` online GNN path when `unfreeze_encoder: true` | ⬜ incomplete |
@@ -23,12 +24,24 @@
 | Ablation series Config C, B if D insufficient | ⬜ incomplete |
 | `test_minimal_model.py` (shapes, param count, no NaN, reproducibility) | ⬜ incomplete |
 
+## A0a impact assessment
+
+**Packed GNN training (A2 controller path) was never invalidated** — labels come from `pack.py`.
+
+**Analysis scripts** now call `build_compact_trajectory_from_payload` + `budgeted_oracle_from_trajectory` only. Shared features live in `board_tree_features.py`. A0b re-run still ⬜ todo.
+
+### Invalid runs (do not cite)
+
+| Run | Date | Reported outcome | Why invalid |
+|---|---|---|---|
+| A0b minimal MLP | 2026-06-03 | val sign acc ≈ 86.4% vs GNN+MC 90.1% | Wrong halt_rewards in analysis script (not comparable to packed GNN baseline) |
+
 ## Notes
 
 ### Success metric
 
 - Primary: **GNN loss** on ablation shards (not stop-step accuracy alone)
-- Behavioral anchor: A0b minimal MLP **86.4%** val sign acc vs GNN+MC **90.1%**
+- Behavioral anchor: A0b minimal MLP val sign acc — ⬜ **todo** (correct re-run after 2026-06-05 fix)
 
 ### Config D (planned)
 

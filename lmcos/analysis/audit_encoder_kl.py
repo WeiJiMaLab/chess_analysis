@@ -134,7 +134,13 @@ def _build_encoder(encoder_checkpoint: str, device: torch.device) -> TreeEncoder
     return encoder
 
 
-_LEGACY_RAW_FORMAT_TAGS = ("cts_raw_pretrain_example_v1", "cts_raw_pretrain_example_v2")
+_LEGACY_RAW_FORMAT_TAGS = (
+    "cts_raw_pretrain_example_v1",
+    "cts_raw_pretrain_example_v2",
+    "cts_raw_pretrain_example_v3",
+    "cts_raw_pretrain_example_v4",
+    "cts_raw_pretrain_example_v5",
+)
 _RESUME_FORMAT = "cts_audit_encoder_kl_resume_v2"  # v2: adds num_children grid (size grid alone was silently incomplete on resume)
 
 

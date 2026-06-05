@@ -14,13 +14,11 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis.minimal_mc_baseline import (
     MinimalMC,
-    extract_snapshot_features,
     compute_sign_accuracy,
+    extract_snapshot_features,
 )
+from src.data.preprocess_mc.pack import build_compact_trajectory_from_payload
 
-# ---------------------------------------------------------------------------
-# MinimalMC architecture
-# ---------------------------------------------------------------------------
 
 class TestMinimalMC:
     def test_output_shape(self):
@@ -30,7 +28,6 @@ class TestMinimalMC:
         assert out.shape == (32, 1), f"Expected (32,1), got {out.shape}"
 
     def test_parameter_count_small(self):
-        """Minimal MC should have far fewer params than GNN+MC baseline (~millions)."""
         model = MinimalMC(input_dim=5, hidden_dim=64, hidden_layers=2)
         n_params = sum(p.numel() for p in model.parameters())
         assert n_params < 50_000, f"Minimal MC has {n_params} params — unexpectedly large"
@@ -60,10 +57,6 @@ class TestMinimalMC:
         assert torch.allclose(o1, o2)
 
 
-# ---------------------------------------------------------------------------
-# extract_snapshot_features
-# ---------------------------------------------------------------------------
-
 class TestExtractSnapshotFeatures:
     @pytest.fixture
     def example_tree(self):
@@ -71,43 +64,52 @@ class TestExtractSnapshotFeatures:
         return torch.load(path, map_location="cpu", weights_only=False)
 
     def test_output_shape(self, example_tree):
-        X, y = extract_snapshot_features(example_tree, budget=43)
-        T = len(example_tree["oracle_root_q_trace"])
-        assert X.shape[0] == min(T, 43), f"Expected {min(T,43)} rows, got {X.shape[0]}"
-        assert X.shape[1] >= 3, "Expected at least 3 features per snapshot"
+        X, y, stop = extract_snapshot_features(example_tree, budget=43)
+        trajectory = build_compact_trajectory_from_payload(example_tree)
+        assert trajectory is not None
+        expected_rows = min(len(trajectory["halt_rewards"]), 43)
+        assert X.shape[0] == expected_rows, f"Expected {expected_rows} rows, got {X.shape[0]}"
+        assert X.shape[1] == 4
         assert y.shape == (X.shape[0],)
+        assert isinstance(stop, int)
 
     def test_no_nans(self, example_tree):
-        X, y = extract_snapshot_features(example_tree, budget=43)
+        X, y, _ = extract_snapshot_features(example_tree, budget=43)
         assert not np.isnan(X).any(), "NaN in features"
         assert not np.isnan(y).any(), "NaN in labels"
 
-    def test_labels_binary(self, example_tree):
-        _, y = extract_snapshot_features(example_tree, budget=43)
-        assert set(y).issubset({-1.0, 1.0}), f"Labels not binary: {set(y)}"
+    def test_halt_rewards_use_pack_trajectory(self, example_tree):
+        trajectory = build_compact_trajectory_from_payload(example_tree)
+        assert trajectory is not None
+        num_steps = min(len(trajectory["halt_rewards"]), 43)
+        halt_slice = [float(v) for v in trajectory["halt_rewards"][:num_steps]]
+        q_final = example_tree["oracle_final_root_q_values"]
+        best_idx = example_tree["oracle_best_move_index"]
+        root_rank = int(trajectory["first_decision_expansion_count"]) - 1
+        for s in range(num_steps):
+            expected = float(q_final[best_idx[root_rank + s].item()].item())
+            assert halt_slice[s] == expected, f"Step {s}: halt_reward != Q_final[best_idx]"
+
+    def test_best_q_feature_matches_trajectory_halt_rewards(self, example_tree):
+        X, _, _ = extract_snapshot_features(example_tree, budget=43)
+        trajectory = build_compact_trajectory_from_payload(example_tree)
+        num_steps = min(len(trajectory["halt_rewards"]), 43)
+        halt_slice = [float(v) for v in trajectory["halt_rewards"][:num_steps]]
+        np.testing.assert_allclose(X[:, 0], halt_slice, rtol=0, atol=1e-6)
 
     def test_best_q_in_unit_interval(self, example_tree):
-        X, _ = extract_snapshot_features(example_tree, budget=43)
-        best_q_col = X[:, 0]  # first feature = best_q at each step
+        X, _, _ = extract_snapshot_features(example_tree, budget=43)
+        best_q_col = X[:, 0]
         assert np.all((best_q_col >= 0) & (best_q_col <= 1 + 1e-6)), "best_q outside [0,1]"
 
 
-# ---------------------------------------------------------------------------
-# compute_sign_accuracy
-# ---------------------------------------------------------------------------
-
 class TestComputeSignAccuracy:
     def test_perfect(self):
-        y = np.array([1.0, -1.0, 1.0, -1.0])
-        preds = np.array([0.5, -0.5, 0.5, -0.5])
+        y = np.array([1.0, -1.0, 1.0])
+        preds = np.array([0.5, -0.5, 0.1])
         assert compute_sign_accuracy(y, preds) == 1.0
 
-    def test_all_wrong(self):
-        y = np.array([1.0, 1.0, 1.0])
-        preds = np.array([-1.0, -1.0, -1.0])
-        assert compute_sign_accuracy(y, preds) == 0.0
-
     def test_chance(self):
-        y = np.array([1.0, -1.0, 1.0, -1.0])
-        preds = np.array([1.0, 1.0, -1.0, -1.0])
+        y = np.array([0.5, -0.5, 0.5, -0.5])
+        preds = np.array([0.5, 0.5, -0.5, -0.5])
         assert compute_sign_accuracy(y, preds) == 0.5

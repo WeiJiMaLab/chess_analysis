@@ -55,7 +55,7 @@ Cross-project summary: [`../labnotebook.md`](../labnotebook.md), [(R-A0)](analys
 
 Tests: `tests/test_oracle_stop_step_features.py`, `tests/test_minimal_mc_baseline.py` (25/25). Figures under `analysis/figures/` when scripts are run locally.
 
-**Outcomes:** A1 **go** (3/4 directional feature matches on lmcos trees). A2 **go** (minimal MC val sign acc 86.4% vs 90.1% GNN+MC). A1 still needs human FEN tree generation + `human_oracle_comparison.py`. A2 still needs Config D YAML (`unfreeze_encoder: true` path already in `controller_train.py`).
+**Outcomes:** A1 **go** (3/4 directional feature matches on lmcos trees). A2 **go** pending A0b re-run (2026-06-03 val sign acc **invalid** — do not cite). A1 still needs human FEN tree generation + `human_oracle_comparison.py`. A2 still needs Config D YAML (`unfreeze_encoder: true` path already in `controller_train.py`).
 
 ### 2026-05-29 — Repo layout refactor + stage-4 controller ablation harness (hl4291)
 
