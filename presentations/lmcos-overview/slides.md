@@ -270,11 +270,11 @@ math: katex
 
 <div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
   <div class="space-y-3 text-sm">
-    <div><span class="label">What</span> Compute <code>oracle_stop_step</code> on 5K lmcos training trees. Extract board features from root FEN.</div>
+    <div><span class="label">What</span> Compute <code>oracle_stop_step</code> on 39,668 lmcos training trees. Extract board features from root FEN.</div>
     <div><span class="label">x</span> Board features: branching, material, gain_depth, toptwo</div>
     <div><span class="label">y</span> oracle_stop_step (DP-optimal expansions, budget=43)</div>
     <div><span class="label">Compare</span> r(feature, oracle_stop_step) vs r(feature, human log RT)</div>
-    <div class="finding"><span class="label">Finding</span> 3 of 4 features match direction. gain_depth r = +0.797 for oracle vs +0.096 for humans. toptwo is the one mismatch.</div>
+    <div class="finding"><span class="label">Finding</span> All 4 of 4 features match direction. gain_depth r = +0.233 for oracle vs +0.096 for humans. toptwo r = -0.290 for oracle vs -0.064 for humans.</div>
   </div>
   <img class="w-full object-contain max-h-[72vh]" src="/figures/oracle_stop_step_vs_human_rt.png" />
 </div>
@@ -296,33 +296,33 @@ math: katex
     <tbody class="text-[12px]">
       <tr class="border-b border-gray-100 bg-green-50">
         <td class="py-2 pr-4 font-mono">branching</td>
-        <td class="text-right pr-4 text-blue-600 font-bold">+0.165</td>
+        <td class="text-right pr-4 text-blue-600 font-bold">+0.014</td>
         <td class="text-right pr-4 text-blue-600 font-bold">+0.195</td>
-        <td class="text-green-700 font-semibold">✓ match</td>
+        <td class="text-green-700 font-semibold">✓ match (tiny)</td>
       </tr>
       <tr class="border-b border-gray-100 bg-green-50">
         <td class="py-2 pr-4 font-mono">material</td>
-        <td class="text-right pr-4 text-blue-500 font-bold">+0.154</td>
+        <td class="text-right pr-4 text-blue-500 font-bold">+0.011</td>
         <td class="text-right pr-4 text-blue-400 font-bold">+0.039</td>
-        <td class="text-green-700 font-semibold">✓ match</td>
+        <td class="text-green-700 font-semibold">✓ match (tiny)</td>
       </tr>
       <tr class="border-b border-gray-100 bg-green-50">
         <td class="py-2 pr-4 font-mono">gain_depth</td>
-        <td class="text-right pr-4 font-bold text-blue-700">+0.797</td>
+        <td class="text-right pr-4 font-bold text-blue-700">+0.233</td>
         <td class="text-right pr-4 text-blue-500 font-bold">+0.096</td>
-        <td class="text-green-700 font-semibold">✓ match — oracle much stronger</td>
+        <td class="text-green-700 font-semibold">✓ match</td>
       </tr>
-      <tr class="bg-red-50">
+      <tr class="bg-green-50">
         <td class="py-2 pr-4 font-mono">toptwo</td>
-        <td class="text-right pr-4 text-blue-500 font-bold">+0.436</td>
+        <td class="text-right pr-4 text-red-500 font-bold">−0.290</td>
         <td class="text-right pr-4 text-red-400 font-bold">−0.064</td>
-        <td class="text-red-700 font-semibold">✗ mismatch — interpretable</td>
+        <td class="text-green-700 font-semibold">✓ match</td>
       </tr>
     </tbody>
   </table>
   <div class="mt-3 p-3 bg-neutral-soft rounded text-xs space-y-1">
-    <p><b>toptwo mismatch:</b> oracle continues longer when toptwo is large (refining the dominant move's Q-estimate). Humans stop faster (decisiveness = satisficing signal).</p>
-    <p><b>gain_depth gap:</b> oracle is defined to stop when Q-refinement no longer pays — it is necessarily most sensitive to positions where Q is still changing. Humans track this, but weakly.</p>
+    <p><b>Value Landscape Alignment:</b> Both humans and the oracle stop faster when one move is clearly better (negative toptwo correlation) and search longer when deeper search yields higher value (positive gain_depth/VOC correlation).</p>
+    <p><b>Structural Complexity Divergence:</b> Branching factor and piece count strongly drive human deliberation due to explicit move/threat enumeration, whereas the oracle's PUCT search and value network handle this natively, showing near-zero correlation with optimal stopping.</p>
   </div>
 </div>
 

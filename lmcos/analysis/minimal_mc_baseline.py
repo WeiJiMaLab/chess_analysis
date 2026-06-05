@@ -46,7 +46,11 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
-from src.data.preprocess_mc.oracle import BudgetedOracleConfig, predicted_stop_from_advantages
+from src.data.preprocess_mc.oracle import (
+    BudgetedOracleConfig,
+    compute_budgeted_oracle,
+    predicted_stop_from_advantages,
+)
 from src.data.preprocess_mc.pack import (
     budgeted_oracle_from_trajectory,
     build_compact_trajectory_from_payload,
@@ -98,23 +102,22 @@ def extract_snapshot_features(t: dict, budget: int) -> tuple[np.ndarray, np.ndar
     oracle_stop_step: policy.optimal_stop_step for this episode
     """
     q = t["oracle_root_q_trace"]       # [T, n_children]
-    trajectory = build_compact_trajectory_from_payload(t)
-    if trajectory is None:
-        raise ValueError("Tree has no controller trajectory (no root expansion).")
-    halt_rewards = trajectory["halt_rewards"]
-    root_rank = int(trajectory["first_decision_expansion_count"]) - 1
-    num_steps = min(len(halt_rewards), budget)
-    policy = budgeted_oracle_from_trajectory(trajectory, budget, _CONFIG)
+    best_idx = t["oracle_best_move_index"]
+    q_final = t["oracle_final_root_q_values"]
+    num_steps = min(len(q), budget)
+
+    halt_rewards = [float(q_final[best_idx[s].item()].item()) for s in range(num_steps)]
+    tree_sizes = [1] * num_steps
+
+    policy = compute_budgeted_oracle(halt_rewards, tree_sizes, num_steps, _CONFIG)
     advantages = np.array(policy.target_advantages, dtype=np.float32)
     oracle_stop_step = policy.optimal_stop_step
-    halt_slice = [float(value) for value in halt_rewards[:num_steps]]
 
     X = np.zeros((num_steps, 4), dtype=np.float32)
     for s in range(num_steps):
-        trace_step = root_rank + s
-        q_row = q[trace_step]
+        q_row = q[s]
         evaluated = q_row[q_row != 0]
-        best_q = halt_slice[s]
+        best_q = halt_rewards[s]
         wdl_var = float(evaluated.var().item()) if len(evaluated) > 1 else 0.0
         X[s, 0] = best_q
         X[s, 1] = wdl_var
