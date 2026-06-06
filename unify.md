@@ -112,7 +112,13 @@ Each part lists **goal · data · method · tests · contingencies · independen
 
 ### U1 — Reunify the datasets (URGENT, the critical path)
 
-The spine of the sprint. Four steps; U1.0 is essentially done.
+The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ done → U1.1 🚀 launching.**
+
+> **Live status.** U1.0 smoke complete ([R-U1](reports/u1-engine-timing-smoke.md)): Lc0-GPU
+> **16.87 s/tree**, Lc0-CPU **~738 s/tree**, CPU gate fixed. 50K FENs exported
+> (`human_fens_50k.txt`, seed 43). U1.1 launch staged in-repo (`human_trees_50k_{gpu,cpu}.yaml`
+> + `generate_dataset_shard_{gpu,cpu}_array.slurm`); **canary** running (GPU ✅ 10/10 trees; CPU
+> launched clean on a `no_gpu` node) with **auto-fire** of the full two-lane run on pass.
 
 #### U1.0 — Timing smoke (first pass DONE; clean three-engine re-run is sprint action #1)
 
@@ -159,11 +165,18 @@ The spine of the sprint. Four steps; U1.0 is essentially done.
   re-export with the same filter and a fixed seed.
 - **Data out:** `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k/` (`.pt` per FEN,
   `resume: true`).
-- **Method:** `cts.data.build_tree` (`generate-dataset`), **Lc0-GPU, depth/budget 96** (decision 3,
+- **Method:** `cts.data.build_tree` (`generate-dataset`), **depth/budget 96** (decision 3,
   regime-faithful). Packing uses the **canonical `BudgetedOracleConfig()` defaults + bucket
   sampling** of §7a so episodes are format-identical to `controller_packed_*_nomaint_no_xaba`.
-  **Re-shard per §5** (the fix for the empty-dir failure): `gpu-medium` QOS, ~20 fat shards
-  (~2.5K FENs/shard for 50K), walls = `ceil(FENs_per_shard × pinned_s_per_tree)` × 1.3.
+- **Launch (two lanes, one output dir, split by global FEN index — files are
+  `{index:06d}_root_{index}.pt`, disjoint ranges never collide, `--resume` automatic):**
+  - **GPU lane** `[0,14000)` `backend: cuda` — `generate_dataset_shard_gpu_array.slurm`,
+    `--array=0-13%3` (≈3 GPUs), 1000 FENs/shard, 6 h wall.
+  - **CPU lane** `[14000,50000)` `backend: blas` — `generate_dataset_shard_cpu_array.slurm` on the
+    `cpu` partition with the **venv `LD_LIBRARY_PATH` libcublas fix**, `--array=0-899%350`,
+    40 FENs/shard, 10 h wall.
+  - Throughput-balanced → combined ≈ **21 h** for 50K. Array tasks compute their own index range
+    from `SLURM_ARRAY_TASK_ID`; each shard `FENs × s_per_tree × 1.3 < wall` (the empty-dir guard).
 - **Tests:**
   - Schema/identity guard: `root_position_spec == manifest full_fen` per tree (already enforced
     at load in `human_oracle_comparison.py`; reuse to reject stale trees).

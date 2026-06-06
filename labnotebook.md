@@ -31,6 +31,7 @@ Sprint action #1 — three-engine timing smoke — run; CPU lane unblocked; U3 b
 | **CPU-lane gate** — lc0-blas on a pure-CPU node | The 50K plan is CPU-led | ⚠️→✅ **Blocked then FIXED:** CUDA-linked lc0 needs `libcublas.so.12`; absent on CPU nodes → crash. Fix: `LD_LIBRARY_PATH` → venv `nvidia/*/lib` (no rebuild). Lane viable. | [(R-U1)](reports/u1-engine-timing-smoke.md) |
 | **Feasibility** — 50K both lanes | Confirm timing | ✅ Combined ≈ 2,350 trees/hr → **50K in ~21 h**. Decision: run Lc0 50K, CPU-led + 3 GPUs. | [unify.md §7](unify.md) |
 | **U3 baselines** — gain-depth-only rule + `test_budgeted_baselines.py` | Build the independent comparison thread while data generates | ✅ 12 data-independent tests pass; geometric baseline **dropped** (silly); semi-smart variants brainstormed | [unify.md §U3](unify.md) |
+| **U1.1 launch** — 50K human FENs (seed 43); two-lane gen, in-repo configs + array scripts | Reunify datasets; CPU-led + 3 GPUs | 🚀 Export ✅ (50K + manifest). GPU lane `[0,14000)` cuda (array 0-13%3, 1000/shard); CPU lane `[14000,50000)` blas on `cpu` partition w/ libcublas fix (array 0-899%350, 40/shard). One output dir keyed by global index. **Canary:** GPU ✅ 10/10; CPU launched clean on `no_gpu` node → **auto-fire** full run on pass (~21 h). | [unify.md §U1.1](unify.md) |
 
 ---
 
