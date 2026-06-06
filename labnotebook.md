@@ -21,6 +21,19 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## 2026-06-05 (planning) {#2026-06-05-plan}
+
+Drafted the sprint North Star — **The Great Reunification** — and restructured the deck.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **Plan** — `unify.md` North Star: state verification + U1/U2/U3 sub-plans, tests, contingencies, feasibility, open questions | Single reference for the reunification sprint | ✅ Verified repo matches the brief except the 3 open problems; `human_trees_10k/` empty (shard-sizing, not cost). 5 decisions for hl4291 in §7. | [unify.md](unify.md) |
+| **Timing smoke** — 20-FEN tree-gen benchmark (budget 96), A100 | Pin per-tree cost before 10K/50K/100K spend | ✅ GPU **~16–41 s/tree** (0.024–0.062 roots/s); CPU/blas **~14 min/tree**. 50K < 1 day; 100K ≈ 1.5–2.4 days. **Feasible.** | [unify.md §5](unify.md) |
+| **Slides** — prepend reunification deck; move prior framing + A0–A4 + architecture to appendix | Lead with the reunification narrative | ✅ 14 new slides; appendix preserved | [slides.md](presentations/lmcos-overview/slides.md) |
+| **Decisions locked** (hl4291) | Resolve the 5 sprint questions | ✅ Tier **50K**; engine-swap profiling folded into a **3-engine smoke** (Stockfish / Lc0-CPU / Lc0-GPU) = sprint action #1; **depth 96 kept** (reduce epochs before depth); OSS budget = canonical `BudgetedOracleConfig()` (5 buckets 1–120, 2/bucket, **maintenance off**, λ=18.537/p=2.8, trees→96). | [unify.md §7](unify.md) |
+
+---
+
 ## 2026-06-05 {#2026-06-05}
 
 A0a corrected and rerun on all 39,668 trees; definitions, features, and code audited.
@@ -28,7 +41,7 @@ A0a corrected and rerun on all 39,668 trees; definitions, features, and code aud
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
 | **LMCOS A0a** — corrected `oracle_stop_step` + features; all 39,668 trees; scatter plots | Two bugs fixed; rerun at full scale (missed half the shards with old glob) | ✅ **4/4 RT directions** correct. gain_depth r=**+0.233** ✓; toptwo r=**−0.290** ✓; branching/material r≈0.01 (tiny, correct dir). r(oss, ce)=**0.525**. Branching/material near-zero expected: oracle driven by value landscape (toptwo/gain_depth), not structural complexity. 72/72 tests. | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
-| **LMCOS A0b** — halt_rewards fix + optimal_stop eval | Establish minimal-MC anchor with correct oracle labels | ⏳ Code fixed 2026-06-05; correct re-run ⬜ **todo** (2026-06-03 run invalid) | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
+| **LMCOS A0b** — minimal MLP (4 features → MSE → target_advantage) | Establish minimal-MC anchor with correct oracle labels | ✅ val sign acc **54.6%** (↓ from invalid 86.4%); exact stop **5.2%**; r(pred,oracle) **+0.291**. Sign acc oscillates during training (loss ↓ but zero-crossings unstable) — features lack discriminative boundary. GNN encoder confirmed essential. | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
 | **LMCOS code audit** — pack-path oracle labels; shared `board_tree_features.py`; removed analysis-layer oracle wrappers | Single source of truth: `pack.py` + `oracle.py` | ✅ Done | [(R-A0)](reports/analysis-0-oracle-baseline.md) |
 | **LMCOS A1 smoke** — 497 clean trees (1K job cut at 1h wall); corrected bugs from A0a in `human_oracle_comparison.py`; generated 10K FENs; submitted 20-shard 10K job | Smoke confirms direction before 10K spend | ✅ r(oss, log RT) = **+0.091** ✓; stale-tree guard added; 10K jobs 9266775–9266794 running | [(R-A1)](reports/analysis-1-human-oracle.md) |
 

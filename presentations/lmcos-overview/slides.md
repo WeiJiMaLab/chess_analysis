@@ -16,7 +16,372 @@ math: katex
   </h1>
   <div class="mt-2 text-lg opacity-80">Yotam Sagiv & Jordan Lei</div>
   <div class="mt-6 text-[10px] font-bold uppercase tracking-widest opacity-40">
-    Project status — June 2026
+    The Great Reunification — sprint plan · June 2026
+  </div>
+</div>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">The plan</div>
+    <h1 class="text-5xl">The Great Reunification</h1>
+    <div class="mt-4 text-sm opacity-60 max-w-xl mx-auto">
+      Put the human dataset and the normative agent on <b>the same positions</b>,
+      measure the normative ceiling on human RT, and open the model-comparison thread.
+    </div>
+  </div>
+</div>
+
+---
+
+# The big idea
+
+<div class="mt-6 max-w-3xl space-y-4 text-sm">
+  <div class="p-4 bg-neutral-soft border-2 border-accent rounded-lg text-center">
+    <div class="text-lg font-semibold">How should a meta-controller know <i>when to stop thinking</i>?</div>
+    <div class="mt-2 text-sm opacity-80"><b>Input = search tree &nbsp;→&nbsp; Output = continue / halt</b></div>
+  </div>
+
+  <div class="p-3 bg-accent-soft border-l-2 border-accent rounded text-xs">
+    <b>Background (Russek et al.):</b> the <i>value of computation</i>
+    $\;\text{gain} = V_\text{deep}(a_\text{deep}) - V_\text{deep}(a_\text{shallow})\;$
+    tracks human reaction time. We ask whether a <b>normatively optimal</b> stopping rule —
+    and a <b>learned controller</b> that approximates it — also tracks human RT on the
+    <b>same positions</b>.
+  </div>
+</div>
+
+---
+
+# The model — greatest possible world
+
+<div class="mt-6 max-w-3xl space-y-4 text-sm">
+  <p class="font-semibold">In the best of all possible worlds, the agent looks like this:</p>
+  <div class="grid grid-cols-2 gap-3 text-xs">
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Architecture</b><br>GNN + readout (MC) head over the search tree.
+    </div>
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Objective</b><br>Self-play to <i>win</i>, minus a cost that grows with tree size.
+    </div>
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Inner loop</b><br>Lc0 MCTS+PUCT rollouts — the planning loop, abstracted.
+    </div>
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Learning</b><br>RL discovers the <b>optimal stopping step (OSS)</b>.
+    </div>
+  </div>
+  <p class="text-xs opacity-60">...but five constraints stand in the way. Each has a solution.</p>
+</div>
+
+---
+
+# The model — constraints &rarr; solutions
+
+<div class="mt-3 max-w-4xl text-xs">
+
+| Constraint | Solution |
+| :--- | :--- |
+| GNN root encoding is a **sparse bottleneck** — `z_root` may learn nothing | **Auxiliary head.** `ChildWDLEncoder(z_root, child_pos) → child WDL`. Forces `z_root` to be informative. Data: edge `(parent, child)` → search-encoded child WDL. |
+| **Reward is a sparse signal** for meta-control | **Dense target.** Train MC: `(z_root, β) → advantage A`. Per-step, dense. |
+| Most **leaves are unexpanded** → child-WDL target trivial | **Weight the loss** by subtree size; trivial children contribute ≈ 0. |
+| Advantage **matters most near the boundary** | **BCE penalty on the sign** of $A$, weight $\lambda$. |
+| Many **FENs need no thought** | **Filter them out** (PUCT stability filter). |
+
+</div>
+
+<div class="mt-3 text-xs opacity-60">The first two are the load-bearing moves: a representation that means something, and a dense target to learn from.</div>
+
+---
+
+# Advantage &mdash; a dense, computable target
+
+<div class="mt-5 max-w-3xl space-y-4 text-sm">
+  <div class="p-4 bg-neutral-soft border-2 border-accent rounded-lg text-center">
+    $V_t = \max\big(V_\text{halt},\; V_\text{continue}\big)
+       = \max\big(V_\text{deep}(a_t),\; V_{t+1} - \text{cost}(t{+}1,\beta)\big)$
+    <div class="mt-2 text-xs opacity-70">Optimal stopping is recursive &rarr; solve backwards by <b>dynamic programming</b>.</div>
+  </div>
+
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs">
+    <b>Co-located data.</b> Snapshots $T_0 \dots T_\text{max}$ fall out for free while MCTS+PUCT
+    grows the tree. <b>One artifact</b> trains both heads: the GNN uses the <i>nodes</i> of the
+    full tree $T_\text{max}$; the MC uses the <i>snapshots</i> $T_0\dots T_\text{max}$ to encode
+    advantages.
+  </div>
+</div>
+
+---
+
+# The model pipeline today
+
+<div class="mt-4 grid grid-cols-2 gap-4 max-w-4xl text-xs">
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+    <b class="text-secondary uppercase tracking-wider">Data</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>~40K filtered FENs (39,668 trees)</li>
+      <li>$T_0\dots T_\text{max}$ snapshots → GNN + MC targets</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+    <b class="text-secondary uppercase tracking-wider">Engine / Model</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>Lc0 inner loop</li>
+      <li>GNN: GRU cell, up+down sweeps, child-attention</li>
+      <li>MC: MLP readout of `z_root` → advantage</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+    <b class="text-secondary uppercase tracking-wider">Metrics</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>child-WDL CE curves</li>
+      <li>MC advantage MSE + λ·BCE curves</li>
+      <li>greedy stop (first $A<0$) vs DP-OSS</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-green-50 border-l-2 border-green-500 rounded">
+    <b class="text-green-700 uppercase tracking-wider">Status</b>
+    <p class="mt-1 opacity-80">Learns well across a wide variety of positions; competitive with what we hoped to see.</p>
+  </div>
+</div>
+
+---
+
+# The data — greatest possible world
+
+<div class="mt-6 max-w-3xl space-y-4 text-sm">
+  <div class="p-4 bg-neutral-soft border-2 border-accent rounded-lg text-center">
+    <div class="text-lg font-semibold">$\text{OSS}(s) \;\leftrightarrow\; \log \text{RT}(s)$</div>
+    <div class="mt-2 text-xs opacity-70">
+      Take the GNN trained <b>only on self-play</b>; show its optimal stopping step is strongly
+      correlated with human thinking time.
+    </div>
+  </div>
+  <div class="p-3 bg-accent-soft border-l-2 border-accent rounded text-xs">
+    If humans, the model, and the normative target all align → evidence for
+    <b>resource rationality</b>, and a compelling application of the model.
+  </div>
+  <p class="text-xs opacity-60">...but again, constraints — and a deliberately model-free first step.</p>
+</div>
+
+---
+
+# The data — constraints &rarr; solutions
+
+<div class="mt-4 max-w-4xl text-xs">
+
+| Constraint | Solution |
+| :--- | :--- |
+| Time-control & **skill confounds** | One control: **60+0 (10-min)**, no berserk, fixed Elo tranche (≥2000). |
+| Don't want results to **depend on the model** | **Zero-parameter analyses first** — show humans behave sensibly with no model at all. |
+
+</div>
+
+<div class="mt-4 p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs max-w-4xl">
+  <b>Zero-parameter findings:</b> Ply · Branching · Own pieces · Gain (Russek) · (neg) action gap
+  all track RT — with <b>Branching</b> playing a large role that Russek et al. do <b>not</b>
+  explain and that is largely <b>orthogonal</b> to gain.
+</div>
+
+---
+
+# The human pipeline today
+
+<div class="mt-4 grid grid-cols-2 gap-4 max-w-4xl text-xs">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+    <b class="text-accent uppercase tracking-wider">Data / Engine</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>~2M games → 60+0, ≥2000 Elo</li>
+      <li>Stockfish (for convenience)</li>
+      <li>0-parameter</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+    <b class="text-accent uppercase tracking-wider">Metrics</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>Ply / Branching / Own pieces</li>
+      <li>Gain / Action gap</li>
+    </ul>
+  </div>
+  <div class="col-span-2 p-3 bg-green-50 border-l-2 border-green-500 rounded">
+    <b class="text-green-700 uppercase tracking-wider">Status</b>
+    <span class="opacity-80"> Interesting trends on what people actually do — with surprising results we'd like validated.</span>
+  </div>
+</div>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Where it stands</div>
+    <h1 class="text-4xl">Three problems block the reunification</h1>
+  </div>
+</div>
+
+---
+
+# The three problems
+
+<div class="mt-6 max-w-3xl space-y-3 text-sm">
+  <div class="p-4 bg-red-50 border-l-4 border-red-500 rounded">
+    <b class="text-red-700 uppercase tracking-wider text-xs">Urgent — data mismatch</b>
+    <p class="mt-1 text-xs opacity-90">Human-filtered FENs ≠ model-training FENs. Run the data-gen pipeline on the <b>human</b> FENs, then compare the <b>target OSS (no model)</b> with human RT — the <b>upper bound</b> on what any normative model can explain. <span class="opacity-60">→ U1</span></p>
+  </div>
+  <div class="p-4 bg-amber-50 border-l-4 border-amber-400 rounded">
+    <b class="text-amber-700 uppercase tracking-wider text-xs">Engine mismatch — gain</b>
+    <p class="mt-1 text-xs opacity-90">Human gain uses Stockfish; Lc0 is the study standard. Replicate Russek's gain↔RT with <b>Lc0</b>. <span class="opacity-60">→ U2</span></p>
+  </div>
+  <div class="p-4 bg-neutral-soft border-l-4 border-secondary rounded">
+    <b class="text-secondary uppercase tracking-wider text-xs">Important — model comparison</b>
+    <p class="mt-1 text-xs opacity-90">One model, no baselines. Profile lesions & alternatives on the <b>existing shards</b> — runs concurrently. <span class="opacity-60">→ U3</span></p>
+  </div>
+</div>
+
+---
+
+# U1 — Reunify on the human FENs
+
+<div class="mt-4 max-w-3xl space-y-2 text-sm">
+  <p class="font-semibold">Migrate the model's data-gen pipeline onto the filtered human FENs, then read off the normative ceiling.</p>
+  <div class="space-y-2 text-xs">
+    <div class="flex gap-3 items-start"><div class="text-accent font-bold w-8 shrink-0">U1.0</div><div><b>Timing smoke</b> — 20 FENs, budget 96. <span class="text-green-700 font-semibold">Done.</span> Sets the cost everything depends on (next slide).</div></div>
+    <div class="flex gap-3 items-start"><div class="text-accent font-bold w-8 shrink-0">U1.1</div><div><b>Generate trees</b> on 10K/50K/100K human FENs via `cts.data.build_tree` (Lc0, budget 96), snapshots + DP targets.</div></div>
+    <div class="flex gap-3 items-start"><div class="text-accent font-bold w-8 shrink-0">U1.2</div><div><b>Upper bound</b> — `compute_budgeted_oracle()` → target OSS; correlate with `log(RT)` at matched positions. <b>The headline result.</b></div></div>
+    <div class="flex gap-3 items-start"><div class="text-accent font-bold w-8 shrink-0">U1.3</div><div><b>Refit the model</b> (GNN + MC) on the unified data; greedy-stop vs DP-OSS; eventually predicted-stop ↔ RT.</div></div>
+  </div>
+  <div class="p-2 bg-amber-50 border-l-2 border-amber-400 rounded text-xs">Critical path: U1.0 → U1.1 → U1.2. U1.3 runs in parallel with U1.2 off the same trees.</div>
+</div>
+
+---
+
+# U1 — Feasibility (the smoke already told us)
+
+<div class="mt-3 max-w-4xl space-y-3 text-xs">
+  <div class="grid grid-cols-2 gap-3">
+    <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+      <b class="text-accent">Per-tree cost (A100)</b>
+      <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+        <li>GPU: <b>~16–41 s/tree</b> (0.024–0.062 roots/s) — pin to one number with a clean steady-state smoke</li>
+        <li>CPU/blas: <b>~14 min/tree</b> (~20–50× slower; lc0 needs `libcublas` even for blas)</li>
+      </ul>
+    </div>
+    <div class="p-3 bg-red-50 border-l-2 border-red-400 rounded">
+      <b class="text-red-700">Why `human_trees_10k/` is empty</b>
+      <p class="mt-1 opacity-80">500 FENs × 1 h walls, but ≥16 s/tree needs <b>2–6 h/shard</b>. Shard-sizing bug, <b>not</b> a cost wall. Fix: <b>~20 fat shards on gpu-medium</b>, walls sized to FENs×s/tree.</p>
+    </div>
+  </div>
+
+  <table>
+  <thead><tr><th>Tier</th><th>Trees</th><th>GPU-h @25s</th><th>GPU-h @41s</th><th>Wall · 20 GPUs</th></tr></thead>
+  <tbody>
+  <tr><td>acceptable</td><td>10K</td><td>69</td><td>114</td><td>3.5 / 5.7 h</td></tr>
+  <tr><td><b>good</b></td><td><b>50K</b></td><td>347</td><td>568</td><td><b>17 / 28 h</b></td></tr>
+  <tr><td>ideal</td><td>100K</td><td>694</td><td>1,137</td><td>35 / 57 h</td></tr>
+  </tbody>
+  </table>
+
+  <div class="p-2 bg-green-50 border-l-2 border-green-500 rounded">
+    <b class="text-green-700">Verdict: feasible.</b> 50K < 1 day even pessimistically; 100K ≈ 1.5–2.4 days.
+    Contingencies: CPU overflow (≈1,500 trees/h under `short`), depth 96→64 (~⅓ faster), Stockfish swap (needs sign-off).
+  </div>
+</div>
+
+---
+
+# U1.3 — Refit fast: profile, don't scale
+
+<div class="mt-5 max-w-3xl space-y-3 text-sm">
+  <p class="font-semibold">Goal: an end-to-end loop that converges <i>good enough</i>, <i>quickly</i> — speed first.</p>
+  <div class="grid grid-cols-2 gap-3 text-xs">
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Fitting smoke</b>
+      <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+        <li>Tiny GNN (Config D): `d_embed=16`, 1 head, 1 layer</li>
+        <li>Representation 16–32, not 128</li>
+        <li>10–20 shards; plot loss curves live</li>
+      </ul>
+    </div>
+    <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+      <b class="text-secondary">Targets</b>
+      <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+        <li>GNN: converge in ≤ ~2 h GPU</li>
+        <li>MC: ≤ ~1 h, ≤ ~1000 steps (~1 epoch)</li>
+        <li>Beat A0b anchor (54.6%) → toward 90.1%</li>
+      </ul>
+    </div>
+  </div>
+  <div class="p-2 bg-amber-50 border-l-2 border-amber-400 rounded text-xs">If tiny GNN underfits, widen D→C→B. Do not scale to production until the loop is fast.</div>
+</div>
+
+---
+
+# U2 & U3 — the parallel threads
+
+<div class="mt-5 grid grid-cols-2 gap-4 max-w-4xl text-xs">
+  <div class="p-3 bg-amber-50 border-l-2 border-amber-400 rounded">
+    <b class="text-amber-700 uppercase tracking-wider">U2 — Lc0 gain in human data</b>
+    <ul class="mt-2 list-disc pl-4 space-y-1 opacity-90">
+      <li>Replace Stockfish gain with <b>Lc0</b> gain on the same FENs</li>
+      <li>Reuse the engine-eval harness → `lc0_evaluations`</li>
+      <li><b>Test:</b> Lc0 reproduces the sign of SF gain↔RT; Lc0~SF rank-agree</li>
+      <li><b>Fully independent</b> of U1/U3</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-neutral-soft border-l-2 border-secondary rounded">
+    <b class="text-secondary uppercase tracking-wider">U3 — Baseline suite</b>
+    <p class="mt-1 opacity-80">On the <b>existing</b> shards, vs OSS / Pr(halt) / regret:</p>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-90">
+      <li>MLP over tree stats · gain-depth-only</li>
+      <li>always-stop · never-stop</li>
+      <li>geometric · tree-size-sensitive</li>
+    </ul>
+    <p class="mt-1 opacity-60">Fully independent — different data, different output dir.</p>
+  </div>
+</div>
+
+---
+
+# Sprint map
+
+<div class="mt-4 max-w-3xl text-xs">
+
+```
+   U1.0 smoke ─► U1.1 generate ─► U1.2 OSS ↔ RT  (CRITICAL: the upper bound)
+    (DONE)        human FENs   └► U1.3 refit (smoke → fit)
+
+   U2 Lc0 gain   ──── independent, parallel ───►  (CPU/GPU)
+   U3 baselines  ──── independent, parallel ───►  (existing shards)
+```
+
+</div>
+
+<div class="mt-4 grid grid-cols-2 gap-4 max-w-3xl text-xs">
+  <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
+    <b class="text-accent">Decisions needed</b>
+    <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
+      <li>Tier: <b>50K recommended</b> (10K / 50K / 100K)</li>
+      <li>Depth 96 vs 64 for the first run</li>
+      <li>Schedule the Stockfish-swap profiling now, or on first wall?</li>
+      <li>Pin the per-tree number (16 vs 41 s) with one clean smoke</li>
+    </ul>
+  </div>
+  <div class="p-3 bg-green-50 border-l-2 border-green-500 rounded">
+    <b class="text-green-700">Bottom line</b>
+    <p class="mt-1 opacity-80">The reunification is feasible within the brief's "couple of days, max GPU QoS." The only true blocker was shard sizing — now understood. Full plan: <code>unify.md</code>.</p>
+  </div>
+</div>
+
+---
+
+<div class="h-full flex items-center justify-center text-center">
+  <div>
+    <div class="text-accent font-bold uppercase tracking-widest text-xs mb-2">Appendix</div>
+    <h1 class="text-4xl">Prior framing, results &amp; architecture</h1>
+    <div class="mt-4 text-sm opacity-60 max-w-xl mx-auto">
+      The earlier two-project framing, the human-behavior section, Analysis 0–4, and the
+      architecture diagrams that motivate the plan above.
+    </div>
   </div>
 </div>
 
@@ -399,7 +764,7 @@ math: katex
   <p class="font-semibold">Find the smallest architecture that trains end-to-end in hours. <b>Burning question: can we skip GNN pretraining entirely?</b></p>
 
   <div class="p-3 bg-accent-soft border-l-2 border-accent rounded text-xs mb-3">
-    <b>Motivation from A0b:</b> 4 raw tree-stat scalars → MLP vs GNN+MC sign accuracy. Correct A0b re-run is <b>⬜ todo</b> (2026-06-03 run invalid — wrong halt_rewards). GNN+MC packed baseline ≈ 90.1%.
+    <b>A0b result (2026-06-05, corrected labels):</b> 4 raw tree-stat scalars → MLP → sign acc <b>54.6%</b> val (≈ chance), exact stop <b>5.2%</b>, r(pred,oracle) = +0.29. GNN+MC packed baseline: <b>90.1%</b>. GNN encoder confirmed essential — scalar features have no discriminative power for halt/continue.
   </div>
 
   <div class="space-y-2">
@@ -550,7 +915,7 @@ math: katex
       <b class="text-accent text-xs uppercase tracking-wider">What we know so far</b>
       <ul class="mt-2 text-xs list-disc pl-4 space-y-1 opacity-80">
         <li>4/4 board features match direction between oracle and humans (A0a, corrected)</li>
-        <li>A0b minimal MLP vs GNN+MC — correct re-run ⬜ todo</li>
+        <li>A0b minimal MLP vs GNN+MC — val sign acc <b>54.6%</b> (≈ chance) vs GNN+MC 90.1%; GNN essential ✅</li>
         <li>Both oracle and humans over-compute in dominant positions</li>
       </ul>
     </div>
