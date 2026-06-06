@@ -112,13 +112,17 @@ Each part lists **goal · data · method · tests · contingencies · independen
 
 ### U1 — Reunify the datasets (URGENT, the critical path)
 
-The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ done → U1.1 🚀 launching.**
+The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 🚀 generating (faithful).**
 
 > **Live status.** U1.0 smoke complete ([R-U1](reports/u1-engine-timing-smoke.md)): Lc0-GPU
-> **16.87 s/tree**, Lc0-CPU **~738 s/tree**, CPU gate fixed. 50K FENs exported
-> (`human_fens_50k.txt`, seed 43). U1.1 launch staged in-repo (`human_trees_50k_{gpu,cpu}.yaml`
-> + `generate_dataset_shard_{gpu,cpu}_array.slurm`); **canary** running (GPU ✅ 10/10 trees; CPU
-> launched clean on a `no_gpu` node) with **auto-fire** of the full two-lane run on pass.
+> **16.87 s/tree**. 50K FENs exported (`human_fens_50k.txt`, seed 43). **CPU lane dropped**
+> (node-speed variance → fixed-wall timeout risk; GPU-only). A speedup investigation
+> ([R-U1-SPEED](reports/u1-tree-gen-speedup.md)) found **no faithful quick win** (lc0 is ~1 ms/eval
+> but the value engine is `valuehead`/compute-bound, so pooling was slower **and** non-identical →
+> reverted; route (a) batching can't yield the per-child WDL triple; route (b) net-reimpl is the
+> only real lever, logged for later). lc0/CUDA is deterministic. **U1.1 now generating** the
+> faithful 50K: job `9282935`, 50×1000-FEN shards, `gpu-short %20`, `resume:true`, backfilling
+> around an unrelated job. ~3 days at low GPU concurrency; faster if more GPUs free up.
 
 #### U1.0 — Timing smoke (first pass DONE; clean three-engine re-run is sprint action #1)
 
@@ -422,6 +426,49 @@ The lmcos OSS is **not** a flat budget = 96. From `preprocess_mc/oracle.py`, the
 | T-u13-shape | shapes/params/no-NaN/reproducibility | `test_minimal_model.py` |
 | T-u2 | Lc0 gain reproduces sign of SF gain↔RT; Lc0~SF rank Spearman>0 | U2 |
 | T-u3 | always-stop OSS=0; never-stop OSS=budget; ours < all six on regret | U3 |
+
+---
+
+## 9. Remaining work & spin-off analyses
+
+### 9a. Tree-gen speed findings (from the U1.1 investigation — [R-U1-SPEED](reports/u1-tree-gen-speedup.md))
+- lc0 itself is ~1 ms/eval; ~80% of tree-gen wall is the per-expansion **child value-eval loop**
+  (~27 children, `valuehead` mode).
+- **Pooling rejected:** valuehead is GPU-**compute-bound**, so concurrent engines serialize →
+  slower (172 vs 133 s/tree) *and* non-identical. Reverted.
+- **Route (a)** (lc0 batched search → per-child value): gives only scalar `V`, not the W/D/L triple
+  the GNN targets need. Ruled out.
+- **Route (b)** = extract the net (ONNX/PyTorch) + lc0's exact 112-plane encoding → batched WDL.
+  The only real lever (~10×). A separate, validation-heavy project; **the right home for any future
+  speedup**, and directly relevant to U2 (below).
+- lc0/CUDA is **deterministic** → byte-identity is the correct validation bar.
+
+### 9b. The U1.2 analysis menu (the upper-bound result is many cuts, not one number)
+1. **Decisive inequality (R-THEORY):** does DP-oracle OSS beat crude VOC proxies at predicting RT —
+   `r(OSS, logRT) > r(gain_depth, logRT)` — on matched FENs?
+2. **Over/under-computation map:** plot (OSS, logRT); characterize residuals (where humans
+   over-deliberate vs the normative optimum). A bounded-rationality figure.
+3. **Implicit budget:** sweep the starting-budget bucket; find β where OSS best tracks RT.
+4. **Branching puzzle:** branching is a large *orthogonal* RT driver (≈0 for OSS in A0a) — humans
+   pay a structural-complexity cost the oracle doesn't. Dedicated analysis.
+5. **Subgroup cuts:** by ply arc, Elo tranche, clock pressure.
+6. **Engine-strength ladder (A3 + U2):** Lc0 vs SF-2000 vs SF — does a human-strength engine align
+   better? Conditional on U1.2.
+
+### 9c. Cross-thread & infra spin-offs
+- **U1.3 Tier C:** does the *learned* controller (not just the DP oracle) predict RT?
+- **U3 × human:** do any cheap "semi-smart" rules predict RT as well as the oracle? (weakens/strengthens
+  the normative story).
+- **Route (b) net-eval harness** (see 9a): unlocks 100K, fast model iteration, and a batched **U2**.
+- **Reproducibility:** lc0/CUDA determinism confirmed; fix backend for anything published.
+
+### 9d. U2 batching (open question — being scoped)
+U2 (Lc0 gain on human FENs) is a **flat list of independent position evals**, so unlike tree-gen's
+sequential MCTS it is *naturally* batchable — big GPU win available. **But** the same lc0-UCI limit
+applies (one position per `go`), so true batching again needs route (b) (the net directly). Key
+relief vs tree-gen: U2 is a **behavioral correlate, not a format-locked GNN target**, so it needs a
+faithful *value/gain*, not a byte-identical WDL triple — a lower bar that may make route (b)
+tractable here first. Options under evaluation in the U2 work below.
 
 ---
 
