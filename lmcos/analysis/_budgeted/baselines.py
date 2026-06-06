@@ -27,6 +27,25 @@ _BASELINE_SWEEP_SIZE_QUANTILES = [0.1, 0.25, 0.5, 0.75, 0.9]
 # larger anchors (7, 10, 15, 20) so the OR combinations still cover the
 # slack-budget regime.
 _BASELINE_SWEEP_TIME_THRESHOLDS = [1, 2, 3, 4, 5, 7, 10, 15, 20]
+# Marginal-gain thresholds for the gain-depth-only sweep. The "gain" of the
+# i-th expansion is the change in the haltable reward, halt_rewards[i] -
+# halt_rewards[i-1] — a myopic value-of-computation signal. Halting when that
+# gain falls to/below the threshold is the dynamic stop rule that uses gain
+# alone (Russek-style VOC), independent of tree size or remaining budget.
+_BASELINE_SWEEP_GAIN_THRESHOLDS = [0.0, 0.001, 0.005, 0.01, 0.02, 0.05]
+
+
+def _gain_depth_stop_step(episode: dict[str, Any], threshold: float) -> int:
+    """First step (>=1) whose marginal halt-reward gain is <= threshold, else the last step."""
+    halt_rewards = episode["halt_rewards"]
+    return next(
+        (
+            idx
+            for idx in range(1, len(halt_rewards))
+            if (halt_rewards[idx] - halt_rewards[idx - 1]) <= threshold
+        ),
+        len(halt_rewards) - 1,
+    )
 
 
 def _evaluate_baseline(
@@ -101,6 +120,14 @@ def _baseline_sweep(diagnostics: list[dict[str, Any]], oracle_config: BudgetedOr
                 (idx for idx, time_budget in enumerate(episode["time_budgets"]) if int(time_budget) <= threshold),
                 len(episode["halt_rewards"]) - 1,
             ),
+        )
+    # Gain-depth-only: halt as soon as the marginal value of one more expansion
+    # decays to/below threshold. Uses the halt-reward trajectory alone.
+    for threshold in _BASELINE_SWEEP_GAIN_THRESHOLDS:
+        baselines[f"halt_when_gain_le_{threshold}"] = _evaluate_baseline(
+            diagnostics,
+            oracle_config,
+            lambda episode, threshold=threshold: _gain_depth_stop_step(episode, threshold),
         )
     # Halt as soon as tree size grows past threshold.
     for threshold in size_thresholds:

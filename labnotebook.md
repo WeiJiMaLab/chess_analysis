@@ -21,6 +21,19 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## 2026-06-05 (execution) {#2026-06-05-exec}
+
+Sprint action #1 — three-engine timing smoke — run; CPU lane unblocked; U3 baseline tests added.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **U1.0 smoke** — Lc0-GPU / Lc0-CPU / Stockfish on 100 warm human FENs (budget 96) | Pin per-tree cost; decide engine before 50K | ✅ Lc0-GPU **16.87 s/tree** (A100, steady); Lc0-CPU **~738 s/tree** (4-core, pure-CPU node); SF 0.45–11.65 s/pos (d12–20), 0.026 s @100k nodes | [(R-U1)](reports/u1-engine-timing-smoke.md) |
+| **CPU-lane gate** — lc0-blas on a pure-CPU node | The 50K plan is CPU-led | ⚠️→✅ **Blocked then FIXED:** CUDA-linked lc0 needs `libcublas.so.12`; absent on CPU nodes → crash. Fix: `LD_LIBRARY_PATH` → venv `nvidia/*/lib` (no rebuild). Lane viable. | [(R-U1)](reports/u1-engine-timing-smoke.md) |
+| **Feasibility** — 50K both lanes | Confirm timing | ✅ Combined ≈ 2,350 trees/hr → **50K in ~21 h**. Decision: run Lc0 50K, CPU-led + 3 GPUs. | [unify.md §7](unify.md) |
+| **U3 baselines** — gain-depth-only rule + `test_budgeted_baselines.py` | Build the independent comparison thread while data generates | ✅ 12 data-independent tests pass; geometric baseline **dropped** (silly); semi-smart variants brainstormed | [unify.md §U3](unify.md) |
+
+---
+
 ## 2026-06-05 (planning) {#2026-06-05-plan}
 
 Drafted the sprint North Star — **The Great Reunification** — and restructured the deck.

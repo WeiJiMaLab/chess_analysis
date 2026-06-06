@@ -237,17 +237,32 @@ The spine of the sprint. Four steps; U1.0 is essentially done.
   **now**, on the **existing ysagiv shards**, and be migrated elsewhere later.
 - **Data in:** existing packed controller shards
   (`/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/controller_packed_*`).
-- **Baselines to implement (eval-only, no training where possible):**
-  1. GNN → **MLP over tree statistics** (the A2 `tree_stats_baseline.py` line)
-  2. **Gain-depth-only** dynamic stopping
-  3. **Always stop**
-  4. **Never stop**
-  5. **Geometric-probability** stopping
-  6. **Tree-size-sensitive** stopping
+- **Baselines (status — `analysis/_budgeted/baselines.py`, `stop_rule → int` harness):**
+  1. GNN → **MLP over tree statistics** — ⬜ separate (`tree_stats_baseline.py` line)
+  2. **Gain-depth-only** dynamic stopping — ✅ **done** (`_gain_depth_stop_step`, ε sweep;
+     halt when marginal halt-reward gain `halt_rewards[i] − halt_rewards[i-1] ≤ ε`)
+  3. **Always stop** — ✅ `always_halt_0`
+  4. **Never stop** — ✅ `always_continue_to_end`
+  5. ~~Geometric-probability stopping~~ — **dropped** (hl4291, 2026-06-05): a constant-hazard rule
+     is a distribution over stop steps, doesn't fit the `stop_rule → int` harness, and isn't
+     critical. See the "semi-smart rules" brainstorm below for cheaper, more meaningful variants.
+  6. **Tree-size-sensitive** stopping — ✅ `halt_when_N_ge_*` (also `halt_when_T_le_*` + OR combos)
+- **Brainstorm — other "semi-smart" cheap stopping rules** (candidates to fit cheaply; pick a
+  shortlist with hl4291): **(i)** *argmax-stability* — halt once the root best move has been stable
+  for `k` consecutive expansions (cheap; closely related to `converged_expansions`); **(ii)**
+  *visit-share/PUCT-margin* — halt when the top child's visit fraction (or visit gap to 2nd) exceeds
+  a threshold; **(iii)** *value-plateau* — halt when a moving average of `halt_rewards` flattens
+  (smoother cousin of gain-depth, robust to single-step noise); **(iv)** *entropy threshold* — halt
+  when the root visit-distribution entropy drops below θ (ties to the A4 entropy-VoI line);
+  **(v)** *fixed-fraction-of-budget* — halt at `⌈ρ·β⌉` for ρ∈(0,1) (a non-trivial constant anchor).
+  (i)–(iii) and (v) fit the existing `stop_rule → int` harness directly.
+- **Tests (done):** `tests/test_budgeted_baselines.py` — 12 data-independent tests on synthetic
+  episodes: always-halt→step 0, never-stop→last step, threshold rules fire at first satisfying
+  step, out-of-range clamp, gain-depth decay, and **every baseline has non-negative regret vs the
+  DP oracle** (oracle return is optimal by construction). Still open: our controller beats all
+  baselines on regret-vs-DP (needs the trained model + real episodes).
 - **Metrics:** OSS, `Pr(halt)` curves, regret vs DP, calibration — reuse `analysis/_budgeted/*`
   (`baselines.py`, `calibration.py`, `regret.py`, `report.py`).
-- **Tests:** sanity bounds (always-stop OSS=0; never-stop OSS=budget); every baseline ≤ DP-oracle
-  on its own objective; our controller beats all six on regret-vs-DP.
 - **Contingencies:** if baselines rival the GNN, that reshapes the model story (and feeds back
   into U1.3's "is the GNN necessary?" question from A0b).
 - **Independence:** **fully independent** of U1/U2 — different data, different output dir.
@@ -341,8 +356,11 @@ loss curves as it runs; do **not** scale to production until the end-to-end loop
 
 ## 7. Decisions (resolved 2026-06-05 by hl4291)
 
-1. **Tier = 50K ("good").** Pipeline parameterized to extend to 100K. **Feasible in ~1.1–1.4 days
-   only via the CPU lane** — with ~3 GPUs, GPU-only 50K would take ~5–8 days (§5). CPU-led.
+1. **Tier = 50K ("good"), Lc0, both lanes — proceed (hl4291: "do the 1-day run without
+   hesitation").** Pinned by the R-U1 smoke: Lc0-GPU **16.87 s/tree**, Lc0-CPU **~738 s/tree**
+   (CPU gate cleared via venv `LD_LIBRARY_PATH`). Run **CPU-led + all 3 GPUs in parallel** (3 GPUs
+   are scarce but far faster, so use them): combined ≈ **2,350 trees/hr → 50K in ~21 h**.
+   Extensible to 100K (~1.8 d). See [R-U1](reports/u1-engine-timing-smoke.md).
 2. **Engine-swap profiling: schedule now, in parallel, folded into the per-tree smoke (5).**
    The smoke profiles **three engines × node-type: Lc0-GPU, Lc0-CPU (pure-CPU node), Stockfish
    (CPU)** — doubling as the engine-stack cost/benefit profiling the brief requires before any
