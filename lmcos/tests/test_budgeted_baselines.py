@@ -25,7 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis._budgeted.baselines import (
     _baseline_sweep,
     _evaluate_baseline,
+    _fixed_fraction_stop_step,
     _gain_depth_stop_step,
+    _value_plateau_stop_step,
 )
 from src.data.preprocess_mc.oracle import (
     BudgetedOracleConfig,
@@ -160,6 +162,38 @@ def test_gain_depth_rule_falls_through_to_last_step_when_gains_stay_high():
 def test_gain_depth_baseline_is_present_in_sweep(episodes):
     result = _baseline_sweep(episodes, _CONFIG)
     assert any(name.startswith("halt_when_gain_le_") for name in result["all_baselines"])
+
+
+def test_value_plateau_fires_on_windowed_flattening():
+    """Halts at the first step whose improvement over the window is <= threshold."""
+    # window=2 improvements: i2: 0.5-0.0=0.5, i3: 0.5-0.5=0.0
+    episode = {"halt_rewards": [0.0, 0.5, 0.5, 0.5, 0.5]}
+    assert _value_plateau_stop_step(episode, threshold=0.1, window=2) == 3
+    # threshold high enough that even the first window improvement qualifies
+    assert _value_plateau_stop_step(episode, threshold=0.6, window=2) == 2
+
+
+def test_value_plateau_is_noise_robust_vs_gain_depth():
+    """A single-step dip trips gain-depth early but not the windowed plateau."""
+    # gains: [_, +0.5, -0.01, +0.11, 0.0] -> gain-depth(<=0) stops at the i=2 dip
+    episode = {"halt_rewards": [0.0, 0.5, 0.49, 0.60, 0.60]}
+    assert _gain_depth_stop_step(episode, threshold=0.0) == 2
+    # window-2 improvements stay positive until the real flattening at the end
+    assert _value_plateau_stop_step(episode, threshold=0.0, window=2) == 4
+
+
+def test_fixed_fraction_stop_step_uses_starting_budget():
+    """Stops at round(rho * starting_budget); starting budget = time_budgets[0]."""
+    episode = {"halt_rewards": [0.0] * 12, "time_budgets": list(range(10, -2, -1))}  # starts at 10
+    assert _fixed_fraction_stop_step(episode, 0.5) == 5
+    assert _fixed_fraction_stop_step(episode, 0.25) == 2   # round(2.5) -> 2 (banker's rounding)
+    assert _fixed_fraction_stop_step(episode, 0.1) == 1
+
+
+def test_sweep_includes_plateau_and_fraction_baselines(episodes):
+    names = _baseline_sweep(episodes, _CONFIG)["all_baselines"]
+    assert any(n.startswith("value_plateau_w") for n in names)
+    assert any(n.startswith("halt_at_frac_") for n in names)
 
 
 def test_sweep_exposes_anchor_baselines_and_best_picks(episodes):
