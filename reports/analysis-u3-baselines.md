@@ -47,6 +47,29 @@ Findings:
   (many positions need no search) — yet its blanket regret is 20× the controller's.
 - Full report + 15 diagnostic plots: `/scratch/gpfs/GRIFFITHS/hl4291/tmp/u3_baselines/`.
 
+## Is regret the right metric? Budget vs value in the oracle's stop
+
+Prompted by fixed-fraction-of-budget being the best hand-written rule, we decomposed the oracle's
+stop decision on the same 30,630 episodes (recovered cost config: `time_lambda=18.537`, maint off).
+Figures: `human_analytics/figures/u3_baselines/{controller_vs_baselines,oracle_stop_cost_bimodal}.png`.
+
+1. **Stops are bimodal, not uniformly budget-dominated.** At the oracle's stop step, the per-step
+   cost is **<0.01 in ~49%** of episodes (value-driven — median *gross value of continuing = 0.000*,
+   nothing left to gain) but **>0.1 in ~28%** (cost-forced — budget so depleted the convex time cost
+   swamps any value). So budget has outsized sway on a sizable minority; the core is value-driven.
+2. **The oracle stops early.** Median stop = **3.8% of the starting budget** (IQR 0.9–14%);
+   `corr(stop, budget)=+0.41`. The answer is almost always "stop soon," so a small fixed fraction
+   (ρ=0.1–0.25) approximates it *without value info* — which is why a position-blind rule competes.
+3. **Regret is a weak discriminator among *good* rules.** The per-episode return spread is large
+   (~1.4–1.75 → never-stop regret +1.37), but good rules cluster (controller +0.026, fixed-fraction
+   +0.069, gain-depth +0.148 — a few % of the range). **Exact-stop separates them far better**
+   (controller 0.63 vs fixed-fraction 0.19 vs gain-depth 0.10).
+
+**Takeaways.** (a) `time_lambda` (cost weight) and the budget distribution are **levers**: ~28% of
+stops are budget-forced, masking the value signal — lowering the cost weight / using longer budgets
+would sharpen value-driven stopping and *reduce* fixed-fraction's edge. (b) **Report exact-stop (or
+a value-normalized regret) alongside regret** — regret alone undersells the value-based controller.
+
 ## Procedure
 
 | Step | Status |

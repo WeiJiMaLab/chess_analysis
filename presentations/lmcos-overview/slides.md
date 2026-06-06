@@ -343,6 +343,30 @@ math: katex
 
 ---
 
+# U3 — controller vs stopping baselines
+
+<div class="text-xs opacity-70 mb-1">30,630 episodes of the budgeted controller; regret vs the DP oracle (left) and exact-stop accuracy (right). Parallel thread — ran on existing trees, no GPU.</div>
+<div class="flex justify-center">
+  <img class="w-full object-contain max-h-[64vh]" src="/figures/u3_baselines/controller_vs_baselines.png" />
+</div>
+<div class="mt-1 text-xs opacity-80">
+  Controller dominates (regret <b>+0.026</b>, ~2.6× the best baseline; exact-stop <b>63%</b>). <b>Fixed-fraction-of-budget</b> is the best <i>hand-written</i> rule — beating value-based rules. <b>Regret undersells the controller</b>: its edge is small on regret but large on exact-stop.
+</div>
+
+---
+
+# U3 — why a budget-only rule competes
+
+<div class="text-xs opacity-70 mb-1">Per-step cost the oracle is paying at its stop step (recovered cost config, <code>time_lambda=18.5</code>).</div>
+<div class="flex justify-center">
+  <img class="w-full object-contain max-h-[60vh]" src="/figures/u3_baselines/oracle_stop_cost_bimodal.png" />
+</div>
+<div class="mt-1 text-xs opacity-80">
+  Oracle stops are <b>bimodal</b>: a <b>value-driven core</b> (~49%, cost≈0, no value left to gain) plus a <b>cost-forced tail</b> (~28%, budget so depleted the convex time cost forces the stop). So <b>budget is over-weighted enough to make a position-blind rule competitive</b> — and regret, dominated by the easy cases, is a weak discriminator. <span class="opacity-60">Lever: lower <code>time_lambda</code> / longer budgets → value-driven stopping sharpens.</span>
+</div>
+
+---
+
 # Sprint map
 
 <div class="mt-4 max-w-3xl text-xs">
