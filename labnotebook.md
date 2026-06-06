@@ -21,6 +21,29 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## ⚙️ Running state (as of 2026-06-06, end of day) {#running-state}
+
+> **A background process is generating the U1.1 50K trees — know it's there.**
+
+- **50K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k/` (files keyed by global FEN
+  index; `resume:true`, so safe to interrupt/restart).
+- **The cycler** (`/scratch/gpfs/GRIFFITHS/hl4291/tmp/u1_50k_cycler.sh`, log `…/u1_50k_cycler.log`)
+  is a `nohup` login-node loop that keeps ~15 short `gpu-short` shards (`SHARD_SIZE=150`, 1 h wall,
+  job-name `gen50k-gpu`) in flight, advancing a cursor through `[150,50000)`. **Why:** a per-user
+  submit cap (~140–160 jobs, mostly consumed by the unrelated `prod_full` CPU array) blocks
+  submitting all shards at once; the cycler stays within the headroom and **auto-accelerates when
+  `prod_full` finishes**. It exits itself once all batches are submitted.
+- **To stop it:** `pkill -f u1_50k_cycler.sh` then `scancel -n gen50k-gpu` (cancels only my shards;
+  never touches `prod_full`). **To resume later:** re-run the cycler script (resume skips done trees).
+- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k | wc -l`  (of 50000).
+- **Key inputs:** FENs `…/tmp/human_fens_50k.txt` (+ `_manifest.parquet`, seed 43); base config
+  `lmcos/slurm/configs/1_preprocess_data/human_trees_50k_gpu.yaml`; array script
+  `lmcos/slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
+- **Next once trees land:** U1.2 OSS↔RT join (`analysis/human_oracle_comparison.py`, subset-tolerant);
+  then U1.3 refit; re-run [R-U3](reports/analysis-u3-baselines.md) on the new controller.
+
+---
+
 ## 2026-06-05 (execution) {#2026-06-05-exec}
 
 Sprint action #1 — three-engine timing smoke — run; CPU lane unblocked; U3 baseline tests added.
