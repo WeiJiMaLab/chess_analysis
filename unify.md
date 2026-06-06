@@ -462,13 +462,20 @@ The lmcos OSS is **not** a flat budget = 96. From `preprocess_mc/oracle.py`, the
 - **Route (b) net-eval harness** (see 9a): unlocks 100K, fast model iteration, and a batched **U2**.
 - **Reproducibility:** lc0/CUDA determinism confirmed; fix backend for anything published.
 
-### 9d. U2 batching (open question — being scoped)
-U2 (Lc0 gain on human FENs) is a **flat list of independent position evals**, so unlike tree-gen's
-sequential MCTS it is *naturally* batchable — big GPU win available. **But** the same lc0-UCI limit
-applies (one position per `go`), so true batching again needs route (b) (the net directly). Key
-relief vs tree-gen: U2 is a **behavioral correlate, not a format-locked GNN target**, so it needs a
-faithful *value/gain*, not a byte-identical WDL triple — a lower bar that may make route (b)
-tractable here first. Options under evaluation in the U2 work below.
+### 9d. U2 with lc0 — **Option A validated, fast** (route-b NOT needed)
+U2 (Lc0 gain on human FENs) reuses the existing engine-agnostic worker
+(`build_pos_with_engine_eval.py --engine lc0`, now node-budget-aware via `--nodes-deep`/
+`--nodes-shallow`, default **96/1**). The feared "heavy GPU" and "WDL problem" both evaporated:
+- **Fast:** the deep search is lc0's *native* `go nodes 96` (internally batched, ~0.1 s) — **not**
+  the slow explicit-Python MCTS of tree-gen. Smoke: **~20 pos/s on one GPU** → 1M positions ≈ 14
+  GPU-h single-thread, minutes when sharded.
+- **WDL is a non-issue:** U2 needs only a few specific moves' WDL (best, 2nd, taken, `a_shallow`),
+  each explicitly searched (`multipv=2` + `root_moves` fallbacks) → all present.
+- **`nodes_shallow=1` = root-only / pure-policy `a_shallow`** (lc0's zero-search "intuition" move);
+  validated to produce well-signed VOC/toptwo/mq.
+- **Conclusion:** run **Option A** (search-based, coarse-sharded across a few GPU jobs). The
+  batched route-(b) net-eval harness remains worthwhile for tree-gen/U1.3 scale-up, but **U2 does
+  not need it**.
 
 ---
 

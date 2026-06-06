@@ -73,13 +73,24 @@ _worker_engine: chess.engine.SimpleEngine | None = None
 _worker_engine_type: str = "stockfish"
 _worker_depth_deep: int = 5
 _worker_depth_shallow: int = 1
+_worker_nodes_deep: int | None = None
+_worker_nodes_shallow: int | None = None
 
 
-def _init_worker(engine_type: str, depth_deep: int, depth_shallow: int) -> None:
+def _init_worker(
+    engine_type: str,
+    depth_deep: int,
+    depth_shallow: int,
+    nodes_deep: int | None,
+    nodes_shallow: int | None,
+) -> None:
     global _worker_engine, _worker_engine_type, _worker_depth_deep, _worker_depth_shallow
+    global _worker_nodes_deep, _worker_nodes_shallow
     _worker_engine_type = engine_type
     _worker_depth_deep = depth_deep
     _worker_depth_shallow = depth_shallow
+    _worker_nodes_deep = nodes_deep
+    _worker_nodes_shallow = nodes_shallow
     if engine_type == "stockfish":
         engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_SF14_PATH, cwd=STOCKFISH_SF14_DIR)
         engine.configure({"Threads": 1, "Hash": 32})
@@ -90,6 +101,7 @@ def _init_worker(engine_type: str, depth_deep: int, depth_shallow: int) -> None:
 
 def _eval_row(row: dict) -> dict:
     global _worker_engine, _worker_engine_type, _worker_depth_deep, _worker_depth_shallow
+    global _worker_nodes_deep, _worker_nodes_shallow
     out = {k: row[k] for k in (
         "fen", "gid", "move_ply", "move_uci",
         "player_clock_time", "opponent_clock_time", "move_time", "n_possible_moves",
@@ -107,6 +119,8 @@ def _eval_row(row: dict) -> dict:
             board, move, _worker_engine,
             depth_deep=_worker_depth_deep,
             depth_shallow=_worker_depth_shallow,
+            nodes_deep=_worker_nodes_deep,
+            nodes_shallow=_worker_nodes_shallow,
         )
         out["e_win_best"] = result.e_win_best
         out["e_win_second_best"] = result.e_win_second_best
@@ -173,20 +187,27 @@ def run_eval(
     engine_type: str,
     depth_deep: int,
     depth_shallow: int,
+    nodes_deep: int | None,
+    nodes_shallow: int | None,
     n_workers: int,
     output_path: str,
 ) -> None:
     t0 = time.perf_counter()
     chunksize = max(1, len(rows) // (n_workers * 4))
+    limit_desc = (
+        f"nodes={nodes_deep}/{nodes_shallow if nodes_shallow is not None else 1}"
+        if nodes_deep is not None
+        else f"depth={depth_deep}/{depth_shallow}"
+    )
     with mp.Pool(
         processes=n_workers,
         initializer=_init_worker,
-        initargs=(engine_type, depth_deep, depth_shallow),
+        initargs=(engine_type, depth_deep, depth_shallow, nodes_deep, nodes_shallow),
     ) as pool:
         results = list(tqdm(
             pool.imap(_eval_row, rows, chunksize=chunksize),
             total=len(rows),
-            desc=f"{engine_type} depth={depth_deep}/{depth_shallow} n_workers={n_workers}",
+            desc=f"{engine_type} {limit_desc} n_workers={n_workers}",
         ))
     elapsed = time.perf_counter() - t0
     n = len(results)
@@ -240,6 +261,12 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("--engine", choices=["stockfish", "lc0"], default="stockfish")
     ev.add_argument("--depth-deep", type=int, default=5)
     ev.add_argument("--depth-shallow", type=int, default=1)
+    ev.add_argument("--nodes-deep", type=int, default=None,
+                    help="Use MCTS node-budget limits instead of depth for the DEEP search "
+                         "(lc0). Defaults to 96 when --engine lc0, matching the tree-gen budget.")
+    ev.add_argument("--nodes-shallow", type=int, default=None,
+                    help="Node budget for the SHALLOW search. Default 1 = root-only / pure-policy "
+                         "a_shallow (lc0's zero-search 'intuition' move).")
     ev.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR)
     # Smoke test
     ev.add_argument("--n-total", type=int, default=None,
@@ -264,22 +291,33 @@ def main(argv: list[str] | None = None) -> None:
         if args.shard_id is not None and args.n_total is not None:
             raise SystemExit("--shard-id and --n-total are mutually exclusive")
 
+        # lc0 searches are node-budgeted, not depth-budgeted: default to the
+        # tree-gen deep budget (96) and a root-only/pure-policy shallow (1)
+        # unless the caller overrides. Stockfish keeps its depth limits.
+        nodes_deep, nodes_shallow = args.nodes_deep, args.nodes_shallow
+        if args.engine == "lc0" and nodes_deep is None:
+            nodes_deep, nodes_shallow = 96, 1
+        limit_desc = (
+            f"nodes={nodes_deep}/{nodes_shallow if nodes_shallow is not None else 1}"
+            if nodes_deep is not None
+            else f"depth={args.depth_deep}/{args.depth_shallow}"
+        )
+
         if args.shard_id is not None:
-            print(f"Shard {args.shard_id}/{args.total_shards}  engine={args.engine}  "
-                  f"depth={args.depth_deep}/{args.depth_shallow}")
+            print(f"Shard {args.shard_id}/{args.total_shards}  engine={args.engine}  {limit_desc}")
             rows = _load_shard(args.db, args.shard_id, args.total_shards)
             out = os.path.join(args.output_dir, f"shard_{args.shard_id:04d}.parquet")
             n_workers = 1
         else:
             n = args.n_total or 10_000
-            print(f"Smoke test: {n:,} positions  engine={args.engine}  "
-                  f"depth={args.depth_deep}/{args.depth_shallow}  workers={args.n_workers}")
+            print(f"Smoke test: {n:,} positions  engine={args.engine}  {limit_desc}  workers={args.n_workers}")
             rows = _sample(args.db, n=n, seed=args.seed)
             print(f"  Sampled {len(rows):,} positions")
             out = os.path.join(args.output_dir, "smoke_test.parquet")
             n_workers = args.n_workers
 
-        run_eval(rows, args.engine, args.depth_deep, args.depth_shallow, n_workers, out)
+        run_eval(rows, args.engine, args.depth_deep, args.depth_shallow,
+                 nodes_deep, nodes_shallow, n_workers, out)
 
     elif args.cmd == "merge":
         run_merge(args.db, args.input_dir)

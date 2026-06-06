@@ -35,6 +35,7 @@ Sprint action #1 — three-engine timing smoke — run; CPU lane unblocked; U3 b
 | **CPU lane dropped** — node-speed variance (738→1338 s/tree on a slow node) risks fixed-wall timeouts | Safer to stay GPU-only | ⚠️ Pivot to **GPU-only**; CPU revisited later | [unify.md §U1.1](unify.md) |
 | **Tree-gen speedup investigation** — profile + 3 routes + pooling impl/validation | Cut ~16.87 s/tree before 50K spend | ❌ **No faithful quick win.** lc0 ~1 ms/eval; 80% = `valuehead` child-eval loop (compute-bound). Pooling **slower** (172 vs 133 s/tree) **and** non-identical → reverted. Route (a) batched search gives only scalar V (not the WDL triple). Route (b) net-reimpl = only real lever (logged). lc0/CUDA **deterministic**. | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
 | **U1.1 fire** — faithful 50K, GPU-only | Generate the reunified trees | 🚀 Job `9282935`, 50×1000-FEN shards, `gpu-short %20`, `resume:true`; coexists with an unrelated `prod_full` job (untouched). ~3 d at low concurrency, faster if GPUs free. | [(R-U1)](reports/u1-engine-timing-smoke.md) |
+| **U2 wiring + lc0 smoke** — `--nodes-deep/--nodes-shallow` for lc0 node-budget VOC | Replace Stockfish with lc0 (study standard) | ✅ Wired (lc0 default **96/1**; SF depth path unchanged). Smoke 30 pos: **~20 pos/s/GPU**, all VOC/toptwo/mq non-null + correct signs; **`nodes_shallow=1` works** (a_shallow = policy move). lc0's *native* `go nodes 96` makes U2 fast → **Option A** (search, coarse-shard); route-b not needed for U2. | [unify.md §9d](unify.md) |
 
 ---
 
