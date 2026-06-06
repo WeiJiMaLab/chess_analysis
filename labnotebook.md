@@ -31,6 +31,7 @@ Drafted the sprint North Star — **The Great Reunification** — and restructur
 | **Timing smoke** — 20-FEN tree-gen benchmark (budget 96), A100 | Pin per-tree cost before 10K/50K/100K spend | ✅ GPU **~16–41 s/tree** (0.024–0.062 roots/s); CPU/blas **~14 min/tree**. 50K < 1 day; 100K ≈ 1.5–2.4 days. **Feasible.** | [unify.md §5](unify.md) |
 | **Slides** — prepend reunification deck; move prior framing + A0–A4 + architecture to appendix | Lead with the reunification narrative | ✅ 14 new slides; appendix preserved | [slides.md](presentations/lmcos-overview/slides.md) |
 | **Decisions locked** (hl4291) | Resolve the 5 sprint questions | ✅ Tier **50K**; engine-swap profiling folded into a **3-engine smoke** (Stockfish / Lc0-CPU / Lc0-GPU) = sprint action #1; **depth 96 kept** (reduce epochs before depth); OSS budget = canonical `BudgetedOracleConfig()` (5 buckets 1–120, 2/bucket, **maintenance off**, λ=18.537/p=2.8, trees→96). | [unify.md §7](unify.md) |
+| **Resource reality** (hl4291) | Correct GPU concurrency | ⚠️ Effective **~3 GPUs** (not the QOS 20 cap), but **CPU-rich** (~1,400 cores/`short`). Strategy flips to **CPU-led tree-gen**: 50K ≈ **1.1–1.4 d** combined; GPU-only would be ~5–8 d. **Gate:** lc0-blas must launch on a pure-CPU node (`libcublas` dynamic-load) — smoke confirms; else build a Stockfish provider. | [unify.md §5](unify.md) |
 
 ---
 

@@ -128,13 +128,20 @@ The spine of the sprint. Four steps; U1.0 is essentially done.
 - **Clean re-run (sprint action #1 — decisions 2+5 combined):** a **three-engine** steady-state
   smoke on **≥100 warm FENs** (exclude warmup), profiling per-tree cost for:
   1. **Lc0-GPU** (production path) — pins the 16-vs-41 s number for the §5 tier math.
-  2. **Lc0-CPU** (blas) — quantifies the CPU-overflow lane.
-  3. **Stockfish (CPU)** — doubles as the **engine-swap cost/benefit profiling** the brief
-     requires before any all-SF migration (decision 2). SF is CPU-only, so it does not contend
-     with Lc0-GPU and can run concurrently.
-- **Deliverable:** a one-table report (`R-U1`) of s/tree × engine, plus the §5 tier estimates
-  recomputed from the pinned Lc0-GPU number, plus a go/no-go on whether SF is competitive enough
-  to be worth the migration discussion.
+  2. **Lc0-CPU (blas) on a *pure-CPU node*** — the now-**primary** lane (§5). Must confirm two
+     things: (a) the CUDA-linked lc0 binary **launches without a GPU** (`libcublas` satisfiable via
+     `LD_LIBRARY_PATH` to a cudatoolkit lib dir, dynamic-load only); (b) it holds ~833 s/tree.
+     If (a) fails, the CPU lane is blocked and the Stockfish-provider fallback is on.
+  3. **Stockfish (CPU), standalone throughput reference** — doubles as the **engine-swap
+     cost/benefit profiling** the brief requires before any all-SF migration (decision 2). SF is
+     CPU-only (no GPU contention) and, given the 3-GPU reality, is the natural primary engine *if*
+     it is much faster than lc0-CPU. **Caveat:** `cts.data.build_tree` is **Lc0-only today** (sole
+     provider `core/providers/lc0.py`); SF *inside the lmcos pipeline* needs a new provider (a
+     build task, post-green-flag). This arm measures the standalone SF eval rate to decide whether
+     that build is worth it.
+- **Deliverable:** a one-table report (`R-U1`) of s/tree × engine × node-type, the §5 tiers
+  recomputed from the pinned Lc0-GPU and confirmed Lc0-CPU numbers, and a go/no-go on (i) the
+  CPU-led 50K plan and (ii) whether to build a Stockfish provider.
 - **Verdict vs the brief's "a few minutes" smoke target:** a 20-FEN job is ~5–14 min (fine); the
   binding signal is per-tree cost. A 100-FEN Lc0-GPU smoke ≈ 27–68 min — acceptable for a
   one-time pin.
@@ -264,29 +271,45 @@ The spine of the sprint. Four steps; U1.0 is essentially done.
 
 ## 5. Feasibility and timing
 
-**Per-tree cost (A100):** ~16–41 s GPU (pin to one number, §U1.0), ~14 min CPU/blas.
-Throughput (use a conservative 41 s and a central 25 s):
+**Resource reality (corrected 2026-06-05):** the gpu QOS *caps* read 20–44 GPUs, but hl4291's
+**effective concurrency is ~3 GPUs** (matches the A1 "3 running, 17 queued" experience; the
+binding limit is the `griffith` group allocation / contention, not the QOS ceiling). **CPU is
+abundant:** `short` QOS = **1400 cores / 400 jobs**; `medium` = 400 cores; the `cpu` partition has
+15-day walls. **Strategy flips: CPU is the primary tree-gen lane; the 3 GPUs are supplementary.**
 
-| Tier | Trees | GPU-hours @25 s (central) | GPU-hours @41 s (cons.) | Wall on 20 GPUs (gpu-medium) |
+**Per-tree cost (A100 / CPU):** Lc0-GPU **~16–41 s/tree** (pin via §U1.0); Lc0-CPU/blas
+**~833 s/tree on 4 cores** (~14 min). Throughput:
+
+| Lane | Concurrency | Trees/hr |
+|---|---|---|
+| Lc0-GPU | **3** GPUs (realistic) | 264 (@41 s) – 432 (@25 s) |
+| Lc0-GPU | 20 GPUs (QOS ceiling, if queue empty) | 1,760 – 2,880 |
+| **Lc0-CPU** | **350** × 4-core jobs (`short`) | **~1,512** |
+| **GPU(3) + CPU** | combined | **~1,780 – 1,944** |
+
+| Tier | Trees | Wall · 3 GPUs only | Wall · CPU only (~1,512/hr) | Wall · **GPU(3)+CPU** |
 |---|---|---|---|---|
-| acceptable | 10K | 69 | 114 | 3.5 h / 5.7 h |
-| good | 50K | 347 | 568 | **17 h / 28 h** |
-| ideal | 100K | 694 | 1,137 | **35 h / 57 h** |
+| acceptable | 10K | 23–38 h | 6.6 h | **~5–6 h** |
+| **good** | **50K** | 116–189 h (4.8–7.9 d) ❌ | **33 h (1.4 d)** | **~26–28 h (1.1–1.2 d)** ✅ |
+| ideal | 100K | 9.6–15.8 d ❌ | 66 h (2.8 d) | **~51–56 h (2.1–2.3 d)** |
 
-**Committed tier: 50K** (decision 1) — 17–28 h on 20 GPUs, < 1 day even pessimistically. Pipeline
-stays parameterized to extend to 100K (~1.5–2.4 days) if the pinned per-tree number is favorable.
-The brief's "couple of days, max GPU QoS" is **feasible**.
+**Committed tier: 50K (decision 1).** GPU-only is **not** feasible in a couple of days at 3 GPUs;
+**the CPU lane carries it** — 50K lands in ~1.1–1.4 days CPU-led, GPU-assisted. 100K ≈ ~2.1–2.8 d.
 
-**QOS available** (`gpu-medium`: ≤20 GPUs, 3-day wall; `gpu-short`: ≤44 GPUs, 1-day wall):
-- Primary: `gpu-medium`, **~20 fat shards** (5K FENs/shard for 100K), walls sized to the per-tree
-  number with ≥30% margin. **This is the fix for the empty-dir failure** — never size a shard so
-  `FENs × s_per_tree` exceeds its wall.
-- Burst: `gpu-short` (44 GPUs) for a 10K/50K push under a 1-day wall.
+**The CPU lane has one open risk that the smoke must clear:** the ysagiv lc0 binary is CUDA-linked
+and needs `libcublas` *even for the `blas` backend* (two `bench-cpu` runs failed on a missing
+`libcublas.so.12`; the only successful blas run was on a GPU node). **§U1.0 must confirm lc0-blas
+launches and holds ~833 s/tree on a pure-CPU node** (via `LD_LIBRARY_PATH` to a cudatoolkit lib
+dir — dynamic-load only, no GPU used). If it cannot, the fallback is **building a Stockfish
+tree-gen provider** (CPU-native, far faster), which the GPU scarcity now strongly motivates — see
+§U1.0 and decision 2.
 
-**CPU overflow (the brief's "max out CPU in parallel"):** at ~14 min/tree on 4 cores, the `short`
-QOS (cpu≤1400 → ~350 four-core jobs) yields ~**1,500 trees/hr**, comparable to 20 GPUs. Worth it
-as additive throughput, but it monopolizes the CPU allocation and inherits lc0's `libcublas`
-coupling — treat as overflow, not primary.
+**Sharding (the empty-dir fix):** size every shard so `FENs_per_shard × s_per_tree < wall`.
+CPU lane: many small array tasks on `short`/`cpu` (e.g. ~30–60 FENs/job at ~14 min/tree under a
+~16 h wall). GPU lane: 3 fat shards on `gpu-medium` (3-day wall) running continuously.
+
+**Depth: keep 96 (decision 3).** If a speed trade is forced, **reduce controller epochs first**;
+treat depth 96→64 (~⅓ faster) as a last resort only, since it breaks regime-match with training.
 
 **Depth: keep 96 (decision 3).** If a speed trade is forced, **reduce controller epochs first**;
 treat depth 96→64 (~⅓ faster) as a last resort only, since it breaks regime-match with training.
@@ -318,13 +341,14 @@ loss curves as it runs; do **not** scale to production until the end-to-end loop
 
 ## 7. Decisions (resolved 2026-06-05 by hl4291)
 
-1. **Tier = 50K ("good").** Pipeline parameterized to extend to 100K if the clean smoke lands
-   near the fast end. 50K finishes < 1 day even pessimistically.
+1. **Tier = 50K ("good").** Pipeline parameterized to extend to 100K. **Feasible in ~1.1–1.4 days
+   only via the CPU lane** — with ~3 GPUs, GPU-only 50K would take ~5–8 days (§5). CPU-led.
 2. **Engine-swap profiling: schedule now, in parallel, folded into the per-tree smoke (5).**
-   Stockfish is CPU-only and does not compete with Lc0 for GPU, so it is a free comparison.
-   The smoke profiles **three engines side-by-side: Stockfish (CPU), Lc0-CPU, Lc0-GPU** — this
-   doubles as the engine-stack cost/benefit profiling the brief requires before any swap. For a
-   smoke (~20–100 FENs) this is not prohibitive.
+   The smoke profiles **three engines × node-type: Lc0-GPU, Lc0-CPU (pure-CPU node), Stockfish
+   (CPU)** — doubling as the engine-stack cost/benefit profiling the brief requires before any
+   swap. **The 3-GPU / CPU-rich reality sharpens the swap question:** if Stockfish-CPU is much
+   faster than Lc0-CPU, building a Stockfish tree-gen provider may be the right primary engine.
+   (`build_tree` is Lc0-only today; SF-in-pipeline is a post-green-flag build task.)
 3. **Depth: keep regime-matching faithfully — depth 96.** Fall back to 64 only if forced, and
    **prefer reducing epochs over reducing depth** if a speed trade is needed. The first reunified
    run uses the same depth-96 regime as model training.

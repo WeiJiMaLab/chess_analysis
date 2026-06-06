@@ -255,35 +255,36 @@ math: katex
 
 ---
 
-# U1 — Feasibility (the smoke already told us)
+# U1 — Feasibility: CPU-led, 3 GPUs supplementary
 
 <div class="mt-3 max-w-4xl space-y-3 text-xs">
   <div class="grid grid-cols-2 gap-3">
     <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
-      <b class="text-accent">Per-tree cost (A100)</b>
+      <b class="text-accent">Resource reality</b>
       <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
-        <li>GPU: <b>~16–41 s/tree</b> (0.024–0.062 roots/s) — pin to one number with a clean steady-state smoke</li>
-        <li>CPU/blas: <b>~14 min/tree</b> (~20–50× slower; lc0 needs `libcublas` even for blas)</li>
+        <li>Effective <b>~3 GPUs</b> (QOS cap reads 20, but group contention binds)</li>
+        <li><b>CPU abundant:</b> ~1,400 cores / 400 jobs (`short`)</li>
+        <li>Lc0-GPU <b>~16–41 s/tree</b>; Lc0-CPU <b>~833 s/tree</b> (4 cores)</li>
       </ul>
     </div>
     <div class="p-3 bg-red-50 border-l-2 border-red-400 rounded">
       <b class="text-red-700">Why `human_trees_10k/` is empty</b>
-      <p class="mt-1 opacity-80">500 FENs × 1 h walls, but ≥16 s/tree needs <b>2–6 h/shard</b>. Shard-sizing bug, <b>not</b> a cost wall. Fix: <b>~20 fat shards on gpu-medium</b>, walls sized to FENs×s/tree.</p>
+      <p class="mt-1 opacity-80">500 FENs × 1 h walls, but ≥16 s/tree needs <b>2–6 h/shard</b>. Shard-sizing bug, <b>not</b> a cost wall. Fix: size every shard so FENs×s/tree &lt; wall.</p>
     </div>
   </div>
 
   <table>
-  <thead><tr><th>Tier</th><th>Trees</th><th>GPU-h @25s</th><th>GPU-h @41s</th><th>Wall · 20 GPUs</th></tr></thead>
+  <thead><tr><th>Tier</th><th>Trees</th><th>3 GPUs only</th><th>CPU only (~1,512/hr)</th><th><b>GPU(3)+CPU</b></th></tr></thead>
   <tbody>
-  <tr><td>acceptable</td><td>10K</td><td>69</td><td>114</td><td>3.5 / 5.7 h</td></tr>
-  <tr><td><b>good</b></td><td><b>50K</b></td><td>347</td><td>568</td><td><b>17 / 28 h</b></td></tr>
-  <tr><td>ideal</td><td>100K</td><td>694</td><td>1,137</td><td>35 / 57 h</td></tr>
+  <tr><td>acceptable</td><td>10K</td><td>23–38 h</td><td>6.6 h</td><td><b>~5–6 h</b></td></tr>
+  <tr><td><b>good</b></td><td><b>50K</b></td><td>4.8–7.9 d ❌</td><td>33 h</td><td><b>~26–28 h ✅</b></td></tr>
+  <tr><td>ideal</td><td>100K</td><td>9.6–15.8 d ❌</td><td>2.8 d</td><td><b>~2.1–2.3 d</b></td></tr>
   </tbody>
   </table>
 
   <div class="p-2 bg-green-50 border-l-2 border-green-500 rounded">
-    <b class="text-green-700">Verdict: feasible.</b> 50K < 1 day even pessimistically; 100K ≈ 1.5–2.4 days.
-    Contingencies: CPU overflow (≈1,500 trees/h under `short`), depth 96→64 (~⅓ faster), Stockfish swap (needs sign-off).
+    <b class="text-green-700">Verdict: 50K feasible in ~1.1–1.4 days — but only CPU-led.</b>
+    One open risk: lc0-blas must launch on a <b>pure-CPU node</b> (`libcublas` dynamic-load). The 3-engine smoke confirms it; if it fails, build a Stockfish provider (CPU-native, GPU scarcity motivates it).
   </div>
 </div>
 
@@ -358,17 +359,16 @@ math: katex
 
 <div class="mt-4 grid grid-cols-2 gap-4 max-w-3xl text-xs">
   <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
-    <b class="text-accent">Decisions needed</b>
+    <b class="text-accent">Decisions locked</b>
     <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
-      <li>Tier: <b>50K recommended</b> (10K / 50K / 100K)</li>
-      <li>Depth 96 vs 64 for the first run</li>
-      <li>Schedule the Stockfish-swap profiling now, or on first wall?</li>
-      <li>Pin the per-tree number (16 vs 41 s) with one clean smoke</li>
+      <li>Tier <b>50K</b>; <b>depth 96</b> (cut epochs before depth)</li>
+      <li>OSS budget = canonical <code>BudgetedOracleConfig()</code> (buckets, maint. off)</li>
+      <li>3-engine smoke = action #1 (pins cost + swap profiling)</li>
     </ul>
   </div>
   <div class="p-3 bg-green-50 border-l-2 border-green-500 rounded">
     <b class="text-green-700">Bottom line</b>
-    <p class="mt-1 opacity-80">The reunification is feasible within the brief's "couple of days, max GPU QoS." The only true blocker was shard sizing — now understood. Full plan: <code>unify.md</code>.</p>
+    <p class="mt-1 opacity-80"><b>CPU-led, 50K in ~1.1–1.4 days</b> (3 GPUs can't carry it alone). One gate: lc0-blas on a pure-CPU node. The empty-dir blocker was shard sizing. Full plan: <code>unify.md</code>.</p>
   </div>
 </div>
 
