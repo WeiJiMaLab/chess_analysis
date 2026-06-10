@@ -41,14 +41,13 @@ def extract_tree_features(t: dict) -> dict:
     toptwo_equiv: gap between top-2 deep Q-values (oracle_final_root_q_values).
     gain_depth_equiv: Q_final[best_idx[-1]] - Q_final[best_idx[1]] (VOC analog).
     """
-    q = t["oracle_root_q_trace"]
     best_idx = t["oracle_best_move_index"]
-    final_q = q[-1]
+    final_q = t["oracle_final_root_q_values"]
 
     nonzero = final_q[final_q != 0]
     if len(nonzero) >= 2:
         v = nonzero.topk(2).values
-        toptwo = float((v[0] - v[1]).abs().item())
+        toptwo = float((v[0] - v[1]).item())  # topk is descending, so v[0] >= v[1] always
     else:
         toptwo = float("nan")
 

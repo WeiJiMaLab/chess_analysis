@@ -35,11 +35,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
+from analysis._data import load_shard_trees
+from analysis._plots import analysis_style, save_fig
 from src.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
 from src.data.preprocess_mc.oracle import BudgetedOracleConfig, predicted_stop_from_advantages
 from src.data.preprocess_mc.pack import (
@@ -47,7 +47,6 @@ from src.data.preprocess_mc.pack import (
     build_compact_trajectory_from_payload,
 )
 from src.core.tree import SearchTree
-from utils.helpers import apply_poster_style
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
@@ -75,27 +74,34 @@ class TreeStatsMC(nn.Module):
         return self.net(x)
 
 
-def extract_tree_stats_from_prefix(prefix_tree: SearchTree, q_row: torch.Tensor, best_idx: int, budget: int) -> list[float]:
-    """Compute the 12 tree statistics for a given prefix tree snapshot, normalized where appropriate."""
+def extract_tree_stats_from_prefix(
+    prefix_tree: SearchTree,
+    q_row: torch.Tensor,
+    halt_reward: float,
+    budget: int,
+) -> list[float]:
+    """Compute 10 tree-stat features for one snapshot, normalised where appropriate.
+
+    The last slot (root_best_q) uses the pack-path halt_reward (oracle_final_root_q_values
+    indexed by the step's recommended move) rather than the evolving q_row estimate.
+    t_norm and remaining_budget_norm are appended by the caller (indices 10-11).
+    """
     nodes = list(prefix_tree.iter_nodes())
     tree_size = len(nodes)
     expanded_nodes = sum(1 for n in nodes if n.is_expanded)
     max_depth = max(n.depth for n in nodes)
     mean_depth = sum(n.depth for n in nodes) / tree_size
     terminal_ratio = sum(1 for n in nodes if n.is_terminal) / tree_size
-    
+
     values = [n.scalar_features.get("value", 0.0) for n in nodes]
     avg_value = sum(values) / tree_size
     var_value = float(np.var(values)) if tree_size > 1 else 0.0
-    
+
     root_value = prefix_tree.get_node(0).scalar_features.get("value", 0.0)
-    
-    # Root children statistics
+
     evaluated = q_row[q_row != 0]
     root_wdl_var = float(evaluated.var().item()) if len(evaluated) > 1 else 0.0
-    root_best_q = float(q_row[best_idx].item())
-    
-    # Normalize count and depth features to prevent scaling issues in the MLP
+
     return [
         float(tree_size) / budget,
         float(expanded_nodes) / budget,
@@ -106,7 +112,7 @@ def extract_tree_stats_from_prefix(prefix_tree: SearchTree, q_row: torch.Tensor,
         float(var_value),
         float(root_value),
         float(root_wdl_var),
-        float(root_best_q),
+        halt_reward,
     ]
 
 
@@ -143,11 +149,7 @@ def extract_snapshot_features(t: dict, budget: int) -> tuple[np.ndarray, np.ndar
         # Reconstruct prefix tree at step s
         # In build_tree, step s corresponds to s expansions
         prefix_tree = tree.clone_expansion_prefix(trace_step)
-        
-        # Get 10 statistics
-        stats = extract_tree_stats_from_prefix(prefix_tree, q[trace_step], best_idx[trace_step].item(), num_steps)
-        stats[9] = halt_slice[s]  # root_best_q from pack trajectory halt_rewards
-        
+        stats = extract_tree_stats_from_prefix(prefix_tree, q[trace_step], halt_slice[s], num_steps)
         X[s, :10] = stats
         X[s, 10] = s / max(num_steps - 1, 1)            # t normalised
         X[s, 11] = (num_steps - s) / num_steps          # remaining_budget normalised
@@ -157,24 +159,12 @@ def extract_snapshot_features(t: dict, budget: int) -> tuple[np.ndarray, np.ndar
 
 def load_dataset(trees_root: str, n_trees: int, budget: int, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Load tree-statistic features + targets from n_trees filtered_shard trees."""
-    dirs = sorted(d for d in os.listdir(trees_root) if d.startswith("filtered_shard"))
-    files: list[str] = []
-    for d in dirs:
-        p = os.path.join(trees_root, d)
-        files.extend(os.path.join(p, f) for f in os.listdir(p) if f.endswith(".pt"))
+    def _process(t: dict):
+        X, y = extract_snapshot_features(t, budget)
+        return (X, y) if len(X) > 0 else None
 
-    np.random.default_rng(seed).shuffle(files)
-    all_X, all_y = [], []
-    for path in tqdm(files[:n_trees], desc="Extracting features"):
-        try:
-            t = torch.load(path, map_location="cpu", weights_only=False)
-            X, y = extract_snapshot_features(t, budget)
-            if len(X) > 0:
-                all_X.append(X)
-                all_y.append(y)
-        except Exception as e:
-            pass
-    return np.concatenate(all_X), np.concatenate(all_y)
+    pairs = load_shard_trees(trees_root, n_trees, _process, seed=seed, desc="Extracting features")
+    return np.concatenate([p[0] for p in pairs]), np.concatenate([p[1] for p in pairs])
 
 
 def compute_sign_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -217,12 +207,7 @@ def train_stats_mc(
 
 
 def plot_comparison_bar(train_acc: float, val_acc: float, output_path: str) -> None:
-    plt.rcParams.update({
-        "font.size": 13, "axes.labelsize": 15, "axes.titlesize": 14,
-        "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.3,
-    })
+    analysis_style()
     fig, ax = plt.subplots(figsize=(8, 5))
     models = ["GNN+MC\n(baseline)", "A2.1 train", "A2.1 val"]
     accs = [_GNN_MC_SIGN_ACCURACY, train_acc, val_acc]
@@ -239,10 +224,7 @@ def plot_comparison_bar(train_acc: float, val_acc: float, output_path: str) -> N
     ax.set_title("A2.1: Tree-Statistic Baseline Sign Accuracy")
     ax.legend(loc="lower right")
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Saved comparison plot to {output_path}")
+    save_fig(output_path)
 
 
 def main() -> None:
@@ -273,7 +255,7 @@ def main() -> None:
     print(f"  GNN+MC baseline sign accuracy:     {_GNN_MC_SIGN_ACCURACY:.3f}")
     print(f"  A2.1 Rich Tree (12 stats) train:   {train_acc:.3f}")
     print(f"  A2.1 Rich Tree (12 stats) val:     {val_acc:.3f}")
-    print(f"  (A0b minimal-MC comparison pending correct re-run — see R-A0)")
+    print(f"  (A0b minimal-MC val sign acc: 54.6% — GNN encoder confirmed essential)")
     print(f"{'='*60}\n")
 
     plot_comparison_bar(train_acc, val_acc, os.path.join(str(_FIGURES_DIR), "tree_stats_baseline_accuracy.png"))

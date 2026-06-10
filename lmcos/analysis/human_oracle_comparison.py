@@ -30,7 +30,6 @@ import torch
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
 from analysis.board_tree_features import extract_board_features, extract_tree_features
 from src.data.preprocess_mc.oracle import BudgetedOracleConfig
@@ -38,7 +37,7 @@ from src.data.preprocess_mc.pack import (
     budgeted_oracle_from_trajectory,
     build_compact_trajectory_from_payload,
 )
-from utils.helpers import analysis_style
+from analysis._plots import analysis_style, save_fig
 
 _CONFIG = BudgetedOracleConfig()
 _DB_PATH = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
@@ -194,10 +193,7 @@ def main() -> None:
     plt.ylabel("human log(RT)")
     plt.title(f"A1: oracle_stop_step vs. human log(RT)  r={r_rt_oracle:+.3f}  n={len(df)}")
     plt.tight_layout()
-    rt_path = _FIGURES_DIR / f"human_oracle_rt_comparison{tag}.png"
-    plt.savefig(rt_path, dpi=150)
-    plt.close()
-    print(f"Saved Plot A to {rt_path}")
+    save_fig(str(_FIGURES_DIR / f"human_oracle_rt_comparison{tag}.png"))
 
     features = ["n_possible_moves", "n_self_pieces_exc_pawns", "gain_depth_equiv", "toptwo_equiv"]
     labels = ["Branching", "Material", "gain_depth", "toptwo"]
@@ -214,10 +210,7 @@ def main() -> None:
     plt.title(f"A1: Feature correlations  n={len(df)}")
     plt.legend()
     plt.tight_layout()
-    feat_path = _FIGURES_DIR / f"human_oracle_features_comparison{tag}.png"
-    plt.savefig(feat_path, dpi=150)
-    plt.close()
-    print(f"Saved Plot B to {feat_path}")
+    save_fig(str(_FIGURES_DIR / f"human_oracle_features_comparison{tag}.png"))
 
 
 if __name__ == "__main__":

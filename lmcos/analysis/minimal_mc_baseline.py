@@ -41,11 +41,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
+from analysis._data import load_shard_trees
+from analysis._plots import analysis_style, save_fig
 from src.data.preprocess_mc.oracle import (
     BudgetedOracleConfig,
     compute_budgeted_oracle,
@@ -55,7 +55,6 @@ from src.data.preprocess_mc.pack import (
     budgeted_oracle_from_trajectory,
     build_compact_trajectory_from_payload,
 )
-from utils.helpers import apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, PHASE_COLORS
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
@@ -169,25 +168,15 @@ def load_dataset(
     seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, list[int], list[int]]:
     """Load snapshot features + targets from n_trees filtered_shard trees."""
-    dirs = sorted(d for d in os.listdir(trees_root) if d.startswith("filtered_shard"))
-    files: list[str] = []
-    for d in dirs:
-        p = os.path.join(trees_root, d)
-        files.extend(os.path.join(p, f) for f in os.listdir(p) if f.endswith(".pt"))
+    def _process(t: dict):
+        X, y, stop_step = extract_snapshot_features(t, budget)
+        return (X, y, stop_step) if len(X) > 0 else None
 
-    np.random.default_rng(seed).shuffle(files)
-    all_X, all_y, episode_lengths, oracle_stops = [], [], [], []
-    for path in tqdm(files[:n_trees], desc="Extracting features"):
-        try:
-            t = torch.load(path, map_location="cpu", weights_only=False)
-            X, y, stop_step = extract_snapshot_features(t, budget)
-            if len(X) > 0:
-                all_X.append(X)
-                all_y.append(y)
-                episode_lengths.append(len(X))
-                oracle_stops.append(stop_step)
-        except Exception:
-            pass
+    triples = load_shard_trees(trees_root, n_trees, _process, seed=seed, desc="Extracting features")
+    all_X = [r[0] for r in triples]
+    all_y = [r[1] for r in triples]
+    episode_lengths = [len(r[0]) for r in triples]
+    oracle_stops = [r[2] for r in triples]
     return np.concatenate(all_X), np.concatenate(all_y), episode_lengths, oracle_stops
 
 
@@ -237,17 +226,8 @@ def train_minimal_mc(
 # Plotting
 # ---------------------------------------------------------------------------
 
-def _analysis_style() -> None:
-    plt.rcParams.update({
-        "font.size": 13, "axes.labelsize": 15, "axes.titlesize": 14,
-        "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.3,
-    })
-
-
 def plot_sign_accuracy(train_acc: float, val_acc: float, output_path: str) -> None:
-    _analysis_style()
+    analysis_style()
     fig, ax = plt.subplots(figsize=(8, 5))
     models = ["GNN+MC\n(baseline)", "Minimal MLC\n(train)", "Minimal MLC\n(val)"]
     accs = [_GNN_MC_SIGN_ACCURACY, train_acc, val_acc]
@@ -264,24 +244,55 @@ def plot_sign_accuracy(train_acc: float, val_acc: float, output_path: str) -> No
     ax.set_title("Minimal MLC vs GNN+MC sign accuracy")
     ax.legend(loc="lower right", framealpha=0.9)
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"✅ {output_path}")
+    save_fig(output_path)
 
 
 def plot_weights(model: MinimalMC, feature_names: list[str], output_path: str) -> None:
-    _analysis_style()
+    analysis_style()
     W = model.net[0].weight.detach().abs().mean(dim=0).numpy()
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.bar(feature_names, W, color="#2563EB", alpha=0.8, edgecolor="white")
     ax.set_ylabel("Mean |weight| (first layer)")
     ax.set_title("Feature importance — minimal MLC")
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"✅ {output_path}")
+    save_fig(output_path)
+
+
+def plot_stop_step_scatter(
+    model: MinimalMC,
+    X: np.ndarray,
+    episode_lengths: list[int],
+    oracle_stops: list[int],
+    output_path: str,
+    label: str = "val",
+) -> None:
+    """Scatter oracle_stop_step vs predicted_stop_step, one point per episode."""
+    predicted: list[int] = []
+    offset = 0
+    model.eval()
+    with torch.no_grad():
+        for length in episode_lengths:
+            preds = model(torch.from_numpy(X[offset:offset + length])).numpy().ravel()
+            predicted.append(predicted_stop_from_advantages(preds))
+            offset += length
+
+    oracle = np.asarray(oracle_stops, dtype=np.float64)
+    pred_arr = np.asarray(predicted, dtype=np.float64)
+    r = float(np.corrcoef(oracle, pred_arr)[0, 1]) if np.std(pred_arr) > 0 else float("nan")
+    budget = max(oracle_stops) if oracle_stops else 1
+
+    analysis_style()
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(oracle, pred_arr, alpha=0.25, s=8, color="#2563EB", rasterized=True)
+    lo, hi = 0, budget + 1
+    ax.plot([lo, hi], [lo, hi], color="black", lw=1.5, linestyle="--", label="y = x")
+    ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
+    ax.set_xlabel("oracle_stop_step")
+    ax.set_ylabel("predicted_stop_step (MLP greedy)")
+    ax.set_title(f"A0b {label}: oracle vs predicted stop  r={r:+.3f}  n={len(oracle):,}")
+    ax.legend(loc="upper left")
+    plt.tight_layout()
+    save_fig(output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +368,8 @@ def main(argv: list[str] | None = None) -> None:
     feature_names = ["best_q", "wdl_var", "t_norm", "budget_rem_norm"]
     plot_sign_accuracy(train_acc, val_acc, os.path.join(out, "minimal_mc_sign_accuracy.png"))
     plot_weights(model, feature_names, os.path.join(out, "minimal_mc_weights.png"))
+    plot_stop_step_scatter(model, X_val, val_lengths, val_stops,
+                           os.path.join(out, "minimal_mc_stop_scatter.png"), label="val")
 
 
 if __name__ == "__main__":

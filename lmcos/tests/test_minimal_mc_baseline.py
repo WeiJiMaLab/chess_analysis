@@ -113,3 +113,92 @@ class TestComputeSignAccuracy:
         y = np.array([0.5, -0.5, 0.5, -0.5])
         preds = np.array([0.5, 0.5, -0.5, -0.5])
         assert compute_sign_accuracy(y, preds) == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Stub payload helpers (no disk access)
+# ---------------------------------------------------------------------------
+
+def _stub_payload(q_final: list[float], best_idx: list[int]) -> dict:
+    """Minimal fake .pt payload for extract_snapshot_features — no scratch disk needed.
+
+    q_trace rows: all zeros except the last row which equals q_final.
+    This is the simplest valid shape; wdl_var will be 0 at all steps except the last.
+    """
+    T = len(best_idx)
+    n_children = len(q_final)
+    q_trace = torch.zeros(T, n_children, dtype=torch.float32)
+    q_trace[-1] = torch.tensor(q_final, dtype=torch.float32)
+    return {
+        "oracle_root_q_trace": q_trace,
+        "oracle_best_move_index": torch.tensor(best_idx, dtype=torch.long),
+        "oracle_final_root_q_values": torch.tensor(q_final, dtype=torch.float32),
+    }
+
+
+class TestExtractSnapshotFeaturesStub:
+    """Pure-stub tests for extract_snapshot_features — no scratch disk access."""
+
+    def test_output_shapes(self):
+        t = _stub_payload([0.8, 0.3, 0.1], [0, 0, 1, 0, 0])
+        X, y, stop = extract_snapshot_features(t, budget=5)
+        assert X.shape == (5, 4), f"Expected (5,4), got {X.shape}"
+        assert y.shape == (5,)
+        assert isinstance(stop, int)
+
+    def test_budget_truncates_steps(self):
+        # T=10 steps but budget=4 → only 4 rows
+        t = _stub_payload([0.8, 0.2], [0] * 10)
+        X, y, stop = extract_snapshot_features(t, budget=4)
+        assert X.shape[0] == 4
+
+    def test_t_norm_in_unit_interval(self):
+        t = _stub_payload([0.8, 0.2], [0] * 6)
+        X, _, _ = extract_snapshot_features(t, budget=6)
+        assert np.all(X[:, 2] >= 0) and np.all(X[:, 2] <= 1)
+
+    def test_remaining_budget_norm_in_half_open_unit(self):
+        t = _stub_payload([0.8, 0.2], [0] * 6)
+        X, _, _ = extract_snapshot_features(t, budget=6)
+        # (num_steps - s) / num_steps is in (0, 1] — never zero, at most 1
+        assert np.all(X[:, 3] > 0) and np.all(X[:, 3] <= 1)
+
+    def test_wdl_var_nonneg(self):
+        t = _stub_payload([0.8, 0.3, 0.1], [0, 0, 1, 0])
+        X, _, _ = extract_snapshot_features(t, budget=4)
+        assert np.all(X[:, 1] >= 0)
+
+    def test_best_q_uses_final_q_values(self):
+        # halt_rewards[s] = q_final[best_idx[s]], so best_q column must equal that
+        q_final = [0.9, 0.2, 0.4]
+        best_idx = [0, 2, 1, 0, 0]
+        t = _stub_payload(q_final, best_idx)
+        X, _, _ = extract_snapshot_features(t, budget=5)
+        expected = [q_final[i] for i in best_idx]
+        np.testing.assert_allclose(X[:, 0], expected, atol=1e-5)
+
+    def test_oracle_stop_step_in_valid_range(self):
+        t = _stub_payload([0.8, 0.2], [0] * 8)
+        _, _, stop = extract_snapshot_features(t, budget=8)
+        assert 0 <= stop <= 7
+
+    def test_no_nans_in_output(self):
+        t = _stub_payload([0.7, 0.3], [0, 1, 0, 1, 0])
+        X, y, _ = extract_snapshot_features(t, budget=5)
+        assert not np.isnan(X).any(), "NaN in features"
+        assert not np.isnan(y).any(), "NaN in labels"
+
+    def test_single_child_line_tree(self):
+        # Line tree: only one child. wdl_var = 0 at all steps, best_q constant.
+        t = _stub_payload([0.6], [0, 0, 0, 0])
+        X, y, stop = extract_snapshot_features(t, budget=4)
+        assert X.shape == (4, 4)
+        assert np.all(X[:, 1] == 0.0), "wdl_var should be 0 for single-child tree"
+        assert np.all(X[:, 0] == pytest.approx(0.6)), "best_q should always be q_final[0]"
+
+    def test_constant_halt_rewards_stop_immediately(self):
+        # If best_q is constant across all steps, the oracle should halt at step 0
+        # (no value in waiting since halt_reward never improves).
+        t = _stub_payload([0.5, 0.5], [0] * 10)
+        _, _, stop = extract_snapshot_features(t, budget=10)
+        assert stop == 0, f"Constant rewards should yield stop=0, got {stop}"

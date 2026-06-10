@@ -43,12 +43,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
-from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
+from analysis._data import load_shard_trees
+from analysis._plots import analysis_style, save_fig
 from analysis.board_tree_features import (
     HUMAN_RT_CORRELATIONS,
     extract_board_features,
@@ -59,7 +58,6 @@ from src.data.preprocess_mc.pack import (
     budgeted_oracle_from_trajectory,
     build_compact_trajectory_from_payload,
 )
-from utils.helpers import analysis_style
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
@@ -98,22 +96,11 @@ def process_tree(t: dict, budgets: list[int]) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def load_trees(trees_root: str, n_max: int, seed: int = 42) -> pd.DataFrame:
-    dirs = sorted(d for d in os.listdir(trees_root) if d.startswith("filtered_shard"))  # all shards
-    files: list[str] = []
-    for d in dirs:
-        p = os.path.join(trees_root, d)
-        files.extend(os.path.join(p, f) for f in os.listdir(p) if f.endswith(".pt"))
-
-    np.random.default_rng(seed).shuffle(files)  # deterministic shuffle for reproducibility
-    rows = []
-    for path in tqdm(files[:n_max], desc="Loading trees"):
-        try:
-            t = torch.load(path, map_location="cpu", weights_only=False)
-            row = process_tree(t, _BUCKET_BUDGETS)
-            if row is not None:
-                rows.append(row)
-        except Exception:
-            pass
+    rows = load_shard_trees(
+        trees_root, n_max,
+        lambda t: process_tree(t, _BUCKET_BUDGETS),
+        seed=seed, desc="Loading trees",
+    )
     return pd.DataFrame(rows)
 
 
@@ -167,10 +154,7 @@ def plot_comparison_bar(df: pd.DataFrame, primary_budget: int, output_path: str)
         ax.legend(loc="upper left", bbox_to_anchor=(0, 1), framealpha=0.9)
 
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"✅ {output_path}")
+    save_fig(output_path)
 
 
 def plot_correlation_matrix(df: pd.DataFrame, primary_budget: int, output_path: str) -> None:
@@ -197,10 +181,7 @@ def plot_correlation_matrix(df: pd.DataFrame, primary_budget: int, output_path: 
     plt.colorbar(im, ax=ax, fraction=0.035, pad=0.04).set_label("Pearson r")
     ax.set_title(f"lmcos tree feature correlations  (n={len(sub):,})", pad=10)
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"✅ {output_path}")
+    save_fig(output_path)
 
 
 # ---------------------------------------------------------------------------

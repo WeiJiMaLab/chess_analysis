@@ -96,11 +96,13 @@ oracle_stop_step varies with starting budget (cost rises convexly as budget depl
 | Model | Val sign acc | Val exact stop | r(pred, oracle) |
 |---|---|---|---|
 | GNN+MC | 90.1% | — | — |
-| Minimal MLP | **54.7%** | **5.4%** | **+0.290** |
+| Minimal MLP | **54.6%** | **5.2%** | **+0.291** |
 
-**Script:** `lmcos/analysis/minimal_mc_baseline.py`.
+**Script:** `lmcos/analysis/minimal_mc_baseline.py`. Run 2026-06-05, 2K train / 500 val trees, budget=43.
 
-**2026-06-05 fix:** A0b uses the pack path (`build_compact_trajectory` + `budgeted_oracle_from_trajectory`). Reports sign acc, exact stop-step acc, and `r(predicted_stop, oracle_stop_step)`.
+**Training dynamics:** MSE loss falls monotonically (0.143 → 0.053 over 20 epochs) but sign accuracy oscillates wildly (0.54 → 0.41 → 0.68 → 0.52). This indicates the model fits the regression target but the zero-crossings of predicted advantages are unstable — the 4 features do not define a clean decision boundary for halt vs. continue.
+
+**Interpretation:** The near-chance sign accuracy confirms the 4 raw scalar features (best_q, wdl_var, t_norm, budget_rem_norm) carry very little information about the oracle's halt/continue decision. The weak r=+0.29 on stop steps suggests a faint timing prior (probably t_norm), but the GNN's encoding of the full Q-value landscape is essential for discriminative performance.
 
 ### Invalid runs (do not cite)
 

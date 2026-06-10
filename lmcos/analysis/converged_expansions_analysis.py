@@ -23,17 +23,16 @@ import os
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "human_analytics"))
 
+from analysis._data import load_shard_trees
+from analysis._plots import analysis_style, save_fig
 from analysis.board_tree_features import HUMAN_RT_CORRELATIONS, extract_board_features, extract_tree_features
-from utils.helpers import analysis_style
 
 _TREES_ROOT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_combined"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
@@ -88,23 +87,7 @@ def process_tree(t: dict) -> dict | None:
 
 
 def load_trees(trees_root: str, n_max: int, seed: int = 42) -> pd.DataFrame:
-    dirs = sorted(d for d in os.listdir(trees_root) if d.startswith("filtered_shard"))
-    files: list[str] = []
-    for d in dirs:
-        p = os.path.join(trees_root, d)
-        files.extend(os.path.join(p, f) for f in os.listdir(p) if f.endswith(".pt"))
-
-    np.random.default_rng(seed).shuffle(files)
-    rows = []
-    for path in tqdm(files[:n_max], desc="Loading trees"):
-        try:
-            t = torch.load(path, map_location="cpu", weights_only=False)
-            row = process_tree(t)
-            if row is not None:
-                rows.append(row)
-        except Exception:
-            pass
-    return pd.DataFrame(rows)
+    return pd.DataFrame(load_shard_trees(trees_root, n_max, process_tree, seed=seed))
 
 
 def print_summary(df: pd.DataFrame) -> None:
@@ -177,9 +160,7 @@ def plot_results(df: pd.DataFrame, output_dir: str) -> None:
     ax.set_title(f"converged_expansions vs human log(RT)  (n={len(df):,})")
     ax.legend(loc="upper left", bbox_to_anchor=(0, 1), framealpha=0.9)
     plt.tight_layout()
-    path1 = os.path.join(output_dir, "converged_expansions_vs_human_rt.png")
-    plt.savefig(path1, dpi=150, bbox_inches="tight"); plt.close()
-    print(f"✅ {path1}")
+    save_fig(os.path.join(output_dir, "converged_expansions_vs_human_rt.png"))
 
     sub = df[["gain_depth_equiv", "converged_expansions", "frac_correct"]].dropna()
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
@@ -201,9 +182,7 @@ def plot_results(df: pd.DataFrame, output_dir: str) -> None:
 
     fig.suptitle("gain_depth vs converged_expansions", fontsize=13, y=1.03)
     plt.tight_layout()
-    path2 = os.path.join(output_dir, "converged_expansions_gain_depth_diagnostic.png")
-    plt.savefig(path2, dpi=150, bbox_inches="tight"); plt.close()
-    print(f"✅ {path2}")
+    save_fig(os.path.join(output_dir, "converged_expansions_gain_depth_diagnostic.png"))
 
 
 def main(argv: list[str] | None = None) -> None:
