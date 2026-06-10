@@ -21,26 +21,37 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
-## ⚙️ Running state (as of 2026-06-06, end of day) {#running-state}
+## ⚙️ Running state (as of 2026-06-10) {#running-state}
 
-> **A background process is generating the U1.1 50K trees — know it's there.**
+> **50K tree-gen stalled at 5,228/50,000. Not currently running. Next: restart on gpu-short (not gpu-test).**
 
-- **50K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k/` (files keyed by global FEN
-  index; `resume:true`, so safe to interrupt/restart).
-- **The cycler** (`/scratch/gpfs/GRIFFITHS/hl4291/tmp/u1_50k_cycler.sh`, log `…/u1_50k_cycler.log`)
-  is a `nohup` login-node loop that keeps ~15 short `gpu-short` shards (`SHARD_SIZE=150`, 1 h wall,
-  job-name `gen50k-gpu`) in flight, advancing a cursor through `[150,50000)`. **Why:** a per-user
-  submit cap (~140–160 jobs, mostly consumed by the unrelated `prod_full` CPU array) blocks
-  submitting all shards at once; the cycler stays within the headroom and **auto-accelerates when
-  `prod_full` finishes**. It exits itself once all batches are submitted.
-- **To stop it:** `pkill -f u1_50k_cycler.sh` then `scancel -n gen50k-gpu` (cancels only my shards;
-  never touches `prod_full`). **To resume later:** re-run the cycler script (resume skips done trees).
-- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k | wc -l`  (of 50000).
+- **50K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k/` — 5,228 trees on disk (1.2 GB); 44,772 remain.
+  `resume:true` so restarts are safe.
+- **Root cause of stall:** all `gen50k-gpu` jobs ran on `gputest/gpu-test` (MaxJobsPU=3), not `gpu-short` (MaxJobsPU=44).
+  The cycler was job-capped at 3. The `griffith` account has **no GrpTRES GPU cap**; `gpu-short` allows 44 concurrent GPUs.
+  Switching QOS unblocks throughput immediately. Multi-GPU lane script also available:
+  `lmcos/slurm/1_preprocess_data/generate_dataset_shard_gpu_multi.slurm` (one job, N GPUs, N workers, counts as 1 job).
+- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k | wc -l` (of 50000).
 - **Key inputs:** FENs `…/tmp/human_fens_50k.txt` (+ `_manifest.parquet`, seed 43); base config
-  `lmcos/slurm/configs/1_preprocess_data/human_trees_50k_gpu.yaml`; array script
-  `lmcos/slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
+  `lmcos/slurm/configs/1_preprocess_data/human_trees_50k_gpu.yaml`.
+- **Full unique FEN pool** (110.5 M FENs, all of `processed_moves_nonzero`) now at
+  `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/fens.txt` (5.4 GB); export script: `lmcos/fens/export_unique_fens.py`.
 - **Next once trees land:** U1.2 OSS↔RT join (`analysis/human_oracle_comparison.py`, subset-tolerant);
   then U1.3 refit; re-run [R-U3](reports/analysis-u3-baselines.md) on the new controller.
+
+---
+
+## 2026-06-10 {#2026-06-10}
+
+Repo audit + scratch cleanup; QoS diagnosis; full FEN export.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **Repo audit** — jordan vs main; code cleanliness; script inventory | Pre-PR hygiene check | ✅ 60 commits ahead of main; no orphan scripts (lmcos/analysis is a documented toolkit); two untracked helper modules (`_data.py`, `_plots.py`) found mid-refactor → committed | — |
+| **Commit `16aefca`** — consolidate `_data.py` / `_plots.py`; converged_expansions figures; multi-GPU slurm lane | Five analysis scripts had broken imports on a clean checkout (helpers untracked) | ✅ Working tree clean; `jordan` PR-ready | — |
+| **QoS diagnosis** — why 50K stalled at 5,228/50,000 | "~3 effective GPUs" logged 2026-06-05 was a misdiagnosis | ✅ Root cause: all gen jobs ran on `gpu-test` (MaxJobsPU=3) not `gpu-short` (MaxJobsPU=44). `griffith` has no GrpTRES GPU cap. Fix: switch QoS on next restart. | — |
+| **Scratch cleanup** — removed legacy.db, eval_results, old metacontrol data, bench artifacts | ~10 GB freed | ✅ Scratch now 18 GB (personal.db) + 1.3 GB (tmp) | — |
+| **Full FEN export** — `SELECT DISTINCT fen FROM processed_moves_nonzero` | Canonical FEN pool for tree-gen and future sampling | ✅ **110,505,438 unique FENs**, 5.4 GB → `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/fens.txt`; script at `lmcos/fens/export_unique_fens.py` | — |
 
 ---
 
