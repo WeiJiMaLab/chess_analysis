@@ -69,7 +69,7 @@ class PackPretrainConfig(BaseModel):
             if inc_lt and inc_tt:
                 raise ValueError(
                     f"Deprecated mutually exclusive YAML keys `{lt_key}` and `{tt_key}` cannot both be true. "
-                    "Use node_targets / node_supervision_shard; see LAB_NOTEBOOK."
+                    "Use node_targets / node_supervision_shard; see labnotebook.md / reports/."
                 )
             if inc_lt:
                 out.setdefault("node_supervision_shard", True)
@@ -84,7 +84,7 @@ class PackPretrainConfig(BaseModel):
         if self.node_targets and not self.node_supervision_shard:
             raise ValueError(
                 "node_targets=true requires node_supervision_shard=true so node pretrain "
-                "has explicit targets and shards stay consistent; see LAB_NOTEBOOK presets."
+                "has explicit targets and shards stay consistent; see labnotebook.md / reports/."
             )
         return self
 

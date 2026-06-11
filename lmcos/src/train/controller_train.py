@@ -36,6 +36,7 @@ from cts.data.preprocess_mc.oracle import (
     BudgetedOracleConfig,
     budgeted_oracle_config_from_metadata,
     budgeted_oracle_metadata,
+    predicted_stop_from_advantages,
     return_for_stop_step,
 )
 from cts.models.gnn import TreeEncoderOutput, TreeEncoder
@@ -1738,11 +1739,7 @@ def _aggregate_greedy_rollout_metrics(
         episode_advantages = all_advantages[offset:offset + meta.num_steps].tolist()
         offset += meta.num_steps
 
-        predicted_stop = len(episode_advantages) - 1
-        for step_index, v in enumerate(episode_advantages):
-            if v <= 0.0:
-                predicted_stop = step_index
-                break
+        predicted_stop = predicted_stop_from_advantages(episode_advantages)
 
         predicted_return = return_for_stop_step(
             meta.halt_rewards,

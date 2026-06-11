@@ -11,7 +11,6 @@ import chess.engine
 import chess.svg
 import duckdb
 import matplotlib.pyplot as plt
-import dask.dataframe as dd
 from IPython.display import SVG, display
 
 # Constants
@@ -56,6 +55,22 @@ def apply_poster_style():
     plt.rcParams['axes.grid'] = True
     plt.rcParams['grid.alpha'] = 0.3
     plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
+
+
+def analysis_style() -> None:
+    """Apply standard matplotlib settings for lmcos analysis figures."""
+    plt.rcParams.update({
+        "font.size": 13,
+        "axes.labelsize": 15,
+        "axes.titlesize": 14,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 12,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+    })
 
 def get_stockfish_engine(
     path: str | None = None,

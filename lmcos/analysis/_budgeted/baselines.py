@@ -27,6 +27,63 @@ _BASELINE_SWEEP_SIZE_QUANTILES = [0.1, 0.25, 0.5, 0.75, 0.9]
 # larger anchors (7, 10, 15, 20) so the OR combinations still cover the
 # slack-budget regime.
 _BASELINE_SWEEP_TIME_THRESHOLDS = [1, 2, 3, 4, 5, 7, 10, 15, 20]
+# Marginal-gain thresholds for the gain-depth-only sweep. The "gain" of the
+# i-th expansion is the change in the haltable reward, halt_rewards[i] -
+# halt_rewards[i-1] — a myopic value-of-computation signal. Halting when that
+# gain falls to/below the threshold is the dynamic stop rule that uses gain
+# alone (Russek-style VOC), independent of tree size or remaining budget.
+_BASELINE_SWEEP_GAIN_THRESHOLDS = [0.0, 0.001, 0.005, 0.01, 0.02, 0.05]
+# Value-plateau: a noise-robust gain-depth. Instead of one step's gain, look at
+# the improvement over a window of ``w`` steps and halt once it falls to/below
+# the threshold (the value curve has flattened over the window, not just dipped
+# for a single noisy step). ``w == 1`` reduces to gain-depth.
+_BASELINE_SWEEP_PLATEAU_WINDOW = 3
+_BASELINE_SWEEP_PLATEAU_THRESHOLDS = [0.0, 0.01, 0.05]
+# Fixed-fraction-of-budget: a constant "spend rho of the starting budget then
+# stop" anchor (rho in (0, 1)). A non-trivial control that ignores the value
+# landscape entirely and just allocates a fixed share of the budget.
+_BASELINE_SWEEP_FRACTION_RHOS = [0.1, 0.25, 0.5, 0.75]
+
+
+def _gain_depth_stop_step(episode: dict[str, Any], threshold: float) -> int:
+    """First step (>=1) whose marginal halt-reward gain is <= threshold, else the last step."""
+    halt_rewards = episode["halt_rewards"]
+    return next(
+        (
+            idx
+            for idx in range(1, len(halt_rewards))
+            if (halt_rewards[idx] - halt_rewards[idx - 1]) <= threshold
+        ),
+        len(halt_rewards) - 1,
+    )
+
+
+def _value_plateau_stop_step(episode: dict[str, Any], threshold: float, window: int) -> int:
+    """First step (>=window) whose improvement over the last ``window`` steps is <= threshold.
+
+    Noise-robust gain-depth: ``halt_rewards[i] - halt_rewards[i-window] <= threshold``
+    means the value has not climbed meaningfully across the window — a plateau —
+    rather than reacting to a single noisy step. Falls through to the last step.
+    """
+    halt_rewards = episode["halt_rewards"]
+    return next(
+        (
+            idx
+            for idx in range(window, len(halt_rewards))
+            if (halt_rewards[idx] - halt_rewards[idx - window]) <= threshold
+        ),
+        len(halt_rewards) - 1,
+    )
+
+
+def _fixed_fraction_stop_step(episode: dict[str, Any], rho: float) -> int:
+    """Halt after spending ``rho`` of the starting budget (clamped in-episode by the caller).
+
+    ``time_budgets[0]`` is the starting budget by construction, so this stops at
+    ``round(rho * starting_budget)`` regardless of the value landscape.
+    """
+    starting_budget = int(episode["time_budgets"][0])
+    return int(round(rho * starting_budget))
 
 
 def _evaluate_baseline(
@@ -101,6 +158,31 @@ def _baseline_sweep(diagnostics: list[dict[str, Any]], oracle_config: BudgetedOr
                 (idx for idx, time_budget in enumerate(episode["time_budgets"]) if int(time_budget) <= threshold),
                 len(episode["halt_rewards"]) - 1,
             ),
+        )
+    # Gain-depth-only: halt as soon as the marginal value of one more expansion
+    # decays to/below threshold. Uses the halt-reward trajectory alone.
+    for threshold in _BASELINE_SWEEP_GAIN_THRESHOLDS:
+        baselines[f"halt_when_gain_le_{threshold}"] = _evaluate_baseline(
+            diagnostics,
+            oracle_config,
+            lambda episode, threshold=threshold: _gain_depth_stop_step(episode, threshold),
+        )
+    # Value-plateau: noise-robust gain-depth over a window of expansions.
+    plateau_window = _BASELINE_SWEEP_PLATEAU_WINDOW
+    for threshold in _BASELINE_SWEEP_PLATEAU_THRESHOLDS:
+        baselines[f"value_plateau_w{plateau_window}_le_{threshold}"] = _evaluate_baseline(
+            diagnostics,
+            oracle_config,
+            lambda episode, threshold=threshold, window=plateau_window: _value_plateau_stop_step(
+                episode, threshold, window
+            ),
+        )
+    # Fixed-fraction-of-budget: spend rho of the starting budget, then stop.
+    for rho in _BASELINE_SWEEP_FRACTION_RHOS:
+        baselines[f"halt_at_frac_{rho}"] = _evaluate_baseline(
+            diagnostics,
+            oracle_config,
+            lambda episode, rho=rho: _fixed_fraction_stop_step(episode, rho),
         )
     # Halt as soon as tree size grows past threshold.
     for threshold in size_thresholds:

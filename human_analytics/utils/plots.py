@@ -131,13 +131,29 @@ def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
 
-def plot_histogram_from_bins(ax, df_bins, left_col="bin_left", right_col="bin_right", count_col="n", x_label=None, y_label="Count", color=MAIN_COLOR):
-    """Aligned-edge bar histogram from SQL histogram tables (bin left edges + widths). No-op if ``df_bins`` is empty."""
+def plot_histogram_from_bins(
+    ax, df_bins,
+    left_col="bin_left", right_col="bin_right", count_col="n",
+    x_label=None, y_label="Count", color=MAIN_COLOR,
+    mean=None, median=None,
+):
+    """Aligned-edge bar histogram from SQL histogram tables.
+
+    Draws optional dashed vertical lines at ``mean`` and ``median`` when provided.
+    No-op if ``df_bins`` is empty.
+    """
     apply_poster_style()
     if df_bins.empty:
         return
     widths = df_bins[right_col] - df_bins[left_col]
-    ax.bar(df_bins[left_col], df_bins[count_col], width=widths, align="edge", color=color, alpha=0.5, edgecolor=color, linewidth=1.5)
+    ax.bar(df_bins[left_col], df_bins[count_col], width=widths, align="edge",
+           color=color, alpha=0.5, edgecolor=color, linewidth=1.5)
+    if mean is not None:
+        ax.axvline(mean, color="black", linestyle="--", lw=2.5, label=f"Mean = {mean:.3f}")
+    if median is not None:
+        ax.axvline(median, color="dimgray", linestyle=":", lw=2.5, label=f"Median = {median:.3f}")
+    if mean is not None or median is not None:
+        ax.legend(fontsize=FONT_SIZE_TICKS)
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:

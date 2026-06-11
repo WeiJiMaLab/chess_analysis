@@ -1644,7 +1644,12 @@ def generate_partial_tree_from_provider(
         oracle_root_visits_trace.append(visits_row)
 
     # --- Main PUCT loop: pick a leaf, expand or terminate, backprop ---
+    simulations = 0
+    max_simulations = sampled_node_budget * 50
     while num_expansions < sampled_node_budget and _has_expandable_frontier(tree, config):
+        simulations += 1
+        if simulations > max_simulations:
+            break
         node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
         node = tree.get_node(node_id)
         leaf_value = _static_node_value(tree, node_id, config.value_feature)

@@ -1,6 +1,6 @@
 # Chess Meta-control (CMC): workspace overview
 
-This repository is the working root for **Chess Meta-control (CMC)**—research that combines **large-scale human chess analytics** in `human_analytics/` with a neural **meta-controller** in **`lmcos/`** (learned metacontrol over search). The long-form experimental record is `lmcos/LAB_NOTEBOOK.md`. This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
+This repository is the working root for **Chess Meta-control (CMC)**—research that combines **large-scale human chess analytics** in `human_analytics/` with a neural **meta-controller** in **`lmcos/`** (learned metacontrol over search). The chronological experiment log is [`labnotebook.md`](labnotebook.md); stable analysis write-ups live under [`reports/`](reports/). This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
 
 **Objective (control layer).** Build a **meta-controller** that manages the trade-off between **thinking** (expanding a Leela/lc0 search tree) and **acting** (playing a move). At the control layer this is an **optimal stopping** problem: is the move-quality we might discover worth the compute we are about to spend? The `lmcos` stack implements this as **representation learning first** (GNN over search trees), then **offline fitted-Q / advantage regression** on teacher traces—not yet full self-play PPO at production scale.
 
@@ -13,7 +13,8 @@ This repository is the working root for **Chess Meta-control (CMC)**—research 
 | `chess_analysis/human_analytics/metacontrol/` | Modular tree-search export (refactored from `lmcos/`) |
 | `chess_analysis/human_analytics/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/human_analytics/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
-| `chess_analysis/lmcos/LAB_NOTEBOOK.md` | Dated experiments, cluster run IDs, and conclusions |
+| `chess_analysis/labnotebook.md` | Chronological log (Description · Rationale · Status · Reference) |
+| `chess_analysis/reports/` | Stable analysis reports (`R-*` refs) |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`src/`** (`cts` package), **`analysis/`** (`cts.analysis`), **`slurm/`** (stage scripts + **`slurm/configs/`** run YAMLs) |
 | `chess_analysis/human_analytics/presentations/lmcos-overview/` | Slidev deck: motivation, method, human validation |
 
@@ -39,7 +40,7 @@ The implementation is **deliberately narrower**: **meta-control of search only**
 
 **Central empirical questions** include: Can a **simple** halt/continue policy learn (near-)optimal control given a **TreeNN** encoding? Which encoding or **cost architecture** (linear vs budget-aware) supports learning? How does behavior relate to **human** time allocation and engine-based **VOC** (value of computation) from the behavioral track?
 
-A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see `lmcos/LAB_NOTEBOOK.md` for the roadmap.
+A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see [`labnotebook.md`](labnotebook.md) and [(R-LMCOS-OVERVIEW)](reports/lmcos-pipeline-overview.md) for the roadmap.
 
 ---
 
@@ -55,7 +56,7 @@ The `lmcos` line asks the complementary question: if we **teach a network** the 
 
 ### 3.1 Snapshots and halt rewards
 
-Along one search episode, let snapshots be \(s_0,\ldots,s_{K-1}\) with step index \(t\) over expansions. The **halt reward** at \(t\), written \(h_t\), scores the **quality of the move selected if the agent stops at \(t\)**. The project moved from a **regret** formulation to an **absolute** full-reference target: \(h_t\) is driven by the **value of the best move at snapshot \(t\)** under the full teacher search (e.g. \(Q\)-full), not by difference to the final best move only. That avoids degenerate small margins on intermediate steps (see `LAB_NOTEBOOK`, 2026-04-05).
+Along one search episode, let snapshots be \(s_0,\ldots,s_{K-1}\) with step index \(t\) over expansions. The **halt reward** at \(t\), written \(h_t\), scores the **quality of the move selected if the agent stops at \(t\)**. The project moved from a **regret** formulation to an **absolute** full-reference target: \(h_t\) is driven by the **value of the best move at snapshot \(t\)** under the full teacher search (e.g. \(Q\)-full), not by difference to the final best move only. That avoids degenerate small margins on intermediate steps (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md), 2026-04-05).
 
 ### 3.2 Linear continue cost and DP oracle (scalar cost)
 
@@ -84,7 +85,7 @@ with \(V^*\) the oracle value of following the optimal policy from the next snap
 \[
 A_{\mathrm{compute}}(s_t) = Q_{\mathrm{continue}}(s_t) - Q_{\mathrm{halt}}(s_t).
 \]
-A **greedy** policy **continues** iff \(A_{\mathrm{compute}}(s_t) > 0\). Training minimizes MSE to Bellman-derived \(A_{\mathrm{compute}}\) to avoid “common-mode” value fitting that matches levels but not the **decision boundary** (see `LAB_NOTEBOOK`, fitted-Q and advantage-only sections).
+A **greedy** policy **continues** iff \(A_{\mathrm{compute}}(s_t) > 0\). Training minimizes MSE to Bellman-derived \(A_{\mathrm{compute}}\) to avoid “common-mode” value fitting that matches levels but not the **decision boundary** (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md), fitted-Q and advantage-only sections).
 
 ### 3.4 Budget-aware oracle (state: tree size and time budget)
 
@@ -124,11 +125,11 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 - **Mode (research):** **dynamic growth** — run a full **oracle** search (e.g. large node budget), then take a **prefix** of the expansion sequence as input and **consolidate** deep statistics from the full tree as **supervised targets** (prefix / deep targets in `cts_pretrain.py`).
 - **Targets:** Scalar value backups and, after fixes in 2026-04-10, **search-consolidated per-edge WDL** targets (visit-weighted, perspective-correct) stored as `edge_wdl_targets`, not raw value-head slices at a node in isolation.
-- **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see `LAB_NOTEBOOK`).
+- **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md)).
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and `lmcos/LAB_NOTEBOOK.md` (2026-05-29 entry).
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md).
 
 ### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
 
@@ -211,7 +212,7 @@ pytest analysis/metacontrol/tests/core/test_providers.py analysis/metacontrol/te
 - **Fitted advantage** on frozen embeddings can get **return** near oracle but **poor** exact stop-step / sign unless data are **filtered** to nontrivial episodes; **async** vs **sync** encoders can differ on filtered data.
 - **Budgeted** packing and training are the **current** intended path for state-aware costs.
 
-These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers and run IDs.
+These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.md) and [(R-A0)](reports/analysis-0-oracle-baseline.md) for numbers and run IDs.
 
 ---
 
@@ -220,7 +221,8 @@ These are *hypothesis-generating* outcomes; see `LAB_NOTEBOOK.md` for numbers an
 | Resource | Content |
 | :--- | :--- |
 | `analysis/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
-| `lmcos/LAB_NOTEBOOK.md` | CTS experiment log, pipeline stages, cluster run IDs |
+| `labnotebook.md` | Chronological experiment log |
+| `reports/` | Stable `R-*` analysis reports |
 
 Analysis notebooks mentioned in the lab (`regret_landscape.ipynb`, `episode_difficulty_analysis.ipynb`) live alongside packed diagnostics on analysis machines.
 
@@ -247,7 +249,7 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `lmcos/tests/` cover plumbing, oracles, fitted-Q, probes; run `pytest tests/` from `lmcos/` with `PYTHONPATH` set.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands: **`human_analytics/README.md`** (DuckDB ETL, figures); **`lmcos/slurm/README.md`** (pipeline Slurm); **`lmcos/LAB_NOTEBOOK.md`** (experiments).
+For day-to-day commands: **`human_analytics/README.md`** (DuckDB ETL, figures); **`lmcos/slurm/README.md`** (pipeline Slurm); **`labnotebook.md`** (experiments).
 
 ---
 
@@ -284,4 +286,4 @@ Current production focus is **stage 3–4** on ysagiv read-only caches (hl4291 d
 
 ---
 
-*Last updated 2026-05-29: collapsed `project.md` into this file; see `lmcos/LAB_NOTEBOOK.md` for today's controller harness changes.*
+*Last updated 2026-06-04: experiment log at `labnotebook.md` + `reports/`; see [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md) for the 2026-05-29 controller harness.*

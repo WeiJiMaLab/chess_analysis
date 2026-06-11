@@ -20,7 +20,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple
 
 import numpy as np
 import torch
@@ -35,6 +35,7 @@ from cts.data.preprocess_gnn.teacher_targets import (
 from cts.data.preprocess_mc.oracle import (
     BudgetBucket,
     BudgetedOracleConfig,
+    BudgetedOraclePolicy,
     budgeted_oracle_metadata,
     compute_budgeted_oracle,
     deterministic_starting_budgets,
@@ -592,6 +593,22 @@ def _ordered_expansion_parent_ids(record: RawPretrainExampleRecord) -> List[int]
     return [node_id for _, node_id in expansion_parents]
 
 
+def build_compact_trajectory(
+    record: RawPretrainExampleRecord,
+    schema: NodeFeatureSchema | None = None,
+    *,
+    source_path: str = "",
+) -> Optional[dict[str, Any]]:
+    """Convert a raw pretrain record into the per-trajectory dict used at pack time.
+
+    The returned ``halt_rewards`` and ``tree_sizes`` are the precomputed inputs passed
+    to ``compute_budgeted_oracle`` when building controller episodes.
+    """
+    if schema is None:
+        schema = _feature_schema()
+    return _build_compact_trajectory(source_path, record, schema)
+
+
 def _build_compact_trajectory(
     path_str: str,
     record: RawPretrainExampleRecord,
@@ -657,6 +674,28 @@ def _build_compact_trajectory(
     }
 
 
+def budgeted_oracle_from_trajectory(
+    trajectory: Mapping[str, Any],
+    starting_budget: int,
+    config: BudgetedOracleConfig,
+) -> BudgetedOraclePolicy:
+    """Run ``compute_budgeted_oracle`` on a ``build_compact_trajectory`` result."""
+    num_steps = min(starting_budget, len(trajectory["halt_rewards"]))
+    halt_rewards = [float(value) for value in trajectory["halt_rewards"][:num_steps]]
+    tree_sizes = [int(value) for value in trajectory["tree_sizes"][:num_steps]]
+    return compute_budgeted_oracle(halt_rewards, tree_sizes, num_steps, config)
+
+
+def build_compact_trajectory_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    source_path: str = "",
+) -> Optional[dict[str, Any]]:
+    """Load a raw ``.pt`` payload and build the controller trajectory dict."""
+    record = RawPretrainExampleRecord.from_payload(payload)
+    return build_compact_trajectory(record, source_path=source_path)
+
+
 def _build_packed_tree_result(
     path_str: str,
     reward_scale: float,
@@ -683,7 +722,7 @@ def _build_packed_tree_result(
         return None
     if exclude_xaba and _source_top_level_root_churn_category(record) == "X*AB*A":
         return None
-    trajectory = _build_compact_trajectory(path_str, record, NodeFeatureSchema(feature_names))
+    trajectory = build_compact_trajectory(record, NodeFeatureSchema(feature_names), source_path=path_str)
     if trajectory is None or trajectory["num_steps"] <= 0:
         return None
 
