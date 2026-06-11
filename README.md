@@ -257,7 +257,7 @@ For day-to-day commands: **`human_analytics/README.md`** (DuckDB ETL, figures); 
 
 | Area | Lead | Scope |
 | :--- | :--- | :--- |
-| **Infrastructure & integration** | Yotam | lc0/tree export, GNN core (bidirectional sweeps, slot encodings, batching), RL training paths |
+| **Model development and analysis** | Yotam | lc0 tree generation, GNN architecture (asynchronous sweeps, child-decodability pretraining), metacontroller training (pipeline design and implementation) and mech interp |
 | **Validation & psychology** | Jordan | Baselines, human alignment (move time, clock regimes), controller ablations, diagnostics |
 
 ---
