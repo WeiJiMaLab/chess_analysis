@@ -41,6 +41,19 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## 2026-06-11 {#2026-06-11}
+
+LMCOS VOC-mechanism investigation merged (analysis code + report); entries ported from the pre-migration `lmcos/LAB_NOTEBOOK.md`.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **LMCOS WDL-subspace ablation** — greedy-regret differential, subtree-weighted vs rerun controller | Does the stop decision causally use decoder-read `z_t` directions, or read `z_t` as a step-counter proxy? | ✅ Subtree-weighted: ablating the top-k WDL directions degrades regret 0.023→0.145; keep-only top-64 rebuilds **sub-floor** 0.099 (< 0.218 `T_t`-only floor). Rerun never breaks the floor. Head weight-alignment ~at chance for **both** (the static probe doesn't separate the encoders). | [(R-VOC-MECH)](reports/voc-mechanism.md) |
+| **LMCOS readout characterization** — constructed trees with value ⊥ size; response surface | Pin the function: value landscape (metacontrol) vs search-progress proxy (z ≈ `N_t`) | ✅ **Metacontrol.** corr(adv, best) **−0.60..−0.78**, corr(adv, size) ≈ **−0.1**; `N_t` decodable R²=0.68 but **unused**. Rule: stop when budget low, else continue while the near-best candidate field is broad; top-two margin unused. Rerun reads value incoherently → subtree-weighting pretraining makes value usable. | [(R-VOC-MECH)](reports/voc-mechanism.md) |
+| **LMCOS linear perturbation** — cautionary wrong result | Linear value/progress directions in `z` | ❌ Concluded "reads progress" — artifact of linear directions on a nonlinear GNN embedding; overturned by the constructed-tree probe. Do not cite. | [(R-VOC-MECH)](reports/voc-mechanism.md) |
+| **Open** — response-surface + halt-trajectory reruns; network-internals | Corrected candidate sweep (single ε=0.15) + on-distribution halt trigger (halt ≥ 5); inspect head weights/activations | ⏳ Reruns blocked on Della maintenance. ⬜ Network-internals todo (all evidence so far is behavioral). | [(R-VOC-MECH)](reports/voc-mechanism.md) |
+
+---
+
 ## 2026-06-10 {#2026-06-10}
 
 Repo audit + scratch cleanup; QoS diagnosis; full FEN export.
