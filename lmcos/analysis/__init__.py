@@ -16,6 +16,9 @@ Main tools:
 - ``evaluate_controller`` — closed-loop replay of a trained controller
   against the budgeted oracle on held-out data.
 - ``plot_advantage_loss_from_log`` — quick visualization helper.
+- ``wdl_subspace_ablation`` — causal VOC-mechanism probe: SVD the child-WDL
+  decoder's root readout, then keep-only / ablate the top-k WDL subspace of
+  ``z_t`` and re-score the frozen controller's greedy stopping regret.
 
 Shared regex/parse/decomposition helpers live in ``cts.analysis._common``.
 """
