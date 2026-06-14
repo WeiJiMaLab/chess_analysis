@@ -44,6 +44,13 @@ BESTMOVE_RE = re.compile(r"^bestmove\s+(?P<move>\S+)")
 # Delimiter splitting the root FEN from the trailing move list inside a position spec string.
 POSITION_SPEC_SEPARATOR = " ||moves|| "
 
+# Minimum plies of move history for a *claimable* threefold repetition to be
+# possible: identical positions recur >= 4 plies apart, so the 3rd is at ply >= 8
+# and the earliest claim (by intending the completing move) is at ply >= 7. Below
+# this, ``terminal_value_from_board`` skips python-chess's expensive repetition
+# probe. See that function for the full rationale.
+_MIN_PLIES_FOR_CLAIMABLE_THREEFOLD = 7
+
 
 def clamp(value: float, low: float, high: float) -> float:
     """Clamp ``value`` into ``[low, high]``."""
@@ -111,6 +118,26 @@ def terminal_value_from_board(board) -> Optional[float]:
     when the game isn't over (or when python-chess is unavailable).
     """
     if chess is None:
+        return None
+
+    # ``claim_draw=True`` runs ``can_claim_threefold_repetition`` on every call,
+    # a per-legal-move probe that is ~23% of tree-gen wall (R-U1-SPEED). But a
+    # claimable threefold needs the same position 3x: consecutive recurrences are
+    # >= 4 plies apart, so the 3rd is at ply >= 8 and the earliest claim is at
+    # ply >= 7. We therefore gate on the board's *actual* move history, not on
+    # the ``max_depth`` hyperparameter: while the board has < 7 plies (always
+    # true at the default max_depth=4) the threefold probe is provably wasted, so
+    # we skip it and check only the cheap claimable fifty-move rule. If max_depth
+    # is ever raised so a board carries >= 7 plies, we fall back to the exact
+    # claim_draw=True check — correct for any depth, fast in the common case.
+    if len(board.move_stack) < _MIN_PLIES_FOR_CLAIMABLE_THREEFOLD:
+        outcome = board.outcome(claim_draw=False)
+        if outcome is not None:
+            if outcome.winner is None:
+                return 0.0
+            return 1.0 if outcome.winner == board.turn else -1.0
+        if board.can_claim_fifty_moves():
+            return 0.0
         return None
 
     outcome = board.outcome(claim_draw=True)
