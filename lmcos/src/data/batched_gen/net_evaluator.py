@@ -160,11 +160,23 @@ class NetEvaluator(Evaluator):
         ``value``/``wdl`` are side-to-move perspective; ``wdl`` sums to 1.
         """
         from lczerolens import LczeroBoard  # lazy
+        from cts.core.providers.common import split_position_spec  # lazy
 
         self._ensure_model_loaded()
         temperature = 1.0 if self._re_baseline else LC0_DEFAULT_POLICY_TEMPERATURE
 
-        root_boards = [LczeroBoard(fen) for fen in fens]
+        def board_from_spec(spec: str) -> "LczeroBoard":
+            # The search threads positions as specs ("<fen> ||moves|| m1 m2 ..."),
+            # and lc0 is fed `position fen <root> moves ...`, so we replay the
+            # moves to carry the same real history into the encoding. A plain FEN
+            # parses as a zero-move spec.
+            root_fen, moves = split_position_spec(spec)
+            board = LczeroBoard(root_fen)
+            for move in moves:
+                board.push_uci(move)
+            return board
+
+        root_boards = [board_from_spec(spec) for spec in fens]
         root_policy, root_wdl = self._forward_heads(root_boards, want_policy=True)
 
         # re_baseline=True: raw root value head, no 1-ply lookahead (~30x cheaper).
@@ -248,7 +260,7 @@ class NetEvaluator(Evaluator):
             chunk = boards[start : start + self._max_batch_size]
             planes = torch.stack(
                 [board.to_input_tensor(input_encoding=encoding) for board in chunk]
-            )
+            ).to(self._device)
             with torch.no_grad():
                 out = self._model(planes)
             wdl_chunks.append(out["wdl"].detach())

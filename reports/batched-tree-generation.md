@@ -105,13 +105,13 @@ So we separate concerns into four layers, with different bars:
 | 1.2 Online per-tree oracle-trace recording inside the batched loop | ✅ |
 | 1.3 **Replay test:** old sequential vs new batched under the *same* fixed evaluator → byte-identical `PretrainExample` (tree, trace, targets) | ✅ **T-replay passes** (41 batched_gen tests green, full suite 293✅/1 skip) |
 | **Phase 2 — In-process net evaluator (L2, numeric)** | |
-| 2.1 Export/load the lc0 net (`leela2onnx` → ONNX, or lczerolens → PyTorch); pick fp32 | ⬜ |
-| 2.2 Replicate lc0's 112-plane input encoding (incl. the history-fill convention chosen in §2) | ⬜ |
-| 2.3 **Numeric parity test:** forward vs lc0 valuehead/policy on a held-out FEN set; report max/mean abs diff, policy-argmax agreement | ⬜ |
+| 2.1 Export/load the lc0 net (`leela2onnx` → ONNX, then lczerolens) — fp32 | ✅ `…/lmcos/weights/t1-256x10.onnx`; `NetEvaluator(NetBackend.LCZEROLENS)` |
+| 2.2 Replicate lc0's input encoding + the three pinned behaviors (§2): 1-ply valuehead, PolicyTemperature 1.359, fen_only=REPEATED | ✅ `re_baseline=False` reproduces lc0 exactly on midgame FENs |
+| 2.3 **Numeric parity test:** forward + valuehead/priors vs lc0 | ✅ pinning test passes (value/WDL ≤ per-mille; whole prior vector ≤ 1e-2) |
 | **Phase 3 — End-to-end parity + speedup (L3/L4)** | |
-| 3.1 Compose batched loop + in-process net; run on a held-out FEN set vs lc0-UCI baseline | ⬜ |
-| 3.2 Report % trajectory-identical; characterize any divergences (near-tie?); target parity on identical trees | ⬜ |
-| 3.3 Throughput + GPU-util sweep over batch size; pin per-tree cost; **go/no-go** | ⬜ |
+| 3.1 Compose batched loop + in-process net; run vs lc0-UCI baseline | ⏳ runs end-to-end (spec-aware); trajectory parity smoke (S-1tree/S-parity1k) still to run |
+| 3.2 Report % trajectory-identical; characterize divergences | ⬜ |
+| 3.3 Throughput + GPU-util sweep; pin per-tree cost; **go/no-go** | ⏳ preliminary cuda bench in progress; CPU-side bookkeeping looks like the new bottleneck (see §10) |
 | **Phase 4 — Scale-up** | |
 | 4.1 Wire slurm config (one output dir, global-index filenames, `resume`); CPU and/or GPU lane | ⬜ |
 | 4.2 Generate 150K → `trees_unfiltered/`; completeness + identity guards (`count==len(FENs)`, `root_position_spec==FEN`) | ⬜ |
@@ -206,4 +206,24 @@ New deps to add: `lczerolens` (+ its torch deps) **or** `onnx` + `onnxruntime-gp
 
 ---
 
-*Next action on green-light: Phase 0 + the T-replay test (L1) — the single load-bearing gate. Mirror status into `labnotebook.md` and the procedure checklist above.*
+## 10. Phase-2 build findings & working guidance (2026-06-14)
+
+**What's done (committed `2f30bbc`, `3a2bf7d`):** L1 byte-exact batched search; `NetEvaluator` (lczerolens+ONNX) that under `re_baseline=False` reproduces lc0 *exactly* on midgame positions. The pinning test (step 4) passes.
+
+**Bugs the pinning test caught before any scale run** (each would have silently corrupted the 150K dataset):
+1. `LczeroBoard.encode_move(move, us)` needs the side-to-move — policy was misindexed for Black.
+2. The onnx2torch model **must be `.eval()`** — otherwise BatchNorm uses per-batch statistics, so a position's value depends on which other positions share the batch (non-deterministic → would break trajectory determinism).
+3. **History-fill**: lc0 `HistoryFill=fen_only` == lczerolens `INPUT_CLASSICAL_112_PLANE_REPEATED`, *not* the default no-history encoding. (Default matched startpos by luck; broke on midgame.)
+4. The search threads **position specs** (`<fen> ||moves|| m1 …`), and lc0 is fed `position fen <root> moves …`, so the net must replay the moves (`split_position_spec`) to carry the same real history — not treat the string as a bare FEN.
+
+**Cost reality of the chosen faithful path.** `re_baseline=False` (1-ply valuehead) evaluates every node's children to back up its value → ~30× more net calls than the raw head. On the A100 the GPU forwards are cheap; the emerging bottleneck is the **CPU-side search bookkeeping** (building thousands of child boards per step in Python). This is exactly the §7 prediction: once eval is batched, vectorizing/speeding the bookkeeping (or `re_baseline=True`, which skips the 1-ply entirely) becomes the next lever. Pin the actual s/tree before scaling.
+
+**Iteration guidance (how to not be slow — learned the hard way today):**
+- **Default to cuda** for net work — the A100 is on the node (`nvidia-smi -L`). Never run a CPU arm for a quick check.
+- **The ONNX reload (~6–20s) is paid on every `NetEvaluator()`** — cache the loaded model (a session-scoped fixture in the net tests; a single long-lived `NetEvaluator` in scripts). This is the biggest test-suite speedup (a full net-test pass was ~8 min, almost all reloads).
+- **Use tiny configs to iterate** (budget 8–16, 2–4 trees); only run budget-96 for the final headline number.
+- **Generous timeouts + flushed stdout**; don't pipe long pytest through `tail` (truncates the summary) — redirect to a file and read it.
+- `pytest -n` (xdist) does *not* help here — each worker reloads the model; the cached-model fixture is the right fix.
+- The genuine game-start position is special-cased by lc0 (true empty history) and won't match REPEATED — irrelevant, since our data is ply 15–75.
+
+*Next: cached-model fixture (test speed) → trajectory-parity + throughput smokes (S-1tree/S-parity1k/S-thru) = the §8 go/no-go → Phase 4 scale-up. Mirror status into `labnotebook.md`.*
