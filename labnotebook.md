@@ -37,10 +37,11 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 - **Full unique FEN pool** (110.5 M FENs, all of `processed_moves_nonzero`) now at
   `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/fens.txt` (5.4 GB); single source: `cts.data.process_fens`
   (`build-pool` / `sample`).
-- **Tree-gen approach being superseded** by the faithful batched in-process generator
-  ([R-BATCHGEN](reports/batched-tree-generation.md)) — fens.txt is ground truth, trees → `trees_unfiltered/`
-  → PUCT-stability filter → `trees_filtered/`. The 5,228 tmp/human_trees_50k are from the old DB-sampled
-  set and won't be reused.
+- **Tree-gen path: lc0-UCI + QoS fix.** The in-process batched speedup was tried and **scrapped**
+  (only ~2×, encoding-bound — [R-BATCHGEN](reports/batched-tree-generation.md) NO-GO). Resume the existing
+  `cts.data.build_tree` generator on `gpu-short` (not `gpu-test`) for the 50K/150K. The intended data flow
+  (fens.txt ground truth → trees → PUCT-stability filter → train) still stands; only the generator engine
+  reverts to lc0-UCI.
 - **Next once trees land:** U1.2 OSS↔RT join (`analysis/human_oracle_comparison.py`, subset-tolerant);
   then U1.3 refit; re-run [R-U3](reports/analysis-u3-baselines.md) on the new controller.
 
@@ -58,9 +59,10 @@ FEN handling consolidated; batched in-process tree-gen built & validated against
 | **Phase 2 — in-process net** (`NetEvaluator`, lczerolens + `leela2onnx` ONNX) | Replace batch-1 lc0-UCI oracle | ✅ Committed `3a2bf7d`. `re_baseline=False` reproduces lc0 **exactly** on midgame FENs | [(R-BATCHGEN §10)](reports/batched-tree-generation.md) |
 | **3 lc0 quirks pinned** — value=1-ply best-child *valuehead* minimax (not raw head); priors at PolicyTemperature 1.359; history `fen_only`=lczerolens REPEATED | Bit-for-bit replication (user: replicate first, flip `re_baseline=True` later) | ✅ Confirmed vs binary (startpos +0.074 [0.246,0.582,0.172]; priors d2d4 0.1806 vs 0.1804) | [(R-BATCHGEN §2)](reports/batched-tree-generation.md) |
 | **3 real bugs caught by the pinning test** — `encode_move(move, us)`; onnx2torch needs `.eval()` (BatchNorm batch-dependence); position specs (`\|\|moves\|\|`) need `split_position_spec` | Each would have silently corrupted the 150K dataset | ✅ All fixed; pinning test green | [(R-BATCHGEN §10)](reports/batched-tree-generation.md) |
-| **Speedup go/no-go** — end-to-end cuda bench (budget 96, faithful 1-ply) | The §8 ≥5× gate before scaling | ⏳ In progress. GPU forwards cheap; **CPU-side bookkeeping is the emerging bottleneck** (1-ply valuehead = ~30× evals). s/tree pending. | [(R-BATCHGEN §10)](reports/batched-tree-generation.md) |
+| **Speedup go/no-go** — A100 bench (budget 16, extrapolated to 96) | The §8 ≥5× gate before scaling | ❌ **NO-GO.** raw `re_baseline=True` ~8 s/tree (**~2×**); faithful 1-ply ~125 s/tree (**~7× slower**). Bottleneck = Python 112-plane encoding (`to_input_tensor`), not the GPU. Below the 5× gate → not worth the build. | [(R-BATCHGEN)](reports/batched-tree-generation.md) |
+| **Scrap + cleanup** (hl4291: "juice isn't worth the squeeze") | Abort route-b; keep the record | ✅ Removed `batched_gen` module + tests + `smoke/`; **kept `process_fens`** (independent FEN-source win) + R-BATCHGEN as a documented NO-GO. 252 tests collect. | — |
 
-**Next:** cached-model fixture (test speed) → trajectory-parity + throughput smokes (go/no-go) → Phase 4 scale-up → PUCT-stability filter → train.
+**Next:** resume tree-gen on the **lc0-UCI path + QoS fix** (`gpu-short`, not `gpu-test`) for the 50K/150K → U1.2 OSS↔RT → U1.3 refit. Route-(b) speedup parked (revive only with a vectorized encoder).
 
 ---
 

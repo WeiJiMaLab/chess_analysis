@@ -1,6 +1,24 @@
 # Batched in-process tree generation — parity-gated speedup (R-BATCHGEN)
 
-**Phase:** Prior to implementation · drafted 2026-06-14 · owner hl4291 (with ysagiv)
+> ## ❌ NO-GO (2026-06-14) — investigated, built, measured, abandoned.
+>
+> The in-process batched evaluator was built and validated for correctness, then **benchmarked and scrapped**: the speedup doesn't justify the build.
+>
+> **Measured (A100, budget-16, extrapolated to budget-96):**
+> | Mode | s/tree @16 | ~s/tree @96 | vs lc0-UCI 16.87 |
+> |---|---|---|---|
+> | `re_baseline=True` (raw value head) | 1.35 | ~8 | **~2×** |
+> | `re_baseline=False` (faithful 1-ply valuehead) | 20.81 | ~125 | **~7× *slower*** |
+>
+> **Why:** the bottleneck is **Python-side 112-plane encoding (`to_input_tensor`) + board bookkeeping, not the GPU** (the A100 sits idle). The faithful 1-ply valuehead encodes every node's *grandchildren* (~branching² per node) → slower than the baseline it was meant to replace. Even the raw path only reached ~2×, well below the §8 ≥5× gate. Getting past the gate would need a custom vectorized encoder — out of scope for the payoff.
+>
+> **Decision (hl4291):** "juice isn't worth the squeeze." Resume tree-gen on the **lc0-UCI path + the QoS fix** (run on `gpu-short`, not `gpu-test`) — throughput via parallelism, zero new code.
+>
+> **What was kept:** `cts.data.process_fens` (FEN-source consolidation — independent of this effort). **What was removed:** the `batched_gen` module, its tests, and the `smoke/` scripts (see git history: `2f30bbc`, `3a2bf7d`). **Reusable knowledge below:** §2's pinned lc0 behaviors (valuehead = 1-ply minimax; PolicyTemperature 1.359; `HistoryFill=fen_only` == lczerolens `REPEATED`) and §10's bug catalogue — keep these if anyone revisits route (b) with a faster encoder.
+>
+> *The rest of this document is the original plan/record, preserved for posterity. The code it references no longer exists in the tree.*
+
+**Phase:** ❌ NO-GO · built & benchmarked 2026-06-14 · owner hl4291 (with ysagiv)
 **Thread:** LMCOS · follow-on to [(R-U1-SPEED)](u1-tree-gen-speedup.md) ("route (b) is the only real lever")
 **Companions:** [`unify.md`](../unify.md) · [`labnotebook.md`](../labnotebook.md)
 
