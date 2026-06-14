@@ -6,7 +6,7 @@ YAML configs for `python3 -m cts.<module> --config …`. Each file is a Pydantic
 
 | Directory | Stages | Typical modules |
 |-----------|--------|-----------------|
-| `1_preprocess_data/` | Sample FENs, build lc0 trees, GNN split/pack | `cts.data.sample_fens`, `cts.data.build_tree`, `cts.data.preprocess_gnn.split`, `cts.data.preprocess_gnn.pack` |
+| `1_preprocess_data/` | Sample FENs, build lc0 trees, GNN split/pack | `cts.data.process_fens`, `cts.data.build_tree`, `cts.data.preprocess_gnn.split`, `cts.data.preprocess_gnn.pack` |
 | `2_pretrain_encoder/` | Child-WDL (or other) encoder pretrain | `cts.data.build_tree` (`command: pretrain-child-wdl-encoder`) |
 | `3_preprocess_root/` | Pack controller episodes, materialize/merge embedding caches | `cts.data.preprocess_mc.pack`, `cts.data.preprocess_mc.materialize` |
 | `4_supervised_controller/` | Fitted-Q controller training | `cts.train.controller_train` |

@@ -42,6 +42,7 @@ Each report has:
 | [(R-A3)](analysis-3-weaker-engine.md) | Prior | LMCOS |
 | [(R-A4)](analysis-4-entropy-voi.md) | After | Human |
 | [(R-LMCOS-OVERVIEW)](lmcos-pipeline-overview.md) | After | LMCOS |
+| [(R-BATCHGEN)](batched-tree-generation.md) | Prior | LMCOS |
 | [(R-LMCOS-STAGE4)](lmcos-stage4-ablation.md) | After | LMCOS |
 | [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | After | Repo |
 | [(R-ARCH-HUMAN)](archive-human-analytics-notebook-legacy.md) | Archive | Human |

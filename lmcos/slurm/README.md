@@ -12,7 +12,7 @@ Cluster wrappers for the CTS pipeline on della. Each script takes a `CONFIG` env
 
 | Script | Module |
 |--------|--------|
-| `sample_root_fens_della.slurm` | `cts.data.sample_fens` |
+| (FEN pool + sampling) | `cts.data.process_fens` (`build-pool` / `sample`) — run locally, no slurm |
 | `generate_dataset_shard.slurm` | `cts.data.build_tree` (`generate-dataset`) |
 | `submit_generate_dataset.sh` | Local orchestrator → `submit_generate_dataset_shards.py` (slices FEN YAML, submits N shard jobs) |
 | `prepare_pretrain_split_della.slurm` | `cts.data.preprocess_gnn.split` |

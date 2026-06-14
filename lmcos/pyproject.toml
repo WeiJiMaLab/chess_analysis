@@ -17,6 +17,7 @@ packages = [
   "cts.core",
   "cts.core.providers",
   "cts.data",
+  "cts.data.batched_gen",
   "cts.data.preprocess_gnn",
   "cts.data.preprocess_mc",
   "cts.models",
