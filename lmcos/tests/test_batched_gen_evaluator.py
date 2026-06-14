@@ -188,23 +188,5 @@ def test_cached_evaluator_persists_across_instances(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 # T-fwd (net) — skipped unless the heavy lib is present.
 # --------------------------------------------------------------------------- #
-def test_net_evaluator_interface_smoke() -> None:
-    """T-fwd: NetEvaluator.evaluate returns one valid PositionEval per fen.
-
-    Guarded so it is skipped when the inference lib is unavailable. Kept minimal
-    because the real net may still be scaffolded — we only assert the interface
-    and value ranges, not numeric parity (that is T-fwd-numeric / S-backend).
-    """
-    pytest.importorskip("lczerolens")
-    from cts.data.batched_gen.net_evaluator import NetEvaluator
-
-    try:
-        net = NetEvaluator()
-    except (FileNotFoundError, NotImplementedError) as exc:
-        pytest.skip(f"NetEvaluator not constructable in this environment: {exc}")
-
-    fens = list(SMALL_FEN_LIST[:2])
-    out = net.evaluate(fens)
-    assert len(out) == len(fens)
-    for ev in out:
-        _is_valid_eval(ev)
+# NetEvaluator interface + numeric parity live in test_batched_gen_net_forward.py
+# (with the real ONNX net + proper skips); no scaffold-era placeholder here.

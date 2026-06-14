@@ -52,6 +52,35 @@ def quantize_prior_to_uci_text_resolution(probability: float) -> float:
     return float(f"{probability * 100.0:.2f}") / 100.0
 
 
+def quantize_wdl_to_uci_permille(
+    win: float, draw: float, loss: float
+) -> "tuple[float, float, float]":
+    """Snap a WDL triple to lc0's integer per-mille UCI grid, then renormalize.
+
+    lc0's UCI value engine reports WDL as integer per-mille (``wdl W D L``,
+    0-1000), which the baseline reparses and normalizes by their sum
+    ([parse_root_value_features_from_lines] -> [value_features_from_wdl]). So
+    the in-process net's full-precision softmax must be rounded to the same
+    1e-3 grid for ``re_baseline=False`` parity. Rounding to per-mille also
+    absorbs the sub-1e-3 numeric gap between the ONNX/torch backend and lc0's
+    CUDA kernels, which is what makes discrete-trajectory parity attainable
+    (report §2 "honest scope"). Residual forks can only occur when a component
+    straddles a per-mille boundary.
+    """
+    w, d, l = round(win * 1000.0), round(draw * 1000.0), round(loss * 1000.0)
+    total = w + d + l
+    if total <= 0:
+        raise ValueError("WDL must have positive mass after per-mille rounding.")
+    return (w / total, d / total, l / total)
+
+
+# lc0's default search-time PolicyTemperature (UCI ``PolicyTemperature``). The
+# verbose-move-stats prior P the lc0-UCI pipeline parses is the policy head
+# softmaxed at this temperature, so re_baseline=False applies it (empirically
+# reproduces lc0's reported P to ~1e-4); re_baseline=True uses 1.0 (raw policy).
+LC0_DEFAULT_POLICY_TEMPERATURE = 1.359
+
+
 class NetEvaluator(Evaluator):
     """Batched, in-process lc0 net evaluator.
 
@@ -65,12 +94,13 @@ class NetEvaluator(Evaluator):
             hand more FENs than this in one ``evaluate`` call, so they are
             chunked to bound device memory.
         re_baseline: the single fidelity switch (report §2). ``False`` (default,
-            priority) replicates the lc0-UCI quirks bit-for-bit — priors rounded
-            to the verbose-move-stats text resolution (see
-            :func:`quantize_prior_to_uci_text_resolution`) and lc0's bare-FEN
-            history fill (:func:`~.encoding.history_fill_for`). ``True`` keeps
-            the net's full-precision priors and the canonical history fill, and
-            requires re-running the A0 oracle-direction checks (re-baseline).
+            priority) replicates the lc0-UCI pipeline bit-for-bit: value/WDL is
+            lc0's 1-ply best-child ``valuehead`` minimax snapped to the per-mille
+            grid, priors are the policy head at ``PolicyTemperature`` 1.359
+            snapped to the 1e-4 grid, history is fen_only. ``True`` uses the raw
+            root value head + temperature 1.0 (no 1-ply lookahead, ~30x cheaper,
+            a cleaner training target) and requires re-running the A0
+            oracle-direction checks (re-baseline).
     """
 
     def __init__(
@@ -100,13 +130,10 @@ class NetEvaluator(Evaluator):
     def evaluate(self, fens: Sequence[str]) -> List[PositionEval]:
         """Return one ``PositionEval`` per FEN, scoring cache-misses in batches.
 
-        Structure (the batching skeleton; the forward pass is the Phase-2 TODO):
-
         1. partition ``fens`` into cache hits and unique misses;
-        2. encode the misses (``encoding.encode_board_planes_batch``);
-        3. run the net on the encoded batch in ``max_batch_size`` chunks;
-        4. decode policy/value/WDL heads into ``PositionEval`` per FEN;
-        5. populate the cache and return results in input order.
+        2. run the net on the misses in ``max_batch_size`` chunks (one forward
+           pass each — the speedup) and decode the WDL + policy heads;
+        3. populate the cache and return results in input order.
         """
         missing = [fen for fen in dict.fromkeys(fens) if fen not in self._eval_cache]
         if missing:
@@ -115,87 +142,195 @@ class NetEvaluator(Evaluator):
         return [self._eval_cache[fen] for fen in fens]
 
     def _evaluate_uncached(self, fens: Sequence[str]) -> List[PositionEval]:
-        """Run the net over a list of (already-unique, uncached) FENs.
+        """Faithfully replicate lc0's ``valuehead`` per position.
 
-        TODO(Phase 2.1-2.3): the real forward pass. Sketch::
+        lc0's ``valuehead`` is NOT the raw root value head — it does a **1-ply
+        best-child minimax** (confirmed: its output equals
+        ``max over legal children of (-raw_value(child))`` exactly). So for
+        ``re_baseline=False`` a position's value/WDL is that 1-ply backup,
+        snapped to the per-mille grid; priors are the policy head softmaxed at
+        lc0's ``PolicyTemperature`` (1.359) and snapped to the 1e-4 grid.
+        Children are built by pushing each move (1 ply of history) — matching how
+        lc0's valuehead search evaluates them. Terminal positions (no legal
+        moves) fall back to the raw root value head. With ``re_baseline=True``
+        the temperature is 1.0 and no grid-snapping is applied.
 
-            import numpy as np                      # lazy import
-            from .encoding import encode_board_planes_batch, history_fill_for
+        Batching: every position's children are pooled into one forward pass
+        (chunked by ``max_batch_size``) — the speedup over per-child UCI calls.
+        ``value``/``wdl`` are side-to-move perspective; ``wdl`` sums to 1.
+        """
+        from lczerolens import LczeroBoard  # lazy
 
-            self._ensure_model_loaded()
-            history_fill = history_fill_for(self._re_baseline)
+        self._ensure_model_loaded()
+        temperature = 1.0 if self._re_baseline else LC0_DEFAULT_POLICY_TEMPERATURE
+
+        root_boards = [LczeroBoard(fen) for fen in fens]
+        root_policy, root_wdl = self._forward_heads(root_boards, want_policy=True)
+
+        # re_baseline=True: raw root value head, no 1-ply lookahead (~30x cheaper).
+        if self._re_baseline:
             results: List[PositionEval] = []
-            for start in range(0, len(fens), self._max_batch_size):
-                chunk = fens[start : start + self._max_batch_size]
-                planes = encode_board_planes_batch(chunk, history_fill=history_fill)  # [B,112,8,8]
-                policy_logits, value, wdl = self._forward(planes) # net heads
-                for i, fen in enumerate(chunk):
-                    priors = self._policy_logits_to_move_priors(fen, policy_logits[i])
-                    results.append(PositionEval(
-                        priors=priors,
-                        value=float(value[i]),
-                        wdl=tuple(float(x) for x in wdl[i]),
-                    ))
+            for i, board in enumerate(root_boards):
+                priors = self._policy_logits_to_move_priors(
+                    board, root_policy[i], temperature
+                )
+                win, draw, loss = (float(x) for x in root_wdl[i])
+                results.append(
+                    PositionEval(priors=priors, value=win - loss, wdl=(win, draw, loss))
+                )
             return results
 
-        Notes:
-          - ``priors`` are RAW policy-head scores per legal ``move_uci`` (the
-            search loop normalizes them) — emit one entry per legal move only,
-            mapping the 1858-wide lc0 policy vector onto legal UCIs (lczerolens
-            exposes this move<->index mapping; with ONNX it must be reproduced).
-          - ``value``/``wdl`` are side-to-move perspective and ``wdl`` sums to 1.
-          - fp32 keeps L2 numeric parity tight (report §2, §9).
+        # re_baseline=False: faithful lc0 1-ply best-child valuehead minimax.
+        legal_per_fen: List[list] = []
+        child_boards: list = []
+        for board in root_boards:
+            moves = list(board.legal_moves)
+            legal_per_fen.append(moves)
+            for move in moves:
+                child = board.copy()
+                child.push(move)  # 1-ply history, as lc0's valuehead search does
+                child_boards.append(child)
+
+        _, child_wdl = self._forward_heads(child_boards, want_policy=False)
+
+        results = []
+        child_pos = 0
+        for i, board in enumerate(root_boards):
+            moves = legal_per_fen[i]
+            priors = self._policy_logits_to_move_priors(board, root_policy[i], temperature)
+            if not moves:
+                # Terminal: no children to back up; use the raw root value head.
+                win, draw, loss = (float(x) for x in root_wdl[i])
+            else:
+                # 1-ply minimax: choose the child worst for the opponent; the
+                # node value (our perspective) is that child's WDL, flipped.
+                best_value = None
+                win = draw = loss = 0.0
+                for j in range(len(moves)):
+                    child_win, child_draw, child_loss = (
+                        float(x) for x in child_wdl[child_pos + j]
+                    )
+                    our_win, our_draw, our_loss = child_loss, child_draw, child_win
+                    value = our_win - our_loss
+                    if best_value is None or value > best_value:
+                        best_value = value
+                        win, draw, loss = our_win, our_draw, our_loss
+                child_pos += len(moves)
+            if not self._re_baseline:
+                win, draw, loss = quantize_wdl_to_uci_permille(win, draw, loss)
+            results.append(
+                PositionEval(priors=priors, value=win - loss, wdl=(win, draw, loss))
+            )
+        return results
+
+    def _forward_heads(self, boards, *, want_policy):
+        """Run the net over ``boards`` in ``max_batch_size`` chunks.
+
+        Returns ``(policy, wdl)`` concatenated across chunks; ``policy`` is
+        ``None`` when ``want_policy`` is False (children only need WDL), and both
+        are ``None`` for an empty board list.
         """
-        raise NotImplementedError(
-            "NetEvaluator._evaluate_uncached is a Phase-2 scaffold; implement "
-            "the batched forward pass (encode -> net -> decode heads) and gate "
-            "with the T-fwd numeric-parity test against lc0."
-        )
+        import torch  # lazy
+        from lczerolens.board import InputEncoding  # lazy
+
+        if not boards:
+            return None, None
+        # lc0's HistoryFill=fen_only (the default the pipeline inherited) repeats
+        # the current position into the history planes for a bare FEN; the
+        # matching lczerolens encoding is REPEATED (confirmed: reproduces lc0's
+        # policy + valuehead on ply-15-75 positions). The genuine game-start
+        # position is special-cased by lc0 and would not match, but our data is
+        # always midgame, so this is correct for every FEN we generate on.
+        encoding = InputEncoding.INPUT_CLASSICAL_112_PLANE_REPEATED
+        policy_chunks = []
+        wdl_chunks = []
+        for start in range(0, len(boards), self._max_batch_size):
+            chunk = boards[start : start + self._max_batch_size]
+            planes = torch.stack(
+                [board.to_input_tensor(input_encoding=encoding) for board in chunk]
+            )
+            with torch.no_grad():
+                out = self._model(planes)
+            wdl_chunks.append(out["wdl"].detach())
+            if want_policy:
+                policy_chunks.append(out["policy"].detach())
+        wdl = torch.cat(wdl_chunks, dim=0)
+        policy = torch.cat(policy_chunks, dim=0) if want_policy else None
+        return policy, wdl
 
     def _ensure_model_loaded(self) -> None:
-        """Lazily load the net via the selected backend (heavy import inside).
-
-        TODO(Phase 2.1): for ``LCZEROLENS``::
-
-            from lczerolens import LczeroModel       # lazy import
-            self._model = LczeroModel.from_path(self._weights_path).to(self._device)
-
-        for ``ONNX``::
-
-            import onnxruntime as ort                # lazy import
-            # (export the .pb.gz via `lc0 leela2onnx` first, then:)
-            self._model = ort.InferenceSession(onnx_path, providers=[...])
-        """
+        """Lazily load the net via the selected backend (heavy import inside)."""
         if self._model is not None:
             return
+        if self._backend == NetBackend.LCZEROLENS:
+            from lczerolens import LczeroModel  # lazy import
+
+            if not self._weights_path.endswith(".onnx"):
+                raise ValueError(
+                    "LCZEROLENS backend needs an .onnx net. Convert the Leela "
+                    ".pb.gz once with `lc0 leela2onnx --input=<pb.gz> "
+                    "--output=<onnx>` and pass the .onnx path."
+                )
+            model = LczeroModel.from_path(self._weights_path)
+            # eval() is essential: the onnx2torch graph carries BatchNorm, and in
+            # train mode it normalizes with per-batch statistics, making the
+            # output depend on which other positions share the batch (and wrong).
+            # eval() switches to the net's running statistics -> deterministic,
+            # batch-independent, and matching lc0.
+            model.eval()
+            self._model = model.to(self._device) if self._device != "cpu" else model
+            return
         raise NotImplementedError(
-            "NetEvaluator._ensure_model_loaded is a Phase-2 scaffold; load the "
-            f"net for backend={self._backend.value!r} with a lazy import."
+            f"NetEvaluator backend {self._backend.value!r} is not yet wired; "
+            "use NetBackend.LCZEROLENS."
         )
 
-    def _policy_logits_to_move_priors(self, fen: str, policy_logits) -> Dict[str, float]:
-        """Map the net's policy vector onto a raw prior per legal UCI move.
+    def _policy_logits_to_move_priors(
+        self, board, policy_logits, temperature: float
+    ) -> Dict[str, float]:
+        """Map the net's 1858-wide policy onto a prior per legal UCI move.
 
-        TODO(Phase 2.2): use the backend's move<->policy-index mapping
-        (lczerolens provides it; ONNX requires reproducing lc0's index table)
-        and emit one raw score per legal move. Return RAW scores; normalization
-        happens in the search loop via ``normalize_prior_scores``.
-
-        When ``re_baseline=False`` (default), apply
-        :func:`quantize_prior_to_uci_text_resolution` to each per-move policy
-        probability before returning, reproducing the lc0-UCI text quirk so
-        trees match the baseline bit-for-bit::
-
-            if not self._re_baseline:
-                priors = {m: quantize_prior_to_uci_text_resolution(p)
-                          for m, p in priors.items()}
+        lc0's verbose-move-stats prior ``P`` is the policy head softmaxed over
+        *legal* moves at ``PolicyTemperature``, so we gather each legal move's
+        logit via lczerolens's ``board.encode_move`` index map, softmax over just
+        those at ``temperature``, and key by UCI. With ``re_baseline=False`` each
+        probability is then snapped to the 2-dp-% text grid
+        (:func:`quantize_prior_to_uci_text_resolution`) to match the lc0-UCI
+        baseline. Returned values are the (possibly quantized) per-move
+        probabilities; the search loop renormalizes over the children it keeps
+        via ``normalize_prior_scores``.
         """
-        raise NotImplementedError(
-            "NetEvaluator._policy_logits_to_move_priors is a Phase-2 scaffold."
+        import numpy as np  # lazy
+
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return {}
+        # encode_move needs the side to move; the policy index is perspective-
+        # relative (lc0 flips the board for black), so pass board.turn.
+        us = board.turn
+        logits = np.array(
+            [float(policy_logits[board.encode_move(move, us)]) for move in legal_moves],
+            dtype=np.float64,
         )
+        # Softmax over legal moves only, at lc0's PolicyTemperature (mirrors P).
+        scaled = logits / temperature
+        weights = np.exp(scaled - scaled.max())
+        probabilities = weights / weights.sum()
+        priors = {move.uci(): float(p) for move, p in zip(legal_moves, probabilities)}
+        if not self._re_baseline:
+            priors = {
+                uci: quantize_prior_to_uci_text_resolution(p)
+                for uci, p in priors.items()
+            }
+        return priors
 
     def clear_caches(self) -> None:
         self._eval_cache.clear()
 
 
-__all__ = ["NetBackend", "NetEvaluator", "quantize_prior_to_uci_text_resolution"]
+__all__ = [
+    "NetBackend",
+    "NetEvaluator",
+    "quantize_prior_to_uci_text_resolution",
+    "quantize_wdl_to_uci_permille",
+]
