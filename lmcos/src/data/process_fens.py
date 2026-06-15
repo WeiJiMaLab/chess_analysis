@@ -89,8 +89,14 @@ def reservoir_sample(pool_path: str, n: int, seed: int) -> list[str]:
     return reservoir
 
 
-def sample(pool_path: str, n: int, seed: int, out_path: str) -> None:
-    """Sample ``n`` FENs from the pool, normalize to 6 fields, write sorted."""
+def sample(pool_path: str, n: int, seed: int, out_path: str, manifest_out: str | None = None) -> None:
+    """Sample ``n`` FENs from the pool, normalize to 6 fields, write sorted.
+
+    The line index in ``out_path`` is the global FEN index ``build_tree`` uses
+    for ``{index:06d}_root_{index}.pt``. When ``manifest_out`` is given, also
+    write a parquet mapping ``index -> fen`` for downstream joins (the 4-field
+    FEN is the key to recover human reaction times from ``processed_moves_nonzero``).
+    """
     print(f"Sampling {n} FENs (seed={seed}) from {pool_path}...")
     fens = reservoir_sample(pool_path, n, seed)
     # Sort so the file — and therefore the build_tree index → FEN mapping — is
@@ -100,6 +106,17 @@ def sample(pool_path: str, n: int, seed: int, out_path: str) -> None:
         for fen in fens:
             handle.write(f"{fen}\n")
     print(f"Wrote {len(fens)} FENs to {out_path}")
+
+    if manifest_out:
+        import pandas as pd
+
+        rows = {
+            "index": list(range(len(fens))),
+            "fen": fens,  # 6-field, exactly what build_tree consumes
+            "fen_4field": [" ".join(fen.split()[:4]) for fen in fens],  # RT-join key
+        }
+        pd.DataFrame(rows).to_parquet(manifest_out, index=False)
+        print(f"Wrote manifest ({len(fens)} rows) to {manifest_out}")
 
 
 def main() -> None:
@@ -115,6 +132,7 @@ def main() -> None:
     samp.add_argument("--n", type=int, default=150_000)
     samp.add_argument("--seed", type=int, default=43)
     samp.add_argument("--out", default=SAMPLE_OUT_DEFAULT)
+    samp.add_argument("--manifest", default=None, help="optional parquet manifest (index -> fen) path")
 
     args = parser.parse_args()
     if args.command == "build-pool":
@@ -122,7 +140,7 @@ def main() -> None:
         build_pool(args.db, args.out)
         print("done")
     elif args.command == "sample":
-        sample(args.pool, args.n, args.seed, args.out)
+        sample(args.pool, args.n, args.seed, args.out, args.manifest)
 
 
 if __name__ == "__main__":

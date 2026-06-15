@@ -1,0 +1,25 @@
+# Reunification tree-gen — 150K human FENs sampled from fens.txt (ground truth).
+# Faithful lc0-UCI regime (budget 96, max_depth 4, multipv 8). Array tasks
+# override start_index/end_index. Trees + the FEN sample + manifest.parquet all
+# live in output_dir. Submit on partition=gpu, qos=gpu-short (NOT gpu-test).
+command: generate-dataset
+
+engine_path: /scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0
+weights_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz
+
+fens: /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/fens_sample_150k.txt
+output_dir: /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees
+
+search_budget: 96
+min_nodes: 96
+max_nodes: 96
+
+seed: 42
+multipv: 8
+max_depth: 4
+resume: true
+log_interval: 25
+
+backend: cuda
+start_index: 0
+end_index: 150000

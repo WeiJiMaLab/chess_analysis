@@ -21,27 +21,27 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
-## ⚙️ Running state (as of 2026-06-10) {#running-state}
+## ⚙️ Running state (as of 2026-06-14) {#running-state}
 
-> **50K tree-gen stalled at 5,228/50,000. Not currently running. Next: restart on gpu-short (not gpu-test).**
+> **150K tree-gen LIVE — job `9694864`, gpu-short, `--array=0-149%44`. Running clean at 44/44 GPUs.**
 
-- **50K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k/` — 5,228 trees on disk (1.2 GB); 44,772 remain.
-  `resume:true` so restarts are safe.
-- **Root cause of stall:** all `gen50k-gpu` jobs ran on `gputest/gpu-test` (MaxJobsPU=3), not `gpu-short` (MaxJobsPU=44).
-  The cycler was job-capped at 3. The `griffith` account has **no GrpTRES GPU cap**; `gpu-short` allows 44 concurrent GPUs.
-  Switching QOS unblocks throughput immediately. Multi-GPU lane script also available:
-  `lmcos/slurm/1_preprocess_data/generate_dataset_shard_gpu_multi.slurm` (one job, N GPUs, N workers, counts as 1 job).
-- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/tmp/human_trees_50k | wc -l` (of 50000).
-- **Key inputs:** FENs `…/tmp/human_fens_50k.txt` (+ `_manifest.parquet`, seed 43); base config
-  `lmcos/slurm/configs/1_preprocess_data/human_trees_50k_gpu.yaml`.
-- **Full unique FEN pool** (110.5 M FENs, all of `processed_moves_nonzero`) now at
-  `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/fens.txt` (5.4 GB); single source: `cts.data.process_fens`
-  (`build-pool` / `sample`).
-- **Tree-gen path: lc0-UCI + QoS fix.** The in-process batched speedup was tried and **scrapped**
-  (only ~2×, encoding-bound — [R-BATCHGEN](reports/batched-tree-generation.md) NO-GO). Resume the existing
-  `cts.data.build_tree` generator on `gpu-short` (not `gpu-test`) for the 50K/150K. The intended data flow
-  (fens.txt ground truth → trees → PUCT-stability filter → train) still stands; only the generator engine
-  reverts to lc0-UCI.
+- **150K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/` (`{index:06d}_root_{index}.pt`). Job
+  **9694864**, 150 shards × 1000 FENs, `resume: true` (re-submit the same array line to fill any gaps).
+  Config: `lmcos/slurm/configs/1_preprocess_data/lc0_trees_150k.yaml` (faithful regime: budget 96,
+  max_depth 4, multipv 8, lc0 cuda).
+- **Submit (the QoS fix):** `sbatch --qos=gpu-short --array=0-149%44 --export=ALL,CONFIG=<yaml>,SHARD_SIZE=1000,BASE_START=0,LANE_END=150000 slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
+  **Do NOT pass `--partition`** (cluster rejects it; select via QOS). `gpu-test` was the old stall (3-job cap);
+  `gpu-short` = 44 GPUs/user, no group cap.
+- **Pace:** ~14 s/tree at scale → ~11k trees/h at 44 concurrent → **~13–14 h** total. Shard ≈ 3.9 h (< 6 h wall).
+- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/*.pt | wc -l` (of 150000);
+  `squeue -j 9694864 -h -o "%T" | sort | uniq -c`.
+- **Inputs:** sample `…/lc0_trees/fens_sample_150k.txt` (150K, seed 43) + `…/lc0_trees/manifest.parquet`
+  (`index, fen, fen_4field`), drawn from the ground-truth pool `…/lmcos/fens.txt` via `cts.data.process_fens sample`.
+  RT join key = the 4-field FEN against `processed_moves_nonzero`.
+- **Superseded:** the old `tmp/human_trees_50k` (5,228 DB-sampled trees) was **deleted**; this run starts clean
+  from the fens.txt sample. The in-process batched speedup was scrapped (~2×, encoding-bound —
+  [R-BATCHGEN](reports/batched-tree-generation.md) NO-GO); generator is the faithful lc0-UCI `build_tree` with
+  the ~1.5× repetition-scan fix.
 - **Next once trees land:** U1.2 OSS↔RT join (`analysis/human_oracle_comparison.py`, subset-tolerant);
   then U1.3 refit; re-run [R-U3](reports/analysis-u3-baselines.md) on the new controller.
 
@@ -63,7 +63,9 @@ FEN handling consolidated; batched in-process tree-gen built & validated against
 | **Scrap + cleanup** (hl4291: "juice isn't worth the squeeze") | Abort route-b; keep the record | ✅ Removed `batched_gen` module + tests + `smoke/`; **kept `process_fens`** (independent FEN-source win) + R-BATCHGEN as a documented NO-GO. 252 tests collect. | — |
 | **lc0-UCI quick win: repetition-scan guard** — `terminal_value_from_board` skips `can_claim_threefold_repetition` when `len(move_stack) < 7`, else exact `claim_draw=True` | R-U1-SPEED flagged the per-child 3-fold probe as 23% of wall but never applied it; a claimable 3-fold needs ≥7 plies, so it's impossible while shallow. **Gated on actual history length, not the `max_depth` hyperparameter** (hl4291) → stays correct if max_depth is ever raised (deep boards fall back to the exact check). | ✅ **~1.5× end-to-end** (16.87 → **11.1 s/tree**, A100, budget 96; full speed retained since max_depth=4 → all boards <7 plies). Equivalent: 0 mismatches over 600+ boards incl. fifty-move boundary, deep fallback branch, and a real 7-ply threefold; 22.6× faster check; tests pass. Remaining cost = irreducible per-child valuehead NN eval (no faithful quick win, route-b scrapped). | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
 
-**Next:** resume tree-gen on the **lc0-UCI path + QoS fix** (`gpu-short`, not `gpu-test`) for the 50K/150K → U1.2 OSS↔RT → U1.3 refit. Route-(b) speedup parked (revive only with a vectorized encoder).
+| **150K tree-gen LAUNCHED** — `process_fens sample` (150K, seed 43) → `lc0_trees/` + manifest; 10-FEN smoke + 3-shard gpu-short canary passed; full array fired | Generate the reunified trees on the faithful lc0-UCI path | 🚀 Job **9694864**, `--qos=gpu-short --array=0-149%44` (150×1000). **44/44 GPUs**, ~14 s/tree, **21,934/150,000 at ~2 h**, 0 failures. ETA ~13–14 h. QoS fix verified (routes to `gpu`/`gpu-short`, not `gpu-test`; `--partition` rejected by cluster). See [running state](#running-state). | — |
+
+**Next:** let 150K finish (`resume:true` fills gaps) → **implement the PUCT-stability filter** (`trees_unfiltered`→`trees_filtered`, still the unbuilt piece) → train GNN+MC → U1.2 OSS↔RT join. Route-(b) speedup parked (revive only with a vectorized encoder).
 
 ---
 
