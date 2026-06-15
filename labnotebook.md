@@ -23,18 +23,29 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ## ⚙️ Running state (as of 2026-06-14) {#running-state}
 
-> **150K tree-gen LIVE — job `9694864`, gpu-short, `--array=0-149%44`. Running clean at 44/44 GPUs.**
+> **Two 150K tree-gen runs LIVE on gpu-short, same FENs, `max_depth` is the only difference (A/B):**
+> **depth-4 job `9694864` → `lc0_trees/` (≈done); depth-30 job `9717196` → `lc0_trees_maxdepth_30/`.**
 
-- **150K tree-gen** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/` (`{index:06d}_root_{index}.pt`). Job
-  **9694864**, 150 shards × 1000 FENs, `resume: true` (re-submit the same array line to fill any gaps).
-  Config: `lmcos/slurm/configs/1_preprocess_data/lc0_trees_150k.yaml` (faithful regime: budget 96,
-  max_depth 4, multipv 8, lc0 cuda).
+- **depth-4 (ysagiv replication)** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/`. Job **9694864**,
+  150×1000, `resume: true`. Config `lc0_trees_150k.yaml` (budget 96, **max_depth 4**, multipv 8, lc0 cuda).
+- **depth-30 (deeper VARIANT, not replication)** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees_maxdepth_30/`.
+  Job **9717196**, same 150K sample (index-aligned A/B). Config `lc0_trees_maxdepth_30.yaml` (**max_depth 30**).
+  Lets PUCT self-organize depth vs breadth at the fixed 96 budget; deep boards re-engage the exact
+  threefold check (tripwire validated live). Each dir has a `README.md` stating its depth.
+- **Alignment with ysagiv (verified 2026-06-14):** the ysagiv production trees
+  (`generated_trees_oracle96_trace_filtered`) are **empirically max_depth=4** (sharp depth cutoff;
+  their `build_tree.yaml: max_depth: 30` writes a *different* dir and isn't the production set). Node tuple
+  `(value, wdl_win, wdl_draw, wdl_loss, wdl_var, prior)`; **`value` = lc0 `valuehead` = 1-ply best-child
+  backup**, not the raw net eval — same engine mode as ysagiv. So depth-4 + value semantics match the
+  reference. (Format is v5 here vs v2 there — schema drift, same node feature set.)
 - **Submit (the QoS fix):** `sbatch --qos=gpu-short --array=0-149%44 --export=ALL,CONFIG=<yaml>,SHARD_SIZE=1000,BASE_START=0,LANE_END=150000 slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
   **Do NOT pass `--partition`** (cluster rejects it; select via QOS). `gpu-test` was the old stall (3-job cap);
   `gpu-short` = 44 GPUs/user, no group cap.
-- **Pace:** ~14 s/tree at scale → ~11k trees/h at 44 concurrent → **~13–14 h** total. Shard ≈ 3.9 h (< 6 h wall).
-- **Progress check:** `ls /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/*.pt | wc -l` (of 150000);
-  `squeue -j 9694864 -h -o "%T" | sort | uniq -c`.
+- **Pace:** depth-4 ~14 s/tree → ~13–14 h; depth-30 a bit slower (exact threefold check on deep boards).
+  Both share the gpu-short 44-GPU ceiling; depth-30 backfills as depth-4 frees GPUs.
+- **Progress check:** `find /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees -maxdepth 1 -name '*.pt' | wc -l` (and
+  `…/lc0_trees_maxdepth_30`), of 150000 each; `squeue -u hl4291 -h -o "%j %T" | sort | uniq -c`.
+  (Use `find`, not `ls *.pt` — the glob is slow at 150K files.)
 - **Inputs:** sample `…/lc0_trees/fens_sample_150k.txt` (150K, seed 43) + `…/lc0_trees/manifest.parquet`
   (`index, fen, fen_4field`), drawn from the ground-truth pool `…/lmcos/fens.txt` via `cts.data.process_fens sample`.
   RT join key = the 4-field FEN against `processed_moves_nonzero`.
@@ -62,10 +73,11 @@ FEN handling consolidated; batched in-process tree-gen built & validated against
 | **Speedup go/no-go** — A100 bench (budget 16, extrapolated to 96) | The §8 ≥5× gate before scaling | ❌ **NO-GO.** raw `re_baseline=True` ~8 s/tree (**~2×**); faithful 1-ply ~125 s/tree (**~7× slower**). Bottleneck = Python 112-plane encoding (`to_input_tensor`), not the GPU. Below the 5× gate → not worth the build. | [(R-BATCHGEN)](reports/batched-tree-generation.md) |
 | **Scrap + cleanup** (hl4291: "juice isn't worth the squeeze") | Abort route-b; keep the record | ✅ Removed `batched_gen` module + tests + `smoke/`; **kept `process_fens`** (independent FEN-source win) + R-BATCHGEN as a documented NO-GO. 252 tests collect. | — |
 | **lc0-UCI quick win: repetition-scan guard** — `terminal_value_from_board` skips `can_claim_threefold_repetition` when `len(move_stack) < 7`, else exact `claim_draw=True` | R-U1-SPEED flagged the per-child 3-fold probe as 23% of wall but never applied it; a claimable 3-fold needs ≥7 plies, so it's impossible while shallow. **Gated on actual history length, not the `max_depth` hyperparameter** (hl4291) → stays correct if max_depth is ever raised (deep boards fall back to the exact check). | ✅ **~1.5× end-to-end** (16.87 → **11.1 s/tree**, A100, budget 96; full speed retained since max_depth=4 → all boards <7 plies). Equivalent: 0 mismatches over 600+ boards incl. fifty-move boundary, deep fallback branch, and a real 7-ply threefold; 22.6× faster check; tests pass. Remaining cost = irreducible per-child valuehead NN eval (no faithful quick win, route-b scrapped). | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
+| **150K tree-gen LAUNCHED** — `process_fens sample` (150K, seed 43) → `lc0_trees/` + manifest; 10-FEN smoke + 3-shard gpu-short canary passed; full array fired | Generate the reunified trees on the faithful lc0-UCI path | 🚀 Job **9694864**, `--qos=gpu-short --array=0-149%44` (150×1000). **44/44 GPUs**, ~14 s/tree, 0 failures, ETA ~13–14 h. QoS fix verified (routes to `gpu`/`gpu-short`, not `gpu-test`; `--partition` rejected by cluster). | — |
+| **ysagiv alignment verified** — max_depth + node-value semantics vs the reference set | We replicate ysagiv on a new dataset; confirm the regime matches | ✅ ysagiv production trees (`generated_trees_oracle96_trace_filtered`) are **empirically max_depth=4** (sharp depth cutoff; their `build_tree.yaml: max_depth: 30` writes a different dir, not the production set). Node `value` = lc0 `valuehead` = **1-ply best-child backup** (same engine mode), not the raw eval. Our depth-4 trees match (node schema same; format v5 vs v2 = drift). Same-root-FEN → same-tree parity test running (subagent). | — |
+| **depth-30 variant LAUNCHED** (hl4291) — same 150K FENs, `max_depth=30` → `lc0_trees_maxdepth_30/` | depth-4 is shallow for modeling deliberation; A/B-test deeper trees (PUCT self-organizes depth vs breadth at fixed budget 96) | 🚀 Job **9717196**, gpu-short %44, index-aligned to depth-4 (single-variable A/B). Threefold tripwire (exact check for ≥7-ply boards) validated live (0/300 mismatch). READMEs in both scratch dirs. | — |
 
-| **150K tree-gen LAUNCHED** — `process_fens sample` (150K, seed 43) → `lc0_trees/` + manifest; 10-FEN smoke + 3-shard gpu-short canary passed; full array fired | Generate the reunified trees on the faithful lc0-UCI path | 🚀 Job **9694864**, `--qos=gpu-short --array=0-149%44` (150×1000). **44/44 GPUs**, ~14 s/tree, **21,934/150,000 at ~2 h**, 0 failures. ETA ~13–14 h. QoS fix verified (routes to `gpu`/`gpu-short`, not `gpu-test`; `--partition` rejected by cluster). See [running state](#running-state). | — |
-
-**Next:** let 150K finish (`resume:true` fills gaps) → **implement the PUCT-stability filter** (`trees_unfiltered`→`trees_filtered`, still the unbuilt piece) → train GNN+MC → U1.2 OSS↔RT join. Route-(b) speedup parked (revive only with a vectorized encoder).
+**Next:** let both runs finish (`resume:true` fills gaps) → depth histogram w/ 95% CI to check depth-30 actually exceeds 4 (script being written); ysagiv same-root parity result → **implement the PUCT-stability filter** (`trees_unfiltered`→`trees_filtered`, still unbuilt) → train GNN+MC → U1.2 OSS↔RT join. Route-(b) speedup parked.
 
 ---
 

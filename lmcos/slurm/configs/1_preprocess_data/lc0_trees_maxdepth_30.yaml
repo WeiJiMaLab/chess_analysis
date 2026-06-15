@@ -1,0 +1,28 @@
+# Deeper-tree VARIANT (experiment, not the ysagiv replication): same 150K human
+# FENs as lc0_trees/ but max_depth=30, letting PUCT self-organize depth vs
+# breadth at the fixed 96 budget. Single-variable A/B vs lc0_trees (max_depth=4).
+# NOTE: deep boards make claimable threefold possible — terminal_value_from_board
+# falls back to the exact claim_draw=True check for boards with >=7 plies (live,
+# validated). Submit on qos=gpu-short (NOT --partition).
+command: generate-dataset
+
+engine_path: /scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0
+weights_path: /scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz
+
+# SAME sample as the depth-4 run, so trees are index-aligned for a clean A/B.
+fens: /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/fens_sample_150k.txt
+output_dir: /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees_maxdepth_30
+
+search_budget: 96
+min_nodes: 96
+max_nodes: 96
+
+seed: 42
+multipv: 8
+max_depth: 30
+resume: true
+log_interval: 25
+
+backend: cuda
+start_index: 0
+end_index: 150000
