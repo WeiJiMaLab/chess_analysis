@@ -129,6 +129,7 @@ The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 �
 - **Goal:** pin per-FEN tree-generation cost to one number, and decide the engine stack, before
   the 50K spend.
 - **First pass (done):** 20 benchmark FENs, budget 96, multipv 8, max_depth 4, A100
+  *(timing-smoke config only; the faithful ysagiv production regime is **max_depth 10** — realized depth ~6, ~11 s/tree on a compute node)*
   (`bench_configs/{gpu_cuda,cpu_blas}.yaml`, `slurm/1_preprocess_data/benchmark_tree_gen.slurm`).
   - **Lc0-GPU (cuda):** 20 trees in 322 s (slurm log) vs 814 s (time-wrapper run) →
     **≈ 16–41 s/tree** (0.024–0.062 roots/s). Spread = warmup vs steady state; not yet pinned.

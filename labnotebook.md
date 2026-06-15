@@ -23,31 +23,27 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ## ⚙️ Running state (as of 2026-06-14) {#running-state}
 
-> **Two 150K tree-gen runs LIVE on gpu-short, same FENs, `max_depth` is the only difference (A/B):**
-> **depth-4 job `9694864` → `lc0_trees/` (≈done); depth-30 job `9717196` → `lc0_trees_maxdepth_30/`.**
+> **150K depth-10 tree-gen LIVE — job `9745158`, gpu-short `--array=0-149%44` → `lc0_trees/`. THE faithful ysagiv replication.**
 
-- **depth-4 (ysagiv replication)** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/`. Job **9694864**,
-  150×1000, `resume: true`. Config `lc0_trees_150k.yaml` (budget 96, **max_depth 4**, multipv 8, lc0 cuda).
-- **depth-30 (deeper VARIANT, not replication)** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees_maxdepth_30/`.
-  Job **9717196**, same 150K sample (index-aligned A/B). Config `lc0_trees_maxdepth_30.yaml` (**max_depth 30**).
-  Lets PUCT self-organize depth vs breadth at the fixed 96 budget; deep boards re-engage the exact
-  threefold check (tripwire validated live). Each dir has a `README.md` stating its depth.
-- **Alignment with ysagiv (verified 2026-06-14):** the ysagiv production trees
-  (`generated_trees_oracle96_trace_filtered`) are **empirically max_depth=4** (sharp depth cutoff;
-  their `build_tree.yaml: max_depth: 30` writes a *different* dir and isn't the production set). Node tuple
-  `(value, wdl_win, wdl_draw, wdl_loss, wdl_var, prior)`; **`value` = lc0 `valuehead` = 1-ply best-child
-  backup**, not the raw net eval — same engine mode as ysagiv. So depth-4 + value semantics match the
-  reference. (Format is v5 here vs v2 there — schema drift, same node feature set.)
-- **Submit (the QoS fix):** `sbatch --qos=gpu-short --array=0-149%44 --export=ALL,CONFIG=<yaml>,SHARD_SIZE=1000,BASE_START=0,LANE_END=150000 slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
-  **Do NOT pass `--partition`** (cluster rejects it; select via QOS). `gpu-test` was the old stall (3-job cap);
-  `gpu-short` = 44 GPUs/user, no group cap.
-- **Pace:** depth-4 ~14 s/tree → ~13–14 h; depth-30 a bit slower (exact threefold check on deep boards).
-  Both share the gpu-short 44-GPU ceiling; depth-30 backfills as depth-4 frees GPUs.
-- **Progress check:** `find /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees -maxdepth 1 -name '*.pt' | wc -l` (and
-  `…/lc0_trees_maxdepth_30`), of 150000 each; `squeue -u hl4291 -h -o "%j %T" | sort | uniq -c`.
-  (Use `find`, not `ls *.pt` — the glob is slow at 150K files.)
+> ⚠️ **CORRECTIONS (2026-06-14, late) — earlier entries below were WRONG; flagged ~~struck~~/defunct:**
+> 1. **ysagiv `max_depth` = 10, NOT 4.** Verified over **all 39,668** reference trees (global max depth 10, hard cap; depth-10 nodes unexpanded) + independent n=1000 (84% of trees go deeper than 4). My earlier "max_depth=4" was an **n=1 generalization error** (the code *default* is 4; one shallow tree maxed at 4).
+> 2. **Node `value` = the RAW value-head, NOT a "1-ply best-child backup".** Verified `value==win−loss` over 55k nodes; root WDL ≠ best-child WDL. My earlier "1-ply" claim was wrong (it came from a startpos-only measurement; startpos is history-special-cased).
+> 3. **The depth-4 (`9694864`) and depth-30 (`9717196`) runs are DEFUNCT and DELETED** — they used the wrong depth AND silently lacked `edge_wdl_targets` (v5 made it opt-in; the worker never opted in), so they had no child-WDL supervision. `build_tree.py` now passes `include_edge_wdl_targets=True`; the depth-10 run has valid edge targets (verified: finite, sum-to-1).
+
+- **depth-10 replication** → `/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees/` (`{index:06d}_root_{index}.pt`). Job
+  **9745158**, 150×1000, `resume: true`. Config `lc0_trees_150k.yaml` (budget 96, **max_depth 10**, multipv 8,
+  lc0 cuda, **`edge_wdl_targets` on**). Realized depth ~6 (matches ysagiv); ~11 s/tree on compute nodes → ETA ~10 h.
+- **Verified ysagiv reference spec (4-subagent + own measurement):** `max_depth=10`; budget = **96 expansions**
+  (the "96"/oracle-trace length, not total N ≈3700); node tuple `(value, wdl_win, wdl_draw, wdl_loss, wdl_var, prior)`
+  with `value`=raw valuehead (win−loss), `wdl_var`=(w+l)−value²; `node_targets`=visit-weighted child-Q;
+  `edge_wdl_targets`=per-edge WDL parent-flipped. Encoder pretrain = child-WDL CE (needs edge_wdl_targets);
+  controller = frozen-encoder fitted-Q, BudgetedOracleConfig λ=18.537/p=2.8/maintenance-off/5 buckets×2.
+- **Submit (the QoS fix):** `sbatch --qos=gpu-short --array=0-149%44 --export=ALL,CONFIG=slurm/configs/1_preprocess_data/lc0_trees_150k.yaml,SHARD_SIZE=1000,BASE_START=0,LANE_END=150000 slurm/1_preprocess_data/generate_dataset_shard_gpu_array.slurm`.
+  **Do NOT pass `--partition`** (cluster rejects it; select via QOS). `gpu-test` = old stall (3-job cap); `gpu-short` = 44 GPUs/user, no group cap.
+- **Progress check:** `find /scratch/gpfs/GRIFFITHS/hl4291/lc0_trees -maxdepth 1 -name '*.pt' | wc -l` (of 150000);
+  `squeue -j 9745158 -h -o "%T" | sort | uniq -c`. (Use `find`, NOT `ls *.pt` — the glob is slow / overflows at 150K files.)
 - **Inputs:** sample `…/lc0_trees/fens_sample_150k.txt` (150K, seed 43) + `…/lc0_trees/manifest.parquet`
-  (`index, fen, fen_4field`), drawn from the ground-truth pool `…/lmcos/fens.txt` via `cts.data.process_fens sample`.
+  (`index, fen, fen_4field`), from the ground-truth pool `…/lmcos/fens.txt` via `cts.data.process_fens sample`.
   RT join key = the 4-field FEN against `processed_moves_nonzero`.
 - **Superseded:** the old `tmp/human_trees_50k` (5,228 DB-sampled trees) was **deleted**; this run starts clean
   from the fens.txt sample. The in-process batched speedup was scrapped (~2×, encoding-bound —
@@ -68,16 +64,17 @@ FEN handling consolidated; batched in-process tree-gen built & validated against
 | **R-BATCHGEN plan** — batched in-process tree-gen, parity-gated; layered parity contract; JAX analysis | Route-b from R-U1-SPEED: 10–100× + native tree exposure | ✅ Report written; the only way to both speed up *and* own the tree/snapshots | [(R-BATCHGEN)](reports/batched-tree-generation.md) |
 | **L1 — batched search loop** (`generate_trees_batched`, frontier-batched PUCT reusing legacy helpers) | Speed via batching across independent trees; per-tree order preserved | ✅ **Byte-exact to `build_pretrain_example`** under a fixed evaluator (T-replay). The load-bearing gate. | [(R-BATCHGEN §3)](reports/batched-tree-generation.md) |
 | **Phase 2 — in-process net** (`NetEvaluator`, lczerolens + `leela2onnx` ONNX) | Replace batch-1 lc0-UCI oracle | ✅ Committed `3a2bf7d`. `re_baseline=False` reproduces lc0 **exactly** on midgame FENs | [(R-BATCHGEN §10)](reports/batched-tree-generation.md) |
-| **3 lc0 quirks pinned** — value=1-ply best-child *valuehead* minimax (not raw head); priors at PolicyTemperature 1.359; history `fen_only`=lczerolens REPEATED | Bit-for-bit replication (user: replicate first, flip `re_baseline=True` later) | ✅ Confirmed vs binary (startpos +0.074 [0.246,0.582,0.172]; priors d2d4 0.1806 vs 0.1804) | [(R-BATCHGEN §2)](reports/batched-tree-generation.md) |
+| **3 lc0 quirks pinned** — ~~value=1-ply best-child valuehead minimax~~ (⚠️ **DISPROVEN — value is the RAW value-head**, see CORRECTIONS); priors at PolicyTemperature 1.359; history `fen_only`=lczerolens REPEATED | Bit-for-bit replication (user: replicate first, flip `re_baseline=True` later) | ✅ priors/history confirmed vs binary (priors d2d4 0.1806 vs 0.1804); ❌ the "1-ply" value pin was a startpos-only artifact (`value==win−loss` over 55k nodes ⇒ raw head) | [(R-BATCHGEN §2)](reports/batched-tree-generation.md) |
 | **3 real bugs caught by the pinning test** — `encode_move(move, us)`; onnx2torch needs `.eval()` (BatchNorm batch-dependence); position specs (`\|\|moves\|\|`) need `split_position_spec` | Each would have silently corrupted the 150K dataset | ✅ All fixed; pinning test green | [(R-BATCHGEN §10)](reports/batched-tree-generation.md) |
 | **Speedup go/no-go** — A100 bench (budget 16, extrapolated to 96) | The §8 ≥5× gate before scaling | ❌ **NO-GO.** raw `re_baseline=True` ~8 s/tree (**~2×**); faithful 1-ply ~125 s/tree (**~7× slower**). Bottleneck = Python 112-plane encoding (`to_input_tensor`), not the GPU. Below the 5× gate → not worth the build. | [(R-BATCHGEN)](reports/batched-tree-generation.md) |
 | **Scrap + cleanup** (hl4291: "juice isn't worth the squeeze") | Abort route-b; keep the record | ✅ Removed `batched_gen` module + tests + `smoke/`; **kept `process_fens`** (independent FEN-source win) + R-BATCHGEN as a documented NO-GO. 252 tests collect. | — |
-| **lc0-UCI quick win: repetition-scan guard** — `terminal_value_from_board` skips `can_claim_threefold_repetition` when `len(move_stack) < 7`, else exact `claim_draw=True` | R-U1-SPEED flagged the per-child 3-fold probe as 23% of wall but never applied it; a claimable 3-fold needs ≥7 plies, so it's impossible while shallow. **Gated on actual history length, not the `max_depth` hyperparameter** (hl4291) → stays correct if max_depth is ever raised (deep boards fall back to the exact check). | ✅ **~1.5× end-to-end** (16.87 → **11.1 s/tree**, A100, budget 96; full speed retained since max_depth=4 → all boards <7 plies). Equivalent: 0 mismatches over 600+ boards incl. fifty-move boundary, deep fallback branch, and a real 7-ply threefold; 22.6× faster check; tests pass. Remaining cost = irreducible per-child valuehead NN eval (no faithful quick win, route-b scrapped). | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
-| **150K tree-gen LAUNCHED** — `process_fens sample` (150K, seed 43) → `lc0_trees/` + manifest; 10-FEN smoke + 3-shard gpu-short canary passed; full array fired | Generate the reunified trees on the faithful lc0-UCI path | 🚀 Job **9694864**, `--qos=gpu-short --array=0-149%44` (150×1000). **44/44 GPUs**, ~14 s/tree, 0 failures, ETA ~13–14 h. QoS fix verified (routes to `gpu`/`gpu-short`, not `gpu-test`; `--partition` rejected by cluster). | — |
-| **ysagiv alignment verified** — max_depth + node-value semantics vs the reference set | We replicate ysagiv on a new dataset; confirm the regime matches | ✅ ysagiv production trees (`generated_trees_oracle96_trace_filtered`) are **empirically max_depth=4** (sharp depth cutoff; their `build_tree.yaml: max_depth: 30` writes a different dir, not the production set). Node `value` = lc0 `valuehead` = **1-ply best-child backup** (same engine mode), not the raw eval. Our depth-4 trees match (node schema same; format v5 vs v2 = drift). Same-root-FEN → same-tree parity test running (subagent). | — |
-| **depth-30 variant LAUNCHED** (hl4291) — same 150K FENs, `max_depth=30` → `lc0_trees_maxdepth_30/` | depth-4 is shallow for modeling deliberation; A/B-test deeper trees (PUCT self-organizes depth vs breadth at fixed budget 96) | 🚀 Job **9717196**, gpu-short %44, index-aligned to depth-4 (single-variable A/B). Threefold tripwire (exact check for ≥7-ply boards) validated live (0/300 mismatch). READMEs in both scratch dirs. | — |
+| **lc0-UCI quick win: repetition-scan guard** — `terminal_value_from_board` skips `can_claim_threefold_repetition` when `len(move_stack) < 7`, else exact `claim_draw=True` | R-U1-SPEED flagged the per-child 3-fold probe as 23% of wall but never applied it; a claimable 3-fold needs ≥7 plies, so it's impossible while shallow. **Gated on actual history length, not the `max_depth` hyperparameter** (hl4291) → stays correct if max_depth is ever raised (deep boards fall back to the exact check). | ✅ **~1.5× end-to-end** (16.87 → **11.1 s/tree**, A100, budget 96). Under the real **max_depth=10** regime most boards are still shallow (realized depth ~6) so the fast path dominates; boards that reach ≥7 plies correctly fall back to the exact threefold check (guard is gated on history length, not max_depth). Equivalent: 0 mismatches over 600+ boards incl. fifty-move boundary, deep fallback branch, and a real 7-ply threefold; 22.6× faster check; tests pass. Remaining cost = irreducible per-child valuehead NN eval (no faithful quick win, route-b scrapped). | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
+| ~~**150K tree-gen LAUNCHED** — job 9694864 (depth-4)~~ | — | ❌ **DEFUNCT — deleted.** Wrong regime (depth-4, not ysagiv's 10) AND no `edge_wdl_targets` (silent v5 opt-out → no child-WDL supervision). Superseded by job 9745158. | — |
+| ~~**ysagiv alignment "verified"** — claimed max_depth=4 + value=1-ply~~ | — | ❌ **WRONG — corrected** (see [running-state CORRECTIONS](#running-state)). ysagiv max_depth=**10** (all 39,668 trees), value=**raw** value-head (not 1-ply). Error was n=1 generalization. | — |
+| ~~**depth-30 variant LAUNCHED** — job 9717196~~ | — | ❌ **DEFUNCT — cancelled/deleted.** No `edge_wdl_targets`; depth-30 also overshoots ysagiv's cap of 10. | — |
+| **ysagiv spec re-verified + depth-10 replication LAUNCHED** — 4 skeptical subagents + own measurement (after the n=1 errors) | Pin the reference rigorously and generate the correct set | ✅ **max_depth=10** (all 39,668 trees + n=1000), **value=raw** valuehead, budget=96 expansions, node tuple as documented; **`edge_wdl_targets` were silently dropped → FIXED** (`build_tree.py` `include_edge_wdl_targets=True`; verified finite/sum-1 on a compute-node canary). Depth-10 run **9745158** `--qos=gpu-short --array=0-149%44` → `lc0_trees/`, ~11 s/tree (compute node), realized depth ~6. | [(R-U1-SPEED)](reports/u1-tree-gen-speedup.md) |
 
-**Next:** let both runs finish (`resume:true` fills gaps) → depth histogram w/ 95% CI to check depth-30 actually exceeds 4 (script being written); ysagiv same-root parity result → **implement the PUCT-stability filter** (`trees_unfiltered`→`trees_filtered`, still unbuilt) → train GNN+MC → U1.2 OSS↔RT join. Route-(b) speedup parked.
+**Next:** depth-10 run (9745158) is THE replication — let it finish (`resume:true` fills gaps); skeptical repo-wide code/doc audit + ysagiv same-root parity in flight → **implement the PUCT-stability filter** (`trees_unfiltered`→`trees_filtered`, still unbuilt) → train GNN+MC (child-WDL encoder needs the now-restored `edge_wdl_targets`) → U1.2 OSS↔RT join. Route-(b) speedup parked.
 
 ---
 

@@ -1,5 +1,17 @@
 # Batched in-process tree generation — parity-gated speedup (R-BATCHGEN)
 
+> ## ⚠️ CORRECTION (2026-06-14, late) — the "1-ply valuehead" premise is FALSE.
+>
+> Throughout this document the ysagiv node `value` is described as a **"1-ply best-child
+> valuehead minimax"**. **That is wrong.** Verified afterward over 55k reference nodes:
+> `value == win − loss` exactly (the **raw lc0 value-head**); root WDL ≠ best-child WDL.
+> The "1-ply" claim came from a startpos-only measurement (startpos is history-special-cased).
+> So the `re_baseline=False` path this report calls "faithful" actually computed a target
+> ysagiv does **not** use; ysagiv's real target is the `re_baseline=True` raw head. This does
+> **not** change the NO-GO decision (raw path was still only ~2×, below the ≥5× gate), but
+> every "faithful 1-ply" / "valuehead minimax" phrase below (§2, §2.2, §7, §10, §11) is
+> **defunct** — read "raw value-head" instead. See `labnotebook.md` running-state CORRECTIONS.
+
 > ## ❌ NO-GO (2026-06-14) — investigated, built, measured, abandoned.
 >
 > The in-process batched evaluator was built and validated for correctness, then **benchmarked and scrapped**: the speedup doesn't justify the build.

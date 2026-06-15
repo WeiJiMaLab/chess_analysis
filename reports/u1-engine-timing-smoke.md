@@ -9,7 +9,7 @@ engine-swap decision — the prerequisites for the committed **50K** reunificati
 
 | | |
 |---|---|
-| **Description** | Steady-state tree-gen cost on 100 warm human FENs (budget 96, multipv 8, max_depth 4), three engine/node configs: Lc0-GPU (A100), Lc0-CPU/blas (pure-CPU node), Stockfish (CPU reference). |
+| **Description** | Steady-state tree-gen cost on 100 warm human FENs (budget 96, multipv 8, max_depth 4 — *timing-smoke config only; faithful ysagiv production regime is **max_depth 10***), three engine/node configs: Lc0-GPU (A100), Lc0-CPU/blas (pure-CPU node), Stockfish (CPU reference). |
 | **Rationale** | The 50K plan is CPU-led (≈3 GPUs effective); must confirm the cost number and that lc0 even runs on CPU-only nodes. |
 | **Finding** | **CPU gate: BLOCKED then FIXED.** Lc0-GPU ≈ **16.6 s/tree**; Lc0-CPU ≈ **~738 s/tree** (4 cores) once unblocked; Stockfish ≈ 0.45 s/pos (d12) … 3 s/pos (d16). **50K is feasible CPU-led in ~1 day.** |
 

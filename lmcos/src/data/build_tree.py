@@ -274,6 +274,12 @@ def _generate_and_save_examples(
             node_budget_distribution=node_budget_distribution,
             rng=rng,
             root_position_id=f"root_{index}",
+            # Emit per-edge child-WDL targets — the supervision ysagiv's encoder
+            # pretrain objective consumes. v5 made this opt-in and the worker
+            # never opted in, so our trees had no edge targets (all-NaN on load),
+            # diverging from the ysagiv reference. Additive: node-topology targets
+            # (value_gap / policy_drift) are still produced.
+            include_edge_wdl_targets=True,
         )
         path = save_pretrain_example_to_directory(config.output_dir, example, index)
         saved_paths.append(path)
