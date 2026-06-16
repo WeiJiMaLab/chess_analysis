@@ -70,6 +70,8 @@ def _eval_row_budget(row: dict) -> dict:
            "n_possible_moves": row["n_possible_moves"],
            "n_self_pieces_exc_pawns": row.get("n_self_pieces_exc_pawns"),
            "voc_depth": row["voc"],
+           "toptwo": row.get("toptwo"),
+           "mq": row.get("mq"),
            "move_time": row["move_time"]}
 
     try:
@@ -108,10 +110,7 @@ def _sample(db_path: str, n: int, seed: int = 99) -> pd.DataFrame:
     conn = duckdb.connect(db_path, read_only=True)
     conn.execute("SET enable_progress_bar = false")
     df = conn.execute(f"""
-        SELECT p.fen, p.gid, p.move_ply, p.move_uci, p.n_possible_moves,
-               p.voc, p.toptwo, p.mq, p.move_time,
-               pm.n_self_pieces_exc_pawns
-        FROM (
+        SELECT * FROM (
             SELECT p.fen, p.gid, p.move_ply, p.move_uci, p.n_possible_moves,
                    p.voc, p.toptwo, p.mq, p.move_time,
                    pm.n_self_pieces_exc_pawns
