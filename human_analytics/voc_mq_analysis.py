@@ -118,6 +118,7 @@ def plot_voc_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -> N
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         filter_query="move_time > 0",
         title="VOC vs. log(RT)",
+        zero_inflated=True,  # ~⅔ of moves have VOC==0; show it as one point, bin the rest
     )
     analyzer.save_dashboard(output_path)
 

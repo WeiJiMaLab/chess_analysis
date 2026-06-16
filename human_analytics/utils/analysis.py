@@ -86,6 +86,7 @@ class Analyzer:
         title=None,
         quantile_heatmap_row: str | None = None,
         quantile_heatmap_row_label: str | None = None,
+        zero_inflated: bool = False,
     ):
         self.conn = db_conn
         self.table = table_name
@@ -94,6 +95,11 @@ class Analyzer:
         self.n_bins = n_bins
         self.filter_query = filter_query
         self.title = title or f"{self.x.label} vs {self.y.label}"
+        # When the x distribution has a large point mass at 0 (e.g. VOC: ~⅔ of
+        # moves are exactly 0), plain ``ntile`` wastes most bins on that mass.
+        # ``zero_inflated`` instead renders x==0 as a single leftmost point and
+        # quantile-bins only the nonzero rows.
+        self.zero_inflated = zero_inflated
 
         self.quantile_heatmap_row = None
         self._quantile_heatmap_row_label = ""
@@ -151,39 +157,53 @@ class Analyzer:
             ORDER BY tertile_id
         """).df()
 
-        # 3. Compute Quantile-Binned Data (global ranks)
+        # 3. Compute Quantile-Binned Data (global ranks). With ``zero_inflated``,
+        # the x==0 point mass collapses to a single leftmost bin and only the
+        # nonzero rows are ntiled (avoids wasting bins on the zero mass).
+        col = self.x.column
+        if self.zero_inflated:
+            global_inner = f"""
+                SELECT {col}, _y_transformed, 0 AS qbin
+                FROM _analyzer_view WHERE {col} = 0
+                UNION ALL
+                SELECT {col}, _y_transformed,
+                       ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin
+                FROM _analyzer_view WHERE {col} <> 0
+            """
+        else:
+            global_inner = f"SELECT *, ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin FROM _analyzer_view"
         self.quantile_df = self.conn.execute(f"""
-            SELECT
-                qbin,
-                avg({self.x.column}) as mean_x,
-                avg(_y_transformed) as mean_y,
-                stddev(_y_transformed) as std_y,
-                count(*) as n
-            FROM (
-                SELECT *, ntile({self.n_bins}) over (order by {self.x.column}) as qbin
-                FROM _analyzer_view
-            )
+            SELECT qbin,
+                   avg({col}) as mean_x,
+                   avg(_y_transformed) as mean_y,
+                   stddev(_y_transformed) as std_y,
+                   count(*) as n
+            FROM ({global_inner})
             GROUP BY qbin
         """).df()
 
-        self.quantile_tertile_df = self.conn.execute(f"""
-            SELECT
-                tertile_id,
-                qbin,
-                avg({self.x.column}) as mean_x,
-                avg(_y_transformed) as mean_y,
-                stddev(_y_transformed) as std_y,
-                count(*) as n
-            FROM (
-                SELECT
-                    ply_tertiles as tertile_id,
-                    {self.x.column},
-                    _y_transformed,
-                    ntile({self.n_bins}) OVER (
-                        PARTITION BY ply_tertiles ORDER BY {self.x.column}
-                    ) as qbin
+        if self.zero_inflated:
+            tertile_inner = f"""
+                SELECT ply_tertiles as tertile_id, {col}, _y_transformed, 0 AS qbin
+                FROM _analyzer_view WHERE {col} = 0
+                UNION ALL
+                SELECT ply_tertiles as tertile_id, {col}, _y_transformed,
+                       ntile({self.n_bins}) OVER (PARTITION BY ply_tertiles ORDER BY {col}) AS qbin
+                FROM _analyzer_view WHERE {col} <> 0
+            """
+        else:
+            tertile_inner = f"""
+                SELECT ply_tertiles as tertile_id, {col}, _y_transformed,
+                       ntile({self.n_bins}) OVER (PARTITION BY ply_tertiles ORDER BY {col}) AS qbin
                 FROM _analyzer_view
-            )
+            """
+        self.quantile_tertile_df = self.conn.execute(f"""
+            SELECT tertile_id, qbin,
+                   avg({col}) as mean_x,
+                   avg(_y_transformed) as mean_y,
+                   stddev(_y_transformed) as std_y,
+                   count(*) as n
+            FROM ({tertile_inner})
             GROUP BY tertile_id, qbin
             ORDER BY tertile_id, qbin
         """).df()
