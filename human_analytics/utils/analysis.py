@@ -23,8 +23,6 @@ from .plots import (
     get_isoluminant_cmap,
     plot_heatmap_with_alpha,
     plot_qbin_stats,
-    plot_raw_trend,
-    plot_subset_scatterplot,
 )
 
 _PLY_TERTILE_LEGEND_FALLBACK = {1: "Tertile 1", 2: "Tertile 2", 3: "Tertile 3"}
@@ -114,10 +112,7 @@ class Analyzer:
         # Results to be populated by _run_sql_pipeline()
         self.n_games = 0
         self.n_moves = 0
-        self.raw_trend_df = None
         self.quantile_df = None
-        self.sample_df = None
-        self.raw_trend_tertile_df = None
         self.quantile_tertile_df = None
         self.ply_tertile_bounds_df = None
 
@@ -156,18 +151,7 @@ class Analyzer:
             ORDER BY tertile_id
         """).df()
 
-        # 3. Compute Raw Trend Data
-        self.raw_trend_df = self.conn.execute("""
-            SELECT
-                _x_transformed as x_val,
-                avg(_y_transformed) as mean_y,
-                stddev(_y_transformed) as std_y,
-                count(*) as n
-            FROM _analyzer_view
-            GROUP BY _x_transformed
-        """).df()
-
-        # 4. Compute Quantile-Binned Data (global ranks)
+        # 3. Compute Quantile-Binned Data (global ranks)
         self.quantile_df = self.conn.execute(f"""
             SELECT
                 qbin,
@@ -180,17 +164,6 @@ class Analyzer:
                 FROM _analyzer_view
             )
             GROUP BY qbin
-        """).df()
-
-        self.raw_trend_tertile_df = self.conn.execute("""
-            SELECT
-                ply_tertiles as tertile_id,
-                _x_transformed as x_val,
-                avg(_y_transformed) as mean_y,
-                stddev(_y_transformed) as std_y,
-                count(*) as n
-            FROM _analyzer_view
-            GROUP BY ply_tertiles, _x_transformed
         """).df()
 
         self.quantile_tertile_df = self.conn.execute(f"""
@@ -213,14 +186,6 @@ class Analyzer:
             )
             GROUP BY tertile_id, qbin
             ORDER BY tertile_id, qbin
-        """).df()
-
-        # 5. Pull sample for scatter visualization (sampled in SQL for memory efficiency)
-        print("Sampling moves for scatterplot...")
-        self.sample_df = self.conn.execute("""
-            SELECT _x_transformed as x, _y_transformed as y
-            FROM _analyzer_view
-            USING SAMPLE 100000 ROWS
         """).df()
 
         if self.quantile_heatmap_row:
@@ -246,12 +211,6 @@ class Analyzer:
                 ON x_qbin USING count(*) GROUP BY row_qbin
             """).df().set_index("row_qbin")
 
-    def _tertile_sorted_ids(self) -> list:
-        df = self.raw_trend_tertile_df
-        if df.empty:
-            return []
-        return sorted(df["tertile_id"].unique().tolist())
-
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
         """Human-readable legend segment from observed move_ply bounds for this tertile."""
         df = self.ply_tertile_bounds_df
@@ -263,45 +222,9 @@ class Analyzer:
         lo_raw = match.iloc[0]["min_ply"]
         hi_raw = match.iloc[0]["max_ply"]
         lo, hi = int(lo_raw), int(hi_raw)
-        tid = int(tertile_id)
         if lo == hi:
-            return f"Tertile {tid} (ply = {lo})"
-        return f"Tertile {tid} ({lo} ≤ ply ≤ {hi})"
-
-    def plot_raw_trend_tertile_segmented(self, ax, *, min_n: int = 5):
-        """
-        Mean Y vs X (distinct transformed X), one curve + CI per ply tertile, all on ``ax``.
-        Legend text includes observed ``move_ply`` bounds per tertile.
-        """
-        if self.raw_trend_tertile_df.empty:
-            raise ValueError(
-                "Ply-tertile-segmented raw trend needs non-empty data with column ply_tertiles "
-                "(run preprocess on move tables)."
-            )
-        tertiles = self._tertile_sorted_ids()
-        x_label = self.x.label + (" (log)" if self.x.is_log else "")
-        y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
-
-        for t in tertiles:
-            subset = self.raw_trend_tertile_df[self.raw_trend_tertile_df["tertile_id"] == t]
-            color = PHASE_COLORS.get(int(t), MAIN_COLOR)
-            lbl = self._ply_tertile_legend_label(int(t))
-            plot_raw_trend(
-                ax,
-                subset,
-                x_col="x_val",
-                y_col="mean_y",
-                std_col="std_y",
-                n_col="n",
-                x_label=x_label,
-                y_label=y_label,
-                color=color,
-                label=lbl,
-                min_n=min_n,
-                show_legend=False,
-                ci_legend_label=None,
-            )
-        ax.legend(fontsize=FONT_SIZE_TICKS)
+            return f"ply {lo}"
+        return f"ply {lo} to {hi}"
 
     def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int = 1):
         """
@@ -335,7 +258,13 @@ class Analyzer:
                 show_legend=False,
                 ci_legend_label=None,
             )
-        ax.legend(fontsize=FONT_SIZE_TICKS)
+        ax.legend(
+            fontsize=FONT_SIZE_TICKS,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+            ncol=len(tertiles),
+            frameon=False,
+        )
 
     def plot_quantile_heatmap(self, ax, *, alpha_mode: str = "log"):
         """
@@ -366,24 +295,6 @@ class Analyzer:
         ax.set_ylabel(f"{self._quantile_heatmap_row_label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=48)
         ax.set_title("Quantile × quantile heatmap", fontsize=FONT_SIZE_LABEL, pad=12)
 
-    def plot_raw_trend(self, ax):
-        """Plots the raw trend of mean Y vs X."""
-        x_label = self.x.label + (" (log)" if self.x.is_log else "")
-        y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
-
-        plot_raw_trend(
-            ax,
-            self.raw_trend_df,
-            x_col="x_val",
-            y_col="mean_y",
-            std_col="std_y",
-            n_col="n",
-            x_label=x_label,
-            y_label=y_label,
-            min_n=5,
-            show_legend=False,
-        )
-
     def plot_quantile_bins(self, ax):
         """Plots the trend across equal-sized quantile bins."""
         y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
@@ -396,21 +307,6 @@ class Analyzer:
             y_label=y_label,
             normalized=False,
             show_legend=False,
-        )
-
-    def plot_scatter(self, ax, n_points=10000):
-        """Plots a density scatterplot."""
-        x_label = self.x.label + (" (log)" if self.x.is_log else "")
-        y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
-
-        plot_subset_scatterplot(
-            ax,
-            self.sample_df,
-            x_col="x",
-            y_col="y",
-            x_label=x_label,
-            y_label=y_label,
-            n=n_points,
         )
 
     def save_quantile_heatmap_figure(
@@ -439,7 +335,6 @@ class Analyzer:
     def save_dashboard(
         self,
         output_path,
-        layout="2x2",
         *,
         include_quantile_heatmap: bool = False,
         heatmap_alpha_mode: str = "log",
@@ -447,46 +342,27 @@ class Analyzer:
     ):
         """Generates and saves a publication-ready dashboard.
 
-        ``2x2`` (default): global raw trend | global quantile bins; then the same pair by
-        ``ply_tertiles`` (overlaid tertiles). ``1x3`` keeps raw | quantile | scatter. ``1x2`` is
-        raw | quantile only.
+        Fixed 1×2 layout: **Quantile bins** (global ranks, left) and **Quantile bins
+        (by ply tertile)** (ntile recomputed within each ``ply_tertiles`` segment, right).
+        Raw-trend and scatter panels were removed — quantile binning is the canonical view.
 
-        Set ``include_quantile_heatmap=True`` (with ``layout="2x2"`` only, and
-        ``quantile_heatmap_row='...'`` on construction) to also write the quantile×quantile
-        heatmap as a **separate** PNG next to the dashboard (by default:
-        ``<stem>_quantile_heatmap<ext>`` beside ``output_path``). Pass ``heatmap_output_path``
-        to override the heatmap destination.
+        Set ``include_quantile_heatmap=True`` (with ``quantile_heatmap_row='...'`` on
+        construction) to also write the quantile×quantile heatmap as a **separate** PNG
+        next to the dashboard (default ``<stem>_quantile_heatmap<ext>``). Pass
+        ``heatmap_output_path`` to override the heatmap destination.
         """
         apply_poster_style()
 
-        if include_quantile_heatmap and layout != "2x2":
-            raise ValueError("include_quantile_heatmap is only supported with layout='2x2'.")
         if include_quantile_heatmap and not self.quantile_heatmap_row:
             raise ValueError(
                 "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
             )
 
-        if layout == "2x2":
-            fig, axes = plt.subplots(2, 2, figsize=(36, 26))
-            self.plot_raw_trend(axes[0, 0])
-            self.plot_quantile_bins(axes[0, 1])
-            self.plot_raw_trend_tertile_segmented(axes[1, 0])
-            self.plot_quantile_bins_tertile_segmented(axes[1, 1])
-            axes[0, 0].set_title("Raw trend", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[0, 1].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[1, 0].set_title("Raw trend (by ply tertile)", fontsize=FONT_SIZE_LABEL, pad=12)
-            axes[1, 1].set_title("Quantile bins (by ply tertile)", fontsize=FONT_SIZE_LABEL, pad=12)
-        elif layout == "1x3":
-            fig, axes = plt.subplots(1, 3, figsize=(36, 12))
-            self.plot_raw_trend(axes[0])
-            self.plot_quantile_bins(axes[1])
-            self.plot_scatter(axes[2])
-        elif layout == "1x2":
-            fig, axes = plt.subplots(1, 2, figsize=(24, 12))
-            self.plot_raw_trend(axes[0])
-            self.plot_quantile_bins(axes[1])
-        else:
-            raise ValueError(f"Unsupported layout: {layout}")
+        fig, axes = plt.subplots(1, 2, figsize=(24, 12))
+        self.plot_quantile_bins(axes[0])
+        self.plot_quantile_bins_tertile_segmented(axes[1])
+        axes[0].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
+        axes[1].set_title("Quantile bins (by ply tertile)", fontsize=FONT_SIZE_LABEL, pad=12)
 
         fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
 

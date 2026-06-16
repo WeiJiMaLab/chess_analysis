@@ -32,7 +32,7 @@ def main():
     )
     
     figures_dir = os.path.join(src_dir, "figures")
-    analyzer.save_dashboard(os.path.join(figures_dir, "ply_vs_pinstant.png"), layout="1x2")
+    analyzer.save_dashboard(os.path.join(figures_dir, "ply_vs_pinstant.png"))
     
     conn.close()
 

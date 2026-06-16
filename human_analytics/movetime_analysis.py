@@ -86,7 +86,7 @@ def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) ->
         filter_query="move_ply <= 150",
         title="Game Stage",
     )
-    analyzer.save_dashboard(_fig(src_dir, "ply_vs_movetime.png"), layout="1x2")
+    analyzer.save_dashboard(_fig(src_dir, "ply_vs_movetime.png"))
 
 
 def clock_movetime(
