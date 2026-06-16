@@ -1,7 +1,8 @@
 #!/bin/bash
-# End-to-end analysis script. Runs all standardized plots.
+# End-to-end FULL-dataset analysis. Runs the kept standardized plots only.
 #
-# Engine-backed workflows (e.g. selected_moves_with_engine) are not run here.
+# The tree-derived "generated values" (OSS / VOC / Action Gap on the lc0-tree
+# subset) are NOT run here — see slurm/tree_values.slurm.
 #
 # Usage:
 #   bash human_analytics/slurm/analysis.sh
@@ -14,16 +15,20 @@ cd "${PROJECT_DIR}"
 if [[ -f .venv/bin/activate ]]; then
   source .venv/bin/activate
 fi
+export PYTHONPATH="${PYTHONPATH:-}:human_analytics"
 
-echo "Running analysis pipeline at $(date)"
+echo "Running full-dataset analysis pipeline at $(date)"
 
-echo "1. Move Time Summary..."
+echo "1. Move time: log(MT) histogram + normal QQ..."
 python3 human_analytics/move_time_summary.py
 
-echo "2. Move-time dashboards (clock, branching, material, ply)..."
-python3 human_analytics/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc self_pieces_exc ply
+echo "2. Move-time dashboards (clock, branching, own non-pawn material, ply)..."
+python3 human_analytics/movetime_analysis.py --only clock npossiblemoves self_pieces_exc ply
 
-echo "3. Game Stage (Ply Pre-move Probability)..."
+echo "3. Game stage (ply vs instant-move probability)..."
 python3 human_analytics/ply_premove.py
+
+echo "4. Move quality (MQ) vs move time..."
+python3 human_analytics/mq_analysis.py
 
 echo "Analysis complete at $(date)"

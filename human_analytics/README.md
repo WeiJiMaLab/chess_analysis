@@ -18,14 +18,16 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `human_
 | **Activate env** | `source .venv/bin/activate` |
 | **Moves ETL (games → shards → merge → `process_moves`)** | `bash human_analytics/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
 | **Regenerate standard figures** | `bash human_analytics/slurm/analysis.sh` |
-| **Move-time histograms** | `python human_analytics/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
+| **log(MT) histogram + normal QQ** | `python human_analytics/move_time_summary.py` |
+| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock npossiblemoves self_pieces_exc ply`) |
 | **Ply vs instant-move probability** | `python human_analytics/ply_premove.py` |
+| **MQ vs move time** | `python human_analytics/mq_analysis.py` |
+| **Tree-derived OSS / VOC / Action Gap vs RT** (lc0-tree subset) | `sbatch human_analytics/slurm/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
 | **Engine eval (positions)** | `python human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval --engine stockfish` |
 | **Build selected-moves-with-engine join** | `python human_analytics/slurm/scripts/build_selected_moves_with_engine.py` |
 | **Slidev deck (LMCOS overview)** | `cd human_analytics/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
-Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash human_analytics/slurm/analysis.sh`** (see repo-root paths there).
+The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`, `mq_analysis`) are wired from **`bash human_analytics/slurm/analysis.sh`**. The **generated values** (OSS / VOC / Action Gap, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster.
 
 **Outputs:** analysis scripts write figures under **`human_analytics/figures/`**.
 
@@ -48,9 +50,12 @@ chess_analysis/
     │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
     │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
     │   └── logs/                 # `ld-moves_*.out/.err`, optional `preprocess_driver.log`, `eval_*`
-    ├── movetime_analysis.py      # DuckDB move-time dashboards (see DEFAULT_ANALYSES)
-    ├── move_time_summary.py
-    ├── ply_premove.py
+    ├── movetime_analysis.py      # FULL: clock / branching / own-material / ply vs MT dashboards
+    ├── move_time_summary.py      # FULL: log(MT) histogram + normal QQ
+    ├── ply_premove.py            # FULL: ply vs instant-move probability
+    ├── mq_analysis.py            # FULL: MQ vs move time (pos_with_engine_eval)
+    ├── engine_analysis.py        # engine VOC/MQ primitives (library)
+    ├── tree_values_analysis.py   # SUBSET: OSS / VOC / Action Gap from lc0 trees vs RT (cluster)
     └── ...
 ```
 
@@ -77,7 +82,7 @@ chess_analysis/
 | **VOC (value of computation)** | Engine-defined gain from deep vs shallow search relates to think time; often discussed vs **ply** “arc” (midgame peak ~40–50). |
 | **Scale** | Core DuckDB pipelines target on the order of **~10⁸ moves**; always prefer **SQL-side** aggregation and sampling. |
 
-For publication-style figures, `utils.analysis.Analyzer.save_dashboard` defaults to **2×2**: global raw trend and quantile bins on the top row, the same pair **by `ply_tertiles`** (global ply tertiles from `processed_moves` / `processed_moves_nonzero`; overlaid) on the bottom. Pass **`include_quantile_heatmap=True`** (and **`quantile_heatmap_row='move_ply'`** on construction) to also write a **standalone** quantile×quantile heatmap PNG (default path: same stem as the dashboard plus `_quantile_heatmap` before the extension; override with ``heatmap_output_path``). Use **`layout="1x3"`** for raw | quantile | scatter, or **`layout="1x2"`** for raw | quantile only (see `movetime_analysis.ply_movetime`).
+For publication-style figures, `utils.analysis.Analyzer.save_dashboard` produces a fixed **1×2**: **quantile bins** (global, left) and **quantile bins by ply tertile** (right). Raw-trend and scatter panels were removed — quantile binning is the canonical view. Ply tertiles are settled **a priori** from the whole-dataset `move_ply` distribution (`quantile_disc` at 1/3, 2/3 over `ply_tertile_source`, default `processed_moves_nonzero` → cuts ≈ 27, 56) and applied as fixed boundaries, so the segmentation is identical across plots. A log-`move_time` y-axis keeps log spacing but labels ticks in seconds (`exp`). For near-zero-inflated x (VOC / Action Gap), pass `zero_inflated=True, zero_threshold=0.05` to lump the near-zero mass into one point and quantile-bin the rest. Optional `include_quantile_heatmap=True` (+ `quantile_heatmap_row='move_ply'`) writes a standalone quantile×quantile heatmap.
 
 ---
 
