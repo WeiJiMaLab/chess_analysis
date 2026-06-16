@@ -118,7 +118,8 @@ def plot_voc_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -> N
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         filter_query="move_time > 0",
         title="VOC vs. log(RT)",
-        zero_inflated=True,  # ~⅔ of moves have VOC==0; show it as one point, bin the rest
+        zero_inflated=True,  # lump VOC < 0.05 as one point, quantile-bin the rest
+        zero_threshold=0.05,
     )
     analyzer.save_dashboard(output_path)
 
@@ -175,6 +176,8 @@ def plot_toptwo_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         filter_query="move_time > 0",
         title="toptwo vs. log(RT)",
+        zero_inflated=True,  # lump toptwo < 0.05 as one point, quantile-bin the rest
+        zero_threshold=0.05,
     )
     analyzer.save_dashboard(output_path)
 

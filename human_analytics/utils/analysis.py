@@ -87,6 +87,7 @@ class Analyzer:
         quantile_heatmap_row: str | None = None,
         quantile_heatmap_row_label: str | None = None,
         zero_inflated: bool = False,
+        zero_threshold: float = 0.0,
     ):
         self.conn = db_conn
         self.table = table_name
@@ -95,11 +96,13 @@ class Analyzer:
         self.n_bins = n_bins
         self.filter_query = filter_query
         self.title = title or f"{self.x.label} vs {self.y.label}"
-        # When the x distribution has a large point mass at 0 (e.g. VOC: ~⅔ of
-        # moves are exactly 0), plain ``ntile`` wastes most bins on that mass.
-        # ``zero_inflated`` instead renders x==0 as a single leftmost point and
-        # quantile-bins only the nonzero rows.
+        # When the x distribution has a large mass near 0 (e.g. VOC: ~⅔ of moves
+        # are 0), plain ``ntile`` wastes most bins on that mass. ``zero_inflated``
+        # instead lumps the near-zero rows (``abs(x) <= zero_threshold``) into a
+        # single leftmost point and quantile-bins only the remaining rows.
+        # ``zero_threshold=0`` lumps exactly-zero rows.
         self.zero_inflated = zero_inflated
+        self.zero_threshold = float(zero_threshold)
 
         self.quantile_heatmap_row = None
         self._quantile_heatmap_row_label = ""
@@ -161,14 +164,15 @@ class Analyzer:
         # the x==0 point mass collapses to a single leftmost bin and only the
         # nonzero rows are ntiled (avoids wasting bins on the zero mass).
         col = self.x.column
+        thr = self.zero_threshold
         if self.zero_inflated:
             global_inner = f"""
                 SELECT {col}, _y_transformed, 0 AS qbin
-                FROM _analyzer_view WHERE {col} = 0
+                FROM _analyzer_view WHERE abs({col}) <= {thr}
                 UNION ALL
                 SELECT {col}, _y_transformed,
                        ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin
-                FROM _analyzer_view WHERE {col} <> 0
+                FROM _analyzer_view WHERE abs({col}) > {thr}
             """
         else:
             global_inner = f"SELECT *, ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin FROM _analyzer_view"
@@ -185,11 +189,11 @@ class Analyzer:
         if self.zero_inflated:
             tertile_inner = f"""
                 SELECT ply_tertiles as tertile_id, {col}, _y_transformed, 0 AS qbin
-                FROM _analyzer_view WHERE {col} = 0
+                FROM _analyzer_view WHERE abs({col}) <= {thr}
                 UNION ALL
                 SELECT ply_tertiles as tertile_id, {col}, _y_transformed,
                        ntile({self.n_bins}) OVER (PARTITION BY ply_tertiles ORDER BY {col}) AS qbin
-                FROM _analyzer_view WHERE {col} <> 0
+                FROM _analyzer_view WHERE abs({col}) > {thr}
             """
         else:
             tertile_inner = f"""
