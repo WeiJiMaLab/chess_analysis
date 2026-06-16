@@ -358,7 +358,7 @@ class Analyzer:
                 "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
             )
 
-        fig, axes = plt.subplots(1, 2, figsize=(24, 14))
+        fig, axes = plt.subplots(1, 2, figsize=(24, 19.6))
         self.plot_quantile_bins(axes[0])
         self.plot_quantile_bins_tertile_segmented(axes[1])
         axes[0].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
