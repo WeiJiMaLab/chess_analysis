@@ -401,13 +401,15 @@ class Analyzer:
                 "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
             )
 
-        fig, axes = plt.subplots(1, 2, figsize=(24, 19.6))
+        fig, axes = plt.subplots(1, 2, figsize=(30, 13.72))
         self.plot_quantile_bins(axes[0])
         self.plot_quantile_bins_tertile_segmented(axes[1])
         # Panel titles omitted — left = global, right = by ply tertile (implied by
         # the legend + the "(qbin)" x-axis).
 
-        suptitle = fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10)
+        # Push the panels down so the suptitle clears them with a comfortable gap.
+        fig.subplots_adjust(top=0.80)
+        suptitle = fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
 
         # Crop tightly on save and explicitly include the below-axes legend +
         # suptitle as extra artists so they aren't clipped (bbox_inches='tight'

@@ -187,7 +187,7 @@ def plot_mq_vs_logrt(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
     analyzer = Analyzer(
         db_conn=conn,
         table_name=_VIEW,
-        x_var=Variable(column="move_time", is_log=True, name="log Reaction Time (s)"),
+        x_var=Variable(column="move_time", is_log=True, name="log RT(s)"),
         y_var=Variable(column="mq", is_log=False, name="MQ"),
         filter_query="move_time > 0",
         title="MQ vs. log Reaction Time",

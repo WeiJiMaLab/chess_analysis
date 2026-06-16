@@ -39,7 +39,7 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
     analyzer = Analyzer(
         db_conn=conn,
         table_name=TABLE_PROCESSED_MOVES_NONZERO,
-        x_var=Variable(column="n_possible_moves", is_log=False, name="Number of Legal Moves"),
+        x_var=Variable(column="n_possible_moves", is_log=False, name="# Legal Moves"),
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_possible_moves < 50",
         title="Branching Factor",
