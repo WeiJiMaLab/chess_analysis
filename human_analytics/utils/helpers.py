@@ -13,9 +13,6 @@ import duckdb
 import matplotlib.pyplot as plt
 from IPython.display import SVG, display
 
-# Constants
-EPSILON = 1e-6
-
 # Stockfish paths
 _STOCKFISH_HOME = os.path.expanduser("~/stockfish")
 _STOCKFISH_SF15_HOME = os.path.expanduser("~/stockfish-sf_15")

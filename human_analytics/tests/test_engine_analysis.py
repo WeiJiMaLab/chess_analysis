@@ -111,29 +111,22 @@ class TestMoveQuality(unittest.TestCase):
         self.assertGreater(mq_mate, mq_non_mate)
 
     def test_mq_escaping_check_correctly_vs_badly(self) -> None:
-        """
-        In a position where the player is in check, a correct escape should have
-        higher MQ than a move that escapes check but leaves the player in a worse spot.
-
-        FEN: white king on g1 in check from Qh4. Kg2 blocks the diagonal (correct)
-        while Kf2 might walk into further threats. We check that the better king
-        move has MQ >= the worse one (both ≤ 0 since they're not necessarily best).
-        """
-        # White king on g1, black queen on h4 gives check along the diagonal.
-        # Kh2 blocks immediately; Kf2 might be less accurate.
-        board = chess.Board("6k1/8/8/8/7q/8/8/6K1 w - - 0 1")  # Qh4 check position
-        # Simulate check — find a position where white is actually in check
-        board = chess.Board("8/8/8/8/7q/8/8/6K1 w - - 0 1")  # Qh4 with white king g1: check
-        if board.is_check():
-            legal = list(board.legal_moves)
-            if len(legal) >= 2:
-                mqs = [(move_quality(board, m, self.engine, depth=_DEPTH), m) for m in legal]
-                mqs_valid = [(mq, m) for mq, m in mqs if mq is not None]
-                if len(mqs_valid) >= 2:
-                    self.assertTrue(
-                        all(mq <= 1e-9 for mq, _ in mqs_valid),
-                        "All MQ values in a check position should be ≤ 0",
-                    )
+        """In check, capturing the checker (best) must score MQ ≈ 0, while a legal
+        but inferior escape must score strictly lower (and ≤ 0)."""
+        # White Kg1 is in check from Qf2. Kxf2 wins the queen (best); Kh1 merely
+        # runs and stays lost. Both legal; require MQ(Kxf2) ≈ 0 > MQ(Kh1).
+        board = chess.Board("7k/8/8/8/8/8/5q2/6K1 w - - 0 1")
+        self.assertTrue(board.is_check(), "test FEN must be a check position")
+        best = self.engine.analyse(board, chess.engine.Limit(depth=_DEPTH), multipv=1)
+        best_move = best[0]["pv"][0]
+        self.assertEqual(best_move.uci(), "g1f2", msg="capturing the queen should be best")
+        mq_best = move_quality(board, best_move, self.engine, depth=_DEPTH)
+        mq_bad = move_quality(board, chess.Move.from_uci("g1h1"), self.engine, depth=_DEPTH)
+        self.assertIsNotNone(mq_best)
+        self.assertIsNotNone(mq_bad)
+        self.assertAlmostEqual(mq_best, 0.0, places=6)
+        self.assertLessEqual(mq_bad, 1e-9, msg=f"escape MQ={mq_bad} should be ≤ 0")
+        self.assertLess(mq_bad, mq_best, msg=f"bad escape MQ={mq_bad} should be < best MQ={mq_best}")
 
     def test_giving_check_when_best_has_mq_zero(self) -> None:
         """
@@ -177,17 +170,18 @@ class TestVOC(unittest.TestCase):
 
     def test_voc_forced_move_is_zero(self) -> None:
         """With exactly one legal move, a_shallow == a_deep → VOC = 0."""
-        # White queen and king vs lone black king; white in zugzwang is hard to construct.
-        # Instead: white king on a1, queen on b2, black king on a3 — black is checkmated,
-        # so let's use a position where white has only one legal move.
-        # Simpler: stalemate-adjacent position with one escape.
-        # King on a1 with only Kb1 legal (other squares covered by black queen on c3).
-        board = chess.Board("8/8/8/8/8/2q5/8/K7 w - - 0 1")
+        # White Ka6, black Ka8, black Qb1: the only legal white move is Ka5 (every
+        # other king square is adjacent to the black king or covered by the queen).
+        # One legal move ⇒ shallow and deep must agree ⇒ VOC = 0.
+        board = chess.Board("k7/8/K7/8/8/8/8/1q6 w - - 0 1")
         legal = list(board.legal_moves)
-        if len(legal) == 1:
-            v = voc(board, self.engine, depth_deep=_DEPTH, depth_shallow=_SHALLOW_DEPTH)
-            self.assertIsNotNone(v)
-            self.assertAlmostEqual(v, 0.0, places=6)
+        self.assertEqual(
+            len(legal), 1,
+            msg=f"test FEN must have exactly one legal move, got {[m.uci() for m in legal]}",
+        )
+        v = voc(board, self.engine, depth_deep=_DEPTH, depth_shallow=_SHALLOW_DEPTH)
+        self.assertIsNotNone(v)
+        self.assertAlmostEqual(v, 0.0, places=6)
 
     def test_voc_nonnegative_across_positions(self) -> None:
         """VOC ≥ 0 across multiple positions including tactical ones."""

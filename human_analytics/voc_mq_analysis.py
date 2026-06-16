@@ -6,7 +6,7 @@ All figures go to figures/ (flat):
     mq_histogram.png       — distribution of MQ
     toptwo_histogram.png   — distribution of top-2 gap
     voc_vs_movetime.png    — log RT as a function of VOC (2×2 dashboard)
-    mq_vs_clock.png        — MQ as a function of player clock (2×2 dashboard)
+    mq_vs_logrt.png        — MQ as a function of log reaction time, by ply phase (2×2 dashboard)
 
 Usage (from chess_analysis/):
     python human_analytics/voc_mq_analysis.py
@@ -178,15 +178,15 @@ def plot_toptwo_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -
     analyzer.save_dashboard(output_path)
 
 
-def plot_mq_vs_clock(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
-    """MQ vs player clock time — 2×2 dashboard stratified by ply tertile."""
+def plot_mq_vs_logrt(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
+    """MQ vs log reaction time — 2×2 dashboard stratified by ply phase (ply_tertiles)."""
     analyzer = Analyzer(
         db_conn=conn,
         table_name=_VIEW,
-        x_var=Variable(column="player_clock_time", is_log=False, name="Player Clock (s)"),
+        x_var=Variable(column="move_time", is_log=True, name="log Reaction Time (s)"),
         y_var=Variable(column="mq", is_log=False, name="MQ"),
-        filter_query="player_clock_time < 600",
-        title="MQ vs. Clock Time",
+        filter_query="move_time > 0",
+        title="MQ vs. log Reaction Time",
     )
     analyzer.save_dashboard(output_path)
 
@@ -213,28 +213,32 @@ def _print_summary(df: pd.DataFrame) -> None:
         print(f"  {label:<22} mean={v.mean():+.4f}  std={v.std():.4f}  "
               f"p50={v.median():+.4f}  |>0.005|={( v.abs()>0.005).mean():.1%}")
 
+    # Variance-explained (R² = r²) of log reaction time by each engine feature.
+    # We report r AND R² so the magnitude (how much of log-RT a feature explains)
+    # is never hidden behind a raw correlation; bivariate only — no causal claims.
     sub = df[df["move_time"] > 0].dropna(subset=["voc", "move_time"])
     if len(sub) > 2:
         r = float(np.corrcoef(sub["voc"], np.log(sub["move_time"]))[0, 1])
-        print(f"\n  r(log RT, VOC)   = {r:+.4f}  (n={len(sub):,})")
+        print(f"\n  r(log RT, VOC)   = {r:+.4f}  R²={r**2:.4f}  (n={len(sub):,})")
 
-    sub2 = df.dropna(subset=["mq", "player_clock_time"])
-    if len(sub2) > 2:
-        r2 = float(np.corrcoef(sub2["player_clock_time"], sub2["mq"])[0, 1])
-        print(f"  r(MQ, clock)     = {r2:+.4f}  (n={len(sub2):,})  [negative = more clock → worse MQ]")
+    smq = df[df["move_time"] > 0].dropna(subset=["mq", "move_time"])
+    if len(smq) > 2:
+        r = float(np.corrcoef(smq["mq"], np.log(smq["move_time"]))[0, 1])
+        print(f"  r(log RT, MQ)    = {r:+.4f}  R²={r**2:.4f}  (n={len(smq):,})")
 
-    print("\n  Within-ply-tertile r(MQ, clock):")
-    df2 = df.copy()
-    df2["ply_tertile"] = pd.qcut(df2["move_ply"], q=3, labels=[1, 2, 3]).astype(int)
-    for t in [1, 2, 3]:
-        ts = df2[df2["ply_tertile"] == t].dropna(subset=["mq", "player_clock_time"])
-        r3 = float(np.corrcoef(ts["player_clock_time"], ts["mq"])[0, 1])
-        ply_min, ply_max = int(ts["move_ply"].min()), int(ts["move_ply"].max())
-        print(f"    Tertile {t} (ply {ply_min}–{ply_max}): r = {r3:+.4f}  (n={len(ts):,})")
-
-    print("\n  Interpretation: r(MQ, clock) is negative within every ply tertile.")
-    print("  Players with more clock remaining have played quickly through low-VOC")
-    print("  (book/simple) positions; depth-5 penalises their strategic choices.")
+    # MQ vs log RT across game phases — phases are the SQL ntile(3) `ply_tertiles`
+    # column (single tertile definition everywhere; no pandas qcut).
+    print("\n  Within-ply-phase r(log RT, MQ)  [phases = SQL ply_tertiles]:")
+    if "ply_tertiles" in df.columns:
+        for t in sorted(int(x) for x in df["ply_tertiles"].dropna().unique()):
+            ts = df[(df["ply_tertiles"] == t) & (df["move_time"] > 0)].dropna(subset=["mq", "move_time"])
+            if len(ts) <= 2:
+                continue
+            r = float(np.corrcoef(ts["mq"], np.log(ts["move_time"]))[0, 1])
+            ply_min, ply_max = int(ts["move_ply"].min()), int(ts["move_ply"].max())
+            print(f"    Phase {t} (ply {ply_min}–{ply_max}): r = {r:+.4f}  R²={r**2:.4f}  (n={len(ts):,})")
+    else:
+        print("    (ply_tertiles column missing; rerun build_pos_with_engine_eval)")
     print()
 
 
@@ -261,7 +265,7 @@ def main(argv: list[str] | None = None) -> None:
     plot_toptwo_histogram(df, os.path.join(out, "toptwo_histogram.png"))
     plot_voc_vs_movetime(conn, os.path.join(out, "voc_vs_movetime.png"))
     plot_toptwo_vs_movetime(conn, os.path.join(out, "toptwo_vs_movetime.png"))
-    plot_mq_vs_clock(conn, os.path.join(out, "mq_vs_clock.png"))
+    plot_mq_vs_logrt(conn, os.path.join(out, "mq_vs_logrt.png"))
     plot_correlation_matrix(conn, os.path.join(out, "correlation_matrix.png"))
 
     conn.close()

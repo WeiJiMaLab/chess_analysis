@@ -16,7 +16,6 @@ Each report has:
 | **1** Human FEN trees + oracle vs RT | [(R-A1)](analysis-1-human-oracle.md) | Active | ⏳ 1K trees done; extraction + 10K open |
 | **2** Minimal model / skip pretrain | [(R-A2)](analysis-2-minimal-model.md) | Active | ⏳ tree-stats + Config D open |
 | **3** SF2000 weaker engine | [(R-A3)](analysis-3-weaker-engine.md) | Prior | ⬜ on hold (needs A1) |
-| **4** Entropy VoI stopping | [(R-A4)](analysis-4-entropy-voi.md) | After | ✅ done (weak RT r at scale) |
 
 ### Summary table by phase
 
@@ -40,7 +39,6 @@ Each report has:
 | [(R-A1)](analysis-1-human-oracle.md) | Active | LMCOS |
 | [(R-A2)](analysis-2-minimal-model.md) | Active | LMCOS |
 | [(R-A3)](analysis-3-weaker-engine.md) | Prior | LMCOS |
-| [(R-A4)](analysis-4-entropy-voi.md) | After | Human |
 | [(R-LMCOS-OVERVIEW)](lmcos-pipeline-overview.md) | After | LMCOS |
 | [(R-BATCHGEN)](batched-tree-generation.md) | Prior | LMCOS |
 | [(R-LMCOS-STAGE4)](lmcos-stage4-ablation.md) | After | LMCOS |

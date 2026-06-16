@@ -271,7 +271,7 @@ The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 �
   *visit-share/PUCT-margin* — halt when the top child's visit fraction (or visit gap to 2nd) exceeds
   a threshold; **(iii)** *value-plateau* — halt when a moving average of `halt_rewards` flattens
   (smoother cousin of gain-depth, robust to single-step noise); **(iv)** *entropy threshold* — halt
-  when the root visit-distribution entropy drops below θ (ties to the A4 entropy-VoI line);
+  when the root visit-distribution entropy drops below θ;
   **(v)** *fixed-fraction-of-budget* — halt at `⌈ρ·β⌉` for ρ∈(0,1) (a non-trivial constant anchor).
   (i)–(iii) and (v) fit the existing `stop_rule → int` harness directly.
 - **Tests (done):** `tests/test_budgeted_baselines.py` — 12 data-independent tests on synthetic

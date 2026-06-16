@@ -146,14 +146,14 @@ A0a corrected and rerun on all 39,668 trees; definitions, features, and code aud
 
 ## 2026-06-04 {#2026-06-04}
 
-Notebook + reports restructure; A1 1K trees done; A4 entropy VoI at scale; A2 tiny-GNN pretrain started.
+Notebook + reports restructure; A1 1K trees done; ~~A4 entropy VoI at scale~~ (**removed 2026-06-16 — see below**); A2 tiny-GNN pretrain started.
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
 | **Docs restructure** — root `labnotebook.md` + `reports/`; drop `proposed_next_steps.md` | Single chronology + procedure checklists for open work | ✅ Open steps live in active `R-*` reports | [reports/README.md](reports/README.md) |
 | **LMCOS A1** — human FEN tree smoke (644 FENs, budget 96) | Same-position oracle vs RT | ✅ **644/644** `.pt`; comparison script + 10K + plots still open | [(R-A1)](reports/analysis-1-human-oracle.md) |
 | **LMCOS A2** — tree-stats + tiny GNN scratch (Config D) | Skip 1-day pretrain if small encoder suffices | ⏳ Config D YAML open; child-WDL pretrain job **9215254** started | [(R-A2)](reports/analysis-2-minimal-model.md) |
-| **Human A4** — entropy VoI stopping (SF multidepth, 10K CPU job) | Information-theoretic Rule B vs RT | ✅ **6,494** traces; r(d*, log RT) ≈ **0.01** at θ=0.001 — weak RT alignment | [(R-A4)](reports/analysis-4-entropy-voi.md) |
+| ~~**Human A4** — entropy VoI stopping (SF multidepth, 10K CPU job)~~ | — | ❌ **REMOVED 2026-06-16 (statistically degenerate).** Skeptical audit showed `compute_stopping_depth` softmaxes win-probs (~0.05 spread) at hardcoded β=1 → near-uniform → d* pins to 1 (mean d* collapses 2.46→1.00 as θ rises; r(d*,logRT) null/NaN), and "Approach A vs B" were byte-identical. Code, tests, report, slides, and 10K outputs deleted. | — |
 | **LMCOS A3** — SF ELO 2000 oracle | Only if A1 Lc0 oracle mismatches humans | ⬜ On hold until A1 matched-position r | [(R-A3)](reports/analysis-3-weaker-engine.md) |
 | **Repo cleanup** — scratch + orphan tests | Free disk | ✅ Paths logged | [(R-CLEANUP-0604)](reports/archive-2026-06-04-cleanup.md) |
 

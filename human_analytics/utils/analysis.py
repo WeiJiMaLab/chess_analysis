@@ -13,7 +13,6 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 
 from .helpers import (
-    EPSILON,
     apply_poster_style,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
@@ -56,7 +55,7 @@ class Variable:
     def sql_expression(self):
         """Returns the SQL expression for the variable, including log-transform if needed."""
         if self.is_log:
-            return f"ln({self.column} + {EPSILON})"
+            return f"ln({self.column})"
         return self.column
 
 

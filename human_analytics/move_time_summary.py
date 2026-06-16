@@ -10,7 +10,7 @@ import math
 import duckdb
 import matplotlib.pyplot as plt
 
-from utils import apply_poster_style, FONT_SIZE_LABEL, EPSILON
+from utils import apply_poster_style, FONT_SIZE_LABEL
 from utils.plots import plot_histogram_from_bins
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES, TABLE_PROCESSED_MOVES_NONZERO
 
@@ -54,7 +54,7 @@ def main():
 
     conn.execute(
         f"CREATE OR REPLACE TEMPORARY VIEW _summary_view AS "
-        f"SELECT *, ln(move_time + {EPSILON}) AS ln_move_time FROM {base_table}"
+        f"SELECT *, ln(move_time) AS ln_move_time FROM {base_table}"
     )
     _histogram_bins(conn, "_summary_view", "move_time", "_mt_bins")
     _histogram_bins(conn, "_summary_view", "ln_move_time", "_lmt_bins")
