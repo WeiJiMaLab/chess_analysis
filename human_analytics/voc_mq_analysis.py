@@ -148,6 +148,7 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
 
     apply_poster_style()
     fig, ax = plt.subplots(figsize=(10, 8))
+    ax.grid(False)  # poster style enables a grid globally; off for the heatmap
     im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
     ax.set_xticks(range(n_vars))
     ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
