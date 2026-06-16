@@ -10,8 +10,8 @@ dashboard style:
   * VOC         — value of computation = final_Q(best) − final_Q(shallow choice),
                   where the shallow choice is the best move after the first
                   expansion step (lc0 analog of the Stockfish depth-VOC). ≥ 0.
-  * Action Gap  — final_Q(best) − final_Q(second best) at the root (lc0 analog of
-                  Stockfish ``toptwo``). ≥ 0.
+  * Action Gap  — MYOPIC gap between the root's best and second-best child by the
+                  children's 1-ply value-head value (not a deep/converged gap). ≥ 0.
 
 All three are on the SAME subset (positions that have a generated lc0 tree), so
 they are directly comparable. This replaces the Stockfish proxies: OSS supersedes
@@ -62,26 +62,37 @@ _BUDGET = 96  # set per-run in compute_values before the worker pool forks
 
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
-    """(VOC, Action Gap) from a tree's root oracle Q values.
+    """(VOC, Action Gap) for one tree.
 
-    Action Gap = best − second-best of the final root Q values.
-    VOC        = final_Q(final-best) − final_Q(first-step best); the shallow choice
-                 is the argmax of the first expansion step's root Q trace.
+    Action Gap = **myopic** gap between the root's best and second-best child by the
+                 children's 1-ply value-head value (parent perspective = −child.value).
+                 This is the immediate value separation, NOT a deep/converged gap.
+    VOC        = final_Q(final-best) − final_Q(first-step best): the deep-converged
+                 regret of the shallow (first-expansion) choice = value of computation.
     """
-    final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
-    if final_q.size < 2:
-        return float("nan"), float("nan")
-    order = np.argsort(final_q)[::-1]
-    action_gap = float(final_q[order[0]] - final_q[order[1]])
+    # Action Gap — myopic, from the root children's value-head values.
+    feature_names = list(payload["feature_names"])
+    nf = payload["node_features"].numpy()
+    par = payload["parent_index"].numpy()
+    vi = feature_names.index("value")
+    action_gap = float("nan")
+    roots = np.where(par < 0)[0]
+    if roots.size:
+        kids = np.where(par == int(roots[0]))[0]
+        if kids.size >= 2:
+            myopic_q = -nf[kids, vi]  # parent-perspective 1-ply value (negamax flip)
+            top = np.sort(myopic_q)[::-1]
+            action_gap = float(top[0] - top[1])
 
+    # VOC — deep-converged regret of the first-step (shallow) choice.
+    final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
     trace = np.asarray(payload["oracle_root_q_trace"], dtype=float)  # [steps, n_moves]
     voc = float("nan")
-    if trace.ndim == 2 and trace.shape[0] >= 1 and trace.shape[1] == final_q.size:
-        first = trace[0]
-        if np.isfinite(first).any():
-            a_shallow = int(np.nanargmax(first))
-            a_deep = int(order[0])
-            voc = float(final_q[a_deep] - final_q[a_shallow])
+    if final_q.size >= 2 and trace.ndim == 2 and trace.shape[0] >= 1 \
+            and trace.shape[1] == final_q.size and np.isfinite(trace[0]).any():
+        a_shallow = int(np.nanargmax(trace[0]))
+        a_deep = int(np.argmax(final_q))
+        voc = float(final_q[a_deep] - final_q[a_shallow])
     return voc, action_gap
 
 
