@@ -101,7 +101,7 @@ def plot_toptwo_histogram(df: pd.DataFrame, output_path: str) -> None:
     apply_poster_style()
     t = df["toptwo"].dropna().to_numpy(float)
     fig, ax = plt.subplots(figsize=(18, 10))
-    _histogram(ax, t, "toptwo  (e_win_best − e_win_second_best,  ≥ 0)", len(t))
+    _histogram(ax, t, "Action Gap  (e_win_best − e_win_second_best,  ≥ 0)", len(t))
     _save(output_path)
 
 
@@ -139,7 +139,7 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
         "n_possible_moves": "Branching",
         "n_self_pieces_exc_pawns": "Own material",
         "voc": "VOC",
-        "toptwo": "toptwo",
+        "toptwo": "Action Gap",
         "mq": "MQ",
         "log_T": "log(RT)",
     }
@@ -173,10 +173,10 @@ def plot_toptwo_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -
     analyzer = Analyzer(
         db_conn=conn,
         table_name=_VIEW,
-        x_var=Variable(column="toptwo", is_log=False, name="toptwo"),
+        x_var=Variable(column="toptwo", is_log=False, name="Action Gap"),
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         filter_query="move_time > 0",
-        title="toptwo vs. log(RT)",
+        title="Action Gap vs. log(RT)",
         zero_inflated=True,  # lump toptwo < 0.05 as one point, quantile-bin the rest
         zero_threshold=0.05,
     )
@@ -210,7 +210,7 @@ def _print_summary(df: pd.DataFrame) -> None:
         ("e_win_taken", "e_win_taken"),
         ("voc", "VOC"),
         ("mq", "MQ"),
-        ("toptwo", "toptwo"),
+        ("toptwo", "Action Gap"),
     ]:
         if col not in df.columns:
             continue
