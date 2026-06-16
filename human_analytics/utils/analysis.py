@@ -262,7 +262,7 @@ class Analyzer:
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
             bbox_to_anchor=(0.5, -0.18),
-            ncol=len(tertiles),
+            ncol=1,
             frameon=False,
         )
 
