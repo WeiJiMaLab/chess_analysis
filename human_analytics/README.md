@@ -19,10 +19,10 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `human_
 | **Moves ETL (games → shards → merge → `process_moves`)** | `bash human_analytics/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
 | **Regenerate standard figures** | `bash human_analytics/slurm/analysis.sh` |
 | **Move-time histograms** | `python human_analytics/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, material, ply) | `python analysis/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
-| **Ply vs instant-move probability** | `python analysis/ply_premove.py` |
-| **Engine eval (cluster)** | `bash human_analytics/slurm/engine_eval.sh` (or `--merge-only` when parquets exist) |
-| **Merge eval shards only (legacy)** | `python human_analytics/slurm/scripts/script_merge_evals.py --engine stockfish` |
+| **Move-time dashboards** (clock, branching, material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock pieces_exc self_pieces_exc ply …`) |
+| **Ply vs instant-move probability** | `python human_analytics/ply_premove.py` |
+| **Engine eval (positions)** | `python human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval --engine stockfish` |
+| **Build selected-moves-with-engine join** | `python human_analytics/slurm/scripts/build_selected_moves_with_engine.py` |
 | **Slidev deck (LMCOS overview)** | `cd human_analytics/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
 Standard dashboards (`movetime_analysis`, `move_time_summary`, `ply_premove`) are wired from **`bash human_analytics/slurm/analysis.sh`** (see repo-root paths there).
@@ -121,16 +121,15 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 
 ### Engine evaluation
 
-- **Worker:** `human_analytics/slurm/scripts/script_engine_eval.py` → shard parquets.
-- **Eval parquet merge:** `script_engine_eval.py` **`merge`** (or legacy `script_merge_evals.py`) → `{stockfish,lc0}_evaluations` in `personal.db`.
+- **Worker / eval:** `human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval` → `{stockfish,lc0}_evaluations` in `personal.db`.
 - **Join to moves:** `build_selected_moves_with_engine.py` joins **`processed_moves`** to `{stockfish,lc0}_evaluations` on **`fen`** → **`selected_moves_with_engine`**.
 
-Details: **`bash human_analytics/slurm/engine_eval.sh`**, **`engine_eval_shard.sbatch`**, logs under **`human_analytics/slurm/logs/`**.
+> *(The `engine_eval.sh` / `engine_eval_shard.sbatch` wrappers and `script_engine_eval.py` / `script_merge_evals.py` were removed; `build_pos_with_engine_eval.py` is the current entry point.)*
 
 ### Pipeline vs analysis — ordered workflow
 
 1. `bash human_analytics/slurm/preprocess.sh` (or equivalent `preprocess.py` steps).
-2. **Optional:** `bash human_analytics/slurm/engine_eval.sh` → `python human_analytics/slurm/scripts/build_selected_moves_with_engine.py`
+2. **Optional:** `python human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval` → `python human_analytics/slurm/scripts/build_selected_moves_with_engine.py`
 3. **Figures:** `bash human_analytics/slurm/analysis.sh` or individual `human_analytics/*.py` tools in §1.
 
 ---
@@ -161,13 +160,6 @@ Details: **`bash human_analytics/slurm/engine_eval.sh`**, **`engine_eval_shard.s
 ---
 
 ## 6. Quality control (do not regress)
-
-### Legacy vs new ETL (smoke)
-
-- **Script:** `human_analytics/slurm/scripts/tests/compare_legacy_new_pipeline_smoke.py` — builds **two** isolated DuckDB trees under a scratch root (default **`/scratch/gpfs/GRIFFITHS/hl4291/tmp/pipeline_smoke`**): **legacy** mirrors deleted `preprocess_data.py` (shard = neg-time filter only; berserk + grant on merged `moves`; then `_selected_moves` / `_nonzero_T`), **new** uses current `preprocess.py` (shard applies neg + berserk + grant; `merge` → `process_moves`).
-- **What to expect:** `moves` **row counts** usually **differ** (legacy keeps bad games until feature SQL; new drops them earlier), but **`COUNT(DISTINCT gid)` on the positive-time feature table** should **match** for the same `[start, end)` window when `lichess.db` / parquets are unchanged.
-- **Example:** `PYTHONPATH=human_analytics python3 human_analytics/slurm/scripts/tests/compare_legacy_new_pipeline_smoke.py --clean --start-date 2023-10-01 --end-date 2023-10-05`
-- **Automated (optional):** `RUN_PIPELINE_COMPARE=1 PYTHONPATH=human_analytics python3 -m unittest discover -s human_analytics/slurm/scripts/tests -p 'test_pipeline_compare_smoke.py' -v` (slow; short window).
 
 - **Negative move times:** exclude affected games when building analysis tables (pipeline enforces this for core paths).
 - **Berserk:** dedicated detection; do not mix berserk games into clock analyses without an explicit policy.

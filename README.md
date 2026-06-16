@@ -10,7 +10,6 @@ This repository is the working root for **Chess Meta-control (CMC)**—research 
 | :--- | :--- |
 | `chess_analysis/` | DuckDB, figures; Slidev deck lives under `human_analytics/presentations/` |
 | `chess_analysis/human_analytics/` | **Human analytics** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/human_analytics/metacontrol/` | Modular tree-search export (refactored from `lmcos/`) |
 | `chess_analysis/human_analytics/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
 | `chess_analysis/human_analytics/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/labnotebook.md` | Chronological log (Description · Rationale · Status · Reference) |
@@ -53,6 +52,17 @@ The `lmcos` line asks the complementary question: if we **teach a network** the 
 ---
 
 ## 3. Formal problem: halting, costs, and oracles
+
+> ⚠️ **Filename note (2026-06-16).** §§3–5 below were written against an aspirational
+> "metacontrol" module refactor (`analysis/metacontrol/`, `controller_oracle.py`,
+> `planning_cost.py`, `budgeted_controller_oracle.py`, `episode_difficulty.py`,
+> `GNN.py`/`TreeMHA.py`, `cts_pretrain.py`, `supervised_branch.py`, `cts_rl.py`, …)
+> that was **never landed and is now abandoned** — none of those files/dirs exist.
+> The **math and objectives in these sections are still accurate**; treat the file
+> names as *conceptual labels only*. The **authoritative code map is §11** (the real
+> `cts.*` package: `cts.data.build_tree`, `cts.data.preprocess_mc`,
+> `cts.train.controller_train`, `cts.models.gnn`, `cts.core.providers`, …) and
+> [`labnotebook.md`](labnotebook.md).
 
 ### 3.1 Snapshots and halt rewards
 
@@ -131,60 +141,29 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md).
 
-### 4.4 Modular Metacontrol Pipeline (`analysis/metacontrol/`)
+### 4.4 Engine providers and abstraction (`cts.core.providers`)
 
-The project has been refactored into a modular structure under `analysis/metacontrol/` to enforce strict decoupling and didactic clarity:
+Tree generation uses a UCI engine-provider abstraction under `cts.core.providers`
+(package, not a single `providers.py`): a common UCI subprocess/communication layer
+with engine-specific parsing for **lc0** (`lc0.py` — `VerboseMoveStats`, WDL, the
+valuehead/classic two-engine split) and a generic UCI path. This keeps the PUCT
+search logic engine-agnostic.
 
-- **`core/`**: Fundamental data structures (`tree.py`, `tensorizer.py`) and schemas (`schemas.py`).
-- **`data/`**: Pipeline logic for tree generation (`generator.py`), meta-control DP derivation (`targets_mc.py`), and GNN target computation (`targets_gnn.py`).
-- **`tutorials/`**: Didactic notebooks and generation scripts demonstrating the full pipeline.
-- **`tests/`**: Comprehensive integration and unit tests for the pipeline.
+**Perspective / sign correctness.** Each child's `value`/WDL come from a **separate
+value-engine query on the child's own FEN** (`_value_features_for_fen`), already in
+the child's side-to-move frame — there is **no `-Q` flip at storage**. The single
+negamax negation happens during `_backpropagate_path`. Per-edge WDL targets are
+parent-perspective-flipped when consolidated into `edge_wdl_targets`. Net result is
+correct negamax; an earlier README description of a "flip at storage, flip again at
+backprop" two-flip mechanism was **inaccurate** and has been removed.
 
-The new `TreeSearch` class in `generator.py` provides a clean, method-based API for tree growth, while `targets_mc.py` and `targets_gnn.py` separate the derivation of training targets for the controller and the GNN respectively.
+### 4.5 Testing
 
-**Root sampling and single-tree export (2026-05):**
-
-- **Lichess roots:** `analysis/metacontrol/scripts/sample.py` (`ChessSampler`) writes filtered FEN rows; an example row is kept at `/scratch/gpfs/GRIFFITHS/hl4291/data/metacontrol_example.csv` when integration tests run.
-- **One-tree pipeline:** `analysis/metacontrol/scripts/generate_and_profile.py` reads that CSV (or `--csv`), runs `TreeSearch` + targets + `TreeTensorizer`, and saves `/scratch/gpfs/GRIFFITHS/hl4291/data/trees/example_tree_00001.pt` by default. Use `--no-profile` for wall time only; otherwise it prints cumulative `cProfile` stats and writes `generate_and_profile.pstats` alongside the shard.
-- **`.pt` layout vs `ysagiv`:** Legacy controller shards on the cluster use `format="cts_budgeted_controller_episode_shard_v4"` with RL replay pointer tensors (`trajectory_node_ptr`, `episode_step_ptr`, …) and flattened `target_advantages` across many trajectories. Metacontrol’s Phase~1 export uses `format="metacontrol_single_tree_v1"`, the same five-wide `node_features` (`value`, WDL, `wdl_var` pad), `edge_child` as `int32`, and **omits** trajectory pointers. It adds explicit tensors `mc_halt_rewards`, `mc_dp_values`, `edge_wdl_targets`, and per-snapshot `target_advantages`; `oracle_values` here are **per-node** GNN consolidated values (not the legacy per-episode oracle scalars). See `analysis/metacontrol/README.md` and `analysis/metacontrol/migration.md`.
-
-### 4.5 Engine Providers and Abstraction (`core/providers.py`)
-
-The pipeline now features a generalized engine provider system that supports both **LC0** and **Stockfish** (and any other UCI-compatible engine). 
-- **`UciExpansionProvider`**: Centralizes subprocess management and UCI communication.
-- **`LC0ExpansionProvider`**: Parses specialized statistics like `VerboseMoveStats` and WDL.
-- **`StockfishExpansionProvider`**: Handles standard UCI info and uses `multipv` rank-based priors.
-
-This abstraction ensures that the `TreeSearch` logic remains engine-agnostic, allowing research to focus on the search dynamics rather than engine-specific parsing.
- 
-- **Mathematical Parity and Perspective Correctness**: 
-  The pipeline enforces strict sign and perspective consistency. Historical discrepancies in teacher targets (where winning positions were sometimes recorded with negative values) have been resolved.
-  - **Expansion**: Engine Q-values (reported from parent perspective) are flipped (`-Q`) when stored in child nodes to maintain local consistency.
-  - **Backpropagation**: Values are flipped again during path traversal, restoring the original engine intent at the parent edge.
-  - **WDL Targets**: Normalized WDL probabilities are flipped (`win <-> loss`) at each level to ensure they always reflect the side-to-move.
-  - **Parity Tests**: A dedicated suite (`test_legacy_parity.py`) ensures that new generation logic matches the mathematical core of the legacy system while correcting its sign conventions.
-
-### 4.6 Testing and Validation
-
-The project maintains a comprehensive test suite (`analysis/metacontrol/tests/`) that covers unit, engine, and integration scenarios (run `pytest analysis/metacontrol/tests -m "not integration"` for a fast slice; include `test_sampler.py` for DuckDB smoke tests):
-- **Core Logic & Target Derivation**:
-  - `test_targets_mc.py` verifies the DP algorithm, including a simulation demonstrating that when a tree expansion discovers a mate-in-2, the backward DP properly assigns a massive positive "continue advantage" to earlier snapshots.
-  - `test_targets_gnn.py` ensures target consolidation is accurate, validating that terminal checkmate states correctly map to a WDL of `(1.0, 0.0, 0.0)` from the parent's perspective.
-- **Provider Accuracy (`test_providers.py`)**: Engine-invariant tests for both **LC0** and **Stockfish**. These confirm that terminal states (like Fool's Mate or Stalemate) yield strictly consistent WDL evaluations regardless of which side is checkmated, validating the local `ChildPerspective` invariant.
-- **Search Efficacy (`test_search_quality.py`)**: End-to-end validation using real engine binaries to confirm the search process correctly identifies tactical wins (**Scholar's Mate**, **Back Rank Mate**, **Arabian Mate**, **Damiano's Mate**, **Morphy's Puzzle**, **Philidor's Smothered Sequence**). It explicitly tests the PUCT exploration mechanics, for instance showing that a quiet mate-in-2 might be overlooked with a low `c_puct` but is confidently surfaced when `c_puct` is raised.
-- **Divergence Analysis**: Documented evidence proving that the fixed pipeline is structurally superior to the legacy system, which previously avoided winning moves due to a sign-inversion bug.
-
-### 4.7 Hardening and Engine Stability
-
-The pipeline has been "hardened" for production-scale data generation:
-- **Perspective Parity**: Confirmed via `test_legacy_mates.py` that the pipeline correctly implements `ChildPerspective = -ParentQ`, fixing the "search blindness" of the legacy code.
-- **Engine Robustness**: Implemented dynamic `MultiPV` capping and explicit UCI flushing to prevent engine segmentation faults (notably in Stockfish 15) and ensure stable communication.
-- **Engine-Invariant Testing**: Both LC0 and Stockfish are verified through the same parameterized test suites for both terminal states and deep tactical searches.
-
-Run the full validation suite:
-```bash
-pytest analysis/metacontrol/tests/core/test_providers.py analysis/metacontrol/tests/data/test_search_quality.py analysis/metacontrol/tests/data/test_pipeline.py analysis/metacontrol/tests/data/test_generator.py
-```
+The real test suite lives in **`lmcos/tests/`** (run `pytest tests/` from `lmcos/`
+with `PYTHONPATH=src`). It covers provider parsing, terminal-state WDL, PUCT search
+quality on tactical mates, tensorizer/packing, the DP oracle, fitted-Q, and probes.
+*(An earlier `analysis/metacontrol/tests/` suite described here never existed; the
+authoritative test location is `lmcos/tests/`.)*
 
 ---
 
@@ -220,7 +199,7 @@ These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.m
 
 | Resource | Content |
 | :--- | :--- |
-| `analysis/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
+| `human_analytics/presentations/lmcos-overview/` | Motivation, architecture slides, **human** clock/VOC figures |
 | `labnotebook.md` | Chronological experiment log |
 | `reports/` | Stable `R-*` analysis reports |
 

@@ -238,7 +238,7 @@ The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 �
   `lc0_evaluations` in `personal.db` → join to `processed_moves` via
   `build_selected_moves_with_engine.py`.
 - **Method:** reuse the engine-eval harness
-  (`human_analytics/slurm/scripts/script_engine_eval.py`, `engine_eval.sh`) with an Lc0 worker;
+  (`human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval`) with an Lc0 worker;
   compute `gain = V_deep(a_deep) − V_deep(a_shallow)` in WDL space; recompute the RT correlations
   and the correlation matrix.
 - **Tests:** Lc0 gain reproduces the **sign** of the SF gain↔RT result (currently SF r≈+0.10);
