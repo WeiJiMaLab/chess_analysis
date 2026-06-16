@@ -10,7 +10,14 @@ import os
 import re
 from dataclasses import dataclass
 
+import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
+
+def _seconds_from_log(axis) -> None:
+    """Relabel a log-valued axis to show ``round(exp(v), 1)`` — i.e. seconds."""
+    axis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{np.round(np.exp(v), 1)}"))
 
 from .helpers import (
     apply_poster_style,
@@ -255,7 +262,7 @@ class Analyzer:
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
         """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints."""
         c1, c2 = self.ply_cuts
-        return {1: f"ply ≤ {c1}", 2: f"ply {c1 + 1}–{c2}", 3: f"ply > {c2}"}.get(
+        return {1: f"ply < {c1 + 1}", 2: f"ply {c1 + 1}–{c2}", 3: f"ply > {c2}"}.get(
             tertile_id, f"tertile {tertile_id}"
         )
 
@@ -269,7 +276,7 @@ class Analyzer:
                 "Ply-tertile-segmented quantile bins need non-empty data (check move_ply / filter)."
             )
         tertiles = sorted(self.quantile_tertile_df["tertile_id"].unique().tolist())
-        y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
+        y_label = "Move time (s)" if self.y.is_log else self.y.label
         x_label = f"{self.x.label} (qbin)"
 
         for t in tertiles:
@@ -290,10 +297,12 @@ class Analyzer:
                 show_legend=False,
                 ci_legend_label=None,
             )
+        if self.y.is_log:
+            _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
         ax.legend(
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.22),
+            bbox_to_anchor=(0.5, -0.16),
             ncol=1,
             frameon=False,
         )
@@ -329,7 +338,7 @@ class Analyzer:
 
     def plot_quantile_bins(self, ax):
         """Plots the trend across equal-sized quantile bins."""
-        y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
+        y_label = "Move time (s)" if self.y.is_log else self.y.label
 
         plot_qbin_stats(
             ax,
@@ -340,6 +349,8 @@ class Analyzer:
             normalized=False,
             show_legend=False,
         )
+        if self.y.is_log:
+            _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
 
     def save_quantile_heatmap_figure(
         self,
@@ -396,13 +407,25 @@ class Analyzer:
         # Panel titles omitted — left = global, right = by ply tertile (implied by
         # the legend + the "(qbin)" x-axis).
 
-        fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
+        suptitle = fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        # Crop tightly on save and explicitly include the below-axes legend +
+        # suptitle as extra artists so they aren't clipped (bbox_inches='tight'
+        # alone misses the legend placed outside the axes via bbox_to_anchor).
+        extra_artists = [suptitle]
+        legend = axes[1].get_legend()
+        if legend is not None:
+            extra_artists.append(legend)
         out_dir = os.path.dirname(output_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.savefig(
+            output_path,
+            dpi=300,
+            bbox_inches="tight",
+            bbox_extra_artists=extra_artists,
+            pad_inches=0.3,
+        )
         plt.close()
         print(f"✅ Dashboard saved to {output_path}")
 
