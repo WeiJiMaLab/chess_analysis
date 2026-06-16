@@ -16,6 +16,7 @@ Usage (from chess_analysis/):
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import os
 import random
 import sys
@@ -46,38 +47,56 @@ _TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
 _DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 _FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 _CONFIG = BudgetedOracleConfig()
+_BUDGET = 96  # set per-run in compute_oss before the worker pool forks
 
 
-def compute_oss(trees_dir: str, n_trees: int, seed: int, budget: int) -> pd.DataFrame:
-    """Sample ``n_trees`` trees and return a DataFrame of (root fen, oss)."""
+def _oss_worker(path: str):
+    """Load one tree and return (root_fen, oss); None on failure. CPU-bound, 1 thread."""
+    try:
+        torch.set_num_threads(1)
+        t = torch.load(path, map_location="cpu", weights_only=False)
+        traj = build_compact_trajectory_from_payload(t)
+        if traj is None:
+            return None
+        oss = budgeted_oracle_from_trajectory(traj, _BUDGET, _CONFIG).optimal_stop_step
+        return (t["root_position_spec"], int(oss))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def compute_oss(trees_dir: str, n_trees: int, seed: int, budget: int, n_workers: int) -> pd.DataFrame:
+    """Sample ``n_trees`` trees and return a DataFrame of (root fen, oss).
+
+    OSS is *derived* from the stored oracle trace via the budgeted DP oracle (it is
+    not a stored scalar — it depends on the cost model). The DP is cheap; the cost
+    is loading individual ``.pt`` files, so we parallelize across ``n_workers``.
+    """
+    global _BUDGET
+    _BUDGET = budget
     names = [e.name for e in os.scandir(trees_dir) if e.name.endswith(".pt")]
     names = random.Random(seed).sample(names, min(n_trees, len(names)))
+    paths = [os.path.join(trees_dir, nm) for nm in names]
     rows = []
-    for nm in tqdm(names, desc="OSS"):
-        try:
-            t = torch.load(os.path.join(trees_dir, nm), map_location="cpu", weights_only=False)
-            traj = build_compact_trajectory_from_payload(t)
-            if traj is None:
-                continue
-            oss = budgeted_oracle_from_trajectory(traj, budget, _CONFIG).optimal_stop_step
-            rows.append({"fen": t["root_position_spec"], "oss": int(oss)})
-        except Exception as exc:  # noqa: BLE001
-            print(f"skip {nm}: {exc}")
+    with mp.Pool(n_workers) as pool:
+        for r in tqdm(pool.imap_unordered(_oss_worker, paths, chunksize=64), total=len(paths), desc="OSS"):
+            if r is not None:
+                rows.append({"fen": r[0], "oss": r[1]})
     return pd.DataFrame(rows)
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--trees-dir", default=_TREES_DEFAULT)
-    parser.add_argument("--n-trees", type=int, default=10000)
+    parser.add_argument("--n-trees", type=int, default=100000)
+    parser.add_argument("--n-workers", type=int, default=os.cpu_count() or 8)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--budget", type=int, default=96)
     parser.add_argument("--db", default=_DB_DEFAULT)
     parser.add_argument("--output", default=str(_FIGURES_DIR / "oss_vs_rt.png"))
     args = parser.parse_args(argv)
 
-    print(f"Computing OSS on {args.n_trees:,} sampled trees from {args.trees_dir} …")
-    oss_df = compute_oss(args.trees_dir, args.n_trees, args.seed, args.budget)
+    print(f"Computing OSS on {args.n_trees:,} sampled trees from {args.trees_dir} ({args.n_workers} workers) …")
+    oss_df = compute_oss(args.trees_dir, args.n_trees, args.seed, args.budget, args.n_workers)
     print(f"  OSS computed for {len(oss_df):,} trees (OSS range {oss_df['oss'].min()}–{oss_df['oss'].max()}).")
 
     conn = duckdb.connect(args.db, read_only=False)
