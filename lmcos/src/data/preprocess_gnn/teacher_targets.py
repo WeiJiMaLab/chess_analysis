@@ -37,14 +37,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from cts.core.schema import (
-    TEACHER_NODETARGETS_FEATURE_NAMES,
     TREE_ENCODER_FEATURE_NAMES,
     tree_encoder_feature_schema,
 )
 from cts.core.tensorizer import (
     TensorizedTreeExample,
     collate_tensorized_examples,
-    collate_tensorized_examples_for_nodetargets,
 )
 from cts.core.tree import ExpansionChild, SearchNode, SearchTree
 from cts.core.providers.common import append_move_to_position_spec
@@ -179,8 +177,8 @@ class GeneratedTree:
 class PretrainExample:
     """The in-memory training example consumed by the encoder pretrainer.
 
-    Topology pretraining uses **node-wise** supervision (``value_gap`` per node).
-    Optional per-edge WDL targets remain for the legacy Child-WDL pretrain path.
+    Supervises per-node value backups and (optionally) per-edge WDL targets for
+    the Child-WDL pretrain path.
     """
 
     tree: SearchTree  # the teacher-built tree
@@ -192,8 +190,6 @@ class PretrainExample:
     oracle_root_q_trace: List[List[float]] = field(default_factory=list)
     oracle_best_move_trace: List[str] = field(default_factory=list)
     oracle_final_root_q_values: Dict[str, float] = field(default_factory=dict)
-    value_gap: List[float] = field(default_factory=list)
-    policy_drift: List[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Normalize and validate at the boundary so the rest of the pipeline
@@ -215,14 +211,8 @@ class PretrainExample:
             str(move): float(value)
             for move, value in dict(self.oracle_final_root_q_values).items()
         }
-        self.value_gap = [float(value) for value in self.value_gap]
-        self.policy_drift = [float(value) for value in self.policy_drift]
         # --- Shape/coverage invariants ---
         num_nodes = self.tree.num_nodes()
-        if self.value_gap and len(self.value_gap) != num_nodes:
-            raise ValueError("value_gap must match tree.num_nodes().")
-        if self.policy_drift and len(self.policy_drift) != num_nodes:
-            raise ValueError("policy_drift must match tree.num_nodes().")
         if len(self.node_target_values) != num_nodes:
             raise ValueError("node_target_values must match tree.num_nodes().")
         if self.edge_wdl_targets and len(self.edge_wdl_targets) != self.tree.num_edges():
@@ -254,8 +244,9 @@ class PretrainExample:
 # Disk format tag for raw (un-packed) pretrain examples. The ``v2`` bump
 # was made when ``_child_ptr_and_children_index`` switched to UCI-sorted
 # child order — older files using insertion order are incompatible.
-# ``v5`` is node-only topology supervision: per-node ``value_gap`` (no ``n_visits`` column,
-# no edge WDL targets in the default generation path).
+# ``v5`` carries optional per-edge child-WDL targets (opt-in at generation);
+# the node-target/topology supervision fields (value_gap/policy_drift) that
+# earlier v5 records stored have been removed and are ignored on load.
 RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v5"
 RAW_PRETRAIN_LEGACY_FORMATS = frozenset(
     {
@@ -308,152 +299,6 @@ def _node_visit_counts_from_edge_stats(
         else:
             counts[node_id] = edge_stats.get((node.parent_id, node_id), EdgeStats()).visit_count
     return counts
-
-
-def scalar_value_to_centipawns(value: float) -> float:
-    """Map a side-correct ``value`` scalar (win-loss in ``[-1, 1]``) to centipawns."""
-    return float(VALUE_SCALAR_TO_CENTIPAWNS * value)
-
-
-def child_q_from_parent_perspective(
-    tree: SearchTree,
-    parent_id: int,
-    child_id: int,
-    edge_stats: Mapping[Tuple[int, int], EdgeStats],
-    *,
-    value_feature: str = "value",
-) -> float:
-    """Return the parent-side Q estimate for edge ``parent_id → child_id``.
-
-    Uses visit-mean edge ``q_value`` when the edge was traversed during search;
-    otherwise falls back to ``-static_child_value`` (negamax flip).
-    """
-    stats = edge_stats.get((parent_id, child_id))
-    if stats is not None and stats.visit_count > 0:
-        return float(stats.q_value)
-    return float(-_static_node_value(tree, child_id, value_feature))
-
-
-def node_value_gap_centipawns(
-    tree: SearchTree,
-    node_id: int,
-    edge_stats: Mapping[Tuple[int, int], EdgeStats],
-    *,
-    value_feature: str = "value",
-) -> float:
-    """Centipawn gap between the best and second-best child Q at ``node_id``.
-
-    Returns ``float('nan')`` for leaves and nodes with fewer than two children.
-    Ties among the top two children yield ``0.0``.
-    """
-    child_ids = tree.child_ids(node_id)
-    if len(child_ids) < 2:
-        return float("nan")
-    child_q = [
-        child_q_from_parent_perspective(
-            tree,
-            node_id,
-            child_id,
-            edge_stats,
-            value_feature=value_feature,
-        )
-        for child_id in child_ids
-    ]
-    child_q.sort(reverse=True)
-    best_q, second_q = child_q[0], child_q[1]
-    return scalar_value_to_centipawns(best_q) - scalar_value_to_centipawns(second_q)
-
-
-def node_value_gap_features(
-    tree: SearchTree,
-    edge_stats: Mapping[Tuple[int, int], EdgeStats],
-    *,
-    value_feature: str = "value",
-) -> List[float]:
-    """Per-node value-gap vector aligned with ``tree.iter_nodes()``."""
-    return [
-        node_value_gap_centipawns(tree, node.node_id, edge_stats, value_feature=value_feature)
-        for node in tree.iter_nodes()
-    ]
-
-
-def _subtree_topology_for_node(tree: SearchTree, node_id: int) -> Tuple[int, int, int]:
-    """Return ``(nodes_below, max_breadth_relative, max_depth_relative)`` for one node.
-
-    ``nodes_below`` counts strict descendants. ``max_depth_relative`` is the
-    maximum ply distance to any descendant. ``max_breadth_relative`` is the widest
-    depth slice in the subtree below this node (not counting siblings above).
-    """
-    nodes_below = 0
-    max_rel_depth = 0
-    breadth_by_level: Dict[int, int] = {}
-    stack: List[Tuple[int, int]] = [(child_id, 1) for child_id in tree.child_ids(node_id)]
-    while stack:
-        current_id, rel_depth = stack.pop()
-        nodes_below += 1
-        max_rel_depth = max(max_rel_depth, rel_depth)
-        breadth_by_level[rel_depth] = breadth_by_level.get(rel_depth, 0) + 1
-        for child_id in tree.child_ids(current_id):
-            stack.append((child_id, rel_depth + 1))
-    max_breadth_relative = max(breadth_by_level.values()) if breadth_by_level else 0
-    return nodes_below, max_breadth_relative, max_rel_depth
-
-
-def _subtree_topology_features(tree: SearchTree) -> Tuple[List[int], List[int], List[int]]:
-    """Compute per-node subtree topology stats aligned with ``tree.iter_nodes()``."""
-    nodes_below: List[int] = []
-    max_breadth_relative: List[int] = []
-    max_depth_relative: List[int] = []
-    for node in tree.iter_nodes():
-        below, breadth, rel_depth = _subtree_topology_for_node(tree, node.node_id)
-        nodes_below.append(below)
-        max_breadth_relative.append(breadth)
-        max_depth_relative.append(rel_depth)
-    return nodes_below, max_breadth_relative, max_depth_relative
-
-
-def scaled_teacher_node_matrix(record: "RawPretrainExampleRecord") -> torch.Tensor:
-    """Stack and scale selected teacher targets defined in TEACHER_NODETARGETS_FEATURE_NAMES."""
-    num_nodes = int(record.parent_index.shape[0])
-    tensors = []
-    for name in TEACHER_NODETARGETS_FEATURE_NAMES:
-        column = getattr(record, name)
-        if int(column.shape[0]) != num_nodes:
-            raise ValueError(f"{name} length {column.shape[0]} != num_nodes={num_nodes}.")
-        tensors.append(column.to(dtype=torch.float32))
-    return torch.stack(tensors, dim=-1)
-
-
-def _subtree_topology_from_csr(
-    parent_index: Sequence[int],
-    child_ptr: Sequence[int],
-    children_index: Sequence[int],
-) -> Tuple[List[int], List[int], List[int]]:
-    """CSR variant of ``_subtree_topology_features`` for legacy record loads."""
-    num_nodes = len(parent_index)
-    children: List[List[int]] = [[] for _ in range(num_nodes)]
-    for parent_id in range(num_nodes):
-        children[parent_id] = [int(children_index[i]) for i in range(int(child_ptr[parent_id]), int(child_ptr[parent_id + 1]))]
-
-    nodes_below: List[int] = []
-    max_breadth_relative: List[int] = []
-    max_depth_relative: List[int] = []
-    for node_id in range(num_nodes):
-        below = 0
-        max_rel_depth = 0
-        breadth_by_level: Dict[int, int] = {}
-        stack = [(child_id, 1) for child_id in children[node_id]]
-        while stack:
-            current_id, rel_depth = stack.pop()
-            below += 1
-            max_rel_depth = max(max_rel_depth, rel_depth)
-            breadth_by_level[rel_depth] = breadth_by_level.get(rel_depth, 0) + 1
-            for child_id in children[current_id]:
-                stack.append((child_id, rel_depth + 1))
-        nodes_below.append(below)
-        max_breadth_relative.append(max(breadth_by_level.values()) if breadth_by_level else 0)
-        max_depth_relative.append(max_rel_depth)
-    return nodes_below, max_breadth_relative, max_depth_relative
 
 
 def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -> torch.Tensor:
@@ -577,8 +422,6 @@ class RawPretrainExampleRecord:
     is_expanded: torch.Tensor  # [N] bool
     node_targets: torch.Tensor  # [N] float32 scalar value targets
     edge_wdl_targets: torch.Tensor  # [num_edges, 3] float32; NaN when edge supervision omitted
-    value_gap: torch.Tensor  # [N] float32 centipawn gap (NaN when undefined)
-    policy_drift: torch.Tensor  # [N] float32 policy drift (NaN when undefined)
     metadata: Dict[str, Any]  # free-form tree-level metadata
     sparse_node_metadata: List[Tuple[int, Dict[str, Any]]]  # only nodes with non-empty metadata get a row
     oracle_trace_expansion_counts: torch.Tensor  # [T] int32; expansion-step indices for the oracle trace
@@ -603,8 +446,6 @@ class RawPretrainExampleRecord:
         object.__setattr__(self, "is_expanded", self.is_expanded.to(dtype=torch.bool, device="cpu"))
         object.__setattr__(self, "node_targets", self.node_targets.to(dtype=torch.float32, device="cpu"))
         object.__setattr__(self, "edge_wdl_targets", self.edge_wdl_targets.to(dtype=torch.float32, device="cpu"))
-        object.__setattr__(self, "value_gap", self.value_gap.to(dtype=torch.float32, device="cpu"))
-        object.__setattr__(self, "policy_drift", self.policy_drift.to(dtype=torch.float32, device="cpu"))
         object.__setattr__(self, "metadata", dict(self.metadata))
         object.__setattr__(
             self,
@@ -657,10 +498,6 @@ class RawPretrainExampleRecord:
             raise ValueError("is_expanded must align with parent_index.")
         if self.node_targets.shape != (num_nodes,):
             raise ValueError("node_targets must align with parent_index.")
-        if self.value_gap.shape != (num_nodes,):
-            raise ValueError("value_gap must align with parent_index.")
-        if self.policy_drift.shape != (num_nodes,):
-            raise ValueError("policy_drift must align with parent_index.")
         # CSR pointer validity.
         if self.child_ptr.shape != (num_nodes + 1,):
             raise ValueError("child_ptr must have length num_nodes + 1.")
@@ -706,14 +543,6 @@ class RawPretrainExampleRecord:
             [float(example.oracle_final_root_q_values[move]) for move in example.oracle_root_moves],
             dtype=torch.float32,
         ) if example.oracle_root_moves else torch.empty((0,), dtype=torch.float32)
-        if example.value_gap:
-            value_gap = torch.tensor(example.value_gap, dtype=torch.float32)
-        else:
-            value_gap = torch.full((tree.num_nodes(),), float("nan"), dtype=torch.float32)
-        if example.policy_drift:
-            policy_drift = torch.tensor(example.policy_drift, dtype=torch.float32)
-        else:
-            policy_drift = torch.full((tree.num_nodes(),), float("nan"), dtype=torch.float32)
         edge_wdl_tensor = _edge_wdl_target_tensor_for_tree(
             tree,
             example.edge_wdl_targets if example.edge_wdl_targets else None,
@@ -750,8 +579,6 @@ class RawPretrainExampleRecord:
             oracle_best_move_index=oracle_best_move_index,
             oracle_final_root_q_values=oracle_final_root_q_values,
             position_specs=position_payload["position_specs"],
-            value_gap=value_gap,
-            policy_drift=policy_drift,
         )
 
     def to_payload(self) -> Dict[str, Any]:
@@ -769,8 +596,6 @@ class RawPretrainExampleRecord:
             "is_terminal": self.is_terminal,
             "is_expanded": self.is_expanded,
             "node_targets": self.node_targets,
-            "value_gap": self.value_gap,
-            "policy_drift": self.policy_drift,
             "metadata": dict(self.metadata),
             "sparse_node_metadata": list(self.sparse_node_metadata),
             "oracle_trace_expansion_counts": self.oracle_trace_expansion_counts,
@@ -797,14 +622,6 @@ class RawPretrainExampleRecord:
         children_index = payload["children_index"]
         num_nodes = int(parent_index.shape[0])
         num_edges = int(children_index.shape[0])
-        if "value_gap" in payload:
-            value_gap = payload["value_gap"]
-        else:
-            value_gap = torch.full((num_nodes,), float("nan"), dtype=torch.float32)
-        if "policy_drift" in payload:
-            policy_drift = payload["policy_drift"]
-        else:
-            policy_drift = torch.full((num_nodes,), float("nan"), dtype=torch.float32)
         if "edge_wdl_targets" in payload:
             edge_wdl_targets = payload["edge_wdl_targets"]
         else:
@@ -822,8 +639,6 @@ class RawPretrainExampleRecord:
             is_expanded=payload["is_expanded"],
             node_targets=payload["node_targets"],
             edge_wdl_targets=edge_wdl_targets,
-            value_gap=value_gap,
-            policy_drift=policy_drift,
             metadata=dict(payload.get("metadata", {})),
             sparse_node_metadata=list(payload.get("sparse_node_metadata", [])),
             oracle_trace_expansion_counts=payload["oracle_trace_expansion_counts"],
@@ -943,10 +758,6 @@ class RawPretrainExampleRecord:
             move: float(value)
             for move, value in zip(self.oracle_root_moves, self.oracle_final_root_q_values.tolist())
         }
-        value_gap = self.value_gap.tolist()
-        if bool(torch.isnan(self.value_gap).all()):
-            value_gap = node_value_gap_features(tree, {}, value_feature="value")
-        policy_drift = self.policy_drift.tolist()
         return PretrainExample(
             tree=tree,
             node_target_values=self.node_targets.tolist(),
@@ -957,31 +768,19 @@ class RawPretrainExampleRecord:
             oracle_root_q_trace=self.oracle_root_q_trace.tolist(),
             oracle_best_move_trace=oracle_best_move_trace,
             oracle_final_root_q_values=oracle_final_root_q_values,
-            value_gap=value_gap,
-            policy_drift=policy_drift,
         )
 
-    def to_tensorized_tree_example(
-        self,
-        schema,
-        *,
-        node_targets: bool = False,
-        topology_supervision_shard: bool = False,
-    ) -> TensorizedTreeExample:
-        """Fill ``node_features`` (and optionally ``topology_targets``) exactly as configured by packing."""
+    def to_tensorized_tree_example(self, schema) -> TensorizedTreeExample:
+        """Fill ``node_features`` exactly as configured by packing."""
 
-        expected = tree_encoder_feature_schema(node_targets=node_targets)
+        expected = tree_encoder_feature_schema()
         if tuple(schema.feature_names) != tuple(expected.feature_names):
             raise ValueError(
                 "Record tensorization schema mismatch: "
                 f"got columns {schema.feature_names!r}; expected "
-                f"{tuple(expected.feature_names)!r} for "
-                f"node_targets={node_targets}. "
+                f"{tuple(expected.feature_names)!r}. "
                 "Rebuild with the packing schema from preprocess_gnn.pack."
             )
-        scaled_topo: Optional[torch.Tensor] = None
-        if node_targets or topology_supervision_shard:
-            scaled_topo = scaled_teacher_node_matrix(self)
 
         feature_index = {name: index for index, name in enumerate(self.feature_names)}
         num_nodes = int(self.parent_index.shape[0])
@@ -990,13 +789,6 @@ class RawPretrainExampleRecord:
         node_features = torch.empty((num_nodes, len(schema.feature_names)), dtype=schema.dtype)
         for column_index, feature_name in enumerate(schema.feature_names):
             default_value = float(schema.defaults.get(feature_name, 0.0))
-            if feature_name in TEACHER_NODETARGETS_FEATURE_NAMES:
-                if node_targets and scaled_topo is not None:
-                    topo_col_idx = TEACHER_NODETARGETS_FEATURE_NAMES.index(feature_name)
-                    node_features[:, column_index] = scaled_topo[:, topo_col_idx].to(dtype=schema.dtype)
-                else:
-                     node_features[:, column_index] = default_value
-                continue
             if feature_name not in feature_index:
                 node_features[:, column_index] = default_value
                 continue
@@ -1008,7 +800,6 @@ class RawPretrainExampleRecord:
                     source_column,
                 )
             node_features[:, column_index] = source_column
-        topology_targets = scaled_topo if topology_supervision_shard else None
         # Derive edge_parent / edge_slot from child_ptr: each parent contributes
         # `count` edges, and edge_slot is 0..count-1 within that block.
         counts = (self.child_ptr[1:] - self.child_ptr[:-1]).to(dtype=torch.long)
@@ -1033,7 +824,6 @@ class RawPretrainExampleRecord:
                 if _record_has_edge_wdl_targets(self.edge_wdl_targets)
                 else None
             ),
-            nodetargets_targets=topology_targets,
         )
 
 
@@ -1165,8 +955,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
         if not entries:
             raise ValueError(f"No packed shard entries found in manifest: {manifest_path}")
 
-        self.expect_topology_targets = bool(manifest.get("topology_targets", False)) or bool(manifest.get("nodetargets_targets", False))
-
         # Preload all shards and flatten into individual examples to avoid
         # shard-thrashing under shuffled access and view-pinning of large shard
         # storages.  Total memory is ~20KB per example (vs ~600MB per shard).
@@ -1180,7 +968,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
             edge_ptr = payload["edge_ptr"]
             feature_names = tuple(payload["feature_names"])
             edge_wdl_targets = payload.get("edge_wdl_targets")
-            shard_topology = payload.get("topology_targets")
             num_examples = int(entry["num_examples"])
             # Slice each example's nodes/edges out of the shard's flat tensors
             # and clone so the slice can outlive the shard payload (which we
@@ -1198,29 +985,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
                     # consecutive ordering inside each parent block.
                     edge_slot = torch.arange(ee - es, dtype=torch.long)
                 node_feat_block = payload["node_features"][ns:ne].clone()
-                topology_slice = None
-                if shard_topology is not None:
-                    topology_slice = shard_topology[ns:ne].clone()
-                elif self.expect_topology_targets:
-                    tail_need = tuple(TEACHER_NODETARGETS_FEATURE_NAMES)
-                    if (
-                        node_feat_block.shape[1] >= len(TREE_ENCODER_FEATURE_NAMES) + len(tail_need)
-                        and tuple(feature_names[-len(tail_need) :]) == tail_need
-                    ):
-                        topology_slice = node_feat_block[:, -len(tail_need) :].clone()
-                    else:
-                        raise ValueError(
-                            f"Manifest requires nodetargets_targets but shard {path} has no "
-                            "nodetargets_targets key and node_features tail does not match "
-                            f"{tail_need!r}; repack or use shards with nodetargets_targets written."
-                        )
-                elif (
-                    shard_topology is None
-                    and node_feat_block.shape[1] >= len(TREE_ENCODER_FEATURE_NAMES) + len(TEACHER_NODETARGETS_FEATURE_NAMES)
-                    and tuple(feature_names[-len(TEACHER_NODETARGETS_FEATURE_NAMES) :]) == tuple(TEACHER_NODETARGETS_FEATURE_NAMES)
-                ):
-                    # Optional: hydrate supervision from wide features for callers that omit explicit tensor.
-                    topology_slice = node_feat_block[:, -len(TEACHER_NODETARGETS_FEATURE_NAMES) :].clone()
                 self._examples.append(TensorizedTreeExample(
                     node_features=node_feat_block,
                     parent_index=payload["parent_index"][ns:ne].clone(),
@@ -1231,7 +995,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
                     node_targets=payload["node_targets"][ns:ne].clone(),
                     feature_names=feature_names,
                     edge_wdl_targets=edge_wdl_targets[es:ee].clone() if edge_wdl_targets is not None else None,
-                    nodetargets_targets=topology_slice,
                 ))
             del payload
 
@@ -1245,11 +1008,6 @@ class PackedTensorizedShardDataset(Sequence[TensorizedTreeExample]):
     def collate_fn(batch: Sequence[TensorizedTreeExample]) -> tuple[Any, Any]:
         """DataLoader collate that defers to the canonical batcher in ``tensorizer``."""
         return collate_tensorized_examples(batch)
-
-    @staticmethod
-    def collate_fn_nodetargets(batch: Sequence[TensorizedTreeExample]) -> tuple[Any, Any]:
-        """Collate for node-targets supervised encoder pretraining."""
-        return collate_tensorized_examples_for_nodetargets(batch)
 
 
 def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
@@ -1857,31 +1615,6 @@ def build_pretrain_example(
         oracle_best_move_trace = list(generated_tree.oracle_best_move_trace)
         oracle_final_root_q_values = _root_q_values_from_edge_stats(tree, generated_tree.edge_stats)
         metadata["oracle_trace_generation_version"] = "generated_search_root_q_v1"
-    value_gap = node_value_gap_features(tree, teacher_result.edge_stats, value_feature=config.value_feature)
-    
-    policy_drift = [float("nan")] * tree.num_nodes()
-    if node_budget_distribution is not None and tree.root_id is not None and generated_tree.oracle_root_visits_trace:
-        # Enforce n_min = 10 (first point at which early policy is estimable)
-        n_min = 10
-        early_visits = None
-        for visits_row in generated_tree.oracle_root_visits_trace:
-            if sum(visits_row) >= n_min:
-                early_visits = visits_row
-                break
-        if early_visits is not None:
-            late_visits = [
-                int(generated_tree.edge_stats.get((tree.root_id, child_id), EdgeStats()).visit_count)
-                for child_id in tree.root_children()
-            ]
-            from cts.data.preprocess_gnn.policy_drift import compute_policy_drift
-            drift_m = compute_policy_drift(
-                node_id=tree.root_id,
-                early_visits=early_visits,
-                late_visits=late_visits,
-                n_min=n_min
-            )
-            if drift_m is not None:
-                policy_drift[tree.root_id] = drift_m.kl_divergence
 
     return PretrainExample(
         tree=tree,
@@ -1893,8 +1626,6 @@ def build_pretrain_example(
         oracle_root_q_trace=oracle_root_q_trace,
         oracle_best_move_trace=oracle_best_move_trace,
         oracle_final_root_q_values=oracle_final_root_q_values,
-        value_gap=value_gap,
-        policy_drift=policy_drift,
     )
 
 
@@ -1993,10 +1724,5 @@ def derive_prefix_pretrain_example(
         node_target_values=teacher_result.node_target_values,
         edge_wdl_targets=teacher_result.edge_target_wdls if include_edge_wdl_targets else {},
         metadata=metadata,
-        value_gap=node_value_gap_features(
-            prefix_tree,
-            teacher_result.edge_stats,
-            value_feature=config.value_feature,
-        ),
     )
 

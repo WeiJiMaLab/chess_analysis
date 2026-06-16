@@ -111,31 +111,10 @@ class NodeFeatureSchema:
 # pretrain dataset on disk.
 TREE_ENCODER_FEATURE_NAMES: Tuple[str, ...] = ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
 
-# Optional extra columns for node targets GNN pretraining (``v5+``): per-node value gap and policy drift.
-# Appended after ``TREE_ENCODER_FEATURE_NAMES`` when packing with ``node_targets: true``.
-# We selectively extract only the "policy_drift" head for pretraining.
-TEACHER_NODETARGETS_FEATURE_NAMES: Tuple[str, ...] = ("policy_drift",)
 
-# Column order for flat ``nodetargets_targets`` supervision tensors.
-NODETARGETS_TARGET_FEATURE_NAMES: Tuple[str, ...] = TEACHER_NODETARGETS_FEATURE_NAMES
-
-# Metadata value stored in node-pretrain checkpoints for target scaling.
-NODETARGETS_TARGET_SCALING_VALUE_GAP_CP = "raw_value_gap_cp"
-NODETARGETS_TARGET_SCALING_LOG1P_VISITS = "log1p_visits_raw_value_gap_cp"
-NODETARGETS_TARGET_SCALING_LOG1P_VISITS_NODES_BELOW = "log1p_visits_nodes_below"
-
-
-def nodetargets_target_feature_names() -> Tuple[str, ...]:
-    """Return ordered node targets supervision columns."""
-    return NODETARGETS_TARGET_FEATURE_NAMES
-
-
-def tree_encoder_feature_schema(*, node_targets: bool = False) -> NodeFeatureSchema:
-    """Column order for packed ``node_features`` (5 baseline, +1 teacher node target if ``node_targets``)."""
-    names = TREE_ENCODER_FEATURE_NAMES
-    if node_targets:
-        names = names + TEACHER_NODETARGETS_FEATURE_NAMES
-    return NodeFeatureSchema.from_ordered_features(names)
+def tree_encoder_feature_schema() -> NodeFeatureSchema:
+    """Column order for packed ``node_features`` (the 5 baseline encoder features)."""
+    return NodeFeatureSchema.from_ordered_features(TREE_ENCODER_FEATURE_NAMES)
 
 
 def require_tree_encoder_scalar_features(scalar_features: Mapping[str, float], *, context: str = "node") -> None:

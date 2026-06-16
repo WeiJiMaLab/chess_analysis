@@ -34,13 +34,10 @@ from cts.data.preprocess_gnn.teacher_targets import (
     load_pretrain_example_dataset,
     save_pretrain_example_to_directory,
 )
-from cts.core.schema import nodetargets_target_feature_names
-from cts.models.gnn import ChildWdlModel, NodeTargetsModel
+from cts.models.gnn import ChildWdlModel
 from cts.train.gnn_pretrain import (
     ChildWdlPretrainConfig,
     ChildWdlPretrainer,
-    NodePretrainConfig,
-    NodePretrainer,
 )
 
 
@@ -58,7 +55,7 @@ def _default_lc0_weights_path() -> str | None:
 class BuildTreeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    command: Literal["generate-dataset", "pretrain-child-wdl-encoder", "pretrain-nodetargets-encoder"]
+    command: Literal["generate-dataset", "pretrain-child-wdl-encoder"]
 
     # generate-dataset
     engine_path: str = _default_lc0_engine_path()
@@ -103,8 +100,6 @@ class BuildTreeConfig(BaseModel):
     disable_persistent_workers: bool = False
     loss_type: Literal["huber", "mse"] = "huber"
     huber_delta: float = 1.0
-    #: Phased node targets Huber curriculum: weights aligned with :func:`nodetargets_target_feature_names`.
-    nodetargets_target_weights: Optional[Tuple[float, ...]] = None
     # When set, the pretrainer's validation pass also accumulates per-edge KL
     # into a (child_subtree_size, parent_depth) grid, and appends one JSONL
     # row per epoch to ``log_bucketed_kl_path`` containing the per-bin mean
@@ -118,13 +113,7 @@ class BuildTreeConfig(BaseModel):
     # full rationale.
     loss_weight_by_subtree_size: bool = False
 
-    @field_validator("nodetargets_target_weights", mode="before")
-    @classmethod
-    def _coerce_nodetargets_target_weights(cls, value: object) -> Optional[Tuple[float, ...]]:
-        if value is None:
-            return None
-        seq = tuple(float(x) for x in value)  # type: ignore[arg-type]
-        return seq
+
 def _feature_schema() -> NodeFeatureSchema:
     """Return the canonical encoder feature schema."""
     return tree_encoder_feature_schema()
@@ -134,22 +123,6 @@ def _load_fens(path: str) -> List[str]:
     """Read newline-separated FENs from ``path``, skipping blank lines."""
     with open(path, "r", encoding="utf-8") as handle:
         return [line.strip() for line in handle if line.strip()]
-
-
-def _build_nodetargets_model(config: BuildTreeConfig, schema: NodeFeatureSchema) -> NodeTargetsModel:
-    """Instantiate the node-targets-supervised pretraining model (5-wide encoder input)."""
-    return NodeTargetsModel(
-        k=config.k,
-        node_feat=len(schema.feature_names),
-        device=config.device,
-        node_embed_hidden=config.node_embed_hidden,
-        d_embed=config.d_embed,
-        d_message=config.d_message,
-        n_heads=config.n_heads,
-        d_att=config.d_att,
-        decoder_hidden=config.decoder_hidden,
-        num_node_targets=len(nodetargets_target_feature_names()),
-    )
 
 
 def _build_child_wdl_model(config: BuildTreeConfig, schema: NodeFeatureSchema) -> ChildWdlModel:
@@ -277,8 +250,7 @@ def _generate_and_save_examples(
             # Emit per-edge child-WDL targets — the supervision ysagiv's encoder
             # pretrain objective consumes. v5 made this opt-in and the worker
             # never opted in, so our trees had no edge targets (all-NaN on load),
-            # diverging from the ysagiv reference. Additive: node-topology targets
-            # (value_gap / policy_drift) are still produced.
+            # diverging from the ysagiv reference.
             include_edge_wdl_targets=True,
         )
         path = save_pretrain_example_to_directory(config.output_dir, example, index)
@@ -556,108 +528,12 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
     )
 
 
-def pretrain_nodetargets_encoder_command(config: BuildTreeConfig) -> None:
-    """Entry point for ``pretrain-nodetargets-encoder``: fit encoder + ``NodeTargetsHead`` on packed node targets."""
-    print(f"[nodetargets-pretrain] stage=load_train_dataset path={config.train_dir}", flush=True)
-    train_examples = load_pretrain_example_dataset(config.train_dir)
-    print(f"[nodetargets-pretrain] stage=load_validation_dataset path={config.validation_dir}", flush=True)
-    validation_examples = load_pretrain_example_dataset(config.validation_dir)
-    print(
-        f"[nodetargets-pretrain] stage=datasets_ready train_examples={len(train_examples)} "
-        f"validation_examples={len(validation_examples)}",
-        flush=True,
-    )
-
-    schema = tree_encoder_feature_schema(node_targets=False)
-    model = _build_nodetargets_model(config, schema)
-    trainer = NodePretrainer(
-        model=model,
-        device=config.device,
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        config=NodePretrainConfig(
-            batch_size=config.batch_size,
-            learning_rate=config.learning_rate,
-            weight_decay=config.weight_decay,
-            epochs=config.epochs,
-            loss_type=config.loss_type,
-            huber_delta=config.huber_delta,
-            nodetargets_target_weights=config.nodetargets_target_weights,
-            shuffle=True,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
-            prefetch_factor=config.prefetch_factor,
-            persistent_workers=not config.disable_persistent_workers,
-        ),
-    )
-
-    resume_path = config.output_checkpoint.replace(".pt", "_resume.pt")
-    start_epoch = 1
-    if os.path.isfile(resume_path):
-        print(f"[nodetargets-pretrain] stage=resume path={resume_path}", flush=True)
-        start_epoch = trainer.load_training_state(resume_path) + 1
-
-    last_logged_batch = {"train": 0, "validation": 0}
-
-    def _log_batch_progress(epoch_index, phase, batch_index, total_batches, seen_examples, seen_nodes, total_loss):
-        interval = config.log_interval
-        if not (
-            batch_index == 1
-            or batch_index == total_batches
-            or batch_index - last_logged_batch[phase] >= interval
-        ):
-            return
-        last_logged_batch[phase] = batch_index
-        print(
-            f"[nodetargets-pretrain] epoch={epoch_index}/{config.epochs} phase={phase} "
-            f"batch={batch_index}/{total_batches} seen_examples={seen_examples} "
-            f"seen_nodes={seen_nodes} total_loss={total_loss:.6f}",
-            flush=True,
-        )
-
-    def _log_epoch(epoch_index, train_metrics, validation_metrics):
-        print(
-            f"epoch={epoch_index}/{config.epochs} "
-            f"train_total_loss={train_metrics.total_loss:.6f} "
-            f"train_supervised_nodes={train_metrics.num_supervised_nodes} "
-            f"val_total_loss={validation_metrics.total_loss:.6f} "
-            f"val_supervised_nodes={validation_metrics.num_supervised_nodes}",
-            flush=True,
-        )
-
-    history = trainer.fit(
-        progress_callback=_log_epoch,
-        batch_progress_callback=_log_batch_progress,
-        start_epoch=start_epoch,
-        resume_path=resume_path,
-    )
-
-    trainer.save_best_encoder(
-        config.output_checkpoint,
-        metadata={"stage": "supervised_pretrain"},
-    )
-    head_path = config.output_checkpoint.replace(".pt", "_nodetargets_head.pt")
-    trainer.save_best_node_targets_head(
-        head_path,
-        metadata={"encoder_checkpoint": config.output_checkpoint},
-    )
-    final_validation = history[-1]["validation"]
-    print(
-        f"validation_total_loss={final_validation.total_loss:.6f} "
-        f"validation_supervised_nodes={final_validation.num_supervised_nodes} "
-        f"checkpoint={config.output_checkpoint} nodetargets_head={head_path}",
-        flush=True,
-    )
-
-
 def main(config: BuildTreeConfig) -> None:
     """Dispatch to the selected subcommand based on ``config.command``."""
     if config.command == "generate-dataset":
         generate_dataset_command(config)
     elif config.command == "pretrain-child-wdl-encoder":
         pretrain_child_wdl_encoder_command(config)
-    elif config.command == "pretrain-nodetargets-encoder":
-        pretrain_nodetargets_encoder_command(config)
 
 
 if __name__ == "__main__":
