@@ -54,6 +54,24 @@ Pre-migration notebooks: [(R-ARCH-HUMAN)](reports/archive-human-analytics-notebo
 
 ---
 
+## 2026-06-16 {#2026-06-16}
+
+human_analytics salvage + dashboard overhaul (skeptical audit → fixes → figure regen).
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **Human — skeptical R² audit** | Verify the move-time/VOC methodology is clean | ✅ All findings reproduced on the 1M-row `pos_with_engine_eval`. Headline: **there is no R²/OLS layer** — every result was a bivariate Pearson r; true variance-explained is tiny (VOC R²≈0.009, MQ≈0.014, branching≈0.038 is the strongest single predictor). | — |
+| **Human — entropy-VoI REMOVED** | A4 stopping-depth analysis was statistically degenerate | ✅ `compute_stopping_depth` softmaxed win-probs (~0.05 spread) at hardcoded β=1 → near-uniform → d* pinned to 1 (NaN correlations); "Approach A vs B" were byte-identical. Deleted code, tests, report, slides, figures; flagged the A4 day-rows defunct. | — |
+| **Human — node-target subsystem REMOVED (lmcos)** | policy_drift was broken (softmax of raw visits → scale-sensitive; root-only) | ✅ Removed the whole auxiliary node-target path (policy_drift + value_gap + NodeTargets head/trainer/packing); unused in any live config, separate from the ysagiv child-WDL parity objective. −1450 lines; suite 229 passed. | — |
+| **Human — MQ↔logRT is a confound, not "thinking hurts"** | Plot showed longer RT → lower MQ within each ply phase | ✅ r=−0.116; **partial r controlling toptwo+branching+ply+eval = −0.130 (does NOT attenuate)**; logRT adds ~1.5% MQ variance the engine features miss. Interpretation: RT is a better *latent-difficulty* sensor than engine summary stats — selection, not causation. Motivates the lc0-tree/VOC difficulty measures. | — |
+| **Human — dashboard overhaul** | Make the surviving plots honest + readable | ✅ Dashboards reduced to a fixed **1×2: Quantile bins \| Quantile bins (by ply tertile)**; raw-trend + scatter panels (and the 100k-row scatter sample SQL) removed. voc_mq reports honest **R²** + MQ↔logRT across SQL ply tertiles (no causal claims). | — |
+| **Human — VOC/toptwo zero-inflated binning** | ~⅔ of VOC is 0; plain ntile wastes bins on the mass | ✅ Added `Analyzer(zero_inflated, zero_threshold)`: lump `abs(x)≤thr` into one leftmost point, ntile the rest. thr=0.05 for VOC/toptwo → clean **positive** VOC↔logRT and **negative** toptwo↔logRT trends now visible per phase. | — |
+| **Human — figures regenerated** | Reflect current code | ✅ All 10 Analyzer dashboards + histograms regenerated. `voc_budget` (engine-heavy scatter/corr) left as-is. Suite 29 passed. | — |
+
+**Salvage verdict:** descriptive RT dashboards + the engine VOC/MQ *computation* are sound; the missing piece is a real multivariate R² layer (logRT ~ branching+ply+clock+VOC, incremental variance) — the next analysis to build.
+
+---
+
 ## 2026-06-14 {#2026-06-14}
 
 FEN handling consolidated; batched in-process tree-gen built & validated against lc0 (R-BATCHGEN).

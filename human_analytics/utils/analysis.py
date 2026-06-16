@@ -25,7 +25,23 @@ from .plots import (
     plot_qbin_stats,
 )
 
-_PLY_TERTILE_LEGEND_FALLBACK = {1: "Tertile 1", 2: "Tertile 2", 3: "Tertile 3"}
+# Ply tertiles are settled **a priori from the whole move dataset**, not from the
+# (filtered) analysis subset: we infer the two ``move_ply`` tertile cutpoints once
+# from this source table and apply the *same* boundaries to every plot, so the
+# segmentation is identical and comparable across analyses regardless of filtering.
+_PLY_TERTILE_SOURCE_DEFAULT = "processed_moves_nonzero"
+_PLY_CUTS_CACHE: dict[str, tuple[int, int]] = {}
+
+
+def _infer_ply_cuts(conn, source: str) -> tuple[int, int]:
+    """Return the (1/3, 2/3) ``move_ply`` tertile cutpoints over the whole ``source`` table."""
+    if source not in _PLY_CUTS_CACHE:
+        c1, c2 = conn.execute(
+            f"SELECT quantile_disc(move_ply, 1.0/3), quantile_disc(move_ply, 2.0/3) FROM {source}"
+        ).fetchone()
+        _PLY_CUTS_CACHE[source] = (int(c1), int(c2))
+    return _PLY_CUTS_CACHE[source]
+
 
 _SQL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -62,13 +78,13 @@ class Analyzer:
     Standard analyzer for the relationship between two variables (X and Y).
     Runs SQL-native aggregations in DuckDB.
 
-    Segmentation by **ply tertiles** uses ``ply_tertiles`` from ``processed_moves`` /
-    ``processed_moves_nonzero`` (``ntile(3) OVER (ORDER BY move_ply)`` globally; values 1–3).
-    ``raw_trend_tertile_df`` and ``quantile_tertile_df`` hold per-tertile aggregates;
-    quantile bins use ``ntile`` **partitioned by** ``ply_tertiles`` so ranks are recomputed
-    within each tertile. Legend labels use observed ``move_ply`` ranges per tertile (min/max
-    in the filtered data); tertiles split rows by global ``ntile``, so ply ranges may overlap.
-    ``ply_tertile_bounds_df`` stores those min/max (and move counts) per tertile.
+    Segmentation by **ply tertiles** is settled a priori: the two ``move_ply``
+    cutpoints are inferred once from the whole ``ply_tertile_source`` dataset
+    (``quantile_disc`` at 1/3, 2/3), then applied as fixed boundaries to this
+    (possibly filtered) analysis — so the segmentation is identical and comparable
+    across plots. ``quantile_tertile_df`` holds per-tertile aggregates with the
+    qbin ``ntile`` recomputed **within** each fixed tertile; legend labels are the
+    fixed ply ranges (``self.ply_cuts``).
 
     Optional ``quantile_heatmap_row``: second column (e.g. ``move_ply``) for a
     quantile×quantile heatmap of mean transformed Y, saved as its own figure when
@@ -88,6 +104,7 @@ class Analyzer:
         quantile_heatmap_row_label: str | None = None,
         zero_inflated: bool = False,
         zero_threshold: float = 0.0,
+        ply_tertile_source: str = _PLY_TERTILE_SOURCE_DEFAULT,
     ):
         self.conn = db_conn
         self.table = table_name
@@ -96,6 +113,10 @@ class Analyzer:
         self.n_bins = n_bins
         self.filter_query = filter_query
         self.title = title or f"{self.x.label} vs {self.y.label}"
+        # Source table whose whole move_ply distribution settles the tertile
+        # cutpoints (applied identically to this — possibly filtered — analysis).
+        self.ply_tertile_source = _validate_sql_identifier(ply_tertile_source)
+        self.ply_cuts: tuple[int, int] | None = None
         # When the x distribution has a large mass near 0 (e.g. VOC: ~⅔ of moves
         # are 0), plain ``ntile`` wastes most bins on that mass. ``zero_inflated``
         # instead lumps the near-zero rows (``abs(x) <= zero_threshold``) into a
@@ -123,7 +144,6 @@ class Analyzer:
         self.n_moves = 0
         self.quantile_df = None
         self.quantile_tertile_df = None
-        self.ply_tertile_bounds_df = None
 
         self._run_sql_pipeline()
 
@@ -132,6 +152,13 @@ class Analyzer:
         x_expr = self.x.sql_expression
         y_expr = self.y.sql_expression
 
+        # 0. Settle ply tertile cutpoints from the WHOLE source dataset (a priori),
+        # then assign each row's tertile by those fixed boundaries (no ntile over
+        # the filtered subset). Tertile = 1 + #cutpoints exceeded (avoids CASE).
+        c1, c2 = _infer_ply_cuts(self.conn, self.ply_tertile_source)
+        self.ply_cuts = (c1, c2)
+        tertile_expr = f"(1 + (move_ply > {c1})::INT + (move_ply > {c2})::INT)"
+
         # 1. Prepare temporary analysis view
         where_clause = f"WHERE {self.filter_query}" if self.filter_query else ""
         self.conn.execute(f"""
@@ -139,7 +166,8 @@ class Analyzer:
             SELECT
                 *,
                 {x_expr} as _x_transformed,
-                {y_expr} as _y_transformed
+                {y_expr} as _y_transformed,
+                {tertile_expr} as _ply_tertile
             FROM {self.table}
             {where_clause}
         """)
@@ -148,17 +176,6 @@ class Analyzer:
         self.n_games = self.conn.execute("SELECT count(distinct gid) FROM _analyzer_view").fetchone()[0]
         self.n_moves = self.conn.execute("SELECT count(*) FROM _analyzer_view").fetchone()[0]
         print(f"📊 Analyzing {self.n_moves:,} moves from {self.n_games:,} games...")
-
-        self.ply_tertile_bounds_df = self.conn.execute("""
-            SELECT
-                ply_tertiles AS tertile_id,
-                min(move_ply) AS min_ply,
-                max(move_ply) AS max_ply,
-                count(*) AS n_moves
-            FROM _analyzer_view
-            GROUP BY ply_tertiles
-            ORDER BY tertile_id
-        """).df()
 
         # 3. Compute Quantile-Binned Data (global ranks). With ``zero_inflated``,
         # the x==0 point mass collapses to a single leftmost bin and only the
@@ -188,17 +205,17 @@ class Analyzer:
 
         if self.zero_inflated:
             tertile_inner = f"""
-                SELECT ply_tertiles as tertile_id, {col}, _y_transformed, 0 AS qbin
+                SELECT _ply_tertile as tertile_id, {col}, _y_transformed, 0 AS qbin
                 FROM _analyzer_view WHERE abs({col}) <= {thr}
                 UNION ALL
-                SELECT ply_tertiles as tertile_id, {col}, _y_transformed,
-                       ntile({self.n_bins}) OVER (PARTITION BY ply_tertiles ORDER BY {col}) AS qbin
+                SELECT _ply_tertile as tertile_id, {col}, _y_transformed,
+                       ntile({self.n_bins}) OVER (PARTITION BY _ply_tertile ORDER BY {col}) AS qbin
                 FROM _analyzer_view WHERE abs({col}) > {thr}
             """
         else:
             tertile_inner = f"""
-                SELECT ply_tertiles as tertile_id, {col}, _y_transformed,
-                       ntile({self.n_bins}) OVER (PARTITION BY ply_tertiles ORDER BY {col}) AS qbin
+                SELECT _ply_tertile as tertile_id, {col}, _y_transformed,
+                       ntile({self.n_bins}) OVER (PARTITION BY _ply_tertile ORDER BY {col}) AS qbin
                 FROM _analyzer_view
             """
         self.quantile_tertile_df = self.conn.execute(f"""
@@ -236,33 +253,24 @@ class Analyzer:
             """).df().set_index("row_qbin")
 
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
-        """Human-readable legend segment from observed move_ply bounds for this tertile."""
-        df = self.ply_tertile_bounds_df
-        if df is None or df.empty:
-            return _PLY_TERTILE_LEGEND_FALLBACK.get(tertile_id, f"Tertile {tertile_id}")
-        match = df[df["tertile_id"] == tertile_id]
-        if match.empty:
-            return _PLY_TERTILE_LEGEND_FALLBACK.get(tertile_id, f"Tertile {tertile_id}")
-        lo_raw = match.iloc[0]["min_ply"]
-        hi_raw = match.iloc[0]["max_ply"]
-        lo, hi = int(lo_raw), int(hi_raw)
-        if lo == hi:
-            return f"ply {lo}"
-        return f"ply {lo} to {hi}"
+        """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints."""
+        c1, c2 = self.ply_cuts
+        return {1: f"ply ≤ {c1}", 2: f"ply {c1 + 1}–{c2}", 3: f"ply > {c2}"}.get(
+            tertile_id, f"tertile {tertile_id}"
+        )
 
     def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int = 1):
         """
-        Quantile bins with **ntile recomputed within each ply tertile**; all tertiles on ``ax``.
-        Legend text includes observed ``move_ply`` bounds per tertile.
+        Quantile bins with **ntile recomputed within each fixed ply tertile**; all tertiles on ``ax``.
+        Legend labels are the a-priori ply ranges (``self.ply_cuts``).
         """
         if self.quantile_tertile_df.empty:
             raise ValueError(
-                "Ply-tertile-segmented quantile bins need non-empty data with column ply_tertiles "
-                "(run preprocess on move tables)."
+                "Ply-tertile-segmented quantile bins need non-empty data (check move_ply / filter)."
             )
         tertiles = sorted(self.quantile_tertile_df["tertile_id"].unique().tolist())
         y_label = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
-        x_label = f"Qbin {self.x.label}"
+        x_label = f"{self.x.label} (qbin)"
 
         for t in tertiles:
             subset = self.quantile_tertile_df[self.quantile_tertile_df["tertile_id"] == t]
@@ -285,7 +293,7 @@ class Analyzer:
         ax.legend(
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.28),
+            bbox_to_anchor=(0.5, -0.22),
             ncol=1,
             frameon=False,
         )
@@ -327,7 +335,7 @@ class Analyzer:
             ax,
             self.quantile_df,
             x_col="mean_x",
-            x_label=f"Qbin {self.x.label}",
+            x_label=f"{self.x.label} (qbin)",
             y_label=y_label,
             normalized=False,
             show_legend=False,
@@ -367,7 +375,7 @@ class Analyzer:
         """Generates and saves a publication-ready dashboard.
 
         Fixed 1×2 layout: **Quantile bins** (global ranks, left) and **Quantile bins
-        (by ply tertile)** (ntile recomputed within each ``ply_tertiles`` segment, right).
+        (by ply tertile)** (ntile recomputed within each fixed, a-priori ply tertile, right).
         Raw-trend and scatter panels were removed — quantile binning is the canonical view.
 
         Set ``include_quantile_heatmap=True`` (with ``quantile_heatmap_row='...'`` on
@@ -385,8 +393,8 @@ class Analyzer:
         fig, axes = plt.subplots(1, 2, figsize=(24, 19.6))
         self.plot_quantile_bins(axes[0])
         self.plot_quantile_bins_tertile_segmented(axes[1])
-        axes[0].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)
-        axes[1].set_title("Quantile bins (by ply tertile)", fontsize=FONT_SIZE_LABEL, pad=12)
+        # Panel titles omitted — left = global, right = by ply tertile (implied by
+        # the legend + the "(qbin)" x-axis).
 
         fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
 
