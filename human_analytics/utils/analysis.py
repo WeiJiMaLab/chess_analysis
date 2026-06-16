@@ -261,7 +261,7 @@ class Analyzer:
         ax.legend(
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.18),
+            bbox_to_anchor=(0.5, -0.28),
             ncol=1,
             frameon=False,
         )
@@ -358,7 +358,7 @@ class Analyzer:
                 "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
             )
 
-        fig, axes = plt.subplots(1, 2, figsize=(24, 12))
+        fig, axes = plt.subplots(1, 2, figsize=(24, 14))
         self.plot_quantile_bins(axes[0])
         self.plot_quantile_bins_tertile_segmented(axes[1])
         axes[0].set_title("Quantile bins", fontsize=FONT_SIZE_LABEL, pad=12)

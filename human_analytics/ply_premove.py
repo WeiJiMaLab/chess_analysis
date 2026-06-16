@@ -18,7 +18,7 @@ def main():
     y_var = Variable(
         column="(CASE WHEN move_time = 0 THEN 1 ELSE 0 END)", 
         is_log=False, 
-        name="Instant Move Probability"
+        name="Pr. Instant Move"
     )
     
     # Run Analysis
