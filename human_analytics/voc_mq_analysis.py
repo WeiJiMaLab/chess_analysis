@@ -125,7 +125,13 @@ def plot_voc_vs_movetime(conn: duckdb.DuckDBPyConnection, output_path: str) -> N
 
 
 def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
-    """Pearson correlation matrix: ply, branching, own material, VOC, toptwo, MQ, log(RT)."""
+    """Spearman ρ correlation matrix: ply, branching, own material, VOC, toptwo, MQ, log(RT).
+
+    Spearman (rank) is used here because the engine features (VOC, Action Gap, MQ)
+    are zero-inflated and skewed, with monotone-but-nonlinear relationships that
+    Pearson r understates (up to ~3.5× on Ply~Action Gap). Variance-explained / R²
+    claims about RT elsewhere stay Pearson — on log(RT) the two barely differ.
+    """
     df = conn.execute(f"""
         SELECT p.move_ply, p.n_possible_moves, pm.n_self_pieces_exc_pawns,
                p.voc, p.toptwo, p.mq, ln(p.move_time) AS log_T
@@ -143,7 +149,7 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
         "mq": "MQ",
         "log_T": "log(RT)",
     }
-    corr = df[list(labels)].corr().rename(columns=labels, index=labels)
+    corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n_vars = len(corr)
 
     apply_poster_style()
@@ -162,9 +168,9 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
                     fontsize=16, color=color,
                     fontweight="bold" if i == j else "normal")
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Pearson r", fontsize=18)
+    cbar.set_label("Spearman ρ", fontsize=18)
     cbar.ax.tick_params(labelsize=16)  # colorbar ticks inherit the giant poster tick size otherwise
-    ax.set_title(f"Correlation matrix  (n = {len(df):,})", fontsize=22, pad=12)
+    ax.set_title(f"Spearman correlation matrix  (n = {len(df):,})", fontsize=22, pad=12)
     plt.tight_layout()
     _save(output_path)
 
