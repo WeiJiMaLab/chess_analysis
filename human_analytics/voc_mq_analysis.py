@@ -150,19 +150,20 @@ def plot_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -
     fig, ax = plt.subplots(figsize=(10, 8))
     im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
     ax.set_xticks(range(n_vars))
-    ax.set_xticklabels(corr.columns, fontsize=11, rotation=30, ha="right")
+    ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
     ax.set_yticks(range(n_vars))
-    ax.set_yticklabels(corr.index, fontsize=11)
+    ax.set_yticklabels(corr.index, fontsize=20)
     for i in range(n_vars):
         for j in range(n_vars):
             val = corr.values[i, j]
             color = "white" if abs(val) > 0.5 else "black"
             ax.text(j, i, f"{val:.2f}", ha="center", va="center",
-                    fontsize=9, color=color,
+                    fontsize=16, color=color,
                     fontweight="bold" if i == j else "normal")
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Pearson r", fontsize=11)
-    ax.set_title(f"Correlation matrix  (n = {len(df):,})", fontsize=13, pad=12)
+    cbar.set_label("Pearson r", fontsize=18)
+    cbar.ax.tick_params(labelsize=16)  # colorbar ticks inherit the giant poster tick size otherwise
+    ax.set_title(f"Correlation matrix  (n = {len(df):,})", fontsize=22, pad=12)
     plt.tight_layout()
     _save(output_path)
 
