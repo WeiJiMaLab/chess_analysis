@@ -9,9 +9,10 @@
 #SBATCH --mem=80G
 #SBATCH --time=02:00:00
 
-# Tree-derived "generated values" (OSS / VOC / Action Gap) from the ysagiv lc0
+# Tree-derived "generated values" (OSS / VOC / Action Gap / MQ) from the ysagiv lc0
 # trees vs human RT, at scale. All are derived per-tree from the stored oracle
-# trace; the cost is loading individual .pt trees, so we parallelize across CPUs.
+# trace (MQ also joins the human's played move); the cost is loading individual
+# .pt trees, so we parallelize across CPUs.
 #   N_TREES (default 100000), N_WORKERS (default = cpus-per-task)
 
 set -euo pipefail

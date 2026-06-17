@@ -1,8 +1,9 @@
 #!/bin/bash
 # End-to-end FULL-dataset analysis. Runs the kept standardized plots only.
 #
-# The tree-derived "generated values" (OSS / VOC / Action Gap on the lc0-tree
-# subset) are NOT run here — see slurm/tree_values.slurm.
+# The tree-derived "generated values" (OSS / VOC / Action Gap / MQ on the lc0-tree
+# subset) are NOT run here — see slurm/tree_values.slurm. MQ in particular is now
+# the Lc0 tree definition (final_Q loss of the played move), not a Stockfish plot.
 #
 # Usage:
 #   bash human_analytics/slurm/analysis.sh
@@ -28,7 +29,7 @@ python3 human_analytics/movetime_analysis.py --only clock npossiblemoves self_pi
 echo "3. Game stage (ply vs instant-move probability)..."
 python3 human_analytics/ply_premove.py
 
-echo "4. Move quality (MQ) vs move time..."
-python3 human_analytics/mq_analysis.py
+# MQ moved to the lc0-tree SUBSET (Lc0 final_Q loss of the played move); it is
+# produced by slurm/tree_values.slurm, not here.
 
 echo "Analysis complete at $(date)"
