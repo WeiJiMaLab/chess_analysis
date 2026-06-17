@@ -3,9 +3,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "node scripts/run-deck.js dev",
-    "build": "node scripts/run-deck.js build",
-    "export": "node scripts/run-deck.js export"
+    "dev": "node scripts/run-deck.cjs dev",
+    "build": "node scripts/run-deck.cjs build",
+    "export": "node scripts/run-deck.cjs export"
   },
   "dependencies": {
     "@slidev/cli": "^52.14.2",

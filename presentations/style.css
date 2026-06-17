@@ -142,15 +142,179 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
   /* max-width: 80%; */
 }
 
-/* .slide-quantile-heatmap-wrap img {
+/* Disabled — sizing handled by utilities on the element instead.
+.slide-quantile-heatmap-wrap img {
   display: block;
   min-height: 0;
   width: 100%;
   max-width: 80%;
   height: 80%;
-  /* max-height: min(36vh, 360px); */
-  /* object-fit: contain; */
-/* } */ */
+  max-height: min(36vh, 360px);
+  object-fit: contain;
+}
+*/
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Structural deck system (mdl-*) — ported broad layouts from the monkey decks,
+ * wired to THIS project's tokens (Inter headers, indigo accent). Opt in per
+ * slide with `class: mdl-slide` (content) or `class: mdl-cover` (title).
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.slidev-layout.mdl-slide,
+.slidev-layout.mdl-cover {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 2.1rem 2.6rem 2.3rem;
+  box-sizing: border-box;
+  /* local aliases mapping the shared system onto project tokens */
+  --accent-core: var(--color-accent);
+  --mdl-text: var(--color-primary);
+  --mdl-muted: var(--color-secondary);
+  --mdl-subtle: #94a3b8;
+  --mdl-faint: #cbd5e1;
+  --mdl-border: var(--border-subtle);
+  --mdl-border-light: #e2e8f0;
+  --mdl-border-lighter: #eef2f7;
+}
+
+/* ── Title slide: heading block pinned lower-left ── */
+.slidev-layout.mdl-cover { justify-content: flex-end; }
+.slidev-layout.mdl-cover h1 {
+  font-size: 2.6rem !important;
+  line-height: 1.1 !important;
+  margin: 0 0 0.4rem !important;
+}
+.mdl-kicker {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-family: var(--font-header);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+
+/* ── Content slide: title header on top, content fills ── */
+.mdl-title {
+  flex: 0 0 auto;
+  margin: 0 0 0.7rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1.5px solid var(--mdl-border);
+  font-family: var(--font-header);
+  font-size: 1.7rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  color: var(--mdl-text);
+}
+.mdl-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.mdl-content--top { justify-content: flex-start; padding-top: 0.3rem; }
+
+.mdl-lead { font-size: 0.95rem; color: var(--mdl-text); margin: 0 0 0.7rem; line-height: 1.4; }
+
+/* ── text-left (small) / figure-right ── */
+.mdl-figrow {
+  display: grid;
+  grid-template-columns: 30% 70%;
+  gap: 2rem;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+}
+.mdl-figrow--wide-left { grid-template-columns: 44% 56%; }
+.mdl-figwrap { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.mdl-figwrap .mdl-figbox { flex: 1; min-height: 0; }
+.mdl-figrow > table.mdl-table { align-self: start; }
+
+.mdl-text { font-size: 0.84rem; line-height: 1.5; color: var(--mdl-muted); min-width: 0; }
+.mdl-text ul { padding-left: 1.1em; margin: 0; }
+.mdl-text li { margin: 0.4rem 0; }
+.mdl-text li::marker { color: var(--accent-core); }
+.mdl-text strong { color: var(--mdl-text); font-weight: 600; }
+
+.mdl-figbox { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 0; overflow: hidden; }
+.mdl-figbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.mdl-figcaption { margin-top: 0.4rem; font-size: 0.7rem; color: var(--mdl-subtle); text-align: center; }
+
+/* ── title-left / figure-right (title is part of the left text column) ── */
+.mdl-titlefig { display: grid; grid-template-columns: 34% 66%; gap: 2rem; height: 100%; min-height: 0; align-items: stretch; }
+.mdl-titlefig--wide { grid-template-columns: 46% 54%; }
+.mdl-tf-left { display: flex; flex-direction: column; min-width: 0; }
+.mdl-tf-left .mdl-title { margin-bottom: 0.6rem; }
+.mdl-tf-left .mdl-text { font-size: 0.82rem; }
+
+/* ── Reformatted tables ── */
+.mdl-table { border-collapse: collapse; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.mdl-table.mdl-table--wide { width: 100%; }
+.mdl-table--sm { font-size: 0.76rem; }
+.mdl-table thead th {
+  font-family: var(--font-header);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mdl-muted);
+  text-align: left;
+  padding: 0 0.7rem 0.4rem;
+  border-bottom: 2px solid var(--mdl-text);
+  white-space: nowrap;
+}
+.mdl-table th.num, .mdl-table td.num { text-align: right; font-family: var(--font-mono); }
+.mdl-table tbody td { padding: 0.38rem 0.7rem; border-bottom: 1px solid var(--mdl-border-lighter); }
+.mdl-table tbody tr:last-child td { border-bottom: none; }
+.mdl-table tbody tr.hl td { background: rgba(99, 102, 241, 0.1); font-weight: 700; }
+.mdl-table tbody tr.dim td { color: var(--mdl-subtle); }
+
+/* ── Two boxes (e.g. paired inquiries / old-new) ── */
+.mdl-two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem; align-items: stretch; height: 100%; min-height: 0; }
+.mdl-card { border: 1px solid var(--mdl-border-light); border-radius: 0.6rem; padding: 1rem 1.2rem; display: flex; flex-direction: column; }
+.mdl-card--accent { background: rgba(99, 102, 241, 0.06); border-color: rgba(99, 102, 241, 0.32); }
+.mdl-card--neutral { background: var(--bg-neutral); }
+.mdl-card-h { font-family: var(--font-header); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 0.6rem; color: var(--color-accent); }
+.mdl-card .body { font-size: 0.92rem; line-height: 1.5; color: var(--mdl-text); }
+
+/* finding callout (reuses project .finding feel) */
+.mdl-found { font-size: 0.92rem; line-height: 1.4; color: var(--mdl-text); background: var(--bg-accent); border-left: 3px solid var(--color-accent); padding: 0.5rem 0.7rem; border-radius: 0.4rem; margin-top: auto; }
+.mdl-found.danger { background: var(--bg-danger); border-left-color: var(--color-danger); }
+.mdl-found.success { background: var(--bg-success); border-left-color: var(--color-success); }
+
+/* ── Three issue/finding cards (motivation / takeaways) ── */
+.mdl-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; height: 100%; min-height: 0; align-items: stretch; }
+.mdl-issue { border: 1px solid var(--mdl-border-light); border-radius: 0.6rem; padding: 1rem 1.1rem 1.1rem; display: flex; flex-direction: column; background: var(--bg-neutral); }
+.mdl-issue-n { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--color-accent); }
+.mdl-issue-h { font-family: var(--font-header); font-size: 1.15rem; font-weight: 600; letter-spacing: -0.03em; margin: 0.1rem 0 0.6rem; }
+.mdl-issue-found { font-size: 0.82rem; line-height: 1.4; color: var(--mdl-text); background: var(--bg-accent); border-left: 3px solid var(--color-accent); padding: 0.45rem 0.6rem; border-radius: 0.3rem; margin-bottom: 0.7rem; }
+.mdl-issue-found.danger { background: var(--bg-danger); border-left-color: var(--color-danger); }
+.mdl-issue-label { font-size: 0.56rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mdl-muted); margin-bottom: 0.25rem; }
+.mdl-issue-list { font-size: 0.8rem; line-height: 1.45; padding-left: 1.05em; margin: 0; }
+.mdl-issue-list li { margin: 0.3rem 0; }
+.mdl-issue-list li::marker { color: var(--accent-core); }
+.mdl-issue-list strong { color: var(--mdl-text); font-weight: 600; }
+
+/* ── Numbered steps ── */
+.mdl-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.3rem; align-items: stretch; }
+.mdl-step { border: 1px solid var(--mdl-border-light); border-radius: 0.6rem; padding: 1rem 1.1rem 1.1rem; background: var(--bg-neutral); display: flex; flex-direction: column; }
+.mdl-step-h { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.7rem; }
+.mdl-step-n { flex: 0 0 auto; width: 1.5rem; height: 1.5rem; border-radius: 99px; background: var(--color-accent); color: #fff; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.mdl-step-t { font-family: var(--font-header); font-size: 1.15rem; font-weight: 600; letter-spacing: -0.03em; }
+.mdl-step ul { font-size: 0.84rem; line-height: 1.5; padding-left: 1.05em; margin: 0; }
+.mdl-step li { margin: 0.4rem 0; }
+.mdl-step li::marker { color: var(--accent-core); }
+.mdl-step strong { color: var(--mdl-text); font-weight: 600; }
+
+/* ── Centered takeaway list ── */
+.mdl-list { max-width: 82%; margin: 0 auto; font-size: 1rem; line-height: 1.5; padding-left: 1.2em; }
+.mdl-list li { margin: 0.7rem 0; }
+.mdl-list li::marker { color: var(--accent-core); font-weight: 700; }
+.mdl-list strong { font-weight: 700; }
 
 /*
  * Literature slides: theme-default forces h1 { text-4xl mb-4 } and h1 + p { -mt-2 opacity-50 mb-4 }
