@@ -310,6 +310,28 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
 .mdl-step li::marker { color: var(--accent-core); }
 .mdl-step strong { color: var(--mdl-text); font-weight: 600; }
 
+/* ── Pending / placeholder slide ── */
+.mdl-pending {
+  margin: auto;
+  text-align: center;
+  max-width: 40rem;
+  color: var(--mdl-muted);
+}
+.mdl-pending .tag {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  background: var(--bg-accent);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 0.3rem 0.8rem;
+  border-radius: 99px;
+  margin-bottom: 1rem;
+}
+.mdl-pending p { font-size: 1rem; line-height: 1.55; margin: 0; }
+
 /* ── Centered takeaway list ── */
 .mdl-list { max-width: 82%; margin: 0 auto; font-size: 1rem; line-height: 1.5; padding-left: 1.2em; }
 .mdl-list li { margin: 0.7rem 0; }

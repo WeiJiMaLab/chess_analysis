@@ -5,120 +5,135 @@ info: Engine value-of-computation and move-quality vs human think time.
 addons:
   - "@/shared/slidev-addon-base"
 css: ./style.css
-class: text-left
+class: mdl-cover
 mdc: true
 math: katex
 ---
 
+<span class="mdl-kicker">Meta-control of tree search</span>
+
 # Human VOC / MQ vs move time
 
-<div class="mt-4 text-lg opacity-80">Does engine value-of-computation track human deliberation?</div>
+<div class="mt-2 text-lg opacity-80">Does engine value-of-computation track human deliberation?</div>
 
-<div class="mt-6 text-sm opacity-60 max-w-2xl">
-Source report: <code>reports/human-voc-mq.md</code> (R-VOC-MQ)
+<div class="mt-4 text-sm opacity-50">Source: <code>reports/human-voc-mq.md</code> (R-VOC-MQ)</div>
+
+---
+layout: default
+class: mdl-slide
+---
+
+<div class="mdl-title"><span class="mdl-kicker">Overview</span>The question</div>
+
+<div class="mdl-content">
+  <p class="mdl-lead" style="max-width:48rem">Do engine-defined <strong>value-of-computation (VOC)</strong> and <strong>move-quality (MQ)</strong> track how long humans think on the same positions?</p>
+  <div class="mdl-two" style="height:auto; margin-top:0.6rem">
+    <div class="mdl-card mdl-card--neutral">
+      <p class="mdl-card-h">Headline</p>
+      <div class="body">
+        <ul style="padding-left:1.1em; margin:0">
+          <li>VOC ↔ log move time: <strong>weak but real positive</strong> (r ≈ +0.10)</li>
+          <li>MQ ↔ move time: <strong>negative</strong> — a <em>difficulty confound</em>, not a sign bug</li>
+        </ul>
+      </div>
+    </div>
+    <div class="mdl-card mdl-card--neutral">
+      <p class="mdl-card-h">Two load-bearing caveats</p>
+      <div class="body">
+        <ul style="padding-left:1.1em; margin:0">
+          <li>The kept <strong>MQ figure is Stockfish depth-5, not LC0</strong></li>
+          <li>MQ subset (1M) ≠ tree subset (OSS/VOC) population</li>
+        </ul>
+      </div>
+    </div>
+  </div>
 </div>
 
 ---
 layout: default
+class: mdl-slide
 ---
 
-# The question
-
-<div class="text-lg opacity-80 mt-4">
-
-Do engine-defined **value-of-computation (VOC)** and **move-quality (MQ)** track
-how long humans think on the same positions?
-
-</div>
-
-<div class="mt-8 grid grid-cols-2 gap-6 text-sm">
-<div>
-
-**Headline**
-
-- VOC ↔ log move time: **weak but real positive** (r ≈ +0.10)
-- MQ ↔ move time: **negative** — but a *difficulty confound*, not a sign bug
-
-</div>
-<div>
-
-**Two load-bearing caveats**
-
-- The kept **MQ figure is Stockfish depth-5, not LC0**
-- MQ subset (1M) ≠ tree subset (OSS/VOC) population
-
-</div>
+<div class="mdl-content">
+  <div class="mdl-titlefig">
+    <div class="mdl-tf-left">
+      <div class="mdl-title"><span class="mdl-kicker">Move quality</span>MQ vs move time — the confound</div>
+      <div class="mdl-text">
+        <ul>
+          <li><strong>MQ ≤ 0</strong> by construction; large mass at 0 (human played engine-best move).</li>
+          <li><strong>r(MQ, clock) = −0.098</strong>, negative within <em>every</em> ply tertile.</li>
+          <li><strong>A difficulty confound, not a sign bug</strong> (N = 1M): Spearman <strong>ρ = −0.119</strong>, survives all controls. Best-move rate falls <strong>0.62 → 0.49</strong> across move-time deciles.</li>
+          <li>MQ × MT × branching interaction <strong>β ≈ −0.007 (t = −7)</strong> — branching amplifies, magnitude small.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="mdl-figbox">
+      <img src="../public/figures/mq_vs_rt.png" alt="MQ vs RT" />
+    </div>
+  </div>
 </div>
 
 ---
 layout: default
+class: mdl-slide
 ---
 
-# MQ vs move time — the confound
-
-<img src="/figures/mq_vs_rt.png" class="h-72 mx-auto rounded" />
-
-<div class="mt-4 text-sm opacity-80">
-
-- **MQ ≤ 0** by construction; large mass at 0 (human played engine-best move).
-- **r(MQ, clock) = −0.098**, negative within *every* ply tertile.
-- **Not a sign bug — a difficulty confound** (N=1M): Spearman **ρ = −0.119**, survives all
-  controls/de-meaning. Best-move rate falls **0.62 → 0.49** across move-time deciles.
-- MQ × MT × branching interaction **β ≈ −0.007 (t=−7)** — branching amplifies, magnitude small.
-
+<div class="mdl-content">
+  <div class="mdl-titlefig">
+    <div class="mdl-tf-left">
+      <div class="mdl-title"><span class="mdl-kicker">Value of computation</span>VOC vs move time</div>
+      <div class="mdl-text">
+        <ul>
+          <li><strong>r(log RT, VOC) = +0.097</strong> — more remaining value-of-computation → longer thinks.</li>
+          <li>Direction predicted by Russek-style value-of-computation.</li>
+          <li>VOC near-zero-inflated: <strong>VOC &gt; 0.005 in ~33%</strong> of positions (mean +0.100, median 0).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="mdl-figbox">
+      <img src="../public/figures/voc_vs_rt.png" alt="VOC vs RT" />
+    </div>
+  </div>
 </div>
 
 ---
 layout: default
+class: mdl-slide
 ---
 
-# VOC vs move time
+<div class="mdl-title"><span class="mdl-kicker">Companion values</span>OSS &amp; Action Gap</div>
 
-<img src="/figures/voc_vs_rt.png" class="h-72 mx-auto rounded" />
-
-<div class="mt-4 text-sm opacity-80">
-
-- **r(log RT, VOC) = +0.097** — more remaining value-of-computation → longer thinks.
-- Direction predicted by Russek-style value-of-computation.
-- VOC near-zero-inflated: **VOC > 0.005 in ~33%** of positions (mean +0.100, median 0).
-
+<div class="mdl-content">
+  <div class="grid grid-cols-2 gap-6 items-center" style="flex:1; min-height:0">
+    <div class="mdl-figbox"><img src="../public/figures/oss_vs_rt.png" alt="OSS vs RT" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/actiongap_vs_rt.png" alt="Action gap vs RT" /></div>
+  </div>
+  <div class="mdl-text" style="text-align:center; margin-top:0.5rem">Oracle stop step (left) and Action Gap (right) — the lc0-tree generated values on the same RT subset, quantile-binned globally and by ply tertile (canonical Analyzer 1×2 dashboard).</div>
 </div>
 
 ---
 layout: default
+class: mdl-slide
 ---
 
-# Companion tree values — OSS & Action Gap
+<div class="mdl-title"><span class="mdl-kicker">Methods</span>Definitions &amp; caveats</div>
 
-<div class="grid grid-cols-2 gap-4">
-<img src="/figures/oss_vs_rt.png" class="h-64 rounded" />
-<img src="/figures/actiongap_vs_rt.png" class="h-64 rounded" />
-</div>
-
-<div class="mt-4 text-sm opacity-80">
-
-Oracle stop step (left) and Action Gap (right) are the lc0-tree "generated values" on the same RT
-subset — quantile-binned globally and by ply tertile (canonical Analyzer 1×2 dashboard).
-
-</div>
-
----
-layout: default
----
-
-# Methods & caveats
-
-<div class="text-sm opacity-80 mt-4">
-
-| Quantity | Definition | Engine |
-| :-- | :-- | :-- |
-| **MQ** (kept fig) | `e_win_taken − e_win_best` (≤0) | **Stockfish d5** (not LC0) |
-| **MQ** (LC0) | `final_Q(played) − final_Q(best)` | LC0 tree |
-| **VOC** | `V_deep(a_deep) − V_deep(a_shallow)` | SF d5/d1 or LC0 tree |
-
-- **100K run:** Stockfish d5/1, ply 15–75, opp clock ≥ 60s.
-- **MQ "FULL" plot** is a 1M-row subset; ply-tertile cuts (27/56) from the whole-dataset
-  distribution → "Early" panel has no openings.
-- **Fix recommended:** recompute MQ from **LC0** + report difficulty-residualized partials.
-
+<div class="mdl-content">
+  <table class="mdl-table mdl-table--wide" style="margin-bottom:1rem">
+    <thead>
+      <tr><th>Quantity</th><th>Definition</th><th>Engine</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>MQ</strong> (kept fig)</td><td><code>e_win_taken − e_win_best</code> (≤0)</td><td>Stockfish d5 (not LC0)</td></tr>
+      <tr><td><strong>MQ</strong> (LC0)</td><td><code>final_Q(played) − final_Q(best)</code></td><td>LC0 tree</td></tr>
+      <tr><td><strong>VOC</strong></td><td><code>V_deep(a_deep) − V_deep(a_shallow)</code></td><td>SF d5/d1 or LC0 tree</td></tr>
+    </tbody>
+  </table>
+  <div class="mdl-text">
+    <ul>
+      <li><strong>100K run:</strong> Stockfish d5/1, ply 15–75, opp clock ≥ 60s.</li>
+      <li>MQ "FULL" plot is a 1M-row subset; ply-tertile cuts (27/56) from the whole-dataset distribution → "Early" panel has no openings.</li>
+      <li><strong>Fix recommended:</strong> recompute MQ from <strong>LC0</strong> + report difficulty-residualized partials.</li>
+    </ul>
+  </div>
 </div>
