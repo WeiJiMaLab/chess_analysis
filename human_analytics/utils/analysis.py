@@ -112,7 +112,41 @@ class Analyzer:
         zero_inflated: bool = False,
         zero_threshold: float = 0.0,
         ply_tertile_source: str = _PLY_TERTILE_SOURCE_DEFAULT,
+        bin_mode: str = "ntile",
+        integer_tail_cut: float | None = None,
+        integer_bin_width: int = 1,
+        edge_mass: tuple[str, float] | list[tuple[str, float]] | None = None,
+        tie_safe: bool = False,
+        min_bin_count: int = 0,
     ):
+        """Binning of x is controlled by three opt-in mechanisms; all default to the
+        legacy equal-count ``ntile`` behavior so existing callers are unchanged.
+
+        ``bin_mode``:
+          * ``"ntile"`` (default): equal-count quantile bins via SQL ``ntile``.
+          * ``"integer"``: group x into fixed-width integer bins of ``integer_bin_width``
+            (default 1 = one point per distinct integer; e.g. 5 = groups 0–4, 5–9, …).
+            Use for discrete/integer x (e.g. OSS) where ``ntile`` would split a heavy
+            point-mass across several identical-mean bins. Each point is plotted at the
+            group's mean x. The long thin tail above ``integer_tail_cut`` (if given) is
+            merged into a single point, so sparse high values don't read as noise.
+            Applies to BOTH the global and the by-ply-tertile panels.
+
+        ``edge_mass`` (tie-safe boundary masses): one ``(op, value)`` pair or a list
+        of them, where ``op`` is ``">="``/``"<="``/``">"``/``"<"``/``"=="``. Rows
+        satisfying a clause are pulled out into their *own* dedicated point at their
+        mean x, instead of being straddled across ``ntile`` edges. Use for discrete
+        boundary masses that ``ntile`` otherwise splits (VOC: ``(">=", 1.0)`` for the
+        spike at 1.0 + the >1 tail; MQ: ``("<=", -1.0)``). Only meaningful together
+        with ``zero_inflated`` / ``tie_safe`` (i.e. the non-ntile interior path).
+
+        ``tie_safe``: when binning the nonzero interior (``zero_inflated`` and/or
+        ``edge_mass``), assign rows to bins by *value range* (``width_bucket`` over
+        quantile cut-points) rather than equal-count rank, so all rows sharing one
+        x-value land in the same bin (no within-value RT noise from a split mass).
+        ``zero_inflated`` alone keeps the legacy rank-based interior unless
+        ``tie_safe=True``.
+        """
         self.conn = db_conn
         self.table = table_name
         self.x = x_var
@@ -131,6 +165,30 @@ class Analyzer:
         # ``zero_threshold=0`` lumps exactly-zero rows.
         self.zero_inflated = zero_inflated
         self.zero_threshold = float(zero_threshold)
+
+        if bin_mode not in ("ntile", "integer"):
+            raise ValueError(f"bin_mode must be 'ntile' or 'integer'; got {bin_mode!r}")
+        self.bin_mode = bin_mode
+        self.integer_tail_cut = None if integer_tail_cut is None else float(integer_tail_cut)
+        self.integer_bin_width = int(integer_bin_width)
+        if self.integer_bin_width < 1:
+            raise ValueError(f"integer_bin_width must be >= 1; got {integer_bin_width!r}")
+        self.tie_safe = bool(tie_safe)
+        # Drop plotted bins with fewer than this many rows (0 = keep all). Lets the
+        # noisy sparse tails (e.g. high-VOC, high-OSS) be cut from both panels.
+        self.min_bin_count = int(min_bin_count)
+        # Normalize edge_mass to a list of (op, value) clauses (validated below).
+        if edge_mass is None:
+            self.edge_mass = []
+        elif isinstance(edge_mass, tuple):
+            self.edge_mass = [edge_mass]
+        else:
+            self.edge_mass = list(edge_mass)
+        _allowed_ops = {">=", "<=", ">", "<", "=="}
+        for op, val in self.edge_mass:
+            if op not in _allowed_ops:
+                raise ValueError(f"edge_mass op must be one of {_allowed_ops}; got {op!r}")
+            float(val)
 
         self.quantile_heatmap_row = None
         self._quantile_heatmap_row_label = ""
@@ -153,6 +211,104 @@ class Analyzer:
         self.quantile_tertile_df = None
 
         self._run_sql_pipeline()
+
+    def _edge_predicate(self) -> str:
+        """SQL boolean: TRUE for rows captured by any ``edge_mass`` clause."""
+        if not self.edge_mass:
+            return "FALSE"
+        return " OR ".join(f"({self.x.column} {op} {val})" for op, val in self.edge_mass)
+
+    def _bin_assignment_sql(self, *, partition_by: str | None) -> str:
+        """Emit an inner SELECT assigning each row a ``qbin``, honoring the active
+        binning mode. Columns produced: ``[<partition_by> as tertile_id,] {col},
+        _y_transformed, qbin``. ``partition_by`` (e.g. ``_ply_tertile``) makes the
+        interior binning independent per group; the global panel passes ``None``.
+
+        qbin is only used to GROUP rows into points and is plotted sorted by mean_x,
+        so its absolute values need only be distinct per group (not globally aligned).
+        Dedicated points use sentinel qbins offset from the interior range.
+        """
+        col = self.x.column
+        sel = f"{partition_by} as tertile_id, " if partition_by else ""
+        part_clause = f"PARTITION BY {partition_by}" if partition_by else ""
+
+        # --- integer mode: fixed-width integer groups, optional tail merge -----
+        if self.bin_mode == "integer":
+            w = self.integer_bin_width
+            # Group index = floor(x / w); width 1 ⇒ one point per integer. Points are
+            # plotted at the group mean x (avg(col)), so the bin width need not show.
+            grp = f"CAST(floor({col} / {w}) AS BIGINT)" if w != 1 else f"CAST({col} AS BIGINT)"
+            if self.integer_tail_cut is not None:
+                # At/above cut: a single merged point (sentinel qbin sorts rightmost;
+                # plot orders by mean_x anyway).
+                qbin = f"CASE WHEN {col} >= {self.integer_tail_cut} THEN 1000000000 ELSE {grp} END"
+            else:
+                qbin = grp
+            return f"SELECT {sel}{col}, _y_transformed, {qbin} AS qbin FROM _analyzer_view"
+
+        # --- ntile / zero-inflated / tie-safe / edge-mass modes ----------------
+        has_zero = self.zero_inflated
+        has_edge = bool(self.edge_mass)
+
+        if not has_zero and not has_edge and not self.tie_safe:
+            # Legacy: pure equal-count ntile (unchanged behavior).
+            return (
+                f"SELECT {sel}{col}, _y_transformed, "
+                f"ntile({self.n_bins}) OVER ({part_clause} ORDER BY {col}) AS qbin "
+                f"FROM _analyzer_view"
+            )
+
+        thr = self.zero_threshold
+        edge_pred = self._edge_predicate()
+        # Interior = rows that are neither the near-zero lump nor an edge mass.
+        zero_pred = f"abs({col}) <= {thr}" if has_zero else "FALSE"
+        interior_pred = f"NOT ({zero_pred}) AND NOT ({edge_pred})"
+
+        parts: list[str] = []
+        if has_zero:
+            # Near-zero lump → dedicated leftmost point (qbin = 0).
+            parts.append(
+                f"SELECT {sel}{col}, _y_transformed, 0 AS qbin "
+                f"FROM _analyzer_view WHERE {zero_pred}"
+            )
+
+        # Interior binning.
+        if self.tie_safe:
+            # Tie-safe: bucket by VALUE over per-group quantile cut-points, so
+            # identical x-values never split across adjacent bins. The bin index is
+            # the number of cut-points the value exceeds (computed with list_filter,
+            # which is portable across DuckDB builds that lack width_bucket).
+            edges = ", ".join(
+                f"quantile_cont({col}, {i / self.n_bins})" for i in range(1, self.n_bins)
+            )
+            edges_subq = (
+                f"(SELECT [{edges}] FROM _analyzer_view i2 WHERE {interior_pred}"
+                + (f" AND i2.{partition_by} = i.{partition_by}" if partition_by else "")
+                + ")"
+            )
+            interior = (
+                f"SELECT {sel}{col}, _y_transformed, "
+                f"1 + len(list_filter({edges_subq}, e -> {col} > e)) AS qbin "
+                f"FROM _analyzer_view i WHERE {interior_pred}"
+            )
+        else:
+            interior = (
+                f"SELECT {sel}{col}, _y_transformed, "
+                f"ntile({self.n_bins}) OVER ({part_clause} ORDER BY {col}) AS qbin "
+                f"FROM _analyzer_view WHERE {interior_pred}"
+            )
+        parts.append(interior)
+
+        if has_edge:
+            # Each edge-mass clause → its own dedicated point, sorted to the right
+            # of the interior (sentinel qbins above n_bins).
+            for j, (op, val) in enumerate(self.edge_mass):
+                parts.append(
+                    f"SELECT {sel}{col}, _y_transformed, {self.n_bins + 1 + j} AS qbin "
+                    f"FROM _analyzer_view WHERE {col} {op} {val}"
+                )
+
+        return "\nUNION ALL\n".join(parts)
 
     def _run_sql_pipeline(self):
         """Executes the core SQL aggregation logic."""
@@ -184,22 +340,15 @@ class Analyzer:
         self.n_moves = self.conn.execute("SELECT count(*) FROM _analyzer_view").fetchone()[0]
         print(f"📊 Analyzing {self.n_moves:,} moves from {self.n_games:,} games...")
 
-        # 3. Compute Quantile-Binned Data (global ranks). With ``zero_inflated``,
-        # the x==0 point mass collapses to a single leftmost bin and only the
-        # nonzero rows are ntiled (avoids wasting bins on the zero mass).
+        # 3. Compute Quantile-Binned Data. Binning of x is one of three modes
+        # (see __init__): legacy equal-count ``ntile``; ``zero_inflated`` lumping
+        # the near-zero mass into a leftmost point; ``bin_mode="integer"`` grouping
+        # by integer value; plus tie-safe interior bucketing and dedicated
+        # ``edge_mass`` boundary points. The qbin assignment is emitted by
+        # ``_bin_assignment_sql`` so the global and per-tertile panels stay identical.
         col = self.x.column
-        thr = self.zero_threshold
-        if self.zero_inflated:
-            global_inner = f"""
-                SELECT {col}, _y_transformed, 0 AS qbin
-                FROM _analyzer_view WHERE abs({col}) <= {thr}
-                UNION ALL
-                SELECT {col}, _y_transformed,
-                       ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin
-                FROM _analyzer_view WHERE abs({col}) > {thr}
-            """
-        else:
-            global_inner = f"SELECT *, ntile({self.n_bins}) OVER (ORDER BY {col}) AS qbin FROM _analyzer_view"
+
+        global_inner = self._bin_assignment_sql(partition_by=None)
         self.quantile_df = self.conn.execute(f"""
             SELECT qbin,
                    avg({col}) as mean_x,
@@ -210,21 +359,7 @@ class Analyzer:
             GROUP BY qbin
         """).df()
 
-        if self.zero_inflated:
-            tertile_inner = f"""
-                SELECT _ply_tertile as tertile_id, {col}, _y_transformed, 0 AS qbin
-                FROM _analyzer_view WHERE abs({col}) <= {thr}
-                UNION ALL
-                SELECT _ply_tertile as tertile_id, {col}, _y_transformed,
-                       ntile({self.n_bins}) OVER (PARTITION BY _ply_tertile ORDER BY {col}) AS qbin
-                FROM _analyzer_view WHERE abs({col}) > {thr}
-            """
-        else:
-            tertile_inner = f"""
-                SELECT _ply_tertile as tertile_id, {col}, _y_transformed,
-                       ntile({self.n_bins}) OVER (PARTITION BY _ply_tertile ORDER BY {col}) AS qbin
-                FROM _analyzer_view
-            """
+        tertile_inner = self._bin_assignment_sql(partition_by="_ply_tertile")
         self.quantile_tertile_df = self.conn.execute(f"""
             SELECT tertile_id, qbin,
                    avg({col}) as mean_x,
@@ -266,7 +401,19 @@ class Analyzer:
             tertile_id, f"tertile {tertile_id}"
         )
 
-    def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int = 1):
+    @property
+    def _x_axis_label(self) -> str:
+        """X label; only suffix "(qbin)" when x is binned by plain equal-count ntile.
+        Integer / tie-safe / zero-inflated / edge-mass modes are not qbins."""
+        plain_qbin = (
+            self.bin_mode == "ntile"
+            and not self.zero_inflated
+            and not self.tie_safe
+            and not self.edge_mass
+        )
+        return f"{self.x.label} (qbin)" if plain_qbin else self.x.label
+
+    def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int | None = None):
         """
         Quantile bins with **ntile recomputed within each fixed ply tertile**; all tertiles on ``ax``.
         Legend labels are the a-priori ply ranges (``self.ply_cuts``).
@@ -275,13 +422,14 @@ class Analyzer:
             raise ValueError(
                 "Ply-tertile-segmented quantile bins need non-empty data (check move_ply / filter)."
             )
+        min_n = self.min_bin_count if min_n is None else min_n
         tertiles = sorted(self.quantile_tertile_df["tertile_id"].unique().tolist())
         y_label = "Move time (s)" if self.y.is_log else self.y.label
-        x_label = f"{self.x.label} (qbin)"
+        x_label = self._x_axis_label
 
         for t in tertiles:
             subset = self.quantile_tertile_df[self.quantile_tertile_df["tertile_id"] == t]
-            if min_n > 1:
+            if min_n:
                 subset = subset[subset["n"] >= min_n]
             color = PHASE_COLORS.get(int(t), MAIN_COLOR)
             lbl = self._ply_tertile_legend_label(int(t))
@@ -299,6 +447,8 @@ class Analyzer:
             )
         if self.y.is_log:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
+        if self.x.is_log:
+            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis for display
         ax.legend(
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
@@ -340,17 +490,22 @@ class Analyzer:
         """Plots the trend across equal-sized quantile bins."""
         y_label = "Move time (s)" if self.y.is_log else self.y.label
 
+        df = self.quantile_df
+        if self.min_bin_count:
+            df = df[df["n"] >= self.min_bin_count]
         plot_qbin_stats(
             ax,
-            self.quantile_df,
+            df,
             x_col="mean_x",
-            x_label=f"{self.x.label} (qbin)",
+            x_label=self._x_axis_label,
             y_label=y_label,
             normalized=False,
             show_legend=False,
         )
         if self.y.is_log:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
+        if self.x.is_log:
+            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis for display
 
     def save_quantile_heatmap_figure(
         self,

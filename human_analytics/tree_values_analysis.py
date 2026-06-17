@@ -7,11 +7,12 @@ dashboard style:
 
   * OSS         — oracle stop step, budgeted DP oracle on the expansion trace
                   (optimal_stop_step; cost model = canonical BudgetedOracleConfig).
-  * VOC         — value of computation = final_Q(best) − final_Q(shallow choice),
-                  where the shallow choice is the best move after the first
-                  expansion step (lc0 analog of the Stockfish depth-VOC). ≥ 0.
-  * Action Gap  — MYOPIC gap between the root's best and second-best child by the
-                  children's 1-ply value-head value (not a deep/converged gap). ≥ 0.
+  * VOC         — value of computation = final_Q(deep best) − final_Q(1-ply best),
+                  i.e. how much deep search improves on the shallow (1-ply value-head
+                  lookahead) choice. ≥ 0.
+  * Action Gap  — MYOPIC gap between the root's best and second-best move by the
+                  children's 1-ply value-head backup (not a deep/converged gap). ≥ 0.
+                  VOC and Action Gap share the same 1-ply value-head lookahead basis.
   * MQ          — move quality of the HUMAN's actual move = final_Q(move played)
                   − final_Q(best), the post-search (full-budget) Lc0 root value
                   loss. ≤ 0 (0 = the human played the engine-best move). This is
@@ -69,37 +70,50 @@ _BUDGET = 96  # set per-run in compute_values before the worker pool forks
 
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
-    """(VOC, Action Gap) for one tree.
+    """(VOC, Action Gap) for one tree — both built on the SAME 1-ply value-head
+    lookahead backup of the root's children (parent perspective = −child.value).
 
-    Action Gap = **myopic** gap between the root's best and second-best child by the
-                 children's 1-ply value-head value (parent perspective = −child.value).
-                 This is the immediate value separation, NOT a deep/converged gap.
-    VOC        = final_Q(final-best) − final_Q(first-step best): the deep-converged
-                 regret of the shallow (first-expansion) choice = value of computation.
+    Action Gap = top1 − top2 of the children's 1-ply backups: the immediate value
+                 separation between the best and second-best move at 1-ply (NOT a
+                 deep/converged gap).
+    VOC        = final_Q(deep best) − final_Q(1-ply best): how much deep search
+                 improves on the shallow (1-ply value-head) choice = value of
+                 computation. ≥ 0; perspective-invariant (both are root side-to-move
+                 Qs in one node).
+
+    Why the 1-ply backup and not the search trace for the shallow choice: every legal
+    root move is present as an evaluated child (verified: n_children == n_legal, no
+    uninitialized zeros), so −child.value is a clean one-step lookahead. The
+    ``oracle_root_q_trace`` instead stores a move's Q as 0 until its child is first
+    visited (trace[0] is all-zero pre-search), so a trace-based shallow choice is
+    contaminated — in losing positions the unvisited zeros beat the visited negatives,
+    which previously inflated VOC to a spurious ~1.0 mass.
     """
-    # Action Gap — myopic, from the root children's value-head values.
     feature_names = list(payload["feature_names"])
     nf = payload["node_features"].numpy()
     par = payload["parent_index"].numpy()
     vi = feature_names.index("value")
+    final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
+    incoming = payload["incoming_moves"]
+    root_moves = list(payload["oracle_root_moves"])
+
     action_gap = float("nan")
+    voc = float("nan")
     roots = np.where(par < 0)[0]
     if roots.size:
         kids = np.where(par == int(roots[0]))[0]
         if kids.size >= 2:
-            myopic_q = -nf[kids, vi]  # parent-perspective 1-ply value (negamax flip)
-            top = np.sort(myopic_q)[::-1]
-            action_gap = float(top[0] - top[1])
-
-    # VOC — deep-converged regret of the first-step (shallow) choice.
-    final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
-    trace = np.asarray(payload["oracle_root_q_trace"], dtype=float)  # [steps, n_moves]
-    voc = float("nan")
-    if final_q.size >= 2 and trace.ndim == 2 and trace.shape[0] >= 1 \
-            and trace.shape[1] == final_q.size and np.isfinite(trace[0]).any():
-        a_shallow = int(np.nanargmax(trace[0]))
-        a_deep = int(np.argmax(final_q))
-        voc = float(final_q[a_deep] - final_q[a_shallow])
+            myopic_q = -nf[kids, vi]  # parent-perspective 1-ply value-head backup
+            order = np.argsort(myopic_q)[::-1]
+            action_gap = float(myopic_q[order[0]] - myopic_q[order[1]])
+            # VOC — deep-search regret of the 1-ply best move. Map that child to its
+            # root-move index (via its incoming UCI) to read the deep final_Q.
+            if final_q.size >= 2:
+                uci = incoming[int(kids[order[0]])]
+                if uci in root_moves:
+                    a_shallow = root_moves.index(uci)
+                    a_deep = int(np.argmax(final_q))
+                    voc = float(final_q[a_deep] - final_q[a_shallow])
     return voc, action_gap
 
 
@@ -220,27 +234,53 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  r(mq, log RT) = {r_mq:+.4f}")
 
     _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    # OSS is not zero-inflated; VOC / Action Gap have a mass near 0 (search did not
-    # change / barely separated the decision); MQ has a large mass at exactly 0
-    # (human played the engine-best move) → lump the near-zero point for those.
+    # OSS / VOC / Action Gap are properties of the position/search, so we plot human
+    # RT (y) as a function of the value (x). Per-figure binning (see Analyzer docstring):
+    #   * OSS is an INTEGER count; ``ntile`` splits its heavy mass at 1 across many
+    #     identical-mean bins → spurious low-OSS swings. Bin in fixed groups of 5
+    #     (each plotted at its group mean). The oracle stop step is not reliable past
+    #     ~64 (of a 96 budget), so cap the analysis at oss <= 64.
+    #   * VOC / Action Gap have a large near-zero mass: lump the near-zero rows and
+    #     bin the interior TIE-SAFE with few (8) bins so a single value can't straddle
+    #     adjacent bins. (VOC's former ~1.0 spike was a bug in the shallow-choice — now
+    #     fixed at source in _tree_voc_and_gap — so no edge_mass is needed.)
+    # min_bin_count drops the noisy sparse tails (high VOC / high OSS) from both panels.
+    # spec: (table, col, label, fname, kwargs-for-Analyzer)
     specs = [
-        ("tree_rt", "oss", "Oracle stop step", "oss_vs_rt.png", False, 0.0),
-        ("tree_rt", "voc", "VOC (lc0 tree)", "voc_vs_rt.png", True, 0.05),
-        ("tree_rt", "action_gap", "Action Gap (lc0 tree)", "actiongap_vs_rt.png", True, 0.05),
-        ("mq_rt", "mq", "MQ (lc0 tree)", "mq_vs_rt.png", True, 0.05),
+        ("tree_rt", "oss", "Oracle stop step", "oss_vs_rt.png",
+         dict(bin_mode="integer", integer_bin_width=5,
+              filter_query="move_time > 0 AND oss <= 64", min_bin_count=100)),
+        ("tree_rt", "voc", "VOC (lc0 tree)", "voc_vs_rt.png",
+         dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
+              filter_query="move_time > 0", min_bin_count=100)),
+        ("tree_rt", "action_gap", "Action Gap (lc0 tree)", "actiongap_vs_rt.png",
+         dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
+              filter_query="move_time > 0", min_bin_count=100)),
     ]
-    for table, col, label, fname, zinf, thr in specs:
+    for table, col, label, fname, bin_kwargs in specs:
         analyzer = Analyzer(
             conn,
             table,
             x_var=Variable(column=col, is_log=False, name=label),
             y_var=Variable(column="move_time", is_log=True, name="RT"),
-            filter_query="move_time > 0",
             title=f"{label} vs. log(RT)",
-            zero_inflated=zinf,
-            zero_threshold=thr,
+            **bin_kwargs,
         )
         analyzer.save_dashboard(str(_FIGURES_DIR / fname))
+
+    # MQ is the OUTCOME of the human's decision, so plot mean move quality (y) as a
+    # function of think time: log RT on x, MQ on y ("does thinking longer yield better
+    # moves?"). Binning on the well-behaved RT axis also sidesteps the MQ point-masses
+    # (the −1.0 / 0.0 spikes) entirely, so no zero-lump / tie-safe / edge-mass needed.
+    Analyzer(
+        conn,
+        "mq_rt",
+        x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
+        y_var=Variable(column="mq", is_log=False, name="MQ (lc0 tree)"),
+        filter_query="move_time > 0",
+        title="MQ (lc0 tree) vs. log(RT)",
+        min_bin_count=100,
+    ).save_dashboard(str(_FIGURES_DIR / "mq_vs_rt.png"))
     conn.close()
 
 
