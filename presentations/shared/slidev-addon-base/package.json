@@ -1,0 +1,8 @@
+{
+  "name": "slidev-addon-base",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local Slidev addon shared by every deck in src/<deck>.md: shared Vue components (chess diagrams: ChessBackground, PaperSketch, LeelaSearchLoop, MetaControllerZoom, DpOracleDiagram, GnnPretrainDiagram, GnnTwoSweeps, ChildWdlDiagram, PolicyPretrainDiagram) and shared layouts. Referenced in deck frontmatter as \"@/shared/slidev-addon-base\".",
+  "keywords": ["slidev-addon", "slidev"],
+  "slidev": {}
+}

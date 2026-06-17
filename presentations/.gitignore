@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.slidev/
+.vite/
+.vite-inspect
+.remote-assets
+components.d.ts
+.DS_Store
+*.local
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

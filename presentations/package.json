@@ -1,11 +1,11 @@
 {
-  "name": "lmcos-overview",
+  "name": "presentations",
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "slidev build",
-    "dev": "slidev --open",
-    "export": "slidev export"
+    "dev": "node scripts/run-deck.js dev",
+    "build": "node scripts/run-deck.js build",
+    "export": "node scripts/run-deck.js export"
   },
   "dependencies": {
     "@slidev/cli": "^52.14.2",

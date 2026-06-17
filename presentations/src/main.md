@@ -2,6 +2,8 @@
 theme: default
 title: Learned Meta-control of Tree Search
 info: Project status — human behavioral analysis and normative DP agent.
+addons:
+  - "@/shared/slidev-addon-base"
 css: ./style.css
 class: text-left
 mdc: true
