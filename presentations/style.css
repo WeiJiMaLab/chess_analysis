@@ -196,6 +196,23 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
   color: var(--color-accent);
 }
 
+/* ── Section divider: centered oversized title (opt in with class: mdl-section) ── */
+.slidev-layout.mdl-section { justify-content: center; }
+.slidev-layout.mdl-section h1 {
+  font-size: 3rem !important;
+  line-height: 1.05 !important;
+  margin: 0 !important;
+  letter-spacing: -0.04em;
+}
+.slidev-layout.mdl-section .mdl-kicker { font-size: 0.72rem; margin-bottom: 0.45rem; }
+.slidev-layout.mdl-section .mdl-section-sub {
+  margin-top: 0.8rem;
+  font-size: 0.95rem;
+  color: var(--mdl-muted);
+  max-width: 42rem;
+  line-height: 1.45;
+}
+
 /* ── Content slide: title header on top, content fills ── */
 .mdl-title {
   flex: 0 0 auto;
