@@ -11,8 +11,13 @@ import argparse
 import os
 
 import duckdb
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from utils import Variable, Analyzer
+from utils.helpers import apply_poster_style
+from utils.plots import highlight_corr_row
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 
 DEFAULT_ANALYSES = (
@@ -20,6 +25,7 @@ DEFAULT_ANALYSES = (
     "npossiblemoves",
     "self_pieces_exc",
     "ply",
+    "boardcorr",
 )
 
 
@@ -88,6 +94,50 @@ def clock_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) 
     analyzer.save_dashboard(_fig(src_dir, "clock_vs_movetime.png"))
 
 
+def board_feature_corr(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None,
+                       n_sample: int = 1_000_000, seed: int = 42) -> None:
+    """Spearman ρ matrix over the board structural features + log(RT) — no engine.
+    Rank correlation on a reservoir sample of ``processed_moves_nonzero`` (the full
+    135M is unnecessary for a correlation estimate)."""
+    if src_dir is None:
+        src_dir = _src_dir()
+    df = conn.execute(f"""
+        SELECT move_ply AS ply, n_possible_moves AS branching,
+               n_self_pieces_exc_pawns AS own_material,
+               player_clock_time AS player_clock, ln(move_time) AS log_T
+        FROM {TABLE_PROCESSED_MOVES_NONZERO}
+        USING SAMPLE {n_sample} ROWS (reservoir, {seed})
+    """).df()
+    labels = {  # log(RT) first (the response variable), then structure → clock
+        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
+        "own_material": "Own material", "player_clock": "Player clock",
+    }
+    corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
+    n = len(corr)
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(9, 7.5))
+    ax.grid(False)
+    im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
+    ax.set_xticks(range(n)); ax.set_xticklabels(corr.columns, fontsize=18, rotation=30, ha="right")
+    ax.set_yticks(range(n)); ax.set_yticklabels(corr.index, fontsize=18)
+    for i in range(n):
+        for j in range(n):
+            v = corr.values[i, j]
+            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=15,
+                    color="white" if abs(v) > 0.5 else "black",
+                    fontweight="bold" if i == j else "normal")
+    highlight_corr_row(ax, n)  # log(RT) row (index 0) — the response variable
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Spearman ρ", fontsize=16)
+    cbar.ax.tick_params(labelsize=14)
+    ax.set_title(f"Spearman correlation — board features (n = {len(df):,})", fontsize=18, pad=12)
+    plt.tight_layout()
+    out = _fig(src_dir, "board_feature_corr.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"✅ {out}")
+
+
 def _run_duckdb_analysis(name: str, conn: duckdb.DuckDBPyConnection, src_dir: str) -> None:
     if name == "npossiblemoves":
         npossiblemoves_movetime(conn, src_dir)
@@ -97,6 +147,8 @@ def _run_duckdb_analysis(name: str, conn: duckdb.DuckDBPyConnection, src_dir: st
         ply_movetime(conn, src_dir)
     elif name == "clock":
         clock_movetime(conn, src_dir)
+    elif name == "boardcorr":
+        board_feature_corr(conn, src_dir)
     else:
         raise ValueError(f"Unknown analysis: {name}")
 
@@ -106,7 +158,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
     parser.add_argument(
         "--only", nargs="+",
-        choices=["npossiblemoves", "self_pieces_exc", "ply", "clock", "all"],
+        choices=["npossiblemoves", "self_pieces_exc", "ply", "clock", "boardcorr", "all"],
         metavar="NAME",
     )
     args = parser.parse_args(argv)

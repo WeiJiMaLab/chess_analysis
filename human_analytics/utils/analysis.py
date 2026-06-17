@@ -427,10 +427,12 @@ class Analyzer:
         y_label = "Move time (s)" if self.y.is_log else self.y.label
         x_label = self._x_axis_label
 
+        any_pos_x = False
         for t in tertiles:
             subset = self.quantile_tertile_df[self.quantile_tertile_df["tertile_id"] == t]
             if min_n:
                 subset = subset[subset["n"] >= min_n]
+            any_pos_x = any_pos_x or (len(subset) and (subset["mean_x"] > 0).any())
             color = PHASE_COLORS.get(int(t), MAIN_COLOR)
             lbl = self._ply_tertile_legend_label(int(t))
             plot_qbin_stats(
@@ -447,8 +449,8 @@ class Analyzer:
             )
         if self.y.is_log:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
-        if self.x.is_log:
-            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis for display
+        if self.x.is_log and any_pos_x:
+            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
         ax.legend(
             fontsize=FONT_SIZE_TICKS,
             loc="upper center",
@@ -504,8 +506,8 @@ class Analyzer:
         )
         if self.y.is_log:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
-        if self.x.is_log:
-            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis for display
+        if self.x.is_log and len(df) and (df["mean_x"] > 0).any():
+            ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
 
     def save_quantile_heatmap_figure(
         self,

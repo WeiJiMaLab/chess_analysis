@@ -208,7 +208,7 @@ The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 �
   cross-check that the A1 497-tree smoke (+0.091) is recovered as a subset; stability across the
   three tiers (sign and rough magnitude should not flip).
 - **Contingencies:** if `r ≈ 0`, that is itself the headline (and triggers **A3/SF2000**,
-  `reports/oracle-stop-vs-human-rt.md`, the strength-mismatch test). If `r` is strong, the
+  `reports/movetime_model.md`, the strength-mismatch test). If `r` is strong, the
   one-paper resource-rationality story is on.
 - **Independence:** depends on U1.1. Can complete and be reported **before** U1.3.
 
@@ -366,7 +366,7 @@ loss curves as it runs; do **not** scale to production until the end-to-end loop
 - 50K/100K human FEN exports → `…/tmp/human_fens_{50k,100k}.txt` (+ manifests).
 - Trees → `…/tmp/human_trees_{10k,50k,100k}/` (`resume: true`).
 - U1.2 join tables + figures → `lmcos/analysis/figures/` (+ `R-U1` report).
-- U1.3 packed episodes / checkpoints → stage-3/4 scratch dirs per `R-LMCOS-OVERVIEW`.
+- U1.3 packed episodes / checkpoints → stage-3/4 scratch dirs per `R-ARCH-LMCOS`.
 - U2 Lc0 evals → `lc0_evaluations` in `personal.db`.
 - U3 baseline metrics → a new `lmcos/analysis/figures/baselines/` (+ `R-U3`).
 
@@ -445,7 +445,7 @@ The lmcos OSS is **not** a flat budget = 96. From `preprocess_mc/oracle.py`, the
 - lc0/CUDA is **deterministic** → byte-identity is the correct validation bar.
 
 ### 9b. The U1.2 analysis menu (the upper-bound result is many cuts, not one number)
-1. **Decisive inequality (R-THEORY):** does DP-oracle OSS beat crude VOC proxies at predicting RT —
+1. **Decisive inequality (R-MOVETIME):** does DP-oracle OSS beat crude VOC proxies at predicting RT —
    `r(OSS, logRT) > r(gain_depth, logRT)` — on matched FENs?
 2. **Over/under-computation map:** plot (OSS, logRT); characterize residuals (where humans
    over-deliberate vs the normative optimum). A bounded-rationality figure.

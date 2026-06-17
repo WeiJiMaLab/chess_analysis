@@ -1,9 +1,11 @@
 """Tree-derived "generated values" vs human reaction time, on the lc0-tree subset.
 
-For a sample of the ysagiv ``human_trees`` we derive FOUR quantities from each
-lc0 search tree, then join the tree's root FEN (4-field) to human ``move_time`` in
-``processed_moves_nonzero`` and plot each vs log(RT) in the standard quantile-bin
-dashboard style:
+For a sample of the local ``lc0_trees`` set (150K trees under the project scratch;
+a copy that is insulated from the collaborator's tree-dir reorganizations) we derive
+FOUR quantities from each lc0 search tree, then join the tree's root FEN — normalized
+to 4-field, since these payloads may carry a 6-field root_position_spec — to human
+``move_time`` in ``processed_moves_nonzero`` and plot each vs log(RT) in the standard
+quantile-bin dashboard style:
 
   * OSS         — oracle stop step, budgeted DP oracle on the expansion trace
                   (optimal_stop_step; cost model = canonical BudgetedOracleConfig).
@@ -26,12 +28,16 @@ they are directly comparable. This replaces the Stockfish proxies: OSS supersede
 the node-budget VOC_budget, and VOC / Action Gap / MQ are read from the lc0 search
 itself rather than re-run on Stockfish.
 
-NOTE: run on the cluster via slurm/tree_values.slurm (it loads many .pt trees).
-It is intentionally NOT part of the standard full-dataset analysis.
+The per-tree/per-move values are deterministic in (trees, n_trees, seed, budget) and
+are CACHED to parquet (``--cache-dir``). The first run loads all .pt trees (slow →
+run on the cluster); after that, tweaking the joins/plots reloads the cache in seconds
+and can run locally — no slurm, no re-reading 150K trees. Use ``--refresh`` to recompute.
 
-Usage (cluster):
-    PYTHONPATH=human_analytics python human_analytics/tree_values_analysis.py \
-        --n-trees 100000 --n-workers 40
+Usage:
+    # one-time compute (populates the cache), on the cluster:
+    sbatch human_analytics/slurm/tree_values.slurm
+    # iterate on plots later, locally, straight from the cache:
+    PYTHONPATH=human_analytics python human_analytics/tree_values_analysis.py
 """
 from __future__ import annotations
 
@@ -60,10 +66,16 @@ from src.data.preprocess_mc.pack import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import matplotlib  # noqa: E402
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 from utils import Variable, Analyzer  # noqa: E402
+from utils.helpers import apply_poster_style  # noqa: E402
+from utils.plots import highlight_corr_row  # noqa: E402
 
-_TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
+_TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees"
 _DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+_CACHE_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/tree_values_cache"
 _FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 _CONFIG = BudgetedOracleConfig()
 _BUDGET = 96  # set per-run in compute_values before the worker pool forks
@@ -149,7 +161,11 @@ def _worker(path: str):
         oss = int(budgeted_oracle_from_trajectory(traj, _BUDGET, _CONFIG).optimal_stop_step)
         voc, gap = _tree_voc_and_gap(t)
         ucis, mqs = _tree_root_mq(t)
-        return (t["root_position_spec"], oss, voc, gap, ucis, mqs)
+        # Join key is the 4-field FEN (placement/stm/castling/ep). These trees may
+        # store a 6-field root_position_spec (with move counters); processed_moves_nonzero.fen
+        # is 4-field, so normalize or the FEN join silently misses everything.
+        fen = " ".join(t["root_position_spec"].split()[:4])
+        return (fen, oss, voc, gap, ucis, mqs)
     except Exception:  # noqa: BLE001
         return None
 
@@ -175,6 +191,51 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, budget: int, n_worke
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)
 
 
+def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
+    """Spearman ρ matrix over the lc0-tree metrics + structure/RT, one row per joined
+    human move (``tree_rt`` ⋈ ``mq_rt`` ⋈ ``processed_moves_nonzero``). Spearman (rank)
+    because the tree metrics (VOC, MQ, Action Gap) are zero-inflated/skewed with
+    monotone-but-nonlinear relations that Pearson understates."""
+    df = conn.execute("""
+        SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
+               p.n_possible_moves AS branching, p.n_self_pieces_exc_pawns AS own_material,
+               m.mq, t.action_gap, t.voc, t.oss
+        FROM tree_rt t
+        JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
+        JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        WHERE t.move_time > 0
+    """).df()
+    # Column/row order is fixed here: RT → structure → move quality → search depth.
+    labels = {
+        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
+        "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
+        "voc": "VOC", "oss": "OSS",
+    }
+    corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
+    n = len(corr)
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.grid(False)
+    im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
+    ax.set_xticks(range(n)); ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
+    ax.set_yticks(range(n)); ax.set_yticklabels(corr.index, fontsize=20)
+    for i in range(n):
+        for j in range(n):
+            val = corr.values[i, j]
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=16,
+                    color="white" if abs(val) > 0.5 else "black",
+                    fontweight="bold" if i == j else "normal")
+    highlight_corr_row(ax, n)  # log(RT) row (index 0) — the response variable
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Spearman ρ", fontsize=18)
+    cbar.ax.tick_params(labelsize=16)
+    ax.set_title(f"Spearman correlation — lc0 metrics (n = {len(df):,})", fontsize=20, pad=12)
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  ✅ {output_path}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--trees-dir", default=_TREES_DEFAULT)
@@ -183,10 +244,28 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--budget", type=int, default=96)
     parser.add_argument("--db", default=_DB_DEFAULT)
+    parser.add_argument("--cache-dir", default=_CACHE_DEFAULT,
+                        help="where the per-tree/per-move values are cached (parquet)")
+    parser.add_argument("--refresh", action="store_true",
+                        help="recompute from the trees even if a cache exists")
     args = parser.parse_args(argv)
 
-    print(f"Deriving OSS/VOC/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
-    vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.budget, args.n_workers)
+    # The per-tree/per-move values are deterministic in (trees, n_trees, seed, budget),
+    # so cache them: tweaking the join or the plots then reloads the cache in seconds
+    # (run locally — no slurm, no re-loading 100k .pt trees / re-running the oracle).
+    key = f"{args.n_trees}_{args.seed}_{args.budget}"
+    cache = Path(args.cache_dir)
+    vals_path, rm_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
+    if not args.refresh and vals_path.exists() and rm_path.exists():
+        print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
+        vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
+    else:
+        print(f"Deriving OSS/VOC/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
+        vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.budget, args.n_workers)
+        cache.mkdir(parents=True, exist_ok=True)
+        vals.to_parquet(vals_path)
+        root_moves.to_parquet(rm_path)
+        print(f"  cached → {cache} (key={key})")
     print(f"  {len(vals):,} trees (OSS {vals['oss'].min()}–{vals['oss'].max()}); "
           f"{len(root_moves):,} root moves for MQ.")
 
@@ -281,6 +360,9 @@ def main(argv: list[str] | None = None) -> None:
         title="MQ (lc0 tree) vs. log(RT)",
         min_bin_count=100,
     ).save_dashboard(str(_FIGURES_DIR / "mq_vs_rt.png"))
+
+    # Relationships among the lc0 metrics (+ structure/RT): Spearman ρ matrix.
+    plot_lc0_correlation_matrix(conn, str(_FIGURES_DIR / "correlation_matrix.png"))
     conn.close()
 
 

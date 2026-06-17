@@ -7,45 +7,48 @@ Reports come in two formats:
 - **Scientific-inquiry reports** follow the **scientific template**: *Overview → Results (plot-heavy,
   figures first) → Methods → Appendix (Logs)*. Figures are embedded from the repo-root `figures/`
   (human analytics) or `lmcos/analysis/figures/` (LMCOS), with `figures/archive/` for historical
-  snapshots. These are the merged inquiry reports below.
-- **Reference / framework / engineering / archive reports** keep their original format (summary
+  snapshots.
+- **Reference / engineering / archive reports** keep their original format (summary
   table · `| Step | Status |` procedure · notes).
 
 > **Didactic mini-paper convention (target).** A scientific report is the **source of truth; the Slidev
 > decks in `presentations/` are built off it**, so it should read like a Reader's-Digest walkthrough anyone
 > can follow: **plain language** (jargon/equations in Methods), the body as **one investigation
-> top-to-bottom**, **every section header a question** (not a finding), and **each section/subsection
-> closing with a callout** — `> **◆ Modeling choice.** …` or `> **◆ Modeling result.** …` — that carries the
-> takeaway. See `monkey_4iar`'s R-GAZE / R-MODELCMP / R-RECOVERY for the worked pattern; the chess reports
-> below predate it and are migrated as they're revised.
+> top-to-bottom**, and **every section header a question** (not a finding, and not numbered). Each
+> section/subsection closes with a typed callout that carries the takeaway:
+> - `> **Decision:** …` — a modeling/methodological choice.
+> - `> **Result:** …` — an empirical finding (e.g. "think time is log-normal").
+> - `> **Clarification:** …` — resolves a likely misreading (e.g. a confound, not a sign bug).
+>
+> See `monkey_4iar`'s R-GAZE / R-MODELCMP / R-RECOVERY for the worked pattern.
 
-### Analysis roadmap (merged thematic set)
+> **Cross-references live here, not in the reports.** Individual reports avoid citing each other; this
+> index is the single place that maps how they relate. Reports are primarily about **scientific questions**.
+
+## Reports
 
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
-| Oracle stop step vs human RT (Tier A/B + SF-2000) | [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md) | Scientific | LMCOS | ⏳ Tier A done; 10K + SF-2000 open |
+| Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](movetime_board.md) | Scientific | Human | ✅ done |
+| Human move time — does a normative lc0 model match it? (VOC / MQ / OSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](movetime_model.md) | Scientific | Human | ✅ 100K done; SF-2000 + residualized MQ open |
 | Minimal meta-controller + budgeted baselines | [(R-MINMODEL)](minimal-model-and-baselines.md) | Scientific | LMCOS | ⏳ baselines done; Config D open |
-| Human VOC / MQ vs move time | [(R-VOC-MQ)](human-voc-mq.md) | Scientific | Human | ✅ pipeline + 100K done |
 | GNN encoder pretraining (child-WDL) | [(R-PRETRAIN)](gnn-pretrain.md) | Scientific | LMCOS | ✅ smoke passed; full run gated |
 | Tree-generation engineering (timing, speedups, batched-gen NO-GO) | [(R-TREEGEN)](tree-generation-engineering.md) | Engineering | LMCOS | ✅ faithful path shipped |
+| Human Lichess dataset (tables, filters) | [(R-HUMAN-DATA)](reference-human-dataset.md) | Reference | Human | ✅ stable |
+| 2026-06-04 cleanup | [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | Archive | Repo | — |
+| Legacy lmcos notebook (Apr–May 2026) | [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) | Archive | LMCOS | — |
 
-**Cite:** `[(R-ORACLE-RT)](oracle-stop-vs-human-rt.md)` from this folder;
-`[(R-ORACLE-RT)](reports/oracle-stop-vs-human-rt.md)` from the notebook.
+## How the threads relate
 
-### Full report list
+- **Human thread.** [(R-HUMAN-DATA)](reference-human-dataset.md) is the dataset all human analyses sit on.
+  The move-time inquiry is in two parts: [(R-MOVETIME-BOARD)](movetime_board.md) — what board features
+  predict think time (subsumes the former move-time-prior baselines) — and
+  [(R-MOVETIME-MODEL)](movetime_model.md) — whether the lc0 model matches it (subsumes the VOC/MQ work,
+  the oracle-stop-vs-RT comparison, and the stopping-theory validation tiers).
+- **LMCOS thread.** [(R-TREEGEN)](tree-generation-engineering.md) generates the search trees →
+  [(R-PRETRAIN)](gnn-pretrain.md) pretrains the encoder → [(R-MINMODEL)](minimal-model-and-baselines.md)
+  fits and benchmarks the meta-controller. The oracle-stop comparison in
+  [(R-MOVETIME-MODEL)](movetime_model.md) reuses these trees. Full pipeline/layout and historical
+  (Apr–May 2026) experiments: [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) and `lmcos/slurm/README.md`.
 
-| Report | Format | Thread |
-|--------|--------|--------|
-| [(R-HUMAN-DATA)](reference-human-dataset.md) | Reference | Human |
-| [(R-MOVETIME-PRIOR)](reference-move-time-prior.md) | Reference | Human |
-| [(R-HUMAN-BACKLOG)](reference-human-backlog.md) | Reference | Human |
-| [(R-VOC-MQ)](human-voc-mq.md) | Scientific | Human |
-| [(R-THEORY)](human-theory-stopping.md) | Framework | Human |
-| [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md) | Scientific | LMCOS |
-| [(R-MINMODEL)](minimal-model-and-baselines.md) | Scientific | LMCOS |
-| [(R-PRETRAIN)](gnn-pretrain.md) | Scientific | LMCOS |
-| [(R-TREEGEN)](tree-generation-engineering.md) | Engineering | LMCOS |
-| [(R-LMCOS-OVERVIEW)](lmcos-pipeline-overview.md) | Reference | LMCOS |
-| [(R-LMCOS-STAGE4)](lmcos-stage4-ablation.md) | Reference | LMCOS |
-| [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | Archive | Repo |
-| [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) | Archive | LMCOS |
+**Cite:** `[(R-MOVETIME-MODEL)](movetime_model.md)` from this folder; `[(R-MOVETIME-MODEL)](reports/movetime_model.md)` from the notebook.

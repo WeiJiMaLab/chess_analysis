@@ -39,7 +39,7 @@ The implementation is **deliberately narrower**: **meta-control of search only**
 
 **Central empirical questions** include: Can a **simple** halt/continue policy learn (near-)optimal control given a **TreeNN** encoding? Which encoding or **cost architecture** (linear vs budget-aware) supports learning? How does behavior relate to **human** time allocation and engine-based **VOC** (value of computation) from the behavioral track?
 
-A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see [`labnotebook.md`](labnotebook.md) and [(R-LMCOS-OVERVIEW)](reports/lmcos-pipeline-overview.md) for the roadmap.
+A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see [`labnotebook.md`](labnotebook.md) and [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) for the roadmap.
 
 ---
 
@@ -139,7 +139,7 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md).
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md).
 
 ### 4.4 Engine providers and abstraction (`cts.core.providers`)
 
@@ -191,7 +191,7 @@ authoritative test location is `lmcos/tests/`.)*
 - **Fitted advantage** on frozen embeddings can get **return** near oracle but **poor** exact stop-step / sign unless data are **filtered** to nontrivial episodes; **async** vs **sync** encoders can differ on filtered data.
 - **Budgeted** packing and training are the **current** intended path for state-aware costs.
 
-These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.md) and [(R-A0)](reports/oracle-stop-vs-human-rt.md) for numbers and run IDs.
+These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.md) and [(R-MOVETIME-MODEL)](reports/movetime_model.md) for numbers and run IDs.
 
 ---
 
@@ -265,4 +265,4 @@ Current production focus is **stage 3–4** on ysagiv read-only caches (hl4291 d
 
 ---
 
-*Last updated 2026-06-04: experiment log at `labnotebook.md` + `reports/`; see [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md) for the 2026-05-29 controller harness.*
+*Last updated 2026-06-04: experiment log at `labnotebook.md` + `reports/`; see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) for the 2026-05-29 controller harness.*

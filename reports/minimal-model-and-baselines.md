@@ -1,6 +1,6 @@
 # Minimal meta-controller and budgeted stopping baselines
 
-**Ref:** `R-MINMODEL` · [Index](README.md) · Thread: LMCOS · Framework: [(R-THEORY)](human-theory-stopping.md)
+**Ref:** `R-MINMODEL` · [Index](README.md) · Thread: LMCOS
 
 ## Overview / Summary
 

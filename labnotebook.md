@@ -10,7 +10,7 @@ Entries are **reverse-chronological** (newest first). Each day: one **summary li
 - **Description** — what was run, changed, or submitted (**Human** or **LMCOS** tag in bold where helpful).
 - **Rationale** — why; what we expected.
 - **Status / finding** — lead with one status emoji, then the outcome.
-- **Reference** — link to the full report (e.g. [(R-A1)](reports/oracle-stop-vs-human-rt.md)).
+- **Reference** — link to the full report (e.g. [(R-MOVETIME-MODEL)](reports/movetime_model.md)).
 
 **Status:** ⬜ not started · ⏳ pending · ✅ done / pass · ❌ fail
 
@@ -174,10 +174,10 @@ A0a corrected and rerun on all 39,668 trees; definitions, features, and code aud
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
-| **LMCOS A0a** — corrected `oracle_stop_step` + features; all 39,668 trees; scatter plots | Two bugs fixed; rerun at full scale (missed half the shards with old glob) | ✅ **4/4 RT directions** correct. gain_depth r=**+0.233** ✓; toptwo r=**−0.290** ✓; branching/material r≈0.01 (tiny, correct dir). r(oss, ce)=**0.525**. Branching/material near-zero expected: oracle driven by value landscape (toptwo/gain_depth), not structural complexity. 72/72 tests. | [(R-A0)](reports/oracle-stop-vs-human-rt.md) |
-| **LMCOS A0b** — minimal MLP (4 features → MSE → target_advantage) | Establish minimal-MC anchor with correct oracle labels | ✅ val sign acc **54.6%** (↓ from invalid 86.4%); exact stop **5.2%**; r(pred,oracle) **+0.291**. Sign acc oscillates during training (loss ↓ but zero-crossings unstable) — features lack discriminative boundary. GNN encoder confirmed essential. | [(R-A0)](reports/oracle-stop-vs-human-rt.md) |
-| **LMCOS code audit** — pack-path oracle labels; shared `board_tree_features.py`; removed analysis-layer oracle wrappers | Single source of truth: `pack.py` + `oracle.py` | ✅ Done | [(R-A0)](reports/oracle-stop-vs-human-rt.md) |
-| **LMCOS A1 smoke** — 497 clean trees (1K job cut at 1h wall); corrected bugs from A0a in `human_oracle_comparison.py`; generated 10K FENs; submitted 20-shard 10K job | Smoke confirms direction before 10K spend | ✅ r(oss, log RT) = **+0.091** ✓; stale-tree guard added; 10K jobs 9266775–9266794 running | [(R-A1)](reports/oracle-stop-vs-human-rt.md) |
+| **LMCOS A0a** — corrected `oracle_stop_step` + features; all 39,668 trees; scatter plots | Two bugs fixed; rerun at full scale (missed half the shards with old glob) | ✅ **4/4 RT directions** correct. gain_depth r=**+0.233** ✓; toptwo r=**−0.290** ✓; branching/material r≈0.01 (tiny, correct dir). r(oss, ce)=**0.525**. Branching/material near-zero expected: oracle driven by value landscape (toptwo/gain_depth), not structural complexity. 72/72 tests. | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **LMCOS A0b** — minimal MLP (4 features → MSE → target_advantage) | Establish minimal-MC anchor with correct oracle labels | ✅ val sign acc **54.6%** (↓ from invalid 86.4%); exact stop **5.2%**; r(pred,oracle) **+0.291**. Sign acc oscillates during training (loss ↓ but zero-crossings unstable) — features lack discriminative boundary. GNN encoder confirmed essential. | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **LMCOS code audit** — pack-path oracle labels; shared `board_tree_features.py`; removed analysis-layer oracle wrappers | Single source of truth: `pack.py` + `oracle.py` | ✅ Done | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **LMCOS A1 smoke** — 497 clean trees (1K job cut at 1h wall); corrected bugs from A0a in `human_oracle_comparison.py`; generated 10K FENs; submitted 20-shard 10K job | Smoke confirms direction before 10K spend | ✅ r(oss, log RT) = **+0.091** ✓; stale-tree guard added; 10K jobs 9266775–9266794 running | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 
 **Two bugs corrected in original A0a (2026-06-03 results no longer valid):**  
 (1) halt_rewards used `oracle_root_q_trace[s, best_idx[s]]` (evolving MCTS Q-estimates) instead of `oracle_root_q_trace[-1][best_idx[s]]` (teacher's fixed Q-values = `oracle_final_root_q_values`).  
@@ -192,10 +192,10 @@ Notebook + reports restructure; A1 1K trees done; ~~A4 entropy VoI at scale~~ (*
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
 | **Docs restructure** — root `labnotebook.md` + `reports/`; drop `proposed_next_steps.md` | Single chronology + procedure checklists for open work | ✅ Open steps live in active `R-*` reports | [reports/README.md](reports/README.md) |
-| **LMCOS A1** — human FEN tree smoke (644 FENs, budget 96) | Same-position oracle vs RT | ✅ **644/644** `.pt`; comparison script + 10K + plots still open | [(R-A1)](reports/oracle-stop-vs-human-rt.md) |
+| **LMCOS A1** — human FEN tree smoke (644 FENs, budget 96) | Same-position oracle vs RT | ✅ **644/644** `.pt`; comparison script + 10K + plots still open | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 | **LMCOS A2** — tree-stats + tiny GNN scratch (Config D) | Skip 1-day pretrain if small encoder suffices | ⏳ Config D YAML open; child-WDL pretrain job **9215254** started | [(R-A2)](reports/minimal-model-and-baselines.md) |
 | ~~**Human A4** — entropy VoI stopping (SF multidepth, 10K CPU job)~~ | — | ❌ **REMOVED 2026-06-16 (statistically degenerate).** Skeptical audit showed `compute_stopping_depth` softmaxes win-probs (~0.05 spread) at hardcoded β=1 → near-uniform → d* pins to 1 (mean d* collapses 2.46→1.00 as θ rises; r(d*,logRT) null/NaN), and "Approach A vs B" were byte-identical. Code, tests, report, slides, and 10K outputs deleted. | — |
-| **LMCOS A3** — SF ELO 2000 oracle | Only if A1 Lc0 oracle mismatches humans | ⬜ On hold until A1 matched-position r | [(R-A3)](reports/oracle-stop-vs-human-rt.md) |
+| **LMCOS A3** — SF ELO 2000 oracle | Only if A1 Lc0 oracle mismatches humans | ⬜ On hold until A1 matched-position r | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 | **Repo cleanup** — scratch + orphan tests | Free disk | ✅ Paths logged | [(R-CLEANUP-0604)](reports/archive-2026-06-04-cleanup.md) |
 
 ---
@@ -206,9 +206,9 @@ Analysis 0 initial run; theoretical framing for stopping proxies. **A0a results 
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
-| **LMCOS A0a** — initial run, 5K trees, budget 43 | Directional match before human-FEN spend | ❌ Results invalid — two bugs in halt_rewards and gain_depth formula. See 2026-06-05. | [(R-A0)](reports/oracle-stop-vs-human-rt.md) |
-| **LMCOS A0b** — minimal MLP vs GNN+MC sign accuracy | Test GNN necessity | ❌ Invalid (wrong halt_rewards); correct re-run ⬜ **todo** | [(R-A0)](reports/oracle-stop-vs-human-rt.md) |
-| **Human theory** — stopping proxies, chasing tails, E[ΔUC] | Claims A/B/C | ✅ Documented | [(R-THEORY)](reports/human-theory-stopping.md) |
+| **LMCOS A0a** — initial run, 5K trees, budget 43 | Directional match before human-FEN spend | ❌ Results invalid — two bugs in halt_rewards and gain_depth formula. See 2026-06-05. | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **LMCOS A0b** — minimal MLP vs GNN+MC sign accuracy | Test GNN necessity | ❌ Invalid (wrong halt_rewards); correct re-run ⬜ **todo** | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **Human theory** — stopping proxies, chasing tails, E[ΔUC] | Claims A/B/C | ✅ Documented | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 
 ---
 
@@ -218,9 +218,9 @@ Human pipeline cleanup, VOC/MQ engine stack, 100K Stockfish eval.
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
-| **Human structural cleanup** — tests, hist bin fix | Co-locate tests; clean `personal.db` | ✅ Figures regenerated | [(R-VOC-MQ)](reports/human-voc-mq.md) |
-| **Human VOC/MQ code** — unified eval pipeline | Russek-style metrics | ✅ 9 unit tests pass | [(R-VOC-MQ)](reports/human-voc-mq.md) |
-| **Human 100K eval** — SF depth 5/1 | Scale VOC–RT | ✅ r(log RT, VOC)=**+0.097** | [(R-VOC-100K)](reports/human-voc-mq.md) |
+| **Human structural cleanup** — tests, hist bin fix | Co-locate tests; clean `personal.db` | ✅ Figures regenerated | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **Human VOC/MQ code** — unified eval pipeline | Russek-style metrics | ✅ 9 unit tests pass | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
+| **Human 100K eval** — SF depth 5/1 | Scale VOC–RT | ✅ r(log RT, VOC)=**+0.097** | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 
 ---
 
@@ -230,7 +230,7 @@ LMCOS repo layout + stage-4 controller ablation harness.
 
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
-| **LMCOS layout** — `cts.*`, `slurm/<stage>/` | Stage-owned paths | ✅ `submit_configs.sh` | [(R-LMCOS-STAGE4)](reports/lmcos-stage4-ablation.md) |
+| **LMCOS layout** — `cts.*`, `slurm/<stage>/` | Stage-owned paths | ✅ `submit_configs.sh` | [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) |
 
 ---
 
@@ -239,6 +239,6 @@ LMCOS repo layout + stage-4 controller ablation harness.
 | Description | Rationale | Status / finding | Reference |
 |---|---|---|---|
 | **Human dataset** — Lichess 10+0, DuckDB | RT / engine foundation | ✅ 135M nonzero-RT moves | [(R-HUMAN-DATA)](reports/reference-human-dataset.md) |
-| **Human move-time dashboards** | Baseline RT | ✅ Done | [(R-MOVETIME-PRIOR)](reports/reference-move-time-prior.md) |
-| **Human follow-ups** — E[ΔUC], Russek filters, full VOC loop | Deferred during A0–A4 | ⬜ See backlog | [(R-HUMAN-BACKLOG)](reports/reference-human-backlog.md) |
+| **Human move-time dashboards** | Baseline RT | ✅ Done | [(R-MOVETIME-BOARD)](reports/movetime_board.md) |
+| **Human follow-ups** — E[ΔUC], Russek filters, full VOC loop | Deferred during A0–A4 | ⬜ See backlog | [(R-MOVETIME-MODEL)](reports/movetime_model.md) |
 | **LMCOS history** — Apr–May 2026 | Encoder / topology arc | ✅ Archived | [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) |

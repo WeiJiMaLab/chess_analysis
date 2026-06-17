@@ -260,3 +260,15 @@ def plot_heatmap_with_alpha(
     ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=10))
 
     return sm
+
+
+def highlight_corr_row(ax, n_cols, idx=0, box_color="#E8A33D", label_color="#7A4F00"):
+    """Outline row ``idx`` across all ``n_cols`` of a correlation heatmap and bold its
+    tick labels — used to flag the response variable (log RT, kept first) as the row
+    that matters most."""
+    ax.add_patch(plt.Rectangle((-0.5, idx - 0.5), n_cols, 1.0, fill=False,
+                               edgecolor=box_color, lw=4, zorder=5))
+    for labs in (ax.get_yticklabels(), ax.get_xticklabels()):
+        if len(labs) > idx:
+            labs[idx].set_fontweight("bold")
+            labs[idx].set_color(label_color)
