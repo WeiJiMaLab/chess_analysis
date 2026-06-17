@@ -11,6 +11,14 @@ Reports come in two formats:
 - **Reference / framework / engineering / archive reports** keep their original format (summary
   table · `| Step | Status |` procedure · notes).
 
+> **Didactic mini-paper convention (target).** A scientific report is the **source of truth; the Slidev
+> decks in `presentations/` are built off it**, so it should read like a Reader's-Digest walkthrough anyone
+> can follow: **plain language** (jargon/equations in Methods), the body as **one investigation
+> top-to-bottom**, **every section header a question** (not a finding), and **each section/subsection
+> closing with a callout** — `> **◆ Modeling choice.** …` or `> **◆ Modeling result.** …` — that carries the
+> takeaway. See `monkey_4iar`'s R-GAZE / R-MODELCMP / R-RECOVERY for the worked pattern; the chess reports
+> below predate it and are migrated as they're revised.
+
 ### Analysis roadmap (merged thematic set)
 
 | Inquiry | Report | Format | Thread | Status |
