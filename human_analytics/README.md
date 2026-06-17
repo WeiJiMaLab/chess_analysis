@@ -28,7 +28,7 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `human_
 
 The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash human_analytics/slurm/analysis.sh`**. The **generated values** (OSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
 
-**Outputs:** analysis scripts write figures under **`human_analytics/figures/`**.
+**Outputs:** analysis scripts write figures under the **repo-root `figures/`** directory (single source of truth; the `presentations/public/figures` symlink points here). Older / intermediate snapshots live under **`figures/archive/`**.
 
 ---
 
@@ -38,10 +38,11 @@ The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premo
 chess_analysis/
 ├── .venv/
 ├── data/                         # Optional staging (parquets, scratch outputs)
+├── figures/                      # Matplotlib outputs from dashboards (single source of truth)
+│   └── archive/                  # Older / intermediate figure snapshots (e.g. u3_baselines/)
 ├── README.md                     # Workspace / lmcos overview
 └── human_analytics/
     ├── README.md                 # This file
-    ├── figures/                  # Matplotlib outputs from dashboards and exploratory scripts
     ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=human_analytics
     ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
     ├── utils/                    # Library: Analyzer, plots, helpers, selected_db (table names)
@@ -153,7 +154,7 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 - All runnable entry logic under **`if __name__ == "__main__":`**.
 - **Bivariate DuckDB plots:** **`Analyzer`** + **`Variable`** (`utils.analysis`); keep aggregations in **SQL** when possible; sample large pulls before plotting.
 - **Matplotlib “poster” figures:** call **`apply_poster_style()`** (`utils.helpers`); no top/right spines; use project font sizes.
-- **Graphviz / non-matplotlib:** no `apply_poster_style()`; anchor output paths under `human_analytics/figures/`.
+- **Graphviz / non-matplotlib:** no `apply_poster_style()`; anchor output paths under the repo-root `figures/` directory.
 
 ### Statistics
 

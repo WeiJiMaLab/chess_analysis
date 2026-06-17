@@ -24,7 +24,8 @@ DEFAULT_ANALYSES = (
 
 
 def _fig(src_dir: str, name: str) -> str:
-    return os.path.join(src_dir, "figures", name)
+    repo_root = os.path.dirname(src_dir)
+    return os.path.join(repo_root, "figures", name)
 
 
 def _src_dir() -> str:

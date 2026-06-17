@@ -24,4 +24,4 @@
 
 ## Notes
 
-See [(R-VOC-MQ)](human-voc-mq.md) and [(R-ARCH-HUMAN)](archive-human-analytics-notebook-legacy.md) for design context.
+See [(R-VOC-MQ)](human-voc-mq.md) and [(R-ARCH-HUMAN)](archive-lmcos-notebook-legacy.md) for design context.

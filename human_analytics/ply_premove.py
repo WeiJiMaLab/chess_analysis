@@ -31,7 +31,8 @@ def main():
         title="Instant Move Arc: Probability vs Game Stage"
     )
     
-    figures_dir = os.path.join(src_dir, "figures")
+    repo_root = os.path.dirname(src_dir)
+    figures_dir = os.path.join(repo_root, "figures")
     analyzer.save_dashboard(os.path.join(figures_dir, "ply_vs_pinstant.png"))
     
     conn.close()

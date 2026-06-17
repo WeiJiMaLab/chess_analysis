@@ -114,10 +114,10 @@ Each part lists **goal · data · method · tests · contingencies · independen
 
 The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 🚀 generating (faithful).**
 
-> **Live status.** U1.0 smoke complete ([R-U1](reports/u1-engine-timing-smoke.md)): Lc0-GPU
+> **Live status.** U1.0 smoke complete ([R-U1](reports/tree-generation-engineering.md)): Lc0-GPU
 > **16.87 s/tree**. 50K FENs exported (`human_fens_50k.txt`, seed 43). **CPU lane dropped**
 > (node-speed variance → fixed-wall timeout risk; GPU-only). A speedup investigation
-> ([R-U1-SPEED](reports/u1-tree-gen-speedup.md)) found **no faithful quick win** (lc0 is ~1 ms/eval
+> ([R-U1-SPEED](reports/tree-generation-engineering.md)) found **no faithful quick win** (lc0 is ~1 ms/eval
 > but the value engine is `valuehead`/compute-bound, so pooling was slower **and** non-identical →
 > reverted; route (a) batching can't yield the per-child WDL triple; route (b) net-reimpl is the
 > only real lever, logged for later). lc0/CUDA is deterministic. **U1.1 now generating** the
@@ -208,7 +208,7 @@ The spine of the sprint. Four steps. **Status (2026-06-05): U1.0 ✅ → U1.1 �
   cross-check that the A1 497-tree smoke (+0.091) is recovered as a subset; stability across the
   three tiers (sign and rough magnitude should not flip).
 - **Contingencies:** if `r ≈ 0`, that is itself the headline (and triggers **A3/SF2000**,
-  `reports/analysis-3-weaker-engine.md`, the strength-mismatch test). If `r` is strong, the
+  `reports/oracle-stop-vs-human-rt.md`, the strength-mismatch test). If `r` is strong, the
   one-paper resource-rationality story is on.
 - **Independence:** depends on U1.1. Can complete and be reported **before** U1.3.
 
@@ -378,7 +378,7 @@ loss curves as it runs; do **not** scale to production until the end-to-end loop
    hesitation").** Pinned by the R-U1 smoke: Lc0-GPU **16.87 s/tree**, Lc0-CPU **~738 s/tree**
    (CPU gate cleared via venv `LD_LIBRARY_PATH`). Run **CPU-led + all 3 GPUs in parallel** (3 GPUs
    are scarce but far faster, so use them): combined ≈ **2,350 trees/hr → 50K in ~21 h**.
-   Extensible to 100K (~1.8 d). See [R-U1](reports/u1-engine-timing-smoke.md).
+   Extensible to 100K (~1.8 d). See [R-U1](reports/tree-generation-engineering.md).
 2. **Engine-swap profiling: schedule now, in parallel, folded into the per-tree smoke (5).**
    The smoke profiles **three engines × node-type: Lc0-GPU, Lc0-CPU (pure-CPU node), Stockfish
    (CPU)** — doubling as the engine-stack cost/benefit profiling the brief requires before any
@@ -432,7 +432,7 @@ The lmcos OSS is **not** a flat budget = 96. From `preprocess_mc/oracle.py`, the
 
 ## 9. Remaining work & spin-off analyses
 
-### 9a. Tree-gen speed findings (from the U1.1 investigation — [R-U1-SPEED](reports/u1-tree-gen-speedup.md))
+### 9a. Tree-gen speed findings (from the U1.1 investigation — [R-U1-SPEED](reports/tree-generation-engineering.md))
 - lc0 itself is ~1 ms/eval; ~80% of tree-gen wall is the per-expansion **child value-eval loop**
   (~27 children, `valuehead` mode).
 - **Pooling rejected:** valuehead is GPU-**compute-bound**, so concurrent engines serialize →

@@ -191,7 +191,7 @@ authoritative test location is `lmcos/tests/`.)*
 - **Fitted advantage** on frozen embeddings can get **return** near oracle but **poor** exact stop-step / sign unless data are **filtered** to nontrivial episodes; **async** vs **sync** encoders can differ on filtered data.
 - **Budgeted** packing and training are the **current** intended path for state-aware costs.
 
-These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.md) and [(R-A0)](reports/analysis-0-oracle-baseline.md) for numbers and run IDs.
+These are *hypothesis-generating* outcomes; see [`labnotebook.md`](labnotebook.md) and [(R-A0)](reports/oracle-stop-vs-human-rt.md) for numbers and run IDs.
 
 ---
 

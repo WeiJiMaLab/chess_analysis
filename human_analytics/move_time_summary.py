@@ -85,7 +85,8 @@ def main():
     theo_q = stats.norm.ppf(probs)  # standard-normal quantiles
     ref = mean + std * theo_q       # reference line if log(MT) ~ Normal(mean, std)
 
-    figures_dir = os.path.join(src_dir, "figures")
+    repo_root = os.path.dirname(src_dir)
+    figures_dir = os.path.join(repo_root, "figures")
     os.makedirs(figures_dir, exist_ok=True)
     apply_poster_style()
     fig, (ax_h, ax_q) = plt.subplots(1, 2, figsize=(30, 13.72))

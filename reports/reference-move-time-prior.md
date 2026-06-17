@@ -21,4 +21,4 @@
 | `pieces_exc` / `self_pieces_exc` | piece counts | RT ↑ in richer positions |
 | `ply` | `move_ply` | Fast openings → slower mid → faster end |
 
-Figures: `human_analytics/figures/`. Full tables: [(R-ARCH-HUMAN)](archive-human-analytics-notebook-legacy.md).
+Figures: `human_analytics/figures/`. Full tables: [(R-ARCH-HUMAN)](archive-lmcos-notebook-legacy.md).

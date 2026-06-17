@@ -63,7 +63,7 @@ from utils import Variable, Analyzer  # noqa: E402
 
 _TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
 _DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
-_FIGURES_DIR = Path(__file__).resolve().parent / "figures"
+_FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 _CONFIG = BudgetedOracleConfig()
 _BUDGET = 96  # set per-run in compute_values before the worker pool forks
 

@@ -2,46 +2,42 @@
 
 Stable analysis and reference docs for **chess_analysis** (CMC). The [lab notebook](../labnotebook.md) is the chronological log (**Description | Rationale | Status / finding | Reference**).
 
-Each report has:
+Reports come in two formats:
 
-1. **Summary table** (phase-specific fields — no procedure here)
-2. **Procedure** — checklist: `| Step | Status |` with **✅ done** / **⬜ incomplete** / **⏳ in progress**
-3. **Notes** (optional) — design tables, commands, static reference
+- **Scientific-inquiry reports** follow the **scientific template**: *Overview → Results (plot-heavy,
+  figures first) → Methods → Appendix (Logs)*. Figures are embedded from the repo-root `figures/`
+  (human analytics) or `lmcos/analysis/figures/` (LMCOS), with `figures/archive/` for historical
+  snapshots. These are the merged inquiry reports below.
+- **Reference / framework / engineering / archive reports** keep their original format (summary
+  table · `| Step | Status |` procedure · notes).
 
-### Analysis roadmap
+### Analysis roadmap (merged thematic set)
 
-| Analysis | Report | Phase | Status |
-|----------|--------|-------|--------|
-| **0** Oracle direction + minimal MC | [(R-A0)](analysis-0-oracle-baseline.md) | After | ✅ done |
-| **1** Human FEN trees + oracle vs RT | [(R-A1)](analysis-1-human-oracle.md) | Active | ⏳ 1K trees done; extraction + 10K open |
-| **2** Minimal model / skip pretrain | [(R-A2)](analysis-2-minimal-model.md) | Active | ⏳ tree-stats + Config D open |
-| **3** SF2000 weaker engine | [(R-A3)](analysis-3-weaker-engine.md) | Prior | ⬜ on hold (needs A1) |
+| Inquiry | Report | Format | Thread | Status |
+|---------|--------|--------|--------|--------|
+| Oracle stop step vs human RT (Tier A/B + SF-2000) | [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md) | Scientific | LMCOS | ⏳ Tier A done; 10K + SF-2000 open |
+| Minimal meta-controller + budgeted baselines | [(R-MINMODEL)](minimal-model-and-baselines.md) | Scientific | LMCOS | ⏳ baselines done; Config D open |
+| Human VOC / MQ vs move time | [(R-VOC-MQ)](human-voc-mq.md) | Scientific | Human | ✅ pipeline + 100K done |
+| GNN encoder pretraining (child-WDL) | [(R-PRETRAIN)](gnn-pretrain.md) | Scientific | LMCOS | ✅ smoke passed; full run gated |
+| Tree-generation engineering (timing, speedups, batched-gen NO-GO) | [(R-TREEGEN)](tree-generation-engineering.md) | Engineering | LMCOS | ✅ faithful path shipped |
 
-### Summary table by phase
+**Cite:** `[(R-ORACLE-RT)](oracle-stop-vs-human-rt.md)` from this folder;
+`[(R-ORACLE-RT)](reports/oracle-stop-vs-human-rt.md)` from the notebook.
 
-| Phase | Fields |
-|-------|--------|
-| **Prior to implementation** | Description · Rationale · Expectation · Open questions / notes |
-| **During active implementation** | Description · Rationale · Expectation · Open questions / notes |
-| **After implementation** | Description · Rationale · Expectation · Finding |
+### Full report list
 
-**Cite:** `[(R-A1)](analysis-1-human-oracle.md)` from this folder; `[(R-A1)](reports/analysis-1-human-oracle.md)` from the notebook.
-
-| Report | Phase | Thread |
-|--------|-------|--------|
-| [(R-HUMAN-DATA)](reference-human-dataset.md) | After | Human |
-| [(R-MOVETIME-PRIOR)](reference-move-time-prior.md) | After | Human |
-| [(R-VOC-MQ)](human-voc-mq.md) | After | Human |
-| [(R-VOC-100K)](human-voc-mq-100k.md) | After | Human |
-| [(R-HUMAN-BACKLOG)](reference-human-backlog.md) | Active | Human |
-| [(R-THEORY)](human-theory-stopping.md) | After | Human |
-| [(R-A0)](analysis-0-oracle-baseline.md) | After | LMCOS |
-| [(R-A1)](analysis-1-human-oracle.md) | Active | LMCOS |
-| [(R-A2)](analysis-2-minimal-model.md) | Active | LMCOS |
-| [(R-A3)](analysis-3-weaker-engine.md) | Prior | LMCOS |
-| [(R-LMCOS-OVERVIEW)](lmcos-pipeline-overview.md) | After | LMCOS |
-| [(R-BATCHGEN)](batched-tree-generation.md) | Prior | LMCOS |
-| [(R-LMCOS-STAGE4)](lmcos-stage4-ablation.md) | After | LMCOS |
-| [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | After | Repo |
-| [(R-ARCH-HUMAN)](archive-human-analytics-notebook-legacy.md) | Archive | Human |
+| Report | Format | Thread |
+|--------|--------|--------|
+| [(R-HUMAN-DATA)](reference-human-dataset.md) | Reference | Human |
+| [(R-MOVETIME-PRIOR)](reference-move-time-prior.md) | Reference | Human |
+| [(R-HUMAN-BACKLOG)](reference-human-backlog.md) | Reference | Human |
+| [(R-VOC-MQ)](human-voc-mq.md) | Scientific | Human |
+| [(R-THEORY)](human-theory-stopping.md) | Framework | Human |
+| [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md) | Scientific | LMCOS |
+| [(R-MINMODEL)](minimal-model-and-baselines.md) | Scientific | LMCOS |
+| [(R-PRETRAIN)](gnn-pretrain.md) | Scientific | LMCOS |
+| [(R-TREEGEN)](tree-generation-engineering.md) | Engineering | LMCOS |
+| [(R-LMCOS-OVERVIEW)](lmcos-pipeline-overview.md) | Reference | LMCOS |
+| [(R-LMCOS-STAGE4)](lmcos-stage4-ablation.md) | Reference | LMCOS |
+| [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | Archive | Repo |
 | [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) | Archive | LMCOS |

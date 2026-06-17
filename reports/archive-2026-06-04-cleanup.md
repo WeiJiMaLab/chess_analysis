@@ -13,7 +13,7 @@
 
 ## Notes
 
-Full path lists: [(R-ARCH-HUMAN)](archive-human-analytics-notebook-legacy.md) § 2026-06-04 Cleanup Log.
+Full path lists: [(R-ARCH-HUMAN)](archive-lmcos-notebook-legacy.md) § 2026-06-04 Cleanup Log.
 
 ### Scratch (sample)
 

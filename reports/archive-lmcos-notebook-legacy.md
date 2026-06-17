@@ -45,7 +45,7 @@ Each pipeline stage is a `python -m cts.X.Y` entry point that reads a Pydantic-v
 
 ### 2026-06-04 — Analysis 0 complete (human↔oracle direction + minimal MC)
 
-Cross-project summary: [`../labnotebook.md`](../labnotebook.md), [(R-A0)](analysis-0-oracle-baseline.md), [(R-A1)](analysis-1-human-oracle.md), [(R-A2)](analysis-2-minimal-model.md). *(Archived copy — superseded by root notebook + `reports/`.)*
+Cross-project summary: [`../labnotebook.md`](../labnotebook.md), [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md), [(R-ORACLE-RT)](oracle-stop-vs-human-rt.md), [(R-MINMODEL)](minimal-model-and-baselines.md). *(Archived copy — superseded by root notebook + `reports/`.)*
 
 | Script | Role |
 |--------|------|
