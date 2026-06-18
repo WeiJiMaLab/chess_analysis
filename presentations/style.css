@@ -379,3 +379,37 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
   font-weight: 400 !important;
   max-width: 56rem;
 }
+
+/* ── Didactic helpers (ported from the monkey_4iar deck) ───────────────────── */
+/* Per-slide punchline / transition line, centered & muted. */
+.mdl-tree-cut {
+  margin: 0.9rem 0 0;
+  font-size: 0.64rem;
+  color: var(--color-secondary);
+  text-align: center;
+}
+/* Inline "design / formula" chip: a mono spec line with an uppercase label. */
+.mdl-design {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  align-self: flex-start;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  color: var(--color-secondary);
+  margin: 0 0 0.55rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  letter-spacing: -0.01em;
+}
+.mdl-design .lbl {
+  font-family: var(--font-header, inherit);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-accent);
+}
+.mdl-design b { color: var(--color-primary); font-weight: 600; }
