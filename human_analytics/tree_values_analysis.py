@@ -12,12 +12,13 @@ dashboard style:
                   the budgeted oracle's stop at zero cost; we use it instead of the
                   cost-aware DP optimal_stop_step (which, under the default time cost,
                   bails almost immediately and is not an interpretable difficulty proxy).
-  * VOC         — value of computation = final_Q(deep best) − final_Q(1-ply best),
+  * Gain        — value of computation = final_Q(deep best) − final_Q(1-ply best),
                   i.e. how much deep search improves on the shallow (1-ply value-head
-                  lookahead) choice. ≥ 0.
+                  lookahead) choice. ≥ 0. (Internally the column is still named ``voc``;
+                  it is displayed as "Gain".)
   * Action Gap  — MYOPIC gap between the root's best and second-best move by the
                   children's 1-ply value-head backup (not a deep/converged gap). ≥ 0.
-                  VOC and Action Gap share the same 1-ply value-head lookahead basis.
+                  Gain and Action Gap share the same 1-ply value-head lookahead basis.
   * MQ          — move quality of the HUMAN's actual move = final_Q(move played)
                   − final_Q(best), the post-search (full-budget) Lc0 root value
                   loss. ≤ 0 (0 = the human played the engine-best move). This is
@@ -71,13 +72,14 @@ _FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
-    """(VOC, Action Gap) for one tree — both built on the SAME 1-ply value-head
+    """(Gain, Action Gap) for one tree — both built on the SAME 1-ply value-head
     lookahead backup of the root's children (parent perspective = −child.value).
+    (The returned first quantity is stored in the ``voc`` column and displayed as "Gain".)
 
     Action Gap = top1 − top2 of the children's 1-ply backups: the immediate value
                  separation between the best and second-best move at 1-ply (NOT a
                  deep/converged gap).
-    VOC        = final_Q(deep best) − final_Q(1-ply best): how much deep search
+    Gain       = final_Q(deep best) − final_Q(1-ply best): how much deep search
                  improves on the shallow (1-ply value-head) choice = value of
                  computation. ≥ 0; perspective-invariant (both are root side-to-move
                  Qs in one node).
@@ -88,7 +90,7 @@ def _tree_voc_and_gap(payload) -> tuple[float, float]:
     ``oracle_root_q_trace`` instead stores a move's Q as 0 until its child is first
     visited (trace[0] is all-zero pre-search), so a trace-based shallow choice is
     contaminated — in losing positions the unvisited zeros beat the visited negatives,
-    which previously inflated VOC to a spurious ~1.0 mass.
+    which previously inflated Gain to a spurious ~1.0 mass.
     """
     feature_names = list(payload["feature_names"])
     nf = payload["node_features"].numpy()
@@ -107,7 +109,7 @@ def _tree_voc_and_gap(payload) -> tuple[float, float]:
             myopic_q = -nf[kids, vi]  # parent-perspective 1-ply value-head backup
             order = np.argsort(myopic_q)[::-1]
             action_gap = float(myopic_q[order[0]] - myopic_q[order[1]])
-            # VOC — deep-search regret of the 1-ply best move. Map that child to its
+            # Gain — deep-search regret of the 1-ply best move. Map that child to its
             # root-move index (via its incoming UCI) to read the deep final_Q.
             if final_q.size >= 2:
                 uci = incoming[int(kids[order[0]])]
@@ -149,6 +151,7 @@ def _tree_gss(payload) -> int:
 
 def _worker(path: str):
     """Load one tree; return (fen, gss, voc, action_gap, root_ucis, root_mqs) or None.
+    (``voc`` is the Gain metric — value of computation; kept as the ``voc`` column name.)
 
     The last two are parallel per-root-move lists (UCI, Lc0 MQ) used to attach MQ to
     whichever of those moves the human actually played. CPU-bound, 1 thread.
@@ -192,7 +195,7 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> t
 def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
     """Spearman ρ matrix over the lc0-tree metrics + structure/RT, one row per joined
     human move (``tree_rt`` ⋈ ``mq_rt`` ⋈ ``processed_moves_nonzero``). Spearman (rank)
-    because the tree metrics (VOC, MQ, Action Gap) are zero-inflated/skewed with
+    because the tree metrics (Gain, MQ, Action Gap) are zero-inflated/skewed with
     monotone-but-nonlinear relations that Pearson understates."""
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
@@ -207,7 +210,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     labels = {
         "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
         "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
-        "voc": "VOC", "gss": "GSS",
+        "voc": "Gain", "gss": "GSS",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
@@ -258,7 +261,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
     else:
-        print(f"Deriving GSS/VOC/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
+        print(f"Deriving GSS/Gain/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
         vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.n_workers)
         cache.mkdir(parents=True, exist_ok=True)
         vals.to_parquet(vals_path)
@@ -311,23 +314,23 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  r(mq, log RT) = {r_mq:+.4f}")
 
     _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    # GSS / VOC / Action Gap are properties of the position/search, so we plot human
+    # GSS / Gain / Action Gap are properties of the position/search, so we plot human
     # RT (y) as a function of the value (x). Per-figure binning (see Analyzer docstring):
     #   * GSS is an INTEGER count (expansions until the best move is first found);
     #     ``ntile`` splits its heavy low-value mass across identical-mean bins → spurious
     #     swings, so bin in fixed groups of 5 (each plotted at its group mean). No cap:
     #     unlike the old cost-aware stop, GSS↔RT is positive across the full range.
-    #   * VOC / Action Gap have a large near-zero mass: lump the near-zero rows and
+    #   * Gain / Action Gap have a large near-zero mass: lump the near-zero rows and
     #     bin the interior TIE-SAFE with few (8) bins so a single value can't straddle
-    #     adjacent bins. (VOC's former ~1.0 spike was a bug in the shallow-choice — now
+    #     adjacent bins. (Gain's former ~1.0 spike was a bug in the shallow-choice — now
     #     fixed at source in _tree_voc_and_gap — so no edge_mass is needed.)
-    # min_bin_count drops the noisy sparse tails (high VOC / high GSS) from both panels.
+    # min_bin_count drops the noisy sparse tails (high Gain / high GSS) from both panels.
     # spec: (table, col, label, fname, kwargs-for-Analyzer)
     specs = [
         ("tree_rt", "gss", "Greedy stop step", "gss_vs_rt.png",
          dict(bin_mode="integer", integer_bin_width=5,
               filter_query="move_time > 0", min_bin_count=100)),
-        ("tree_rt", "voc", "VOC (lc0 tree)", "voc_vs_rt.png",
+        ("tree_rt", "voc", "Gain (lc0 tree)", "gain_vs_rt.png",
          dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
               filter_query="move_time > 0", min_bin_count=100)),
         ("tree_rt", "action_gap", "Action Gap (lc0 tree)", "actiongap_vs_rt.png",

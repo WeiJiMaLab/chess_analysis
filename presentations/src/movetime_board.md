@@ -72,7 +72,7 @@ class: mdl-slide
       </thead>
       <tbody>
         <tr class="hl"><td>branching factor</td><td class="num">+0.20</td><td>More candidates → more uncertainty</td></tr>
-        <tr><td>gain_depth (ΔUC@5)</td><td class="num">+0.10</td><td>Deeper search finds a better move</td></tr>
+        <tr><td>Gain (ΔUC, depth 5)</td><td class="num">+0.10</td><td>Deeper search finds a better move</td></tr>
         <tr><td>own material</td><td class="num">+0.04</td><td>More pieces → more interactions</td></tr>
         <tr><td>action gap (toptwo)</td><td class="num">−0.06</td><td>One move clearly best → less to weigh</td></tr>
       </tbody>

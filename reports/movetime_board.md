@@ -34,7 +34,7 @@ Each board feature gets the canonical quantile-bin dashboard (global + by ply te
 | Feature (from position) | r with log(RT) | Reading |
 |---|---|---|
 | branching factor | **+0.20** | more candidate moves → more to weigh |
-| gain_depth (ΔUC@5) | +0.10 | deeper search demonstrably finds a better move |
+| Gain (ΔUC, depth 5) | +0.10 | deeper search demonstrably finds a better move |
 | own material | +0.04 | more pieces → more interactions |
 | action gap (toptwo) | −0.06 | one move clearly best → less to weigh |
 

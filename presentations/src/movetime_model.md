@@ -1,7 +1,7 @@
 ---
 theme: default
 title: Human move time — does a normative model match it?
-info: Do lc0-search quantities (VOC, MQ, GSS, action gap) track human think time?
+info: Do lc0-search quantities (Gain, MQ, GSS, action gap) track human think time?
 addons:
   - "@/shared/slidev-addon-base"
 css: ./style.css
@@ -32,12 +32,12 @@ class: mdl-slide
     </thead>
     <tbody>
       <tr><td><strong>GSS</strong> — greedy stopping step</td><td>first expansion the eventual-best move is found (greedy, zero-cost)</td><td class="num">+0.115</td></tr>
-      <tr><td><strong>VOC</strong> — value of computation</td><td><code>final_Q(deep best) − final_Q(1-ply best)</code> ≥ 0</td><td class="num">+0.073</td></tr>
+      <tr><td><strong>Gain</strong> — value of computation</td><td><code>final_Q(deep best) − final_Q(1-ply best)</code> ≥ 0</td><td class="num">+0.073</td></tr>
       <tr><td><strong>MQ</strong> — move quality</td><td><code>final_Q(played) − final_Q(best)</code> ≤ 0</td><td class="num">−0.154</td></tr>
       <tr><td><strong>Action gap</strong></td><td>top1 − top2 of children's 1-ply value-head backup</td><td class="num">−0.064</td></tr>
     </tbody>
   </table>
-  <div class="mdl-found">All weak. The model's value-search quantities track human deliberation only faintly — and MQ runs the "wrong" way (a difficulty confound). VOC and action gap share the same 1-ply value-head lookahead basis; MQ is the only per-played-move quantity. <span class="opacity-50">100K trees → ~115K joined moves; 98% match.</span></div>
+  <div class="mdl-found">All weak. The model's value-search quantities track human deliberation only faintly — and MQ runs the "wrong" way (a difficulty confound). Gain and action gap share the same 1-ply value-head lookahead basis; MQ is the only per-played-move quantity. <span class="opacity-50">100K trees → ~115K joined moves; 98% match.</span></div>
 </div>
 
 ---
@@ -48,16 +48,16 @@ class: mdl-slide
 <div class="mdl-content">
   <div class="mdl-titlefig">
     <div class="mdl-tf-left">
-      <div class="mdl-title"><span class="mdl-kicker">Value of computation</span>VOC vs think time</div>
+      <div class="mdl-title"><span class="mdl-kicker">Value of computation</span>Gain vs think time</div>
       <div class="mdl-text">
         <ul>
-          <li><strong>VOC = final_Q(deep best) − final_Q(1-ply best) ≥ 0</strong> — how much deep search beats the shallow 1-ply value-head pick.</li>
+          <li><strong>Gain = final_Q(deep best) − final_Q(1-ply best) ≥ 0</strong> — how much deep search beats the shallow 1-ply value-head pick.</li>
           <li><strong>r = +0.073</strong>: more value-of-computation → longer thinks. Direction matches Russek-style accounts, but weak.</li>
-          <li>Zero-inflated: VOC = 0 in ~⅔ of positions (search confirms the 1-ply choice).</li>
+          <li>Zero-inflated: Gain = 0 in ~⅔ of positions (search confirms the 1-ply choice).</li>
         </ul>
       </div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/voc_vs_rt.png" alt="VOC vs RT" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/gain_vs_rt.png" alt="Gain vs RT" /></div>
   </div>
 </div>
 
@@ -113,7 +113,7 @@ class: mdl-slide
       <tbody>
         <tr><td>branching</td><td class="num">+0.014</td><td class="num">+0.195</td></tr>
         <tr><td>material</td><td class="num">+0.011</td><td class="num">+0.039</td></tr>
-        <tr class="hl"><td>gain_depth (VOC)</td><td class="num">+0.233</td><td class="num">+0.096</td></tr>
+        <tr class="hl"><td>gain_depth (value gained)</td><td class="num">+0.233</td><td class="num">+0.096</td></tr>
         <tr class="hl"><td>action gap (toptwo)</td><td class="num">−0.290</td><td class="num">−0.064</td></tr>
       </tbody>
     </table>
@@ -121,7 +121,7 @@ class: mdl-slide
       <p class="mdl-lead">Same features, opposite emphasis.</p>
       <ul>
         <li>The oracle halts on <strong>value-landscape</strong> features (gain_depth, action gap) — it doesn't care about branching.</li>
-        <li>Humans deliberate on <strong>structural complexity</strong> (branching dominates) — and barely track VOC.</li>
+        <li>Humans deliberate on <strong>structural complexity</strong> (branching dominates) — and barely track Gain.</li>
         <li>4/4 directions agree, but the <em>dominant driver differs</em> → the model captures direction, not mechanism.</li>
       </ul>
       <div class="text-xs opacity-50 mt-3">Tier A: n = 39,668 LMCOS trees · Tier B smoke: r(oracle stop, log RT) = +0.091, n = 497 human-FEN trees</div>
@@ -142,9 +142,9 @@ class: mdl-slide
         <ul>
           <li><strong>Branching ↔ log RT is the strongest RT tie</strong> — stronger than any engine metric.</li>
           <li><strong>MQ ↔ log RT ≈ −0.2</strong>: the difficulty confound, sharper under rank correlation.</li>
-          <li>GSS ties to VOC and action gap (the value-convergence cluster), not to branching.</li>
+          <li>GSS ties to Gain and action gap (the value-convergence cluster), not to branching.</li>
         </ul>
-        <div class="text-xs opacity-50 mt-3">Spearman because VOC / MQ / action gap are zero-inflated &amp; monotone-nonlinear (Pearson understates / can flip sign).</div>
+        <div class="text-xs opacity-50 mt-3">Spearman because Gain / MQ / action gap are zero-inflated &amp; monotone-nonlinear (Pearson understates / can flip sign).</div>
       </div>
     </div>
     <div class="mdl-figbox"><img src="../public/figures/correlation_matrix.png" alt="Spearman correlation matrix — lc0 metrics" /></div>
@@ -164,9 +164,9 @@ class: mdl-slide
       <tr><th>Claim</th><th>Evidence</th></tr>
     </thead>
     <tbody>
-      <tr class="hl"><td><strong>Decision width drives human deliberation</strong> — more than engine value-of-computation</td><td>branching r ≈ +0.20/+0.30 ≫ VOC; oracle ignores branching, humans don't</td></tr>
+      <tr class="hl"><td><strong>Decision width drives human deliberation</strong> — more than engine value-of-computation</td><td>branching r ≈ +0.20/+0.30 ≫ Gain; oracle ignores branching, humans don't</td></tr>
       <tr><td>The normative model captures <strong>direction, not the dominant driver</strong></td><td>4/4 feature directions agree, but oracle halts on value-convergence while humans track structure</td></tr>
-      <tr><td>Engine value-of-computation tracks RT, but <strong>weakly</strong></td><td>VOC r = +0.073; GSS r = +0.115</td></tr>
+      <tr><td>Engine value-of-computation tracks RT, but <strong>weakly</strong></td><td>Gain r = +0.073; GSS r = +0.115</td></tr>
       <tr><td>"More time → worse moves" is a <strong>difficulty confound</strong>, not a paradox</td><td>MQ r = −0.154, negative within every ply tertile</td></tr>
     </tbody>
   </table>
