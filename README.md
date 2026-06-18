@@ -39,7 +39,7 @@ The implementation is **deliberately narrower**: **meta-control of search only**
 
 **Central empirical questions** include: Can a **simple** halt/continue policy learn (near-)optimal control given a **TreeNN** encoding? Which encoding or **cost architecture** (linear vs budget-aware) supports learning? How does behavior relate to **human** time allocation and engine-based **VOC** (value of computation) from the behavioral track?
 
-A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see [`labnotebook.md`](labnotebook.md) and [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) for the roadmap.
+A future layer is a **full planning head** (which node to expand, etc.) on the same representation; see [`labnotebook.md`](labnotebook.md) and [(R-ARCH-LMCOS)](labnotebook.md#legacy) for the roadmap.
 
 ---
 
@@ -66,7 +66,7 @@ The `lmcos` line asks the complementary question: if we **teach a network** the 
 
 ### 3.1 Snapshots and halt rewards
 
-Along one search episode, let snapshots be \(s_0,\ldots,s_{K-1}\) with step index \(t\) over expansions. The **halt reward** at \(t\), written \(h_t\), scores the **quality of the move selected if the agent stops at \(t\)**. The project moved from a **regret** formulation to an **absolute** full-reference target: \(h_t\) is driven by the **value of the best move at snapshot \(t\)** under the full teacher search (e.g. \(Q\)-full), not by difference to the final best move only. That avoids degenerate small margins on intermediate steps (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md), 2026-04-05).
+Along one search episode, let snapshots be \(s_0,\ldots,s_{K-1}\) with step index \(t\) over expansions. The **halt reward** at \(t\), written \(h_t\), scores the **quality of the move selected if the agent stops at \(t\)**. The project moved from a **regret** formulation to an **absolute** full-reference target: \(h_t\) is driven by the **value of the best move at snapshot \(t\)** under the full teacher search (e.g. \(Q\)-full), not by difference to the final best move only. That avoids degenerate small margins on intermediate steps (see [(R-ARCH-LMCOS)](labnotebook.md#legacy), 2026-04-05).
 
 ### 3.2 Linear continue cost and DP oracle (scalar cost)
 
@@ -95,7 +95,7 @@ with \(V^*\) the oracle value of following the optimal policy from the next snap
 \[
 A_{\mathrm{compute}}(s_t) = Q_{\mathrm{continue}}(s_t) - Q_{\mathrm{halt}}(s_t).
 \]
-A **greedy** policy **continues** iff \(A_{\mathrm{compute}}(s_t) > 0\). Training minimizes MSE to Bellman-derived \(A_{\mathrm{compute}}\) to avoid “common-mode” value fitting that matches levels but not the **decision boundary** (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md), fitted-Q and advantage-only sections).
+A **greedy** policy **continues** iff \(A_{\mathrm{compute}}(s_t) > 0\). Training minimizes MSE to Bellman-derived \(A_{\mathrm{compute}}\) to avoid “common-mode” value fitting that matches levels but not the **decision boundary** (see [(R-ARCH-LMCOS)](labnotebook.md#legacy), fitted-Q and advantage-only sections).
 
 ### 3.4 Budget-aware oracle (state: tree size and time budget)
 
@@ -135,11 +135,11 @@ Search trees are **tensorized** for GPU batching (`tensorizer.py`): a **flat-for
 
 - **Mode (research):** **dynamic growth** — run a full **oracle** search (e.g. large node budget), then take a **prefix** of the expansion sequence as input and **consolidate** deep statistics from the full tree as **supervised targets** (prefix / deep targets in `cts_pretrain.py`).
 - **Targets:** Scalar value backups and, after fixes in 2026-04-10, **search-consolidated per-edge WDL** targets (visit-weighted, perspective-correct) stored as `edge_wdl_targets`, not raw value-head slices at a node in isolation.
-- **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md)).
+- **Prefix derivation:** `derive_pretrain_prefixes.py` can subsample **variable-size prefixes** from existing fixed full trees without re-querying the engine (see [(R-ARCH-LMCOS)](labnotebook.md#legacy)).
 
 ### 4.3 Packing and Slurm
 
-Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md).
+Large-scale flow: **generate** many `.pt` **PretrainExample** / raw examples (cluster) → **pack** to shards → **pretrain** encoder (e.g. child-WDL) → **pack controller episodes** (with budget augmentation) → **train** halt/continue head. Job templates and run YAMLs live under `lmcos/slurm/` (`slurm/configs/<stage>/`). Slurm **stdout/stderr** go to flat `slurm/logs/`; per-run **metrics YAML**, **curve PNGs**, and **comparison plots** go to flat `slurm/outputs/<stage>/` (tracked in git). Stage **4** ablation configs are submitted via `./slurm/4_supervised_controller/submit_configs.sh` (glob all YAMLs in `slurm/configs/4_supervised_controller/`). See `lmcos/slurm/README.md` and [(R-ARCH-LMCOS)](labnotebook.md#legacy).
 
 ### 4.4 Engine providers and abstraction (`cts.core.providers`)
 
@@ -265,4 +265,4 @@ Current production focus is **stage 3–4** on ysagiv read-only caches (hl4291 d
 
 ---
 
-*Last updated 2026-06-04: experiment log at `labnotebook.md` + `reports/`; see [(R-ARCH-LMCOS)](reports/archive-lmcos-notebook-legacy.md) for the 2026-05-29 controller harness.*
+*Last updated 2026-06-04: experiment log at `labnotebook.md` + `reports/`; see [(R-ARCH-LMCOS)](labnotebook.md#legacy) for the 2026-05-29 controller harness.*

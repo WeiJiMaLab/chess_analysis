@@ -30,25 +30,26 @@ Reports come in two formats:
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](movetime_board.md) | Scientific | Human | ✅ done |
-| Human move time — does a normative lc0 model match it? (VOC / MQ / OSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](movetime_model.md) | Scientific | Human | ✅ 100K done; SF-2000 + residualized MQ open |
-| Minimal meta-controller + budgeted baselines | [(R-MINMODEL)](minimal-model-and-baselines.md) | Scientific | LMCOS | ⏳ baselines done; Config D open |
-| GNN encoder pretraining (child-WDL) | [(R-PRETRAIN)](gnn-pretrain.md) | Scientific | LMCOS | ✅ smoke passed; full run gated |
-| Tree-generation engineering (timing, speedups, batched-gen NO-GO) | [(R-TREEGEN)](tree-generation-engineering.md) | Engineering | LMCOS | ✅ faithful path shipped |
-| Human Lichess dataset (tables, filters) | [(R-HUMAN-DATA)](reference-human-dataset.md) | Reference | Human | ✅ stable |
-| 2026-06-04 cleanup | [(R-CLEANUP-0604)](archive-2026-06-04-cleanup.md) | Archive | Repo | — |
-| Legacy lmcos notebook (Apr–May 2026) | [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) | Archive | LMCOS | — |
+| Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](movetime_model.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
+| Branching & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
+| Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](reference-data.md) | Reference | Data | ✅ stable |
+
+Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
+lab notebook's [§ Legacy section](../labnotebook.md#legacy) (the former archive, merged in).
 
 ## How the threads relate
 
-- **Human thread.** [(R-HUMAN-DATA)](reference-human-dataset.md) is the dataset all human analyses sit on.
-  The move-time inquiry is in two parts: [(R-MOVETIME-BOARD)](movetime_board.md) — what board features
-  predict think time (subsumes the former move-time-prior baselines) — and
-  [(R-MOVETIME-MODEL)](movetime_model.md) — whether the lc0 model matches it (subsumes the VOC/MQ work,
-  the oracle-stop-vs-RT comparison, and the stopping-theory validation tiers).
-- **LMCOS thread.** [(R-TREEGEN)](tree-generation-engineering.md) generates the search trees →
-  [(R-PRETRAIN)](gnn-pretrain.md) pretrains the encoder → [(R-MINMODEL)](minimal-model-and-baselines.md)
-  fits and benchmarks the meta-controller. The oracle-stop comparison in
-  [(R-MOVETIME-MODEL)](movetime_model.md) reuses these trees. Full pipeline/layout and historical
-  (Apr–May 2026) experiments: [(R-ARCH-LMCOS)](archive-lmcos-notebook-legacy.md) and `lmcos/slurm/README.md`.
+The repo centres on the **human move-time inquiry**, all sitting on [(R-DATA)](reference-data.md)
+(the human Lichess dataset + the lc0 search-tree dataset):
+
+- [(R-MOVETIME-BOARD)](movetime_board.md) — what board features predict think time (branching dominates).
+- [(R-MOVETIME-MODEL)](movetime_model.md) — whether lc0-search quantities (Gain / MQ / GSS / action gap)
+  and the normative oracle track human RT.
+- [(R-BRANCH)](branching.md) — a resource-rational account of the branching effect, with tree mechanisms
+  and predictions (draft).
+
+The **LMCOS model-training thread** (GNN encoder pretraining, the meta-controller and its budgeted
+baselines) is no longer tracked as standalone reports — its record lives in the lab notebook's
+[§ Legacy section](../labnotebook.md#legacy), the `lmcos/` code, and `lmcos/slurm/README.md`.
 
 **Cite:** `[(R-MOVETIME-MODEL)](movetime_model.md)` from this folder; `[(R-MOVETIME-MODEL)](reports/movetime_model.md)` from the notebook.
