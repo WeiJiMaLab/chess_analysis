@@ -78,9 +78,11 @@ argmax-uncertainty — differing in where branching enters the lc0 search:
 
 ## Predictions & experiments
 
-- **P1 (entropy ≈ branching):** root policy entropy H(π) / effective branching predicts log RT
-  about as well as raw branching (ρ ≈ +0.3+), and better than any value metric. *Cheap:* the
-  prior is already in `node_features`.
+- **P1 (entropy ≈ branching) — tested (✓ direction, ✗ "≈ branching"):** root policy entropy H(π)
+  predicts log RT at **ρ ≈ +0.24** — ~3× any value-of-search metric (Gain +0.07, GSS +0.11, MQ −0.15)
+  and surviving controls for Gain/GSS — **but it does *not* match the raw legal-move count** (branching
+  ρ +0.33), which subsumes it (partial ρ(H(π), RT | branching) = +0.05; collinearity +0.61). See
+  *Prior argmax-uncertainty* below.
 - **P2 (width-gated > value-convergence):** a halt-on-visit-concentration stopping rule predicts
   human RT better than the value-convergence oracle. Slots into the budgeted-baselines harness.
 - **P3 (expected ≫ realized VOC):** an *ex-ante* uncertainty signal (prior argmax entropy)
@@ -120,6 +122,29 @@ A first pass on the 112.8K-FEN subset (one observation per FEN) already fits the
 > marginally: 60% zeros, swamped by the width channel. Still open: the *expected*-VOC / entropy
 > signal of P1–P3 (not yet computed) — the hypothesis is that it, not branching per se, is the true
 > driver and that branching is its observable proxy.
+
+## Prior argmax-uncertainty: H(π) vs raw branching (P1)
+
+The cheapest version of the account — the **ex-ante policy entropy** `H(π) = −Σ π(a) log π(a)` over
+the root's legal moves (lc0's policy head; `node_features[:, prior]`) — computed on 157.8K trees
+(165.5K joined human moves):
+
+- **The width/uncertainty channel is confirmed.** `H(π) ↔ log RT = +0.24`, ~3× any realized
+  value-of-search metric (Gain +0.07, GSS +0.11, MQ −0.15), and it **survives** controlling for Gain
+  and GSS (partial +0.215 / +0.221) — a genuinely distinct, *non-value* driver.
+- **But H(π) does not beat the raw move count, and is subsumed by it.** Raw branching `↔ log RT = +0.33`
+  &gt; H(π) +0.24; with branching partialled out H(π)'s signal nearly vanishes (partial ρ = **+0.05**;
+  +0.03 controlling for branching+Gain+GSS jointly), and `ρ(H(π), branching) = +0.61`.
+
+> **Result:** The *width* channel dominates value-of-search (P1 direction ✓), but lc0's **over-confident
+> policy** makes H(π) a *weaker* proxy than the raw legal-move count — the opposite of the "effective
+> branching ≈ better" guess. lc0 down-weights moves a 2000-Elo human still weighs, so H(π) *understates*
+> the human's option set, while the raw count is closer to what the human enumerates. This leans **P5**
+> toward "enumerate the candidate set" over "evidence-accumulate among lc0-plausible moves."
+
+> **P1′ (next):** recompute the policy entropy at a **higher policy temperature** (or from a
+> **strength-matched SF-2000** policy), whose spread should match a human's option set — does *that*
+> entropy beat the raw count? (Ties to the SF-2000 follow-up in the move-time model report.)
 
 ## Open questions
 

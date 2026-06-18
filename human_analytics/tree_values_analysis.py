@@ -149,9 +149,60 @@ def _tree_gss(payload) -> int:
     return int(np.argmax(bmi == bmi[-1]))
 
 
+def _tree_hpi(payload) -> float:
+    """Shannon entropy H(π) (nats) of the lc0 POLICY PRIOR over the root's legal moves —
+    the network's ex-ante uncertainty over which move is best ("prior argmax
+    uncertainty"), i.e. an effective branching factor (raw move count weighted by
+    plausibility). Read from ``node_features[:, prior]`` of the root's children — the
+    policy head's move probabilities (they sum to ~1 over the legal moves; renormalized
+    for safety), NOT the value head. This is the P1 test's predictor: deliberation time
+    should grow with H(π). NaN if the root has < 2 children."""
+    feature_names = list(payload["feature_names"])
+    nf = payload["node_features"].numpy()
+    par = payload["parent_index"].numpy()
+    pi_idx = feature_names.index("prior")
+    roots = np.where(par < 0)[0]
+    if not roots.size:
+        return float("nan")
+    kids = np.where(par == int(roots[0]))[0]
+    if kids.size < 2:
+        return float("nan")
+    p = nf[kids, pi_idx].astype(float)
+    s = p.sum()
+    if not np.isfinite(s) or s <= 0:
+        return float("nan")
+    p = p / s
+    p = p[p > 0]
+    return float(-(p * np.log(p)).sum())
+
+
+def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) -> None:
+    """Print raw + partial Spearman ρ(x, y) controlling for each of ``controls`` (and
+    all jointly). Spearman = Pearson on ranks; partials by residualizing the ranks of
+    x and y on the rank(s) of the control(s) via least squares, then correlating the
+    residuals."""
+    R = df[[x, y] + controls].rank()
+
+    def resid(col: str, ctrl: list[str]) -> np.ndarray:
+        A = np.c_[np.ones(len(R)), R[ctrl].to_numpy()]
+        beta, *_ = np.linalg.lstsq(A, R[col].to_numpy(), rcond=None)
+        return R[col].to_numpy() - A @ beta
+
+    print(f"\n  === P1: H(π) prior argmax-uncertainty vs {y} (Spearman, n={len(df):,}) ===")
+    print(f"  raw ρ(H(π), {y})              = {R[x].corr(R[y]):+.4f}")
+    for c in controls:
+        rho = float(np.corrcoef(resid(x, [c]), resid(y, [c]))[0, 1])
+        print(f"  partial ρ(H(π), {y} | {c:<9s}) = {rho:+.4f}")
+    rho_all = float(np.corrcoef(resid(x, controls), resid(y, controls))[0, 1])
+    print(f"  partial ρ(H(π), {y} | all)        = {rho_all:+.4f}")
+    print(f"  [context] raw ρ(branching, {y})    = {df['branching'].rank().corr(R[y]):+.4f}")
+    print(f"  [context] raw ρ(H(π), branching)   = {R[x].corr(df['branching'].rank()):+.4f}")
+
+
 def _worker(path: str):
-    """Load one tree; return (fen, gss, voc, action_gap, root_ucis, root_mqs) or None.
-    (``voc`` is the Gain metric — value of computation; kept as the ``voc`` column name.)
+    """Load one tree; return (fen, gss, voc, action_gap, h_pi, root_ucis, root_mqs) or None.
+    (``voc`` is the Gain metric — value of computation; kept as the ``voc`` column name;
+    ``h_pi`` is the root policy-prior entropy H(π).)
 
     The last two are parallel per-root-move lists (UCI, Lc0 MQ) used to attach MQ to
     whichever of those moves the human actually played. CPU-bound, 1 thread.
@@ -163,12 +214,13 @@ def _worker(path: str):
         if gss < 0:
             return None
         voc, gap = _tree_voc_and_gap(t)
+        hpi = _tree_hpi(t)
         ucis, mqs = _tree_root_mq(t)
         # Join key is the 4-field FEN (placement/stm/castling/ep). These trees may
         # store a 6-field root_position_spec (with move counters); processed_moves_nonzero.fen
         # is 4-field, so normalize or the FEN join silently misses everything.
         fen = " ".join(t["root_position_spec"].split()[:4])
-        return (fen, gss, voc, gap, ucis, mqs)
+        return (fen, gss, voc, gap, hpi, ucis, mqs)
     except Exception:  # noqa: BLE001
         return None
 
@@ -185,8 +237,8 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> t
         for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
-            fen, gss, voc, gap, ucis, mqs = r
-            tree_rows.append({"fen": fen, "gss": gss, "voc": voc, "action_gap": gap})
+            fen, gss, voc, gap, hpi, ucis, mqs = r
+            tree_rows.append({"fen": fen, "gss": gss, "voc": voc, "action_gap": gap, "h_pi": hpi})
             for u, q in zip(ucis, mqs):
                 move_rows.append({"fen": fen, "move_uci": u, "mq": q})
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)
@@ -199,23 +251,25 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     monotone-but-nonlinear relations that Pearson understates."""
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
-               p.n_possible_moves AS branching, p.n_self_pieces_exc_pawns AS own_material,
+               p.n_possible_moves AS branching, t.h_pi,
+               p.n_self_pieces_exc_pawns AS own_material,
                m.mq, t.action_gap, t.voc, t.gss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
         JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0
     """).df()
-    # Column/row order is fixed here: RT → structure → move quality → search depth.
+    # Column/row order is fixed here: RT → structure (incl. policy entropy) → move
+    # quality → value-of-search → search depth.
     labels = {
-        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
+        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching", "h_pi": "H(π)",
         "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
         "voc": "Gain", "gss": "GSS",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
     apply_poster_style()
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(11, 9))
     ax.grid(False)
     im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
     ax.set_xticks(range(n)); ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
@@ -257,10 +311,14 @@ def main(argv: list[str] | None = None) -> None:
     key = f"{os.path.basename(args.trees_dir.rstrip('/'))}_{args.n_trees}_{args.seed}"
     cache = Path(args.cache_dir)
     vals_path, rm_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
-    if not args.refresh and vals_path.exists() and rm_path.exists():
+    use_cache = (not args.refresh) and vals_path.exists() and rm_path.exists()
+    if use_cache:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
-    else:
+        if "h_pi" not in vals.columns:  # cache predates the H(π) column → recompute
+            print("  cached values predate H(π); recomputing from the trees …")
+            use_cache = False
+    if not use_cache:
         print(f"Deriving GSS/Gain/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
         vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.n_workers)
         cache.mkdir(parents=True, exist_ok=True)
@@ -275,7 +333,7 @@ def main(argv: list[str] | None = None) -> None:
     conn.register("_root_moves", root_moves)
     conn.execute("""
         CREATE OR REPLACE TEMP TABLE tree_rt AS
-        SELECT v.gss, v.voc, v.action_gap, v.fen, m.gid, m.move_ply, m.move_time
+        SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.fen, m.gid, m.move_ply, m.move_time
         FROM _vals v
         JOIN processed_moves_nonzero m ON m.fen = v.fen
         WHERE m.move_time > 0
@@ -283,9 +341,20 @@ def main(argv: list[str] | None = None) -> None:
     n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
     n_fen = conn.execute("SELECT count(DISTINCT fen) FROM tree_rt").fetchone()[0]
     print(f"  joined {n_rows:,} human moves across {n_fen:,} FENs.")
-    for col in ("gss", "voc", "action_gap"):
-        r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt").fetchone()[0]
+    for col in ("gss", "voc", "action_gap", "h_pi"):
+        r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt WHERE {col} IS NOT NULL").fetchone()[0]
         print(f"  r({col}, log RT) = {r:+.4f}")
+
+    # P1 — does the prior policy entropy H(π) predict RT, and does it survive controlling
+    # for branching / Gain (voc) / GSS? branching = n_possible_moves from the human table.
+    p1 = conn.execute("""
+        SELECT ln(t.move_time) AS log_T, t.h_pi,
+               p.n_possible_moves AS branching, t.voc, t.gss
+        FROM tree_rt t
+        JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        WHERE t.move_time > 0 AND t.h_pi IS NOT NULL
+    """).df()
+    _spearman_partials(p1, "h_pi", "log_T", ["branching", "voc", "gss"])
 
     # MQ is per played move: attach each subset human move's actual UCI (moves.move_uci)
     # then match it to its Lc0 root-move MQ on (fen, move_uci). Build the human side

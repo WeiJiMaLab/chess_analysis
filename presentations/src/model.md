@@ -16,7 +16,7 @@ math: katex
 
 <div class="mt-2 text-lg opacity-80">Do lc0-search quantities on the same position track how long humans think?</div>
 
-<div class="mt-4 text-sm opacity-50">~114K lc0 search trees on 2023 human-game FENs → ~119K joined moves.</div>
+<div class="mt-4 text-sm opacity-50">~158K lc0 search trees on 2023 human-game FENs → ~167K joined moves.</div>
 
 ---
 layout: default
@@ -37,7 +37,7 @@ class: mdl-slide
       <tr><td><strong>Action gap</strong></td><td>top1 − top2 of children's 1-ply value-head backup</td><td class="num">−0.064</td></tr>
     </tbody>
   </table>
-  <div class="mdl-found">All weak. The model's value-search quantities track human deliberation only faintly — and MQ runs the "wrong" way (a difficulty confound). Gain and action gap share the same 1-ply value-head lookahead basis; MQ is the only per-played-move quantity. <span class="opacity-50">100K trees → ~115K joined moves; 98% match.</span></div>
+  <div class="mdl-found">All four value-search quantities are weak — they track human deliberation only faintly, and MQ runs the "wrong" way (a difficulty confound). The strong tree-derived signal is instead a <em>structural</em> one — the policy entropy H(π) (next slides). <span class="opacity-50">158K trees → ~167K joined moves; 98% match.</span></div>
 </div>
 
 ---
@@ -141,6 +141,7 @@ class: mdl-slide
       <div class="mdl-text">
         <ul>
           <li><strong>Branching ↔ log RT is the strongest RT tie</strong> — stronger than any engine metric.</li>
+          <li><strong>H(π)</strong> (policy-prior entropy) is the strongest <em>tree-derived</em> RT predictor (<strong>+0.24</strong>, ~3× any value metric) — but it's a <em>width</em> signal (ρ +0.61 with branching) that <strong>raw branching subsumes</strong> (partial ρ | branching = +0.05). It survives Gain/GSS, so it's distinct from the value cluster.</li>
           <li><strong>MQ ↔ log RT ≈ −0.2</strong>: the difficulty confound, sharper under rank correlation.</li>
           <li>GSS ties to Gain and action gap (the value-convergence cluster), not to branching.</li>
         </ul>
@@ -164,7 +165,7 @@ class: mdl-slide
       <tr><th>Claim</th><th>Evidence</th></tr>
     </thead>
     <tbody>
-      <tr class="hl"><td><strong>Decision width drives human deliberation</strong> — more than engine value-of-computation</td><td>branching r ≈ +0.20/+0.30 ≫ Gain; oracle ignores branching, humans don't</td></tr>
+      <tr class="hl"><td><strong>Decision width drives human deliberation</strong> — more than engine value-of-computation</td><td>branching r ≈ +0.20/+0.30 ≫ Gain; policy entropy H(π) +0.24 (subsumed by raw branching); oracle ignores branching, humans don't</td></tr>
       <tr><td>The normative model captures <strong>direction, not the dominant driver</strong></td><td>4/4 feature directions agree, but oracle halts on value-convergence while humans track structure</td></tr>
       <tr><td>Engine value-of-computation tracks RT, but <strong>weakly</strong></td><td>Gain r = +0.073; GSS r = +0.115</td></tr>
       <tr><td>"More time → worse moves" is a <strong>difficulty confound</strong>, not a paradox</td><td>MQ r = −0.154, negative within every ply tertile</td></tr>

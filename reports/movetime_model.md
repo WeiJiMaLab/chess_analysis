@@ -15,7 +15,7 @@ search locks onto its best move) — track human think time, and where model and
 
 ### Do lc0-search quantities track human RT?
 
-On the lc0-tree subset (≈119K human moves whose position has a generated tree):
+On the lc0-tree subset (≈167K human moves whose position has a generated tree):
 
 | Metric | Definition (lc0 tree) | r with log RT |
 |---|---|---|
@@ -86,8 +86,18 @@ the sign of) their monotone relationships. The strongest tie to log(RT) is **bra
 stronger than any engine metric); **MQ ↔ RT** is the difficulty confound; **GSS** ties to the
 Gain / action-gap *value-convergence* cluster, not to branching.
 
-> **Result:** Branching is the connective tissue between human RT and position structure; the
-> engine metrics form a separate value-convergence cluster that humans only weakly express.
+The matrix also carries **H(π)** — the entropy of lc0's *policy prior* over the root's legal moves
+(prior uncertainty over the argmax; a policy-side width measure, **no search**). It is the **strongest
+*tree-derived* predictor of log RT (+0.24)**, ~3× any value-of-search quantity, and it survives controls
+for Gain/GSS — but it is a *width* signal (ρ +0.61 with branching) that the **raw legal-move count
+subsumes** (partial ρ(H(π), RT | branching) = +0.05; +0.03 controlling for branching+Gain+GSS jointly,
+n ≈ 165K). So the policy entropy *reinforces* the branching story rather than adding to it; lc0's
+over-confident policy makes it a weaker proxy than the raw count (see the branching report's P1).
+
+> **Result:** Branching is the connective tissue between human RT and position structure; the engine
+> value-search metrics form a separate, weakly-expressed value-convergence cluster; and the policy
+> entropy H(π) is a third — *width-side* — correlate that branching subsumes. The driver of human
+> deliberation is decision **width**, not realized value-of-computation.
 
 ## What can we conclude?
 
@@ -113,6 +123,7 @@ Gain / action-gap *value-convergence* cluster, not to branching.
 | **Gain** | `final_Q(deep best) − final_Q(1-ply best)` (≥ 0) | lc0 tree; shallow = 1-ply value-head best |
 | **GSS** | first expansion `oracle_best_move_index` reaches its final value (greedy, zero-cost) | lc0 tree |
 | **Action gap** | top1 − top2 of root children's 1-ply value-head backup (`−child.value`) | lc0 tree |
+| **H(π)** | `−Σ π(a) log π(a)` over the root's legal moves; π = lc0 policy-head prior (`node_features[:, prior]`) | lc0 tree (policy head; **no search**) |
 
 > **Decision:** GSS is the **greedy** stopping step (the budgeted oracle's stop at *zero* cost = the
 > first expansion the best move is found), **not** the cost-aware DP `optimal_stop_step`, which under
@@ -123,11 +134,12 @@ Gain / action-gap *value-convergence* cluster, not to branching.
 
 ### Data and pipeline
 
-- **lc0-tree subset:** ~114K trees from the canonical `human_trees` set (lc0 search on 2023 human-game
-  root FENs), joined to human RT on the **4-field** FEN. MQ is matched to the human's played UCI (≈98%
-  match). (An earlier lexicographic 150K slice of the full FEN universe gave a weaker, unrepresentative
-  GSS↔RT — a different FEN *population*, not a generation bug; same engine/config/net.)
-- `human_analytics/tree_values_analysis.py` derives GSS/Gain/Action-Gap/MQ and the lc0 Spearman
+- **lc0-tree subset:** ~158K trees from the canonical `human_trees` set (lc0 search on 2023 human-game
+  root FENs), joined to ~167K human RTs on the **4-field** FEN. MQ is matched to the human's played UCI
+  (≈98% match). (An earlier lexicographic 150K slice of the full FEN universe gave a weaker,
+  unrepresentative GSS↔RT — a different FEN *population*, not a generation bug; same engine/config/net.)
+- `human_analytics/tree_values_analysis.py` derives GSS/Gain/Action-Gap/MQ, **H(π)** (root policy-prior
+  entropy), and the lc0 Spearman
   matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed),
   so plot iterations reload the cache locally in seconds. One-time compute via
   `slurm/tree_values.slurm`. Binning lives in `utils/analysis.py` (integer bins for GSS, tie-safe
@@ -143,7 +155,8 @@ Gain / action-gap *value-convergence* cluster, not to branching.
 
 | Step | Status |
 |------|--------|
-| lc0 GSS/Gain/Action-Gap/MQ + Spearman matrix, 100K trees | ✅ done (cached) |
+| lc0 GSS/Gain/Action-Gap/MQ + Spearman matrix, ~158K trees | ✅ done (cached) |
+| P1: H(π) policy-prior entropy vs log RT + partials (n ≈ 165K) | ✅ +0.24; branching-subsumed (see branching report) |
 | MQ difficulty-confound audit (N = 1M, Spearman + controls) | ✅ done |
 | Oracle Tier A (4/4 directions, 39,668 trees, 72 invariant tests) | ✅ done |
 | Oracle Tier B: 10K human FENs as 20 shards | ✅ submitted; oracle+join+plots ⬜ after jobs |
