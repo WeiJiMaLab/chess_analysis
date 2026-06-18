@@ -1,6 +1,6 @@
 # Human move time — what board features predict it
 
-**Ref:** `R-MOVETIME-BOARD` · [Index](README.md)
+**Ref:** `R-MOVETIME-BOARD` · [Index](reference.md)
 
 ## What board features predict how long humans think?
 

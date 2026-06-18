@@ -1,6 +1,6 @@
 # Human move time — does a normative search model match it?
 
-**Ref:** `R-MOVETIME-MODEL` · [Index](README.md)
+**Ref:** `R-MOVETIME-MODEL` · [Index](reference.md)
 
 ## Does a normative search model reproduce human think time?
 

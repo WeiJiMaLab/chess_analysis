@@ -1,6 +1,6 @@
 # Branching and resource-rational deliberation
 
-**Ref:** `R-BRANCH` (draft / proposal) · [Index](README.md)
+**Ref:** `R-BRANCH` (draft / proposal) · [Index](reference.md)
 
 ## Why does decision *width* drive human think time?
 
