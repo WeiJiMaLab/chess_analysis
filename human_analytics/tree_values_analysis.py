@@ -12,13 +12,14 @@ dashboard style:
                   the budgeted oracle's stop at zero cost; we use it instead of the
                   cost-aware DP optimal_stop_step (which, under the default time cost,
                   bails almost immediately and is not an interpretable difficulty proxy).
-  * Gain        — value of computation = final_Q(deep best) − final_Q(1-ply best),
-                  i.e. how much deep search improves on the shallow (1-ply value-head
-                  lookahead) choice. ≥ 0. (Internally the column is still named ``voc``;
-                  it is displayed as "Gain".)
+  * Gain        — value of computation = final_Q(best @ 96 expansions) − final_Q(best @ 1
+                  expansion), both scored on the converged 96-expansion root Q, read from
+                  the SAME growing oracle tree (the 1-expansion best is the first move the
+                  search expands; the 1-expansion tree is a subset of the 96-expansion one,
+                  so they line up exactly). ≥ 0. (Internally the column is still named
+                  ``voc``; it is displayed as "Gain".)
   * Action Gap  — MYOPIC gap between the root's best and second-best move by the
                   children's 1-ply value-head backup (not a deep/converged gap). ≥ 0.
-                  Gain and Action Gap share the same 1-ply value-head lookahead basis.
   * MQ          — move quality of the HUMAN's actual move = final_Q(move played)
                   − final_Q(best), the post-search (full-budget) Lc0 root value
                   loss. ≤ 0 (0 = the human played the engine-best move). This is
@@ -62,7 +63,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from utils import Variable, Analyzer  # noqa: E402
-from utils.helpers import apply_poster_style  # noqa: E402
+from utils.helpers import apply_poster_style, FONT_SIZE_LABEL  # noqa: E402
 from utils.plots import highlight_corr_row  # noqa: E402
 
 _TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
@@ -72,33 +73,38 @@ _FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
-    """(Gain, Action Gap) for one tree — both built on the SAME 1-ply value-head
-    lookahead backup of the root's children (parent perspective = −child.value).
-    (The returned first quantity is stored in the ``voc`` column and displayed as "Gain".)
+    """(Gain, Action Gap) for one tree. (The first is stored in the ``voc`` column and
+    displayed as "Gain".)
 
-    Action Gap = top1 − top2 of the children's 1-ply backups: the immediate value
-                 separation between the best and second-best move at 1-ply (NOT a
-                 deep/converged gap).
-    Gain       = final_Q(deep best) − final_Q(1-ply best): how much deep search
-                 improves on the shallow (1-ply value-head) choice = value of
-                 computation. ≥ 0; perspective-invariant (both are root side-to-move
-                 Qs in one node).
+    Gain = value of computation, read from the SINGLE growing oracle tree:
 
-    Why the 1-ply backup and not the search trace for the shallow choice: every legal
-    root move is present as an evaluated child (verified: n_children == n_legal, no
-    uninitialized zeros), so −child.value is a clean one-step lookahead. The
-    ``oracle_root_q_trace`` instead stores a move's Q as 0 until its child is first
-    visited (trace[0] is all-zero pre-search), so a trace-based shallow choice is
-    contaminated — in losing positions the unvisited zeros beat the visited negatives,
-    which previously inflated Gain to a spurious ~1.0 mass.
+        Gain = final_Q(best move @ 96 expansions) − final_Q(best move @ 1 expansion)
+
+    where BOTH moves are scored on the converged 96-expansion root Q
+    (``oracle_final_root_q_values``). The 96-expansion best is ``argmax final_Q`` (==
+    ``oracle_best_move_index[-1]``). The 1-expansion best is the first root move the search
+    actually expands — the smallest first-visit step in ``oracle_root_q_trace`` — which,
+    under PUCT's cold start, is the policy's top move. Because the search only ever *adds*
+    nodes, the 1-expansion tree is a subset of the 96-expansion tree, so both moves live on
+    the same board and Gain ≥ 0 by construction (a_96 = argmax). a_shallow is read from what
+    the search *expanded* (any nonzero q-trace entry), so it is always a real, visited move —
+    we never read the uninitialized 0.0 of a never-visited move, the bug two earlier
+    definitions hit (the all-zero step-0 trace, and the unvisited-0.0 deep lookup of a
+    1-ply-value-head choice) that spuriously pinned Gain at ≈ 1.0 in won positions. (Note:
+    final_Q[a_shallow] may legitimately be ≈ 0 for a drawish move — that is its true
+    converged value, not an unvisited placeholder, so it is used as-is.) A won position now
+    gives Gain ≈ 0 (the policy's first pick is already the win; search adds nothing).
+
+    Action Gap = top1 − top2 of the children's 1-ply value-head backup (parent perspective
+    = −child.value): the immediate value separation at 1-ply (NOT a deep/converged gap, and
+    no longer sharing Gain's basis — Gain now comes from the search trace, not the 1-ply
+    head).
     """
     feature_names = list(payload["feature_names"])
     nf = payload["node_features"].numpy()
     par = payload["parent_index"].numpy()
     vi = feature_names.index("value")
     final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
-    incoming = payload["incoming_moves"]
-    root_moves = list(payload["oracle_root_moves"])
 
     action_gap = float("nan")
     voc = float("nan")
@@ -109,13 +115,23 @@ def _tree_voc_and_gap(payload) -> tuple[float, float]:
             myopic_q = -nf[kids, vi]  # parent-perspective 1-ply value-head backup
             order = np.argsort(myopic_q)[::-1]
             action_gap = float(myopic_q[order[0]] - myopic_q[order[1]])
-            # Gain — deep-search regret of the 1-ply best move. Map that child to its
-            # root-move index (via its incoming UCI) to read the deep final_Q.
-            if final_q.size >= 2:
-                uci = incoming[int(kids[order[0]])]
-                if uci in root_moves:
-                    a_shallow = root_moves.index(uci)
-                    a_deep = int(np.argmax(final_q))
+            # Gain from the growing tree: a_deep = best @ 96 expansions; a_shallow = the
+            # first root move the search expanded (smallest first-visit step in the q-trace
+            # — under PUCT's cold start this is the policy's top move). A move is "expanded"
+            # the moment it gets a real Q (any nonzero q-trace entry); both moves are scored
+            # on the converged final_Q. No further filtering: the first-expanded move is by
+            # definition in the tree, and Gain ≥ 0 holds anyway because a_deep = argmax(final_Q)
+            # (final_Q[a_shallow] is its true converged Q — which may legitimately be ≈ 0 for a
+            # drawish move; that is a real value, not the unvisited-0.0 the old defs misread).
+            qt = np.asarray(payload["oracle_root_q_trace"], dtype=float)
+            qt = qt.reshape(qt.shape[0], -1)
+            if qt.shape[1] == final_q.size and final_q.size >= 2:
+                visited = qt != 0.0
+                if visited.any():
+                    steps = np.where(visited, np.arange(qt.shape[0])[:, None], qt.shape[0])
+                    first_visit = np.where(visited.any(axis=0), steps.min(axis=0), qt.shape[0] + 1)
+                    a_shallow = int(np.argmin(first_visit))  # first move the search expanded
+                    a_deep = int(np.argmax(final_q))         # 96-expansion best
                     voc = float(final_q[a_deep] - final_q[a_shallow])
     return voc, action_gap
 
@@ -181,7 +197,8 @@ def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) ->
     all jointly). Spearman = Pearson on ranks; partials by residualizing the ranks of
     x and y on the rank(s) of the control(s) via least squares, then correlating the
     residuals."""
-    R = df[[x, y] + controls].rank()
+    df = df[[x, y] + controls].dropna()  # Gain (voc) is NaN on degenerate trees → drop
+    R = df.rank()
 
     def resid(col: str, ctrl: list[str]) -> np.ndarray:
         A = np.c_[np.ones(len(R)), R[ctrl].to_numpy()]
@@ -195,8 +212,8 @@ def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) ->
         print(f"  partial ρ(H(π), {y} | {c:<9s}) = {rho:+.4f}")
     rho_all = float(np.corrcoef(resid(x, controls), resid(y, controls))[0, 1])
     print(f"  partial ρ(H(π), {y} | all)        = {rho_all:+.4f}")
-    print(f"  [context] raw ρ(branching, {y})    = {df['branching'].rank().corr(R[y]):+.4f}")
-    print(f"  [context] raw ρ(H(π), branching)   = {R[x].corr(df['branching'].rank()):+.4f}")
+    print(f"  [context] raw ρ(legal moves, {y})  = {df['legal_moves'].rank().corr(R[y]):+.4f}")
+    print(f"  [context] raw ρ(H(π), legal moves) = {R[x].corr(df['legal_moves'].rank()):+.4f}")
 
 
 def _worker(path: str):
@@ -244,6 +261,28 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> t
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)
 
 
+def save_mq_dashboard(analyzer: Analyzer, gss_analyzer: Analyzer, output_path: str) -> None:
+    """MQ-vs-RT dashboard — a 1×3 poster figure of the SAME MQ-vs-log-RT relationship
+    segmented three ways: [global | by ply tertile | by GSS difficulty stratum]. All three
+    panels are rendered by the identical Analyzer machinery (same binning, axes, seconds
+    ticks, styling); the right panel only swaps the segmentation column (ply → GSS), so it
+    differs from the centre panel *only in its legend*. ``gss_analyzer`` is a second Analyzer
+    on the same mq_rt table constructed with ``segment_column='gss'``."""
+    apply_poster_style()
+    fig, axes = plt.subplots(1, 3, figsize=(45, 13.72))
+    analyzer.plot_quantile_bins(axes[0])
+    analyzer.plot_quantile_bins_tertile_segmented(axes[1])
+    gss_analyzer.plot_quantile_bins_tertile_segmented(axes[2])
+    fig.subplots_adjust(top=0.80)
+    suptitle = fig.suptitle(f"{analyzer.title}\nn = {analyzer.n_moves:,} moves",
+                            fontsize=FONT_SIZE_LABEL + 10, y=1.0)
+    extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", bbox_extra_artists=extra, pad_inches=0.3)
+    plt.close()
+    print(f"✅ Dashboard saved to {output_path}")
+
+
 def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: str) -> None:
     """Spearman ρ matrix over the lc0-tree metrics + structure/RT, one row per joined
     human move (``tree_rt`` ⋈ ``mq_rt`` ⋈ ``processed_moves_nonzero``). Spearman (rank)
@@ -251,7 +290,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     monotone-but-nonlinear relations that Pearson understates."""
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
-               p.n_possible_moves AS branching, t.h_pi,
+               p.n_possible_moves AS legal_moves, t.h_pi,
                p.n_self_pieces_exc_pawns AS own_material,
                m.mq, t.action_gap, t.voc, t.gss
         FROM tree_rt t
@@ -262,7 +301,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     # Column/row order is fixed here: RT → structure (incl. policy entropy) → move
     # quality → value-of-search → search depth.
     labels = {
-        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching", "h_pi": "H(π)",
+        "log_T": "log(RT)", "ply": "Ply", "legal_moves": "Legal moves", "h_pi": "H(π)",
         "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
         "voc": "Gain", "gss": "GSS",
     }
@@ -346,15 +385,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  r({col}, log RT) = {r:+.4f}")
 
     # P1 — does the prior policy entropy H(π) predict RT, and does it survive controlling
-    # for branching / Gain (voc) / GSS? branching = n_possible_moves from the human table.
+    # for legal moves / Gain (voc) / GSS? legal_moves = n_possible_moves from the human table.
     p1 = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.h_pi,
-               p.n_possible_moves AS branching, t.voc, t.gss
+               p.n_possible_moves AS legal_moves, t.voc, t.gss
         FROM tree_rt t
         JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0 AND t.h_pi IS NOT NULL
     """).df()
-    _spearman_partials(p1, "h_pi", "log_T", ["branching", "voc", "gss"])
+    _spearman_partials(p1, "h_pi", "log_T", ["legal_moves", "voc", "gss"])
 
     # MQ is per played move: attach each subset human move's actual UCI (moves.move_uci)
     # then match it to its Lc0 root-move MQ on (fen, move_uci). Build the human side
@@ -367,9 +406,10 @@ def main(argv: list[str] | None = None) -> None:
             JOIN processed_moves_nonzero m ON m.fen = f.fen AND m.move_time > 0
             JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
         )
-        SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time
+        SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time, v.gss
         FROM human h
         JOIN _root_moves rm ON rm.fen = h.fen AND rm.move_uci = h.move_uci
+        JOIN _vals v ON v.fen = h.fen
         WHERE h.move_time > 0
     """)
     n_human = conn.execute("""
@@ -391,8 +431,9 @@ def main(argv: list[str] | None = None) -> None:
     #     unlike the old cost-aware stop, GSS↔RT is positive across the full range.
     #   * Gain / Action Gap have a large near-zero mass: lump the near-zero rows and
     #     bin the interior TIE-SAFE with few (8) bins so a single value can't straddle
-    #     adjacent bins. (Gain's former ~1.0 spike was a bug in the shallow-choice — now
-    #     fixed at source in _tree_voc_and_gap — so no edge_mass is needed.)
+    #     adjacent bins. (Gain is now the growing-tree definition in _tree_voc_and_gap —
+    #     best@96 vs best@1 expansion on the converged Q — which has no spurious ~1.0 spike;
+    #     two earlier definitions did, from reading an unvisited-0.0 shallow value.)
     # min_bin_count drops the noisy sparse tails (high Gain / high GSS) from both panels.
     # spec: (table, col, label, fname, kwargs-for-Analyzer)
     specs = [
@@ -417,19 +458,25 @@ def main(argv: list[str] | None = None) -> None:
         )
         analyzer.save_dashboard(str(_FIGURES_DIR / fname))
 
-    # MQ is the OUTCOME of the human's decision, so plot mean move quality (y) as a
-    # function of think time: log RT on x, MQ on y ("does thinking longer yield better
-    # moves?"). Binning on the well-behaved RT axis also sidesteps the MQ point-masses
-    # (the −1.0 / 0.0 spikes) entirely, so no zero-lump / tie-safe / edge-mass needed.
-    Analyzer(
-        conn,
-        "mq_rt",
+    # MQ is the OUTCOME of the human's decision, so plot mean move quality (y) as a function
+    # of think time: log RT on x, MQ on y. THREE panels side by side — all MQ-vs-log-RT,
+    # segmented differently: global | by ply tertile | by GSS difficulty stratum. The third
+    # is the difficulty-confound test (MQ↔RT stays negative within every GSS stratum).
+    # Binning on the well-behaved RT axis sidesteps the MQ point-masses (the −1.0 / 0.0 spikes).
+    mq_kwargs = dict(
         x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
         y_var=Variable(column="mq", is_log=False, name="MQ (lc0 tree)"),
         filter_query="move_time > 0",
         title="MQ (lc0 tree) vs. log(RT)",
         min_bin_count=100,
-    ).save_dashboard(str(_FIGURES_DIR / "mq_vs_rt.png"))
+    )
+    mq_analyzer = Analyzer(conn, "mq_rt", **mq_kwargs)
+    # Same plot, segmented by GSS stratum instead of ply tertile (cuts a-priori from mq_rt's
+    # gss). Rendered by the identical Analyzer panel → differs from the by-ply panel only in
+    # the legend. (This is the difficulty-confound test: MQ↔RT slope within GSS strata.)
+    gss_seg_analyzer = Analyzer(conn, "mq_rt", segment_column="gss", segment_source="mq_rt",
+                                segment_label="GSS", **mq_kwargs)
+    save_mq_dashboard(mq_analyzer, gss_seg_analyzer, str(_FIGURES_DIR / "mq_vs_rt.png"))
 
     # Relationships among the lc0 metrics (+ structure/RT): Spearman ρ matrix.
     plot_lc0_correlation_matrix(conn, str(_FIGURES_DIR / "correlation_matrix.png"))

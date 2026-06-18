@@ -16,7 +16,7 @@ math: katex
 
 <div class="mt-2 text-lg opacity-80">Do lc0-search quantities on the same position track how long humans think?</div>
 
-<div class="mt-4 text-sm opacity-50">~158K lc0 search trees on 2023 human-game FENs → ~167K joined moves.</div>
+<div class="mt-4 text-sm opacity-50">~199K lc0 search trees on 2023 human-game FENs → ~211K joined moves.</div>
 
 ---
 layout: default
@@ -31,13 +31,13 @@ class: mdl-slide
       <tr><th>Metric</th><th>Definition (lc0 tree)</th><th class="num">r with log RT</th></tr>
     </thead>
     <tbody>
-      <tr><td><strong>GSS</strong> — greedy stopping step</td><td>first expansion the eventual-best move is found (greedy, zero-cost)</td><td class="num">+0.115</td></tr>
-      <tr><td><strong>Gain</strong> — value of computation</td><td><code>final_Q(deep best) − final_Q(1-ply best)</code> ≥ 0</td><td class="num">+0.073</td></tr>
-      <tr><td><strong>MQ</strong> — move quality</td><td><code>final_Q(played) − final_Q(best)</code> ≤ 0</td><td class="num">−0.154</td></tr>
-      <tr><td><strong>Action gap</strong></td><td>top1 − top2 of children's 1-ply value-head backup</td><td class="num">−0.064</td></tr>
+      <tr><td><strong>GSS</strong> — greedy stopping step</td><td>first expansion the eventual-best move is found (greedy, zero-cost)</td><td class="num">+0.110</td></tr>
+      <tr><td><strong>Gain</strong> — value of computation</td><td><code>final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.)</code> ≥ 0</td><td class="num">+0.085</td></tr>
+      <tr><td><strong>MQ</strong> — move quality</td><td><code>final_Q(played) − final_Q(best)</code> ≤ 0</td><td class="num">−0.151</td></tr>
+      <tr><td><strong>Action gap</strong></td><td>top1 − top2 of children's 1-ply value-head backup</td><td class="num">−0.058</td></tr>
     </tbody>
   </table>
-  <div class="mdl-found">All four value-search quantities are weak — they track human deliberation only faintly, and MQ runs the "wrong" way (a difficulty confound). The strong tree-derived signal is instead a <em>structural</em> one — the policy entropy H(π) (next slides). <span class="opacity-50">158K trees → ~167K joined moves; 98% match.</span></div>
+  <div class="mdl-found">All four value-search quantities are weak — they track human deliberation only faintly, and MQ runs the "wrong" way. The strong tree-derived signal is instead a <em>structural</em> one — the policy entropy H(π) (next slides). <span class="opacity-50">199K trees → ~211K joined moves; 98% match.</span></div>
 </div>
 
 ---
@@ -51,9 +51,10 @@ class: mdl-slide
       <div class="mdl-title"><span class="mdl-kicker">Value of computation</span>Gain vs think time</div>
       <div class="mdl-text">
         <ul>
-          <li><strong>Gain = final_Q(deep best) − final_Q(1-ply best) ≥ 0</strong> — how much deep search beats the shallow 1-ply value-head pick.</li>
-          <li><strong>r = +0.073</strong>: more value-of-computation → longer thinks. Direction matches Russek-style accounts, but weak.</li>
-          <li>Zero-inflated: Gain = 0 in ~⅔ of positions (search confirms the 1-ply choice).</li>
+          <li><strong>Gain = final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.) ≥ 0</strong> — both scored on the converged 96-expansion Q, read from <em>one growing oracle tree</em>.</li>
+          <li><strong>r = +0.085</strong>: more value-of-computation → longer thinks, monotone. Direction matches Russek-style accounts.</li>
+          <li>Zero-inflated: Gain = 0 in ~⅔ of positions (the first expansion already lands on the search-best move).</li>
+          <li><strong>Definition fix:</strong> the 1-expansion tree is a <em>subset</em> of the 96-expansion tree, so the moves line up. This kills a spurious <code>Gain ≈ 1.0</code> spike (+ RT dip) that two earlier definitions hit by reading an <em>unvisited</em> <code>final_Q = 0.0</code>.</li>
         </ul>
       </div>
     </div>
@@ -69,16 +70,34 @@ class: mdl-slide
 <div class="mdl-content">
   <div class="mdl-titlefig">
     <div class="mdl-tf-left">
-      <div class="mdl-title"><span class="mdl-kicker">Move quality</span>MQ vs think time — the confound</div>
+      <div class="mdl-title"><span class="mdl-kicker">Move quality</span>MQ vs think time — worse moves on longer thinks</div>
       <div class="mdl-text">
         <ul>
           <li><strong>MQ = final_Q(played) − final_Q(best) ≤ 0</strong> (0 = engine-best played); plotted as the <em>outcome</em> of think time.</li>
-          <li><strong>r(MQ, log RT) = −0.154</strong> — longer thinks → worse moves.</li>
-          <li>A <strong>difficulty confound</strong>, not a sign bug: hard positions take longer <em>and</em> yield worse moves.</li>
+          <li><strong>r(MQ, log RT) = −0.151</strong> — longer thinks → worse moves.</li>
+          <li>Same relationship, segmented three ways: <strong>global · by ply tertile · by GSS difficulty stratum</strong>. The standing read was a pure <strong>difficulty confound</strong>; the third panel tests it → <em>next slide</em>.</li>
         </ul>
       </div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/mq_vs_rt.png" alt="MQ vs RT" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/mq_vs_rt.png" alt="MQ vs RT — global, by ply, by GSS stratum" /></div>
+  </div>
+</div>
+
+---
+layout: default
+class: mdl-slide
+---
+
+<div class="mdl-title"><span class="mdl-kicker">Is it just difficulty?</span>MQ↔RT survives difficulty controls</div>
+
+<div class="mdl-content">
+  <div class="mdl-text">
+    <ul>
+      <li>From the <strong>third panel</strong> (previous slide): segmenting MQ↔RT <strong>within GSS difficulty strata</strong>, the negative slope holds in <strong>every</strong> stratum (ρ −0.19 to −0.24 vs pooled −0.23).</li>
+      <li><strong>partial ρ | GSS = −0.213</strong> — conditioning on GSS removes only ~7%. GSS is even a <em>poor</em> difficulty proxy (its "easy" GSS 0–1 stratum has the worst MQ).</li>
+      <li>Branching does more (<strong>partial | branching = −0.160</strong>), but <strong>partial | GSS + branching = −0.150</strong> — <strong>~⅔ of the effect survives</strong>.</li>
+      <li>So it is <strong>not</strong> a pure difficulty confound: a residual points to <em>selection / uncertainty</em> (people think long precisely when unsure).</li>
+    </ul>
   </div>
 </div>
 
@@ -94,7 +113,7 @@ class: mdl-slide
     <div class="mdl-figbox"><img src="../public/figures/gss_vs_rt.png" alt="greedy stop step vs RT" /></div>
     <div class="mdl-figbox"><img src="../public/figures/actiongap_vs_rt.png" alt="Action gap vs RT" /></div>
   </div>
-  <div class="mdl-text" style="text-align:center; margin-top:0.5rem">Greedy stop step (left, groups of 5) rises monotonically with RT (r = +0.115, full range — no cap); action gap (right) is flat-to-weak. Same lc0-tree RT subset, quantile-binned globally and by ply tertile (sparse bins n &lt; 100 dropped).</div>
+  <div class="mdl-text" style="text-align:center; margin-top:0.5rem">Greedy stop step (left, groups of 5) rises monotonically with RT (r = +0.110, full range — no cap); action gap (right) is flat-to-weak. Same lc0-tree RT subset, quantile-binned globally and by ply tertile (sparse bins n &lt; 100 dropped).</div>
 </div>
 
 ---
@@ -141,8 +160,8 @@ class: mdl-slide
       <div class="mdl-text">
         <ul>
           <li><strong>Branching ↔ log RT is the strongest RT tie</strong> — stronger than any engine metric.</li>
-          <li><strong>H(π)</strong> (policy-prior entropy) is the strongest <em>tree-derived</em> RT predictor (<strong>+0.24</strong>, ~3× any value metric) — but it's a <em>width</em> signal (ρ +0.61 with branching) that <strong>raw branching subsumes</strong> (partial ρ | branching = +0.05). It survives Gain/GSS, so it's distinct from the value cluster.</li>
-          <li><strong>MQ ↔ log RT ≈ −0.2</strong>: the difficulty confound, sharper under rank correlation.</li>
+          <li><strong>H(π)</strong> (policy-prior entropy) is the strongest <em>tree-derived</em> RT predictor (<strong>+0.24</strong>, ~3× any value metric) — but it's a <em>width</em> signal (ρ +0.59 with branching) that <strong>raw branching subsumes</strong> (partial ρ | branching = +0.05). It survives Gain/GSS, so it's distinct from the value cluster.</li>
+          <li><strong>MQ ↔ log RT ≈ −0.2</strong>: only ~⅓ difficulty; a real residual survives (prev. slide).</li>
           <li>GSS ties to Gain and action gap (the value-convergence cluster), not to branching.</li>
         </ul>
         <div class="text-xs opacity-50 mt-3">Spearman because Gain / MQ / action gap are zero-inflated &amp; monotone-nonlinear (Pearson understates / can flip sign).</div>
@@ -167,9 +186,9 @@ class: mdl-slide
     <tbody>
       <tr class="hl"><td><strong>Decision width drives human deliberation</strong> — more than engine value-of-computation</td><td>branching r ≈ +0.20/+0.30 ≫ Gain; policy entropy H(π) +0.24 (subsumed by raw branching); oracle ignores branching, humans don't</td></tr>
       <tr><td>The normative model captures <strong>direction, not the dominant driver</strong></td><td>4/4 feature directions agree, but oracle halts on value-convergence while humans track structure</td></tr>
-      <tr><td>Engine value-of-computation tracks RT, but <strong>weakly</strong></td><td>Gain r = +0.073; GSS r = +0.115</td></tr>
-      <tr><td>"More time → worse moves" is a <strong>difficulty confound</strong>, not a paradox</td><td>MQ r = −0.154, negative within every ply tertile</td></tr>
+      <tr><td>Engine value-of-computation tracks RT, but <strong>weakly</strong></td><td>Gain r = +0.085 (growing-tree def: best @ 96 vs @ 1 expansion); GSS r = +0.110</td></tr>
+      <tr><td>"More time → worse moves" is <strong>not just</strong> a difficulty confound</td><td>MQ r = −0.151; ~⅔ survives partialling GSS+branching (ρ = −0.150)</td></tr>
     </tbody>
   </table>
-  <div class="mdl-found">Humans look <em>resource-rational about the width of the decision</em>; the value-search model explains the easy direction but misses what most strongly paces human thought. <span class="opacity-50">Open: difficulty-residualized MQ; strength-matched (SF-2000) oracle on the 10K matched-FEN run.</span></div>
+  <div class="mdl-found">Humans look <em>resource-rational about the width of the decision</em>; the value-search model explains the easy direction but misses what most strongly paces human thought. <span class="opacity-50">Open: selection-vs-blunder split of the MQ residual; strength-matched (SF-2000) oracle on the 10K matched-FEN run.</span></div>
 </div>

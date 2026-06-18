@@ -103,6 +103,11 @@ argmax-uncertainty — differing in where branching enters the lc0 search:
 A first pass on the 112.8K-FEN subset (one observation per FEN) already fits the account —
 **branching is the scale, value-of-search the modulation**:
 
+> **Note:** the Gain figures below predate the growing-tree Gain redefinition (now best@96 −
+> best@1-expansion; see the move-time model report). The directional P3–P4 conclusions are
+> unchanged (GSS still wins the linear race, Gain still the stronger rank predictor), but the exact
+> decimals are pending a re-run with the new Gain.
+
 - **Branching dominates.** Alone it explains R² ≈ **0.12** of log RT; both tree metrics *together*
   add ΔR² ≤ 0.01. The width channel is the story; the value channel is a small correction.
 - **GSS is branching-mediated effort.** GSS is the metric most collinear with branching
@@ -142,9 +147,12 @@ the root's legal moves (lc0's policy head; `node_features[:, prior]`) — comput
 > the human's option set, while the raw count is closer to what the human enumerates. This leans **P5**
 > toward "enumerate the candidate set" over "evidence-accumulate among lc0-plausible moves."
 
-> **P1′ (next):** recompute the policy entropy at a **higher policy temperature** (or from a
-> **strength-matched SF-2000** policy), whose spread should match a human's option set — does *that*
-> entropy beat the raw count? (Ties to the SF-2000 follow-up in the move-time model report.)
+> **P1′ (resolved — tempering doesn't help):** re-tempering the over-confident prior (π_T ∝ π^(1/T),
+> T up to 10) only lifts the *marginal* H(π)↔RT correlation by **collapsing H(π) onto the raw
+> legal-move count** (ρ(H(π_T), legal moves) → 0.9997); its contribution *over* the raw count erodes to
+> negative. So no temperature beats the raw count — the operative width variable is just the legal-move
+> count. A **strength-matched SF-2000** policy (whose spread should match a human's option set) remains
+> the one open variant. (Ties to the SF-2000 follow-up in the move-time model report.)
 
 ## Open questions
 

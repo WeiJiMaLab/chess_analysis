@@ -102,6 +102,7 @@ class: mdl-slide
           <li><strong>Branching ↔ log RT is the strongest tie</strong> (Spearman ρ ≈ +0.26).</li>
           <li>Material, clock, and ply move together — material/clock fall as games progress, so they're largely redundant with game stage.</li>
           <li>Branching's RT coupling is <strong>not</strong> reducible to that ply/material complex.</li>
+          <li><strong>Raw branching is the <em>fundamental</em> width axis:</strong> lc0's policy entropy H(π) — a smarter "effective width" — predicts RT <em>worse</em> and is subsumed by the raw count (partial ρ | branching ≈ +0.05). No policy-weighted refinement beats it.</li>
         </ul>
         <div class="text-xs opacity-50 mt-3">Spearman (rank): structural features are skewed/bounded. n = 1M reservoir sample.</div>
       </div>

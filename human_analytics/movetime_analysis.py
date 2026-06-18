@@ -47,7 +47,7 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
         x_var=Variable(column="n_possible_moves", is_log=False, name="# Legal Moves"),
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_possible_moves < 50",
-        title="Branching Factor",
+        title="Legal Moves",
     )
     analyzer.save_dashboard(_fig(src_dir, "npossiblemoves_vs_movetime.png"))
 
@@ -102,14 +102,14 @@ def board_feature_corr(conn: duckdb.DuckDBPyConnection, src_dir: str | None = No
     if src_dir is None:
         src_dir = _src_dir()
     df = conn.execute(f"""
-        SELECT move_ply AS ply, n_possible_moves AS branching,
+        SELECT move_ply AS ply, n_possible_moves AS legal_moves,
                n_self_pieces_exc_pawns AS own_material,
                player_clock_time AS player_clock, ln(move_time) AS log_T
         FROM {TABLE_PROCESSED_MOVES_NONZERO}
         USING SAMPLE {n_sample} ROWS (reservoir, {seed})
     """).df()
     labels = {  # log(RT) first (the response variable), then structure → clock
-        "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
+        "log_T": "log(RT)", "ply": "Ply", "legal_moves": "Legal moves",
         "own_material": "Own material", "player_clock": "Player clock",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)

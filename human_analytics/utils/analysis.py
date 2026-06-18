@@ -37,17 +37,20 @@ from .plots import (
 # from this source table and apply the *same* boundaries to every plot, so the
 # segmentation is identical and comparable across analyses regardless of filtering.
 _PLY_TERTILE_SOURCE_DEFAULT = "processed_moves_nonzero"
-_PLY_CUTS_CACHE: dict[str, tuple[int, int]] = {}
+_TERTILE_CUTS_CACHE: dict[tuple[str, str], tuple[int, int]] = {}
 
 
-def _infer_ply_cuts(conn, source: str) -> tuple[int, int]:
-    """Return the (1/3, 2/3) ``move_ply`` tertile cutpoints over the whole ``source`` table."""
-    if source not in _PLY_CUTS_CACHE:
+def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[int, int]:
+    """Return the (1/3, 2/3) tertile cutpoints of ``column`` over the whole ``source`` table.
+    Default ``column='move_ply'`` gives the a-priori ply tertiles; pass another column (e.g.
+    ``'gss'``) to segment the same plot by a different variable instead."""
+    key = (source, column)
+    if key not in _TERTILE_CUTS_CACHE:
         c1, c2 = conn.execute(
-            f"SELECT quantile_disc(move_ply, 1.0/3), quantile_disc(move_ply, 2.0/3) FROM {source}"
+            f"SELECT quantile_disc({column}, 1.0/3), quantile_disc({column}, 2.0/3) FROM {source}"
         ).fetchone()
-        _PLY_CUTS_CACHE[source] = (int(c1), int(c2))
-    return _PLY_CUTS_CACHE[source]
+        _TERTILE_CUTS_CACHE[key] = (int(c1), int(c2))
+    return _TERTILE_CUTS_CACHE[key]
 
 
 _SQL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -112,6 +115,9 @@ class Analyzer:
         zero_inflated: bool = False,
         zero_threshold: float = 0.0,
         ply_tertile_source: str = _PLY_TERTILE_SOURCE_DEFAULT,
+        segment_column: str = "move_ply",
+        segment_source: str | None = None,
+        segment_label: str = "ply",
         bin_mode: str = "ntile",
         integer_tail_cut: float | None = None,
         integer_bin_width: int = 1,
@@ -157,6 +163,14 @@ class Analyzer:
         # Source table whose whole move_ply distribution settles the tertile
         # cutpoints (applied identically to this — possibly filtered — analysis).
         self.ply_tertile_source = _validate_sql_identifier(ply_tertile_source)
+        # The by-segment panel splits on ``segment_column`` (default ``move_ply`` → ply
+        # tertiles); ``segment_source`` is the table its a-priori cutpoints come from
+        # (default = ``ply_tertile_source``), and ``segment_label`` is the legend prefix.
+        # Pass e.g. (segment_column='gss', segment_source='mq_rt', segment_label='GSS') to
+        # get the *same* MQ-vs-RT plot segmented by GSS stratum instead of ply.
+        self.segment_column = _validate_sql_identifier(segment_column)
+        self.segment_source = _validate_sql_identifier(segment_source or ply_tertile_source)
+        self.segment_label = segment_label
         self.ply_cuts: tuple[int, int] | None = None
         # When the x distribution has a large mass near 0 (e.g. VOC: ~⅔ of moves
         # are 0), plain ``ntile`` wastes most bins on that mass. ``zero_inflated``
@@ -318,9 +332,9 @@ class Analyzer:
         # 0. Settle ply tertile cutpoints from the WHOLE source dataset (a priori),
         # then assign each row's tertile by those fixed boundaries (no ntile over
         # the filtered subset). Tertile = 1 + #cutpoints exceeded (avoids CASE).
-        c1, c2 = _infer_ply_cuts(self.conn, self.ply_tertile_source)
+        c1, c2 = _infer_tertile_cuts(self.conn, self.segment_source, self.segment_column)
         self.ply_cuts = (c1, c2)
-        tertile_expr = f"(1 + (move_ply > {c1})::INT + (move_ply > {c2})::INT)"
+        tertile_expr = f"(1 + ({self.segment_column} > {c1})::INT + ({self.segment_column} > {c2})::INT)"
 
         # 1. Prepare temporary analysis view
         where_clause = f"WHERE {self.filter_query}" if self.filter_query else ""
@@ -395,10 +409,12 @@ class Analyzer:
             """).df().set_index("row_qbin")
 
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
-        """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints."""
+        """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints, prefixed
+        with ``segment_label`` (e.g. 'ply < 28' for ply, 'GSS 2–31' for a GSS segmentation)."""
         c1, c2 = self.ply_cuts
-        return {1: f"ply < {c1 + 1}", 2: f"ply {c1 + 1}–{c2}", 3: f"ply > {c2}"}.get(
-            tertile_id, f"tertile {tertile_id}"
+        lab = self.segment_label
+        return {1: f"{lab} < {c1 + 1}", 2: f"{lab} {c1 + 1}–{c2}", 3: f"{lab} > {c2}"}.get(
+            tertile_id, f"{lab} tertile {tertile_id}"
         )
 
     @property

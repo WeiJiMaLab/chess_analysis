@@ -52,6 +52,13 @@ with the game-stage axis — yet branching's RT coupling is *not* reducible to t
 > predictor of human think time — stronger than realized value-of-search, and not reducible
 > to the ply/material/clock complex.
 
+**Raw branching is the *fundamental* width axis.** A natural worry is that the raw legal-move count
+is a crude stand-in for a smarter "effective width." It isn't: lc0's policy-prior entropy H(π) — a
+plausibility-weighted effective branching — predicts RT *worse* than the raw count (ρ +0.24 vs +0.33)
+and is subsumed by it (partial ρ(H(π), RT | branching) ≈ +0.05). So no policy-weighted refinement beats
+the raw legal-move count — branching is not a proxy *for* a better width measure, it *is* the operative
+one. See the policy-entropy test in [the engine report](engine.md).
+
 ## Methods
 
 - **Dataset:** Lichess 10+0 (60+0), Elo ≥ 2000, no berserk; 1.97M games → 135M
