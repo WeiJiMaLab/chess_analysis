@@ -262,13 +262,15 @@ def plot_heatmap_with_alpha(
     return sm
 
 
-def highlight_corr_row(ax, n_cols, idx=0, box_color="#E8A33D", label_color="#7A4F00"):
-    """Outline row ``idx`` across all ``n_cols`` of a correlation heatmap and bold its
-    tick labels — used to flag the response variable (log RT, kept first) as the row
-    that matters most."""
-    ax.add_patch(plt.Rectangle((-0.5, idx - 0.5), n_cols, 1.0, fill=False,
-                               edgecolor=box_color, lw=4, zorder=5))
+def highlight_corr_row(ax, n_cols, idx=0):
+    """Bold row ``idx``'s cells and its tick labels to flag the response variable
+    (log RT, kept first) as the row that matters — no outline/colour, just weight.
+    Assumes cell text was added row-major (``for i: for j: ax.text(...)``), so
+    ``ax.texts[idx*n_cols : idx*n_cols+n_cols]`` are that row's annotations."""
     for labs in (ax.get_yticklabels(), ax.get_xticklabels()):
         if len(labs) > idx:
             labs[idx].set_fontweight("bold")
-            labs[idx].set_color(label_color)
+    for j in range(n_cols):
+        k = idx * n_cols + j
+        if k < len(ax.texts):
+            ax.texts[k].set_fontweight("bold")

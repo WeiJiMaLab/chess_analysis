@@ -6,23 +6,23 @@
 
 Humans deliberate longest when the decision is *wide* (see the board-features inquiry in the
 index). Here we ask whether quantities read off an **lc0 search tree on the same position** —
-value-of-computation, move-quality, and a budgeted optimal-stopping oracle — track human think
-time, and where the model and humans part ways.
+value-of-computation, move-quality, and a **greedy stopping step** (how many expansions until the
+search locks onto its best move) — track human think time, and where model and humans part ways.
 
-> **Result:** The engine's value-search quantities track human RT only **weakly**, and the
-> normative oracle stops on *value-convergence* while humans deliberate on *structural
-> complexity* — the model captures the direction of the effects, not the dominant driver.
+> **Result:** The engine's value-search quantities (GSS, VOC, MQ) track human RT only **weakly**,
+> and the LMCOS normative oracle stops on *value-convergence* while humans deliberate on
+> *structural complexity* — the model captures the direction of the effects, not the dominant driver.
 
 ### Do lc0-search quantities track human RT?
 
-On the lc0-tree subset (≈108K human moves whose position has a generated tree):
+On the lc0-tree subset (≈119K human moves whose position has a generated tree):
 
 | Metric | Definition (lc0 tree) | r with log RT |
 |---|---|---|
-| **OSS** — oracle stop step | budgeted DP oracle's optimal halt step (budget 96) | **+0.119** |
-| **VOC** — value of computation | `final_Q(deep best) − final_Q(1-ply best)` ≥ 0 | **+0.075** |
-| **MQ** — move quality | `final_Q(played) − final_Q(best)` ≤ 0 | **−0.152** |
-| **Action gap** | top1 − top2 of children's 1-ply value-head backup | **−0.067** |
+| **GSS** — greedy stopping step | first expansion the eventual-best move is found (greedy, zero-cost) | **+0.115** |
+| **VOC** — value of computation | `final_Q(deep best) − final_Q(1-ply best)` ≥ 0 | **+0.073** |
+| **MQ** — move quality | `final_Q(played) − final_Q(best)` ≤ 0 | **−0.154** |
+| **Action gap** | top1 − top2 of children's 1-ply value-head backup | **−0.064** |
 
 ![VOC vs response time](../figures/voc_vs_rt.png)
 
@@ -41,12 +41,13 @@ the 1M-move audit) survives de-meaning by ply and by player.
 > bug** — long thinks land on objectively harder positions, where even a deliberating human
 > plays the engine-best move less often. The sign holds within every ply tertile.
 
-![oracle stop step vs RT](../figures/oss_vs_rt.png)
+![greedy stop step vs RT](../figures/gss_vs_rt.png)
 ![action gap vs RT](../figures/actiongap_vs_rt.png)
 
-OSS (capped at 64, binned in groups of 5) **rises** with RT; the action gap is flat-to-weak.
+GSS (binned in groups of 5) **rises monotonically** with RT across the full range (no cap needed);
+the action gap is flat-to-weak.
 
-> **Result:** Every engine value-search quantity tracks human RT only faintly (|r| ≤ 0.15).
+> **Result:** Every engine value-search quantity tracks human RT only faintly (|r| ≲ 0.17).
 > The model is in the right direction but explains little of the variance in human think time.
 
 ### Where do the model and humans diverge?
@@ -82,7 +83,7 @@ being near-zero for *humans* (+0.020).
 A rank (Spearman) correlation matrix over the lc0 metrics, board structure, and log(RT) — rank,
 because VOC / MQ / action gap are zero-inflated and skewed, so Pearson understates (and can flip
 the sign of) their monotone relationships. The strongest tie to log(RT) is **branching** (still
-stronger than any engine metric); **MQ ↔ RT** is the difficulty confound; **OSS** ties to the
+stronger than any engine metric); **MQ ↔ RT** is the difficulty confound; **GSS** ties to the
 VOC / action-gap *value-convergence* cluster, not to branching.
 
 > **Result:** Branching is the connective tissue between human RT and position structure; the
@@ -94,8 +95,8 @@ VOC / action-gap *value-convergence* cluster, not to branching.
 |---|---|
 | Decision width drives human deliberation — more than engine VOC | branching r ≈ +0.20/+0.30 ≫ VOC; oracle ignores branching, humans don't |
 | The normative model captures direction, not the dominant driver | 4/4 feature directions agree, but oracle halts on value-convergence, humans on structure |
-| Engine value-of-computation tracks RT, but weakly | VOC r = +0.075; OSS r = +0.119 |
-| "More time → worse moves" is a difficulty confound, not a paradox | MQ r = −0.152, negative within every ply tertile |
+| Engine value-of-computation tracks RT, but weakly | VOC r = +0.073; GSS r = +0.115 |
+| "More time → worse moves" is a difficulty confound, not a paradox | MQ r = −0.154, negative within every ply tertile |
 
 > **Result:** Humans look *resource-rational about the width of the decision*; the value-search
 > model explains the easy direction but misses what most strongly paces human thought. Next:
@@ -110,24 +111,26 @@ VOC / action-gap *value-convergence* cluster, not to branching.
 |---|---|---|
 | **MQ** | `final_Q(played) − final_Q(best)` (≤ 0; 0 = engine-best played) | lc0 tree (replaces the retired Stockfish-d5 `e_win_taken − e_win_best`) |
 | **VOC** | `final_Q(deep best) − final_Q(1-ply best)` (≥ 0) | lc0 tree; shallow = 1-ply value-head best |
-| **OSS** | `BudgetedOraclePolicy.optimal_stop_step` (DP, budget 96) | lc0 tree oracle trace |
+| **GSS** | first expansion `oracle_best_move_index` reaches its final value (greedy, zero-cost) | lc0 tree |
 | **Action gap** | top1 − top2 of root children's 1-ply value-head backup (`−child.value`) | lc0 tree |
 
-> **Decision:** VOC's shallow baseline is the **1-ply value-head best** (same basis as the action
-> gap), **not** the search trace at step 0 — the trace stores a move's Q as 0 until its child is
-> first visited, so step-0 is all-zero and, in losing positions, unvisited zeros beat visited
-> negatives, which previously inflated VOC to a spurious ~1.0 mass. MQ is the LC0 final-Q loss
-> (Stockfish-d5 MQ retired); the tree FEN is normalized to 4 fields for the human join.
+> **Decision:** GSS is the **greedy** stopping step (the budgeted oracle's stop at *zero* cost = the
+> first expansion the best move is found), **not** the cost-aware DP `optimal_stop_step`, which under
+> the default time cost bails almost immediately and isn't an interpretable difficulty proxy. VOC's
+> shallow baseline is the **1-ply value-head best** (not the all-zero step-0 trace, which once inflated
+> VOC to a spurious ~1.0 mass). MQ is the LC0 final-Q loss (Stockfish-d5 MQ retired); the tree FEN is
+> normalized to 4 fields for the human join.
 
 ### Data and pipeline
 
-- **lc0-tree subset:** ~100K trees from the local `lc0_trees` set (150K), joined to human RT on
-  the **4-field** FEN (payloads carry a 6-field `root_position_spec` — normalized to 4 fields or
-  the join silently misses). MQ is matched to the human's played UCI (≈98% match).
-- `human_analytics/tree_values_analysis.py` derives OSS/VOC/Action-Gap/MQ and the lc0 Spearman
-  matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed/budget),
+- **lc0-tree subset:** ~114K trees from the canonical `human_trees` set (lc0 search on 2023 human-game
+  root FENs), joined to human RT on the **4-field** FEN. MQ is matched to the human's played UCI (≈98%
+  match). (An earlier lexicographic 150K slice of the full FEN universe gave a weaker, unrepresentative
+  GSS↔RT — a different FEN *population*, not a generation bug; same engine/config/net.)
+- `human_analytics/tree_values_analysis.py` derives GSS/VOC/Action-Gap/MQ and the lc0 Spearman
+  matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed),
   so plot iterations reload the cache locally in seconds. One-time compute via
-  `slurm/tree_values.slurm`. Binning lives in `utils/analysis.py` (integer bins for OSS, tie-safe
+  `slurm/tree_values.slurm`. Binning lives in `utils/analysis.py` (integer bins for GSS, tie-safe
   + zero-lump for VOC/MQ/gap, `min_bin_count` to drop sparse tails).
 - **Oracle (Tier A/B):** `lmcos` `pack.build_compact_trajectory` → `oracle.compute_budgeted_oracle`
   → `analysis/human_oracle_comparison.py`, which validates each tree's FEN against the manifest.
@@ -140,7 +143,7 @@ VOC / action-gap *value-convergence* cluster, not to branching.
 
 | Step | Status |
 |------|--------|
-| lc0 OSS/VOC/Action-Gap/MQ + Spearman matrix, 100K trees | ✅ done (cached) |
+| lc0 GSS/VOC/Action-Gap/MQ + Spearman matrix, 100K trees | ✅ done (cached) |
 | MQ difficulty-confound audit (N = 1M, Spearman + controls) | ✅ done |
 | Oracle Tier A (4/4 directions, 39,668 trees, 72 invariant tests) | ✅ done |
 | Oracle Tier B: 10K human FENs as 20 shards | ✅ submitted; oracle+join+plots ⬜ after jobs |

@@ -2,17 +2,21 @@
 #SBATCH --job-name=tree-values
 #SBATCH --output=/home/hl4291/chess_analysis/human_analytics/slurm/logs/tree_values_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/human_analytics/slurm/logs/tree_values_%j.err
+# CPU partition by design: this job runs NO Leela/lc0 inference. The lc0 evals are
+# already baked into the pre-generated .pt trees (value heads + oracle traces); here we
+# only read them (torch.load on CPU), compute stats (greedy stopping step, VOC/MQ/action
+# gap), join in DuckDB, and plot. A GPU would sit idle. (The GPU work — tree generation
+# — lives in the upstream lc0 tree-gen pipeline.) Modest footprint so it backfills fast.
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=40
-#SBATCH --mem=80G
-#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=00:30:00
 
-# Tree-derived "generated values" (OSS / VOC / Action Gap / MQ) from the ysagiv lc0
-# trees vs human RT, at scale. All are derived per-tree from the stored oracle
-# trace (MQ also joins the human's played move); the cost is loading individual
-# .pt trees, so we parallelize across CPUs.
+# Tree-derived "generated values" (GSS / VOC / Action Gap / MQ) from the canonical
+# human_trees vs human RT. Per-tree values are read from the stored tree (MQ also joins
+# the human's played move) and cached to parquet, so re-plots need no trees/cluster.
 #   N_TREES (default 100000), N_WORKERS (default = cpus-per-task)
 
 set -euo pipefail

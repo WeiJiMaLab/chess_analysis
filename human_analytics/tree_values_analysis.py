@@ -1,14 +1,17 @@
 """Tree-derived "generated values" vs human reaction time, on the lc0-tree subset.
 
-For a sample of the local ``lc0_trees`` set (150K trees under the project scratch;
-a copy that is insulated from the collaborator's tree-dir reorganizations) we derive
-FOUR quantities from each lc0 search tree, then join the tree's root FEN — normalized
-to 4-field, since these payloads may carry a 6-field root_position_spec — to human
-``move_time`` in ``processed_moves_nonzero`` and plot each vs log(RT) in the standard
-quantile-bin dashboard style:
+For a sample of the canonical ``human_trees`` set (lc0 search trees on human FENs) we
+derive FOUR quantities from each tree, then join the tree's root FEN — normalized to
+4-field, since payloads may carry a 6-field root_position_spec — to human ``move_time``
+in ``processed_moves_nonzero`` and plot each vs log(RT) in the standard quantile-bin
+dashboard style:
 
-  * OSS         — oracle stop step, budgeted DP oracle on the expansion trace
-                  (optimal_stop_step; cost model = canonical BudgetedOracleConfig).
+  * GSS         — greedy stopping step: the first expansion at which the eventual-best
+                  move is recommended (``oracle_best_move_index`` first equals its final
+                  value) — the cost-free "search effort to find the best move." This is
+                  the budgeted oracle's stop at zero cost; we use it instead of the
+                  cost-aware DP optimal_stop_step (which, under the default time cost,
+                  bails almost immediately and is not an interpretable difficulty proxy).
   * VOC         — value of computation = final_Q(deep best) − final_Q(1-ply best),
                   i.e. how much deep search improves on the shallow (1-ply value-head
                   lookahead) choice. ≥ 0.
@@ -24,14 +27,13 @@ quantile-bin dashboard style:
                   matched to the tree's ``oracle_root_moves`` (= all legal moves).
 
 All four are on the SAME subset (positions that have a generated lc0 tree), so
-they are directly comparable. This replaces the Stockfish proxies: OSS supersedes
-the node-budget VOC_budget, and VOC / Action Gap / MQ are read from the lc0 search
-itself rather than re-run on Stockfish.
+they are directly comparable, and are read from the lc0 search itself rather than
+re-run on Stockfish.
 
-The per-tree/per-move values are deterministic in (trees, n_trees, seed, budget) and
-are CACHED to parquet (``--cache-dir``). The first run loads all .pt trees (slow →
-run on the cluster); after that, tweaking the joins/plots reloads the cache in seconds
-and can run locally — no slurm, no re-reading 150K trees. Use ``--refresh`` to recompute.
+The per-tree/per-move values are deterministic in (trees, n_trees, seed) and are
+CACHED to parquet (``--cache-dir``, key includes the trees-dir basename). The first run
+loads all .pt trees (slow → run on the cluster); after that, tweaking the joins/plots
+reloads the cache in seconds and can run locally — no slurm. Use ``--refresh`` to recompute.
 
 Usage:
     # one-time compute (populates the cache), on the cluster:
@@ -54,17 +56,6 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-# cts oracle machinery (lmcos), imported via the `src` layout like
-# lmcos/analysis/human_oracle_comparison.py.
-_LMCOS = Path(__file__).resolve().parent.parent / "lmcos"
-if str(_LMCOS) not in sys.path:
-    sys.path.insert(0, str(_LMCOS))
-from src.data.preprocess_mc.oracle import BudgetedOracleConfig  # noqa: E402
-from src.data.preprocess_mc.pack import (  # noqa: E402
-    budgeted_oracle_from_trajectory,
-    build_compact_trajectory_from_payload,
-)
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
@@ -73,12 +64,10 @@ from utils import Variable, Analyzer  # noqa: E402
 from utils.helpers import apply_poster_style  # noqa: E402
 from utils.plots import highlight_corr_row  # noqa: E402
 
-_TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/lc0_trees"
+_TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
 _DB_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 _CACHE_DEFAULT = "/scratch/gpfs/GRIFFITHS/hl4291/tree_values_cache"
 _FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
-_CONFIG = BudgetedOracleConfig()
-_BUDGET = 96  # set per-run in compute_values before the worker pool forks
 
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
@@ -146,8 +135,20 @@ def _tree_root_mq(payload) -> tuple[list[str], list[float]]:
     return moves, mq
 
 
+def _tree_gss(payload) -> int:
+    """Greedy Stopping Step: the first expansion at which the eventual-best move is
+    recommended — ``oracle_best_move_index`` first equals its final value. This is the
+    cost-free "search effort to find the best move" (== the budgeted oracle's stop at
+    zero cost), NOT the cost-aware DP optimal_stop_step (which, under the default time
+    cost, bails almost immediately). ∈ [0, n_steps-1]."""
+    bmi = np.asarray(payload["oracle_best_move_index"]).ravel()
+    if bmi.size == 0:
+        return -1
+    return int(np.argmax(bmi == bmi[-1]))
+
+
 def _worker(path: str):
-    """Load one tree; return (fen, oss, voc, action_gap, root_ucis, root_mqs) or None.
+    """Load one tree; return (fen, gss, voc, action_gap, root_ucis, root_mqs) or None.
 
     The last two are parallel per-root-move lists (UCI, Lc0 MQ) used to attach MQ to
     whichever of those moves the human actually played. CPU-bound, 1 thread.
@@ -155,27 +156,24 @@ def _worker(path: str):
     try:
         torch.set_num_threads(1)
         t = torch.load(path, map_location="cpu", weights_only=False)
-        traj = build_compact_trajectory_from_payload(t)
-        if traj is None:
+        gss = _tree_gss(t)
+        if gss < 0:
             return None
-        oss = int(budgeted_oracle_from_trajectory(traj, _BUDGET, _CONFIG).optimal_stop_step)
         voc, gap = _tree_voc_and_gap(t)
         ucis, mqs = _tree_root_mq(t)
         # Join key is the 4-field FEN (placement/stm/castling/ep). These trees may
         # store a 6-field root_position_spec (with move counters); processed_moves_nonzero.fen
         # is 4-field, so normalize or the FEN join silently misses everything.
         fen = " ".join(t["root_position_spec"].split()[:4])
-        return (fen, oss, voc, gap, ucis, mqs)
+        return (fen, gss, voc, gap, ucis, mqs)
     except Exception:  # noqa: BLE001
         return None
 
 
-def compute_values(trees_dir: str, n_trees: int, seed: int, budget: int, n_workers: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Sample trees; return (per-tree DataFrame(fen, oss, voc, action_gap),
+def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Sample trees; return (per-tree DataFrame(fen, gss, voc, action_gap),
     per-root-move DataFrame(fen, move_uci, mq)). The second is exploded one row per
     legal root move so the human's played UCI can be joined to its Lc0 MQ."""
-    global _BUDGET
-    _BUDGET = budget
     names = [e.name for e in os.scandir(trees_dir) if e.name.endswith(".pt")]
     names = random.Random(seed).sample(names, min(n_trees, len(names)))
     paths = [os.path.join(trees_dir, nm) for nm in names]
@@ -184,8 +182,8 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, budget: int, n_worke
         for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
-            fen, oss, voc, gap, ucis, mqs = r
-            tree_rows.append({"fen": fen, "oss": oss, "voc": voc, "action_gap": gap})
+            fen, gss, voc, gap, ucis, mqs = r
+            tree_rows.append({"fen": fen, "gss": gss, "voc": voc, "action_gap": gap})
             for u, q in zip(ucis, mqs):
                 move_rows.append({"fen": fen, "move_uci": u, "mq": q})
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)
@@ -199,7 +197,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
                p.n_possible_moves AS branching, p.n_self_pieces_exc_pawns AS own_material,
-               m.mq, t.action_gap, t.voc, t.oss
+               m.mq, t.action_gap, t.voc, t.gss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
         JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
@@ -209,7 +207,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, output_path: st
     labels = {
         "log_T": "log(RT)", "ply": "Ply", "branching": "Branching",
         "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
-        "voc": "VOC", "oss": "OSS",
+        "voc": "VOC", "gss": "GSS",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
@@ -242,7 +240,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--n-trees", type=int, default=100000)
     parser.add_argument("--n-workers", type=int, default=os.cpu_count() or 8)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--budget", type=int, default=96)
     parser.add_argument("--db", default=_DB_DEFAULT)
     parser.add_argument("--cache-dir", default=_CACHE_DEFAULT,
                         help="where the per-tree/per-move values are cached (parquet)")
@@ -250,23 +247,24 @@ def main(argv: list[str] | None = None) -> None:
                         help="recompute from the trees even if a cache exists")
     args = parser.parse_args(argv)
 
-    # The per-tree/per-move values are deterministic in (trees, n_trees, seed, budget),
-    # so cache them: tweaking the join or the plots then reloads the cache in seconds
-    # (run locally — no slurm, no re-loading 100k .pt trees / re-running the oracle).
-    key = f"{args.n_trees}_{args.seed}_{args.budget}"
+    # The per-tree/per-move values are deterministic in (trees, n_trees, seed), so cache
+    # them: tweaking the join or the plots then reloads the cache in seconds (run locally —
+    # no slurm, no re-loading 100k .pt trees). Key includes the trees-dir basename so
+    # different tree sets cache separately.
+    key = f"{os.path.basename(args.trees_dir.rstrip('/'))}_{args.n_trees}_{args.seed}"
     cache = Path(args.cache_dir)
     vals_path, rm_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
     if not args.refresh and vals_path.exists() and rm_path.exists():
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
     else:
-        print(f"Deriving OSS/VOC/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
-        vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.budget, args.n_workers)
+        print(f"Deriving GSS/VOC/Action Gap/MQ on {args.n_trees:,} trees ({args.n_workers} workers) …")
+        vals, root_moves = compute_values(args.trees_dir, args.n_trees, args.seed, args.n_workers)
         cache.mkdir(parents=True, exist_ok=True)
         vals.to_parquet(vals_path)
         root_moves.to_parquet(rm_path)
         print(f"  cached → {cache} (key={key})")
-    print(f"  {len(vals):,} trees (OSS {vals['oss'].min()}–{vals['oss'].max()}); "
+    print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); "
           f"{len(root_moves):,} root moves for MQ.")
 
     conn = duckdb.connect(args.db, read_only=False)
@@ -274,7 +272,7 @@ def main(argv: list[str] | None = None) -> None:
     conn.register("_root_moves", root_moves)
     conn.execute("""
         CREATE OR REPLACE TEMP TABLE tree_rt AS
-        SELECT v.oss, v.voc, v.action_gap, v.fen, m.gid, m.move_ply, m.move_time
+        SELECT v.gss, v.voc, v.action_gap, v.fen, m.gid, m.move_ply, m.move_time
         FROM _vals v
         JOIN processed_moves_nonzero m ON m.fen = v.fen
         WHERE m.move_time > 0
@@ -282,7 +280,7 @@ def main(argv: list[str] | None = None) -> None:
     n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
     n_fen = conn.execute("SELECT count(DISTINCT fen) FROM tree_rt").fetchone()[0]
     print(f"  joined {n_rows:,} human moves across {n_fen:,} FENs.")
-    for col in ("oss", "voc", "action_gap"):
+    for col in ("gss", "voc", "action_gap"):
         r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt").fetchone()[0]
         print(f"  r({col}, log RT) = {r:+.4f}")
 
@@ -313,22 +311,22 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  r(mq, log RT) = {r_mq:+.4f}")
 
     _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    # OSS / VOC / Action Gap are properties of the position/search, so we plot human
+    # GSS / VOC / Action Gap are properties of the position/search, so we plot human
     # RT (y) as a function of the value (x). Per-figure binning (see Analyzer docstring):
-    #   * OSS is an INTEGER count; ``ntile`` splits its heavy mass at 1 across many
-    #     identical-mean bins → spurious low-OSS swings. Bin in fixed groups of 5
-    #     (each plotted at its group mean). The oracle stop step is not reliable past
-    #     ~64 (of a 96 budget), so cap the analysis at oss <= 64.
+    #   * GSS is an INTEGER count (expansions until the best move is first found);
+    #     ``ntile`` splits its heavy low-value mass across identical-mean bins → spurious
+    #     swings, so bin in fixed groups of 5 (each plotted at its group mean). No cap:
+    #     unlike the old cost-aware stop, GSS↔RT is positive across the full range.
     #   * VOC / Action Gap have a large near-zero mass: lump the near-zero rows and
     #     bin the interior TIE-SAFE with few (8) bins so a single value can't straddle
     #     adjacent bins. (VOC's former ~1.0 spike was a bug in the shallow-choice — now
     #     fixed at source in _tree_voc_and_gap — so no edge_mass is needed.)
-    # min_bin_count drops the noisy sparse tails (high VOC / high OSS) from both panels.
+    # min_bin_count drops the noisy sparse tails (high VOC / high GSS) from both panels.
     # spec: (table, col, label, fname, kwargs-for-Analyzer)
     specs = [
-        ("tree_rt", "oss", "Oracle stop step", "oss_vs_rt.png",
+        ("tree_rt", "gss", "Greedy stop step", "gss_vs_rt.png",
          dict(bin_mode="integer", integer_bin_width=5,
-              filter_query="move_time > 0 AND oss <= 64", min_bin_count=100)),
+              filter_query="move_time > 0", min_bin_count=100)),
         ("tree_rt", "voc", "VOC (lc0 tree)", "voc_vs_rt.png",
          dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
               filter_query="move_time > 0", min_bin_count=100)),

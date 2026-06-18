@@ -21,12 +21,12 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `human_
 | **log(MT) histogram + normal QQ** | `python human_analytics/move_time_summary.py` |
 | **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock npossiblemoves self_pieces_exc ply`) |
 | **Ply vs instant-move probability** | `python human_analytics/ply_premove.py` |
-| **Tree-derived OSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch human_analytics/slurm/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
+| **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch human_analytics/slurm/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
 | **Engine eval (positions)** | `python human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval --engine stockfish` |
 | **Build selected-moves-with-engine join** | `python human_analytics/slurm/scripts/build_selected_moves_with_engine.py` |
 | **Slidev deck (LMCOS overview)** | `cd human_analytics/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
-The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash human_analytics/slurm/analysis.sh`**. The **generated values** (OSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
+The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash human_analytics/slurm/analysis.sh`**. The **generated values** (GSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
 
 **Outputs:** analysis scripts write figures under the **repo-root `figures/`** directory (single source of truth; the `presentations/public/figures` symlink points here). Older / intermediate snapshots live under **`figures/archive/`**.
 
@@ -54,7 +54,7 @@ chess_analysis/
     ├── move_time_summary.py      # FULL: log(MT) histogram + normal QQ
     ├── ply_premove.py            # FULL: ply vs instant-move probability
     ├── engine_analysis.py        # engine VOC/MQ primitives (library)
-    ├── tree_values_analysis.py   # SUBSET: OSS / VOC / Action Gap / MQ from lc0 trees vs RT (cluster)
+    ├── tree_values_analysis.py   # SUBSET: GSS / VOC / Action Gap / MQ from lc0 trees vs RT (cluster)
     └── ...
 ```
 
