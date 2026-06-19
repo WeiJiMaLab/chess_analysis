@@ -105,3 +105,48 @@ runs stay ≤ ~2 min on data subsets (subagent-eligible, per your note).
   the [[partition]] manifests (shared leakage guard with [[eval]]).
 - **`test_eta_extrapolator`** — the time-to-converge estimator, given a synthetic
   decaying-CE curve + fixed throughput, returns the analytically known ETA.
+
+---
+
+## Post-profiling execution plan + timing (2026-06-19)
+
+**Status:** pre-pack DONE (`packed/gnn/{train,validation}`, 202,830 / 202,829 examples,
+loader-validated); profiling DONE; **training HELD** pending go.
+
+### Phase 1 — encoder training (child-WDL CE → KL)
+- **Config:** ysagiv smoke arch — `k=2, d_embed=128, d_message=128, n_heads=4`, Adam
+  `lr=1e-2`, subtree-size-weighted CE. Data = our partition's packed shards.
+- **Throughput:** packed → GPU-bound (~100k edges/s, A100-class). Train split ≈ 202,830×
+  ~1,640 ≈ **3.3e8 edges/epoch ⇒ ~1–1.3 h/epoch** (+ a cheaper val pass).
+- **Convergence:** per-epoch ΔKL(`loss_gap`) < 1e-5 ([Q2]); ~16 epochs is an optimistic
+  lower bound (the smoke plateau is overfit noise), **budget 30–60 epochs** with KL early-stop.
+- **ETA:** ~18 h (16 ep) · ~1.4 d (30 ep) · ~2.75 d (60 ep) ⇒ **~1–3 days** wall, gated by
+  GPU queue + walltime.
+- **Mechanics:** della GPU walltime is bounded (gpu-short = hours), so this is a
+  **checkpoint+resume chain** of jobs (ckpt every N steps + best-by-val [Q5]; KL early-stop +
+  fixed-epoch cap [Q6], whichever first). Save best+final encoder to
+  `/scratch/gpfs/GRIFFITHS/hl4291/GNN/`. Monitor with `human_analytics/gnn_kl_dashboard.py`.
+- **Note:** `packed/gnn/` shards are symlinks into `packed/gnn_chunks/`; for safekeeping,
+  materialize real copies (or keep `gnn_chunks/`) before any cleanup.
+
+### Phase 2 — benchmarking (controller + fill the reserved Part-3 slot)
+1. **Materialize controller features** — forward the *frozen* encoder over the MC snapshots to
+   cache `z_root` per snapshot (the often-forgotten step;
+   `cts.data.preprocess_mc.materialize`). Forward-only pass over the MC packed snapshots,
+   **~hours GPU**.
+2. **Train the MC controller** — fitted-Q advantage head (MSE + sign-BCE, selected by
+   `average_regret`; `controller_train.py`) on the cached features. Small MLP ⇒ **fast
+   (~minutes–1 h)**.
+3. **Evaluate on the TEST split** — Regret + P(stop==OSS); drop the trained GNN/MC controller
+   into the **reserved greyed slot** in `regret_by_model.png` / `stop_eq_oss_by_model.png`
+   (vs Always Stop / Never Stop / Fraction `f*`). Encoder's own quality = the KL-convergence
+   curve + per-bucket KL (`encoder_kl_audit`).
+- **ETA:** ~0.5–1 day (materialize dominates).
+
+### End-to-end: **~1.5–4 days** wall, mostly Phase 1.
+
+### Decisions needed before launch
+- **Go/no-go** to start Phase 1 now.
+- Confirm the **gpu-short walltime** (sets the resume cadence) — or use a longer GPU QOS if
+  available, for fewer restarts.
+- Confirm the **epoch cap** (30 vs 60) for the ΔKL early-stop budget.
