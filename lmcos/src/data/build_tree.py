@@ -112,6 +112,12 @@ class BuildTreeConfig(BaseModel):
     # its child's subtree size — see ``ChildWdlPretrainConfig`` for the
     # full rationale.
     loss_weight_by_subtree_size: bool = False
+    # Per-epoch encoder checkpointing so an interrupted/incomplete run still yields
+    # downstream-loadable weights. ``checkpoint_dir`` defaults to ``output_checkpoint``'s
+    # directory; a tagged ``encoder_epoch{NNN}.pt`` (every ``checkpoint_every_epochs``) plus a
+    # rolling ``encoder_latest.pt`` are written each epoch with the current encoder weights.
+    checkpoint_dir: Optional[str] = None
+    checkpoint_every_epochs: int = 1
 
 
 def _feature_schema() -> NodeFeatureSchema:
@@ -426,6 +432,10 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
 
     print("[child-wdl-pretrain] stage=train_start", flush=True)
 
+    # Per-epoch encoder checkpoints (current weights) so an interrupted run is still usable.
+    ckpt_dir = config.checkpoint_dir or os.path.dirname(config.output_checkpoint) or "."
+    os.makedirs(ckpt_dir, exist_ok=True)
+
     # Per-phase last-logged-batch counter so the callback can throttle on a
     # batch-count interval rather than firing every step. Mutating dict
     # (not int) so the closures below can update it in place.
@@ -474,6 +484,18 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
             f"val_supervised_edges={validation_metrics.num_supervised_edges}",
             flush=True,
         )
+        # Save the CURRENT encoder this epoch (best is only restored at the very end of fit),
+        # so a partial run still yields downstream-loadable weights.
+        if config.checkpoint_every_epochs > 0 and epoch_index % config.checkpoint_every_epochs == 0:
+            meta = {
+                "stage": "supervised_pretrain_epoch",
+                "epoch": int(epoch_index),
+                "val_loss_gap": float(validation_metrics.loss_gap),
+                "pretrain_objective": "search_consolidated_edge_wdl_v1",
+            }
+            trainer.save_best_encoder(os.path.join(ckpt_dir, f"encoder_epoch{epoch_index:03d}.pt"), metadata=meta)
+            trainer.save_best_encoder(os.path.join(ckpt_dir, "encoder_latest.pt"), metadata=meta)
+            print(f"[child-wdl-pretrain] stage=epoch_checkpoint epoch={epoch_index} dir={ckpt_dir}", flush=True)
 
     # Optional JSONL writer for the per-validation-epoch bucketed-KL time series.
     bucketed_kl_callback = None
