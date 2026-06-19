@@ -63,7 +63,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from utils import Variable, Analyzer  # noqa: E402
-from utils.helpers import apply_poster_style, FONT_SIZE_LABEL  # noqa: E402
+from utils.helpers import apply_poster_style, FONT_SIZE_LABEL, FONT_SIZE_TICKS  # noqa: E402
 from utils.plots import highlight_corr_row  # noqa: E402
 
 _TREES_DEFAULT = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
@@ -270,11 +270,14 @@ def save_mq_dashboard(analyzer: Analyzer, gss_analyzer: Analyzer, output_path: s
     on the same mq_rt table constructed with ``segment_column='gss'``."""
     apply_poster_style()
     fig, axes = plt.subplots(1, 3, figsize=(45, 13.72))
-    analyzer.plot_quantile_bins(axes[0])
-    analyzer.plot_quantile_bins_tertile_segmented(axes[1])
-    gss_analyzer.plot_quantile_bins_tertile_segmented(axes[2])
+    # x = log(RT) is CONTINUOUS → binning-free LOWESS + bootstrap band (the principled
+    # estimator-by-type standard; MQ's point-masses are on the Y axis, so averaging y per
+    # local x-window handles them — no x-mass to isolate). [global | ply tertile | GSS stratum]
+    analyzer.plot_lowess(axes[0])  # global panel: method in title, no legend needed
+    analyzer.plot_lowess_tertile_segmented(axes[1])
+    gss_analyzer.plot_lowess_tertile_segmented(axes[2])
     fig.subplots_adjust(top=0.80)
-    suptitle = fig.suptitle(f"{analyzer.title}\nn = {analyzer.n_moves:,} moves",
+    suptitle = fig.suptitle(f"{analyzer.title} — LOWESS + 95% bootstrap band\nn = {analyzer.n_moves:,} moves",
                             fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -426,9 +429,16 @@ def main(argv: list[str] | None = None) -> None:
     # GSS / Gain / Action Gap are properties of the position/search, so we plot human
     # RT (y) as a function of the value (x). Per-figure binning (see Analyzer docstring):
     #   * GSS is an INTEGER count (expansions until the best move is first found);
-    #     ``ntile`` splits its heavy low-value mass across identical-mean bins → spurious
-    #     swings, so bin in fixed groups of 5 (each plotted at its group mean). No cap:
+    #     ``ntile`` splits its heavy 0/1 mass across identical-mean bins (the 8-quantile
+    #     interior edges collapse to [1,1,2,10,27,45,70] — two coincident edges at 1.0)
+    #     → spurious swings. We therefore bin on the NATIVE integer values
+    #     (``integer_bin_width=1`` ⇒ one point + analytic SEM per distinct GSS value,
+    #     plotted at honest integer x-positions). The per-integer counts stay healthy
+    #     across the full 0–95 range (min ≈1.8k, almost all >2k at full n), so
+    #     ``min_bin_count=100`` keeps every value and no tail-merge is needed. No cap:
     #     unlike the old cost-aware stop, GSS↔RT is positive across the full range.
+    #     (Earlier this used groups of 5, which needlessly coarsened a clean integer
+    #     predictor; see diagnose_gain.md "Jaggedness diagnosis" + "GSS native-integer".)
     #   * Gain / Action Gap have a large near-zero mass: lump the near-zero rows and
     #     bin the interior TIE-SAFE with few (8) bins so a single value can't straddle
     #     adjacent bins. (Gain is now the growing-tree definition in _tree_voc_and_gap —
@@ -436,18 +446,29 @@ def main(argv: list[str] | None = None) -> None:
     #     two earlier definitions did, from reading an unvisited-0.0 shallow value.)
     # min_bin_count drops the noisy sparse tails (high Gain / high GSS) from both panels.
     # spec: (table, col, label, fname, kwargs-for-Analyzer)
+    # Estimator chosen by PREDICTOR TYPE (diagnose_gain.md "Gain binning (K-vs-n)"):
+    #   * DISCRETE/integer x (GSS) → native-integer binning (one point + SEM per value).
+    #   * CONTINUOUS x with a value point-mass (Gain, Action Gap: ~55% / heavy mass at 0,
+    #     which violates local smoothness and which a fixed-K staircase can't resolve) →
+    #     binning-free LOWESS + curve-level bootstrap band, with the 0-mass isolated as its
+    #     own labeled point. The old zero-inflated/tie-safe binning is kept on the Analyzer
+    #     only to draw the faint binned-means sanity overlay behind the smoother.
+    # spec: (table, col, label, fname, Analyzer-kwargs, save_dashboard-kwargs)
     specs = [
         ("tree_rt", "gss", "Greedy stop step", "gss_vs_rt.png",
-         dict(bin_mode="integer", integer_bin_width=5,
-              filter_query="move_time > 0", min_bin_count=100)),
+         dict(bin_mode="integer", integer_bin_width=1,
+              filter_query="move_time > 0", min_bin_count=100),
+         {}),
         ("tree_rt", "voc", "Gain (lc0 tree)", "gain_vs_rt.png",
          dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
-              filter_query="move_time > 0", min_bin_count=100)),
+              filter_query="move_time > 0", min_bin_count=100),
+         dict(estimator="lowess", mass_values=[0.0])),
         ("tree_rt", "action_gap", "Action Gap (lc0 tree)", "actiongap_vs_rt.png",
          dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
-              filter_query="move_time > 0", min_bin_count=100)),
+              filter_query="move_time > 0", min_bin_count=100),
+         dict(estimator="lowess", mass_values=[0.0])),
     ]
-    for table, col, label, fname, bin_kwargs in specs:
+    for table, col, label, fname, bin_kwargs, save_kwargs in specs:
         analyzer = Analyzer(
             conn,
             table,
@@ -456,7 +477,7 @@ def main(argv: list[str] | None = None) -> None:
             title=f"{label} vs. log(RT)",
             **bin_kwargs,
         )
-        analyzer.save_dashboard(str(_FIGURES_DIR / fname))
+        analyzer.save_dashboard(str(_FIGURES_DIR / fname), **save_kwargs)
 
     # MQ is the OUTCOME of the human's decision, so plot mean move quality (y) as a function
     # of think time: log RT on x, MQ on y. THREE panels side by side — all MQ-vs-log-RT,

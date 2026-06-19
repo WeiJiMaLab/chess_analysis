@@ -106,7 +106,7 @@ python human_analytics/move_time_summary.py --include_zeroT
 **Dashboards** (`movetime_analysis.py`; default table `processed_moves_nonzero` → one PNG per analysis):
 
 ```bash
-python analysis/movetime_analysis.py --only clock clock_opp npossiblemoves pieces_exc self_pieces_exc ply
+python analysis/movetime_analysis.py --only clock clock_opp legal_moves pieces_exc own_material ply
 ```
 
 ## Deployment

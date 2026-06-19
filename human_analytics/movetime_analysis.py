@@ -22,8 +22,8 @@ from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 
 DEFAULT_ANALYSES = (
     "clock",
-    "npossiblemoves",
-    "self_pieces_exc",
+    "legal_moves",
+    "own_material",
     "ply",
     "boardcorr",
 )
@@ -38,7 +38,7 @@ def _src_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
+def legal_moves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
     if src_dir is None:
         src_dir = _src_dir()
     analyzer = Analyzer(
@@ -48,22 +48,24 @@ def npossiblemoves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_possible_moves < 50",
         title="Legal Moves",
+        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE count → native-integer
     )
-    analyzer.save_dashboard(_fig(src_dir, "npossiblemoves_vs_movetime.png"))
+    analyzer.save_dashboard(_fig(src_dir, "legal_moves_vs_movetime.png"))
 
 
-def self_pieces_exc_pawns_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
+def own_material_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
     if src_dir is None:
         src_dir = _src_dir()
     analyzer = Analyzer(
         db_conn=conn,
         table_name=TABLE_PROCESSED_MOVES_NONZERO,
-        x_var=Variable(column="n_self_pieces_exc_pawns", is_log=False, name="Own Non-Pawn Pieces"),
+        x_var=Variable(column="n_self_pieces_exc_pawns", is_log=False, name="Own Material (non-pawn pieces)"),
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_self_pieces_exc_pawns IS NOT NULL",
-        title="Own Non-Pawn Material",
+        title="Own Material",
+        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE count → native-integer
     )
-    analyzer.save_dashboard(_fig(src_dir, "self_pieces_exc_pawns_vs_movetime.png"))
+    analyzer.save_dashboard(_fig(src_dir, "own_material_vs_movetime.png"))
 
 
 def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) -> None:
@@ -76,6 +78,7 @@ def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) ->
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="move_ply <= 150",
         title="Game Stage",
+        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE ply → native-integer
     )
     analyzer.save_dashboard(_fig(src_dir, "ply_vs_movetime.png"))
 
@@ -91,7 +94,8 @@ def clock_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) 
         filter_query="player_clock_time < 600",
         title="Player Clock Pressure",
     )
-    analyzer.save_dashboard(_fig(src_dir, "clock_vs_movetime.png"))
+    # CONTINUOUS clock → binning-free LOWESS + bootstrap band.
+    analyzer.save_dashboard(_fig(src_dir, "clock_vs_movetime.png"), estimator="lowess")
 
 
 def board_feature_corr(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None,
@@ -139,10 +143,10 @@ def board_feature_corr(conn: duckdb.DuckDBPyConnection, src_dir: str | None = No
 
 
 def _run_duckdb_analysis(name: str, conn: duckdb.DuckDBPyConnection, src_dir: str) -> None:
-    if name == "npossiblemoves":
-        npossiblemoves_movetime(conn, src_dir)
-    elif name == "self_pieces_exc":
-        self_pieces_exc_pawns_movetime(conn, src_dir)
+    if name == "legal_moves":
+        legal_moves_movetime(conn, src_dir)
+    elif name == "own_material":
+        own_material_movetime(conn, src_dir)
     elif name == "ply":
         ply_movetime(conn, src_dir)
     elif name == "clock":
@@ -158,7 +162,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
     parser.add_argument(
         "--only", nargs="+",
-        choices=["npossiblemoves", "self_pieces_exc", "ply", "clock", "boardcorr", "all"],
+        choices=["legal_moves", "own_material", "ply", "clock", "boardcorr", "all"],
         metavar="NAME",
     )
     args = parser.parse_args(argv)

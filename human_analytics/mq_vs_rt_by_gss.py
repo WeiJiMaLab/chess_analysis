@@ -22,6 +22,7 @@ difficulty-confound statistics. Everything reads the existing parquet caches + D
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import duckdb
@@ -29,18 +30,19 @@ import numpy as np
 import pandas as pd
 
 _CACHE = Path("/scratch/gpfs/GRIFFITHS/hl4291/tree_values_cache")
-_VALS = _CACHE / "vals_human_trees_200000_7.parquet"
-_ROOTMOVES = _CACHE / "rootmoves_human_trees_200000_7.parquet"
+# Cache key {n_trees}_{seed}; a large sentinel n_trees (sampling is capped at the live
+# tree count) reads the full-dataset cache. Default to the historical 200000 key.
+_KEY_DEFAULT = "human_trees_200000_7"
 _DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 
 
-def load_played_moves() -> pd.DataFrame:
+def load_played_moves(key: str = _KEY_DEFAULT) -> pd.DataFrame:
     """One row per human played move on a lc0-tree FEN, with everything we condition on:
     mq (Lc0 value loss of the move played), log_rt, gss (per-FEN difficulty), and
     legal moves (n_possible_moves). The MQ↔human join is on (fen, move_uci) — the human's
     actual UCI matched to its root-move MQ — exactly as ``mq_rt`` is built upstream."""
-    vals = pd.read_parquet(_VALS)[["fen", "gss"]]
-    root_moves = pd.read_parquet(_ROOTMOVES)[["fen", "move_uci", "mq"]]
+    vals = pd.read_parquet(_CACHE / f"vals_{key}.parquet")[["fen", "gss"]]
+    root_moves = pd.read_parquet(_CACHE / f"rootmoves_{key}.parquet")[["fen", "move_uci", "mq"]]
 
     conn = duckdb.connect(_DB, read_only=True)
     conn.register("_vals", vals)
@@ -116,7 +118,11 @@ def main() -> None:
     # Prints the difficulty-confound stats (within-stratum + partial Spearman). The figure
     # itself is the third panel of mq_vs_rt.png — a GSS-segmented Analyzer in
     # tree_values_analysis.py — there is no standalone figure.
-    report(load_played_moves())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--key", default=_KEY_DEFAULT,
+                        help="cache key {n_trees}_{seed}, e.g. human_trees_10000000_7 for the full set")
+    args = parser.parse_args()
+    report(load_played_moves(args.key))
 
 
 if __name__ == "__main__":

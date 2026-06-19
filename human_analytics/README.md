@@ -19,7 +19,7 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `human_
 | **Moves ETL (games → shards → merge → `process_moves`)** | `bash human_analytics/slurm/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
 | **Regenerate standard figures** | `bash human_analytics/slurm/analysis.sh` |
 | **log(MT) histogram + normal QQ** | `python human_analytics/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock npossiblemoves self_pieces_exc ply`) |
+| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python human_analytics/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
 | **Ply vs instant-move probability** | `python human_analytics/ply_premove.py` |
 | **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch human_analytics/slurm/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
 | **Engine eval (positions)** | `python human_analytics/slurm/scripts/build_pos_with_engine_eval.py eval --engine stockfish` |

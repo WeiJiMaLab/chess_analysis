@@ -27,8 +27,8 @@ with difficulty.
 Each board feature gets the canonical quantile-bin dashboard (global + by ply tertile):
 
 ![player clock vs move time](../figures/clock_vs_movetime.png)
-![branching (legal moves) vs move time](../figures/npossiblemoves_vs_movetime.png)
-![own non-pawn material vs move time](../figures/self_pieces_exc_pawns_vs_movetime.png)
+![branching (legal moves) vs move time](../figures/legal_moves_vs_movetime.png)
+![own non-pawn material vs move time](../figures/own_material_vs_movetime.png)
 ![game stage (ply) vs move time](../figures/ply_vs_movetime.png)
 
 | Feature (from position) | r with log(RT) | Reading |
@@ -65,7 +65,7 @@ one. See the policy-entropy test in [the engine report](engine.md).
   non-zero-`move_time` moves in `processed_moves_nonzero` (4-field FEN, board counts, ply
   tertiles). Dataset details: the human-data reference in the index.
 - **Per-feature dashboards:** `human_analytics/movetime_analysis.py` (`clock`,
-  `npossiblemoves`, `self_pieces_exc`, `ply`) — the canonical `Analyzer` quantile-bin 1×2
+  `legal_moves`, `own_material`, `ply`) — the canonical `Analyzer` quantile-bin 1×2
   (global + a-priori ply tertiles). Distribution: `move_time_summary.py`.
 - **Board-feature matrix:** `movetime_analysis.py boardcorr` — Spearman ρ over Ply,
   Branching, Own material, Player clock, log(RT) on a 1M-row reservoir sample. Figures land

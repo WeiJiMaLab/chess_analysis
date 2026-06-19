@@ -525,6 +525,99 @@ class Analyzer:
         if self.x.is_log and len(df) and (df["mean_x"] > 0).any():
             ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
 
+    # --- Binning-free estimator (LOWESS + curve-level bootstrap band) ----------
+    # For a CONTINUOUS predictor, a fixed-K binned staircase does not converge to the
+    # smooth regression function as n grows (its resolution is frozen by K); a bandwidth
+    # smoother does. We isolate any value point-mass (e.g. Gain's 55% at exactly 0, which
+    # violates local smoothness) as its own labeled point and LOWESS only the continuous
+    # remainder. See diagnose_gain.md "Gain binning (K-vs-n)".
+
+    def _fetch_xy(self, tertile: int | None = None):
+        """Raw (x, _y_transformed) arrays from the analyzer view, optionally one ply tertile."""
+        where = "" if tertile is None else f" WHERE _ply_tertile = {int(tertile)}"
+        cols = self.conn.execute(
+            f"SELECT {self.x.column} AS x, _y_transformed AS y FROM _analyzer_view{where}"
+        ).fetchnumpy()
+        x = np.asarray(cols["x"], dtype=float)
+        y = np.asarray(cols["y"], dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        return x[finite], y[finite]
+
+    def plot_lowess(self, ax, *, mass_values=(), frac: float = 0.3, n_boot: int = 120,
+                    grid_n: int = 120, color=None, tertile: int | None = None,
+                    show_band: bool = True, band_alpha: float = 0.22, show_mass: bool = True,
+                    overlay_binned: bool = False, label_prefix: str = "", max_fit_n: int = 500_000):
+        """LOWESS fit of (transformed) Y on X + curve-level bootstrap band, with value
+        point-masses in ``mass_values`` isolated (always excluded from the fit; drawn as
+        their own SEM point when ``show_mass``)."""
+        from .jaggedness import lowess_bootstrap
+        color = color or MAIN_COLOR
+        x, y = self._fetch_xy(tertile=tertile)
+        if x.size == 0:
+            return
+        keep = np.ones(x.size, dtype=bool)
+        mass_points = []
+        for v in mass_values:
+            at = np.isclose(x, v, atol=1e-9)
+            if at.sum() >= max(self.min_bin_count, 1):
+                yc = y[at]
+                mass_points.append((float(v), float(yc.mean()),
+                                    float(1.96 * yc.std() / np.sqrt(yc.size)), int(at.sum())))
+                keep &= ~at
+        # Fit in the DISPLAYED x-coordinate: log(x) when the x-axis is log (e.g. RT), raw
+        # otherwise, so the smoother's bandwidth matches what the eye sees.
+        xc_fit = np.log(x[keep]) if self.x.is_log else x[keep]
+        yc = y[keep]
+        good = np.isfinite(xc_fit) & np.isfinite(yc)
+        xc_fit, yc = xc_fit[good], yc[good]
+        if xc_fit.size > max_fit_n:
+            # The LOWESS curve + (already very tight) band are unchanged by capping the fit
+            # sample; this just keeps the bootstrap tractable on the multi-million-row panels.
+            sel = np.random.default_rng(0).choice(xc_fit.size, max_fit_n, replace=False)
+            xc_fit, yc = xc_fit[sel], yc[sel]
+        if xc_fit.size >= 50:
+            lo_x, hi_x = np.quantile(xc_fit, [0.002, 0.998])  # trim sparse extremes for a stable band
+            grid = np.linspace(lo_x, hi_x, grid_n)
+            delta = 0.01 * float(xc_fit.max() - xc_fit.min() + 1e-12)  # statsmodels large-n speedup
+            res = lowess_bootstrap(xc_fit, yc, grid, frac=frac, n_boot=n_boot, delta=delta)
+            grid_plot = np.exp(grid) if self.x.is_log else grid  # back to raw units for a log-scaled axis
+            # Method (LOWESS + band) is stated in the figure title, not the legend.
+            # Only the per-tertile curve carries a (tertile-name) label; the global curve
+            # and the band carry none, to keep the legend minimal.
+            curve_label = label_prefix.rstrip(": ") or None
+            if show_band:
+                ax.fill_between(grid_plot, res["lo"], res["hi"], color=color, alpha=band_alpha,
+                                lw=0)
+            ax.plot(grid_plot, res["fit"], color=color, lw=2.5, label=curve_label)
+        if show_mass:
+            for v, c, half, n in mass_points:
+                ax.errorbar([v], [c], yerr=[half], marker="s", ms=10, color="crimson",
+                            capsize=4, zorder=5, label=f"x={v:g} mass (n={n:,})")
+        if overlay_binned and tertile is None:
+            df = self.quantile_df
+            if self.min_bin_count:
+                df = df[df["n"] >= self.min_bin_count]
+            ax.scatter(df["mean_x"], df["mean_y"], s=16, color="0.5", alpha=0.5, zorder=1,
+                       label="binned means (sanity)")
+        ax.set_xlabel(self.x.label)  # raw label — LOWESS is binning-free, so no "(qbin)" suffix
+        ax.set_ylabel("Move time (s)" if self.y.is_log else self.y.label)
+        if self.y.is_log:
+            _seconds_from_log(ax.yaxis)
+        if self.x.is_log:
+            ax.set_xscale("log")
+
+    def plot_lowess_tertile_segmented(self, ax, *, mass_values=(), frac: float = 0.3,
+                                      n_boot: int = 60, grid_n: int = 120):
+        """One LOWESS curve per fixed ply tertile (thin bands), colors/labels matching the
+        binned tertile panel. Masses are isolated from each fit but not drawn (global feature)."""
+        for t in (1, 2, 3):
+            self.plot_lowess(ax, mass_values=mass_values, frac=frac, n_boot=n_boot,
+                             grid_n=grid_n, color=PHASE_COLORS.get(t, MAIN_COLOR), tertile=t,
+                             show_band=True, band_alpha=0.12, show_mass=False,
+                             label_prefix=self._ply_tertile_legend_label(t) + ": ")
+        ax.legend(fontsize=FONT_SIZE_TICKS, loc="upper center",
+                  bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)
+
     def save_quantile_heatmap_figure(
         self,
         output_path,
@@ -555,6 +648,9 @@ class Analyzer:
         include_quantile_heatmap: bool = False,
         heatmap_alpha_mode: str = "log",
         heatmap_output_path: str | None = None,
+        estimator: str = "binned",
+        mass_values=(),
+        lowess_frac: float = 0.3,
     ):
         """Generates and saves a publication-ready dashboard.
 
@@ -575,22 +671,38 @@ class Analyzer:
             )
 
         fig, axes = plt.subplots(1, 2, figsize=(30, 13.72))
-        self.plot_quantile_bins(axes[0])
-        self.plot_quantile_bins_tertile_segmented(axes[1])
+        if estimator == "lowess":
+            # CONTINUOUS predictor: binning-free LOWESS + bootstrap band (left = global,
+            # right = by ply tertile). Value masses isolated as their own points. Method
+            # named in the title; legend minimal (mass point only, when present).
+            self.plot_lowess(axes[0], mass_values=mass_values, frac=lowess_frac)
+            if axes[0].get_legend_handles_labels()[1]:
+                axes[0].legend(fontsize=FONT_SIZE_TICKS, loc="upper center",
+                               bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)  # below the panel
+            self.plot_lowess_tertile_segmented(axes[1], mass_values=mass_values, frac=lowess_frac)
+        else:
+            self.plot_quantile_bins(axes[0])
+            self.plot_quantile_bins_tertile_segmented(axes[1])
         # Panel titles omitted — left = global, right = by ply tertile (implied by
         # the legend + the "(qbin)" x-axis).
 
         # Push the panels down so the suptitle clears them with a comfortable gap.
         fig.subplots_adjust(top=0.80)
-        suptitle = fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
+        # Name the estimator in the title (not the legend): LOWESS for the smoother,
+        # "quantile bins" only when it is actually qbin'd; native-integer panels say nothing.
+        method = (" — LOWESS + 95% bootstrap band" if estimator == "lowess"
+                  else " — quantile bins" if self.bin_mode == "ntile" else "")
+        suptitle = fig.suptitle(f"{self.title}{method}\nn = {self.n_moves:,} moves",
+                                fontsize=FONT_SIZE_LABEL + 10, y=1.0)
 
         # Crop tightly on save and explicitly include the below-axes legend +
         # suptitle as extra artists so they aren't clipped (bbox_inches='tight'
         # alone misses the legend placed outside the axes via bbox_to_anchor).
         extra_artists = [suptitle]
-        legend = axes[1].get_legend()
-        if legend is not None:
-            extra_artists.append(legend)
+        for _ax in axes:  # capture every below-panel legend (both panels can have one now)
+            _lg = _ax.get_legend()
+            if _lg is not None:
+                extra_artists.append(_lg)
         out_dir = os.path.dirname(output_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)

@@ -57,8 +57,8 @@ class: mdl-slide
   <p class="mdl-lead">Each candidate feature gets the same quantile-bin dashboard (global + by ply tertile). Eyeball which bends RT.</p>
   <div class="grid grid-cols-2 gap-3 items-center" style="flex:1; min-height:0">
     <div class="mdl-figbox"><img src="../public/figures/clock_vs_movetime.png" alt="player clock vs move time" /></div>
-    <div class="mdl-figbox"><img src="../public/figures/npossiblemoves_vs_movetime.png" alt="legal moves vs move time" /></div>
-    <div class="mdl-figbox"><img src="../public/figures/self_pieces_exc_pawns_vs_movetime.png" alt="own material vs move time" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/legal_moves_vs_movetime.png" alt="legal moves vs move time" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/own_material_vs_movetime.png" alt="own material vs move time" /></div>
     <div class="mdl-figbox"><img src="../public/figures/ply_vs_movetime.png" alt="ply vs move time" /></div>
   </div>
   <p class="mdl-tree-cut">Player clock · legal moves · own non-pawn material · game stage (ply). The steepest, cleanest rise is <strong>legal moves</strong> — the next slide quantifies it.</p>

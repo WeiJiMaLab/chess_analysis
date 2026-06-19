@@ -35,7 +35,7 @@ class: mdl-slide
         </ul>
       </div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/npossiblemoves_vs_movetime.png" alt="branching vs move time" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/legal_moves_vs_movetime.png" alt="branching vs move time" /></div>
   </div>
   <div class="mdl-found">Humans deliberate in proportion to the <strong>width of the decision</strong> (how many moves they must weigh), not to the <em>realized</em> value-of-computation. The paradox dissolves once "value of computation" is read as <em>expected</em> (ex-ante), not <em>realized</em> (ex-post).</div>
 </div>
