@@ -1,7 +1,14 @@
 # diagnose_gain.md — Part 2: the Gain≈1.0 spike, the narrow-CI puzzle, and CI method audit
 
-**Status:** plan draft + confirmed bug history. Awaiting answers on **[Q#]** before
-the subagent executes the diagnosis + test suite.
+**Status:** DONE. The diagnosis is complete and its conclusions are baked into the production
+figure standard (`utils/analysis.py`: LOWESS + bootstrap band for continuous predictors,
+native-integer for discrete) and the kept tests (`tests/test_gain.py`, `tests/test_jaggedness.py`).
+The one-off **diagnostic drivers this doc references have been removed** now that their findings
+are captured here and in the figure standard — `gain_dip_diagnostic.py`, `gain_ci_audit.py`,
+`gain_binning_diagnostic.py`, `jaggedness_diagnosis.py`, and `utils/ci.py` / `tests/test_ci.py`
+(the analytic-with-guards CI was superseded by the LOWESS bootstrap band, so it was never wired
+into production). The narrative below is preserved verbatim as the record of findings; its
+links to those scripts are historical.
 
 Related: [[partition]], [[tree-set-and-gss]], [[report-deck-format-convention]].
 

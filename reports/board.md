@@ -24,7 +24,9 @@ with difficulty.
 
 ### Which board features move with think time?
 
-Each board feature gets the canonical quantile-bin dashboard (global + by ply tertile):
+Each board feature gets the canonical move-time dashboard (global + by ply tertile), with
+the estimator chosen by predictor type — **native-integer points** (one point + SEM per value)
+for the discrete counts, **LOWESS + 95% bootstrap band** for the continuous clock:
 
 ![player clock vs move time](../figures/clock_vs_movetime.png)
 ![branching (legal moves) vs move time](../figures/legal_moves_vs_movetime.png)
@@ -65,8 +67,9 @@ one. See the policy-entropy test in [the engine report](engine.md).
   non-zero-`move_time` moves in `processed_moves_nonzero` (4-field FEN, board counts, ply
   tertiles). Dataset details: the human-data reference in the index.
 - **Per-feature dashboards:** `human_analytics/movetime_analysis.py` (`clock`,
-  `legal_moves`, `own_material`, `ply`) — the canonical `Analyzer` quantile-bin 1×2
-  (global + a-priori ply tertiles). Distribution: `move_time_summary.py`.
+  `legal_moves`, `own_material`, `ply`) — the canonical `Analyzer` 1×2 (global + a-priori ply
+  tertiles), estimator by predictor type: native-integer per-value for the discrete counts,
+  LOWESS + bootstrap band for the continuous clock. Distribution: `move_time_summary.py`.
 - **Board-feature matrix:** `movetime_analysis.py boardcorr` — Spearman ρ over Ply,
   Branching, Own material, Player clock, log(RT) on a 1M-row reservoir sample. Figures land
   in repo-root `figures/`.

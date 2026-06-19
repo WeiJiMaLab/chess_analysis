@@ -91,8 +91,8 @@ effort to find the best move) as the difficulty proxy — the **third panel** ab
 ![greedy stop step vs RT](../figures/gss_vs_rt.png)
 ![action gap vs RT](../figures/actiongap_vs_rt.png)
 
-GSS (binned in groups of 5) **rises monotonically** with RT across the full range (no cap needed);
-the action gap is flat-to-weak.
+GSS (one point + SEM per integer value) **rises monotonically** with RT across the full range
+(no cap needed); the action gap is flat-to-weak.
 
 > **Result:** Every engine value-search quantity tracks human RT only faintly (|r| ≲ 0.17).
 > The model is in the right direction but explains little of the variance in human think time.
@@ -194,8 +194,11 @@ The operative width variable is the **raw legal-move count**, not any policy-wei
   entropy), and the lc0 Spearman
   matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed),
   so plot iterations reload the cache locally in seconds. One-time compute via
-  `slurm/tree_values.slurm`. Binning lives in `utils/analysis.py` (integer bins for GSS, tie-safe
-  + zero-lump for Gain/MQ/gap, `min_bin_count` to drop sparse tails). (Gain is the `voc` column.)
+  `slurm/tree_values.slurm`. The plotting estimator is chosen by predictor type in
+  `utils/analysis.py`: **native-integer** (one point + SEM per value) for the discrete GSS;
+  **LOWESS + 95% bootstrap band** for the continuous Gain / MQ / action-gap (with the value
+  point-mass — e.g. Gain's 55%-at-0 — isolated as its own point), since a fixed-K quantile
+  staircase does not converge to the smooth curve as n grows. (Gain is the `voc` column.)
 - **MQ-by-difficulty:** the 3rd panel of `mq_vs_rt.png` is a second `Analyzer` on the same `mq_rt`
   table built with `segment_column="gss"` — the *identical* MQ-vs-RT panel, segmented by GSS stratum
   instead of ply tertile (so it differs from the by-ply panel only in its legend).
