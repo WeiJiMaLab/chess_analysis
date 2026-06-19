@@ -188,15 +188,15 @@ class: mdl-slide
         <tr><td>overall (pooled)</td><td class="num">−0.232</td></tr>
         <tr><td>within GSS strata (easy / med / hard)</td><td class="num">−0.235 / −0.202 / −0.188</td></tr>
         <tr><td>partial | GSS</td><td class="num">−0.213</td></tr>
-        <tr><td>partial | branching</td><td class="num">−0.160</td></tr>
-        <tr class="hl"><td>partial | GSS + branching</td><td class="num">−0.150</td></tr>
+        <tr><td>partial | legal moves</td><td class="num">−0.160</td></tr>
+        <tr class="hl"><td>partial | GSS + legal moves</td><td class="num">−0.150</td></tr>
       </tbody>
     </table>
     <div class="mdl-text">
       <ul>
         <li>Negative inside <strong>every</strong> GSS stratum; conditioning on GSS removes only ~7%.</li>
         <li>GSS is even a <em>poor</em> difficulty proxy — its "easy" stratum has the <strong>worst</strong> MQ.</li>
-        <li>Branching does more, but the joint partial still leaves <strong>~⅔ of the effect</strong>.</li>
+        <li>The legal-move count does more, but the joint partial still leaves <strong>~⅔ of the effect</strong>.</li>
       </ul>
     </div>
   </div>
@@ -234,7 +234,7 @@ class: mdl-slide
         <tr><th>Feature</th><th class="num">r(oracle stop)</th><th class="num">r(human RT)</th></tr>
       </thead>
       <tbody>
-        <tr class="hl"><td>branching (decision width)</td><td class="num">+0.014</td><td class="num">+0.195</td></tr>
+        <tr class="hl"><td>legal moves (decision width)</td><td class="num">+0.014</td><td class="num">+0.195</td></tr>
         <tr><td>material</td><td class="num">+0.011</td><td class="num">+0.039</td></tr>
         <tr class="hl"><td>gain_depth (value gained)</td><td class="num">+0.233</td><td class="num">+0.096</td></tr>
         <tr><td>action gap (toptwo)</td><td class="num">−0.290</td><td class="num">−0.064</td></tr>
@@ -242,8 +242,8 @@ class: mdl-slide
     </table>
     <div class="mdl-text">
       <ul>
-        <li>The oracle halts on the <strong>value landscape</strong> (gain_depth, action gap) — it ignores branching.</li>
-        <li>Humans deliberate on <strong>structural width</strong> (branching dominates) — and barely track Gain.</li>
+        <li>The oracle halts on the <strong>value landscape</strong> (gain_depth, action gap) — it ignores the legal-move count.</li>
+        <li>Humans deliberate on <strong>structural width</strong> (legal moves dominate) — and barely track Gain.</li>
         <li>4/4 directions agree → the model gets <em>direction</em>, not <em>mechanism</em>.</li>
       </ul>
       <div class="text-xs opacity-50 mt-2">Tier A: n = 39,668 LMCOS trees · Tier B smoke: r(oracle stop, log RT) = +0.091, n = 497.</div>
@@ -264,12 +264,12 @@ class: mdl-slide
       <p class="mdl-lead">A rank-correlation map of every tree metric, board structure, and log RT. What clusters with human think time?</p>
       <div class="mdl-text">
         <ul>
-          <li><strong>Branching ↔ RT</strong> is the strongest tie — stronger than any engine metric.</li>
-          <li><strong>H(π)</strong> (policy-prior entropy, no search) is the best <em>tree-derived</em> predictor (+0.24) — but it's a width signal (ρ +0.59 with branching) that the <strong>raw legal-move count subsumes</strong> (partial | branching ≈ +0.05).</li>
+          <li><strong>Legal moves ↔ RT</strong> is the strongest tie — stronger than any engine metric.</li>
+          <li><strong>H(π)</strong> (policy-prior entropy, no search) is the best <em>tree-derived</em> predictor (+0.24) — but it's a width signal (ρ +0.59 with the legal-move count) that the <strong>raw legal-move count subsumes</strong> (partial | legal moves ≈ +0.05).</li>
           <li>GSS / Gain / action gap form a separate, weak <em>value-convergence</em> cluster.</li>
         </ul>
       </div>
-      <p class="mdl-tree-cut">No policy-weighted "effective width" beats the raw legal-move count — branching <em>is</em> the operative width variable.</p>
+      <p class="mdl-tree-cut">No policy-weighted "effective width" beats the raw legal-move count — it <em>is</em> the operative width variable.</p>
     </div>
     <div class="mdl-figbox"><img src="../public/figures/correlation_matrix.png" alt="Spearman correlation matrix — lc0 metrics" /></div>
   </div>
@@ -287,10 +287,10 @@ class: mdl-slide
     <div class="mdl-issue">
       <span class="mdl-issue-n">Finding 1</span>
       <h3 class="mdl-issue-h">Width &gt; value-of-search</h3>
-      <p class="mdl-issue-found">Decision <strong>width</strong> (branching) paces deliberation far more than any realized value-of-computation.</p>
+      <p class="mdl-issue-found">Decision <strong>width</strong> (the number of legal moves) paces deliberation far more than any realized value-of-computation.</p>
       <p class="mdl-issue-label">Evidence</p>
       <ul class="mdl-issue-list">
-        <li>branching r ≈ +0.20 / +0.33 ≫ Gain +0.085, GSS +0.110</li>
+        <li>legal moves r ≈ +0.20 / +0.33 ≫ Gain +0.085, GSS +0.110</li>
         <li>H(π) +0.24 but subsumed by the raw count</li>
       </ul>
     </div>
@@ -310,7 +310,7 @@ class: mdl-slide
       <p class="mdl-issue-found">"More time → worse moves" is <strong>not</strong> a pure difficulty confound — a real residual survives.</p>
       <p class="mdl-issue-label">Evidence</p>
       <ul class="mdl-issue-list">
-        <li>MQ r = −0.151; partial | GSS+branching = −0.150</li>
+        <li>MQ r = −0.151; partial | GSS + legal moves = −0.150</li>
         <li>~⅔ of the effect intact → selection / uncertainty</li>
       </ul>
     </div>

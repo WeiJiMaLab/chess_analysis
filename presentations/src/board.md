@@ -21,7 +21,7 @@ math: katex
 <!--
 Source: reports/board.md (R-MOVETIME-BOARD). Numbers verbatim. Figures: ../public/figures/.
 Arc: how is RT distributed (log-normal) -> per-feature dashboards -> which predicts (width wins) ->
-how the features relate (branching not reducible; raw count is the operative width).
+how the features relate (the legal-move count not reducible; raw count is the operative width).
 -->
 
 ---

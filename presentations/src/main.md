@@ -181,8 +181,8 @@ math: katex
 </div>
 
 <div class="mt-4 p-3 bg-amber-50 border-l-2 border-amber-400 rounded text-xs max-w-4xl">
-  <b>Zero-parameter findings:</b> Ply · Branching · Own pieces · Gain (Russek) · (neg) action gap
-  all track RT — with <b>Branching</b> playing a large role that Russek et al. do <b>not</b>
+  <b>Zero-parameter findings:</b> Ply · Legal moves · Own pieces · Gain (Russek) · (neg) action gap
+  all track RT — with <b>Legal moves</b> playing a large role that Russek et al. do <b>not</b>
   explain and that is largely <b>orthogonal</b> to gain.
 </div>
 
@@ -202,7 +202,7 @@ math: katex
   <div class="p-3 bg-neutral-soft border-l-2 border-accent rounded">
     <b class="text-accent uppercase tracking-wider">Metrics</b>
     <ul class="mt-1 list-disc pl-4 space-y-1 opacity-80">
-      <li>Ply / Branching / Own pieces</li>
+      <li>Ply / Legal moves / Own pieces</li>
       <li>Gain / Action gap</li>
     </ul>
   </div>
@@ -489,7 +489,7 @@ math: katex
     </thead>
     <tbody class="text-[12px]">
       <tr class="border-b border-gray-100">
-        <td class="py-2 pr-4 font-mono">branching factor</td>
+        <td class="py-2 pr-4 font-mono">legal moves</td>
         <td class="text-blue-600 font-bold">+0.20</td>
         <td class="opacity-80">More candidates → more uncertainty to spread across</td>
       </tr>
@@ -532,7 +532,7 @@ math: katex
         <tr><td class="py-1 pr-3 opacity-80">Ply ↔ own material</td><td class="text-right font-mono text-red-500 font-semibold">−0.81</td></tr>
         <tr><td class="py-1 pr-3 opacity-80">gain_depth ↔ MQ</td><td class="text-right font-mono text-red-500 font-semibold">−0.42</td></tr>
         <tr><td class="py-1 pr-3 opacity-80">toptwo ↔ MQ</td><td class="text-right font-mono text-red-400 font-semibold">−0.30</td></tr>
-        <tr class="border-t border-gray-100"><td class="py-1 pr-3 opacity-80">branching ↔ log(RT)</td><td class="text-right font-mono text-blue-600 font-semibold">+0.20</td></tr>
+        <tr class="border-t border-gray-100"><td class="py-1 pr-3 opacity-80">legal moves ↔ log(RT)</td><td class="text-right font-mono text-blue-600 font-semibold">+0.20</td></tr>
         <tr><td class="py-1 pr-3 opacity-80">gain_depth ↔ log(RT)</td><td class="text-right font-mono text-blue-400 font-semibold">+0.10</td></tr>
         <tr><td class="py-1 pr-3 opacity-80">MQ ↔ log(RT)</td><td class="text-right font-mono text-red-300 font-semibold">−0.12</td></tr>
         <tr><td class="py-1 pr-3 opacity-80">toptwo ↔ log(RT)</td><td class="text-right font-mono text-red-300 font-semibold">−0.06</td></tr>
@@ -563,7 +563,7 @@ math: katex
   <div class="flex gap-4 items-start">
     <div class="text-3xl font-bold text-amber-400 shrink-0 w-8">3</div>
     <div>
-      <div class="text-base font-semibold">Branching beats VOC as an RT predictor</div>
+      <div class="text-base font-semibold">Legal moves beat Gain as an RT predictor</div>
       <div class="text-sm opacity-70 mt-1">r = +0.20 vs +0.10. Width of the decision problem drives deliberation more than realized value of deeper search.</div>
     </div>
   </div>
@@ -662,7 +662,7 @@ math: katex
 <div class="grid grid-cols-[38fr_62fr] gap-8 items-center h-[calc(100%-3.5rem)]">
   <div class="space-y-3 text-sm">
     <div><span class="label">What</span> Compute <code>oracle_stop_step</code> on 39,668 lmcos training trees. Extract board features from root FEN.</div>
-    <div><span class="label">x</span> Board features: branching, material, gain_depth, toptwo</div>
+    <div><span class="label">x</span> Board features: legal moves, material, gain_depth, toptwo</div>
     <div><span class="label">y</span> oracle_stop_step (DP-optimal expansions, budget=43)</div>
     <div><span class="label">Compare</span> r(feature, oracle_stop_step) vs r(feature, human log RT)</div>
     <div class="finding"><span class="label">Finding</span> All 4 of 4 features match direction. gain_depth r = +0.233 for oracle vs +0.096 for humans. toptwo r = -0.290 for oracle vs -0.064 for humans.</div>
@@ -686,7 +686,7 @@ math: katex
     </thead>
     <tbody class="text-[12px]">
       <tr class="border-b border-gray-100 bg-green-50">
-        <td class="py-2 pr-4 font-mono">branching</td>
+        <td class="py-2 pr-4 font-mono">legal moves</td>
         <td class="text-right pr-4 text-blue-600 font-bold">+0.014</td>
         <td class="text-right pr-4 text-blue-600 font-bold">+0.195</td>
         <td class="text-green-700 font-semibold">✓ match (tiny)</td>
@@ -713,7 +713,7 @@ math: katex
   </table>
   <div class="mt-3 p-3 bg-neutral-soft rounded text-xs space-y-1">
     <p><b>Value Landscape Alignment:</b> Both humans and the oracle stop faster when one move is clearly better (negative toptwo correlation) and search longer when deeper search yields higher value (positive gain_depth/VOC correlation).</p>
-    <p><b>Structural Complexity Divergence:</b> Branching factor and piece count strongly drive human deliberation due to explicit move/threat enumeration, whereas the oracle's PUCT search and value network handle this natively, showing near-zero correlation with optimal stopping.</p>
+    <p><b>Structural Complexity Divergence:</b> The legal-move count and piece count strongly drive human deliberation due to explicit move/threat enumeration, whereas the oracle's PUCT search and value network handle this natively, showing near-zero correlation with optimal stopping.</p>
   </div>
 </div>
 
