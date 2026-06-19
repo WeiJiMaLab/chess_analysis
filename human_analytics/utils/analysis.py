@@ -39,6 +39,10 @@ from .plots import (
 _PLY_TERTILE_SOURCE_DEFAULT = "processed_moves_nonzero"
 _TERTILE_CUTS_CACHE: dict[tuple[str, str], tuple[int, int]] = {}
 
+# Highlight color for an isolated value point-mass (e.g. Gain==0) on a LOWESS panel:
+# black ``x`` reads as a discrete "special point" against the steel-blue smoother.
+_MASS_COLOR = "black"
+
 
 def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[int, int]:
     """Return the (1/3, 2/3) tertile cutpoints of ``column`` over the whole ``source`` table.
@@ -588,11 +592,12 @@ class Analyzer:
             if show_band:
                 ax.fill_between(grid_plot, res["lo"], res["hi"], color=color, alpha=band_alpha,
                                 lw=0)
-            ax.plot(grid_plot, res["fit"], color=color, lw=2.5, label=curve_label)
+            ax.plot(grid_plot, res["fit"], color=color, lw=3.5, label=curve_label)
         if show_mass:
             for v, c, half, n in mass_points:
-                ax.errorbar([v], [c], yerr=[half], marker="s", ms=10, color="crimson",
-                            capsize=4, zorder=5, label=f"x={v:g} mass (n={n:,})")
+                ax.errorbar([v], [c], yerr=[half], marker="x", ms=11, color=_MASS_COLOR,
+                            mew=2.5, ecolor=_MASS_COLOR, elinewidth=1.8,
+                            capsize=3, zorder=5, label=f"x={v:g} mass (n={n:,})")
         if overlay_binned and tertile is None:
             df = self.quantile_df
             if self.min_bin_count:
