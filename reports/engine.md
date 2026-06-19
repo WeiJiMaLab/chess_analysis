@@ -72,16 +72,16 @@ effort to find the best move) as the difficulty proxy — the **third panel** ab
 | overall (pooled) | **−0.232** |
 | within GSS 0–1 (easy) / 2–31 (med) / 32–95 (hard) | −0.235 / −0.202 / −0.188 |
 | partial \| GSS | **−0.213** |
-| partial \| branching | −0.160 |
-| partial \| GSS + branching | **−0.150** |
+| partial \| legal moves | −0.160 |
+| partial \| GSS + legal moves | **−0.150** |
 
 > **Correction:** The negative MQ↔RT slope is **not** a GSS-difficulty confound and only *partly*
-> a branching one. It stays clearly negative inside **every** GSS stratum (−0.19 to −0.24, barely
+> a legal-moves one. It stays clearly negative inside **every** GSS stratum (−0.19 to −0.24, barely
 > moved from the pooled −0.232), and conditioning on GSS removes only ~7% of the association.
 > Worse, **GSS is a poor difficulty proxy here**: its easiest stratum (GSS 0–1 — forced recaptures
 > / only-moves the engine fixes instantly) has the *worst* mean MQ, because humans who deviate
-> there lose a lot — GSS is engine search-effort, not human-perceived difficulty. **Branching** is
-> the stronger difficulty axis (ρ(branching, MQ) = −0.25, ρ(branching, RT) = +0.34) and explains
+> there lose a lot — GSS is engine search-effort, not human-perceived difficulty. The **legal-move
+> count** is the stronger difficulty axis (ρ(legal moves, MQ) = −0.25, ρ(legal moves, RT) = +0.34) and explains
 > more, but the joint partial still leaves **−0.150 — about ⅔ of the effect intact**. So a real
 > residual "longer thinks → worse moves" survives both difficulty controls, pointing to
 > *selection / uncertainty* (people deliberate precisely when unsure, and subjective uncertainty
@@ -107,13 +107,13 @@ directions agree**) — but the emphasis is opposite:
 
 | Feature | r(oracle stop) | r(human RT) |
 |---|---|---|
-| branching | +0.014 | **+0.195** |
+| legal moves | +0.014 | **+0.195** |
 | material | +0.011 | +0.039 |
 | gain_depth (value gained) | **+0.233** | +0.096 |
 | action gap (toptwo) | **−0.290** | −0.064 |
 
-The oracle halts on **value-landscape** features (gain_depth, action gap) and ignores branching;
-humans deliberate on **structural complexity** (branching dominates) and barely track Gain. On
+The oracle halts on **value-landscape** features (gain_depth, action gap) and ignores the legal-move
+count; humans deliberate on **structural complexity** (legal moves dominate) and barely track Gain. On
 matched human-FEN trees the oracle stop step still correlates positively with log(RT) (smoke
 r = **+0.091**, n = 497), but gain_depth predicts the *oracle's* halt strongly (+0.463) while
 being near-zero for *humans* (+0.020).
@@ -129,32 +129,32 @@ being near-zero for *humans* (+0.020).
 
 A rank (Spearman) correlation matrix over the lc0 metrics, board structure, and log(RT) — rank,
 because Gain / MQ / action gap are zero-inflated and skewed, so Pearson understates (and can flip
-the sign of) their monotone relationships. The strongest tie to log(RT) is **branching** (still
-stronger than any engine metric); **MQ ↔ RT** is the difficulty-*plus-residual* effect above;
-**GSS** ties to the Gain / action-gap *value-convergence* cluster, not to branching.
+the sign of) their monotone relationships. The strongest tie to log(RT) is the **legal-move count**
+(still stronger than any engine metric); **MQ ↔ RT** is the difficulty-*plus-residual* effect above;
+**GSS** ties to the Gain / action-gap *value-convergence* cluster, not to the legal-move count.
 
 The matrix also carries **H(π)** — the entropy of lc0's *policy prior* over the root's legal moves
 (prior uncertainty over the argmax; a policy-side width measure, **no search**). It is the **strongest
 *tree-derived* predictor of log RT (+0.24)**, ~3× any value-of-search quantity, and it survives controls
-for Gain/GSS — but it is a *width* signal (ρ +0.59 with branching) that the **raw legal-move count
-subsumes** (partial ρ(H(π), RT | branching) = +0.05; +0.03 controlling for branching+Gain+GSS jointly,
-n ≈ 204K). So the policy entropy adds essentially **nothing over the raw legal-move count**: lc0's
-over-confident policy makes it a weaker proxy than the count itself (see the branching report's P1).
-The operative width variable is the **raw legal-move count**, not any policy-weighted refinement of it.
+for Gain/GSS — but it is a *width* signal (ρ +0.59 with the legal-move count) that the **raw legal-move
+count subsumes** (partial ρ(H(π), RT | legal moves) = +0.05; +0.03 controlling for legal moves + Gain +
+GSS jointly, n ≈ 204K). So the policy entropy adds essentially **nothing over the raw legal-move count**:
+lc0's over-confident policy makes it a weaker proxy than the count itself (see the legal-moves report's
+P1). The operative width variable is the **raw legal-move count**, not any policy-weighted refinement of it.
 
-> **Result:** Branching is the connective tissue between human RT and position structure; the engine
-> value-search metrics form a separate, weakly-expressed value-convergence cluster; and the policy
-> entropy H(π) is a third — *width-side* — correlate that branching subsumes. The driver of human
+> **Result:** The legal-move count is the connective tissue between human RT and position structure; the
+> engine value-search metrics form a separate, weakly-expressed value-convergence cluster; and the policy
+> entropy H(π) is a third — *width-side* — correlate that the legal-move count subsumes. The driver of human
 > deliberation is decision **width**, not realized value-of-computation.
 
 ## What can we conclude?
 
 | Claim | Evidence |
 |---|---|
-| Decision width drives human deliberation — more than engine Gain | branching r ≈ +0.20/+0.33 ≫ Gain; oracle ignores branching, humans don't |
+| Decision width drives human deliberation — more than engine Gain | legal-moves r ≈ +0.20/+0.33 ≫ Gain; oracle ignores the legal-move count, humans don't |
 | The normative model captures direction, not the dominant driver | 4/4 feature directions agree, but oracle halts on value-convergence, humans on structure |
 | Engine value-of-computation tracks RT, but weakly | Gain r = +0.085 (growing-tree def: best @ 96 vs @ 1 expansion); GSS r = +0.110 |
-| "More time → worse moves" is **not just** a difficulty confound | MQ r = −0.151; survives partialling GSS+branching (ρ = −0.150, ~⅔ of the effect) |
+| "More time → worse moves" is **not just** a difficulty confound | MQ r = −0.151; survives partialling GSS + legal moves (ρ = −0.150, ~⅔ of the effect) |
 
 > **Result:** Humans look *resource-rational about the width of the decision*; the value-search
 > model explains the easy direction but misses what most strongly paces human thought. The
@@ -217,9 +217,9 @@ The operative width variable is the **raw legal-move count**, not any policy-wei
 |------|--------|
 | lc0 GSS/Gain/Action-Gap/MQ + Spearman matrix, ~199K trees | ✅ done (cached) |
 | Gain redefined: best @ 96 vs @ 1 expansion on one growing tree | ✅ supersedes the 1-ply/unvisited-0.0 defs; dip gone, r = +0.085 |
-| P1: H(π) policy-prior entropy vs log RT + partials (n ≈ 204K) | ✅ +0.234; subsumed by raw legal-move count (see branching report) |
+| P1: H(π) policy-prior entropy vs log RT + partials (n ≈ 204K) | ✅ +0.234; subsumed by raw legal-move count (see legal-moves report) |
 | MQ difficulty-confound audit (N = 1M, Spearman + controls) | ✅ done |
-| MQ↔RT segmented by GSS (difficulty-residualized partials) | ✅ survives GSS (−0.213) & GSS+branching (−0.150); not a pure confound |
+| MQ↔RT segmented by GSS (difficulty-residualized partials) | ✅ survives GSS (−0.213) & GSS + legal moves (−0.150); not a pure confound |
 | Oracle Tier A (4/4 directions, 39,668 trees, 72 invariant tests) | ✅ done |
 | Oracle Tier B: 10K human FENs as 20 shards | ✅ submitted; oracle+join+plots ⬜ after jobs |
 | SF-2000 strength-matched oracle (CP→WDL) on same FENs | ⬜ gated on Tier B 10K r |

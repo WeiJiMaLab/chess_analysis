@@ -1,15 +1,15 @@
-# Branching and resource-rational deliberation
+# Legal moves and resource-rational deliberation
 
 **Ref:** `R-BRANCH` (draft / proposal) · [Index](reference.md)
 
 ## Why does decision *width* drive human think time?
 
-The strongest single predictor of how long a human thinks is **branching** — the number of
-legal moves / candidate options at the position (Spearman ρ(branching, log RT) ≈ **+0.35**),
-far above any engine value-search quantity (Gain ≈ +0.07, GSS ≈ +0.12, MQ ≈ −0.15). A
-normative search model whose oracle halts on **value-convergence** (stop once the value gap is
-decided) reproduces the *direction* of the value effects but **ignores branching**, which is
-what actually paces human deliberation.
+The strongest single predictor of how long a human thinks is the **number of legal moves** — the
+candidate options at the position (Spearman ρ(legal moves, log RT) ≈ **+0.35**), far above any
+engine value-search quantity (Gain ≈ +0.07, GSS ≈ +0.12, MQ ≈ −0.15). A normative search model
+whose oracle halts on **value-convergence** (stop once the value gap is decided) reproduces the
+*direction* of the value effects but **ignores decision width**, which is what actually paces human
+deliberation.
 
 > **Result:** Humans deliberate in proportion to the **width of the decision** (how many moves
 > they must weigh), not in proportion to the realized value-of-computation. Our value-convergence
@@ -18,7 +18,7 @@ what actually paces human deliberation.
 This looks paradoxical only if "value of computation" is read as the **realized, ex-post** gain
 that search actually produced (our `Gain` metric — zero in ~⅔ of positions, because the 1-ply
 move was already best). The resolution below is that a resource-rational agent acts on the
-**ex-ante expected** value of computation, which scales with branching.
+**ex-ante expected** value of computation, which scales with the number of legal moves.
 
 ## A resource-rational account: deliberate to resolve *which move is best*
 
@@ -28,7 +28,7 @@ candidate evaluation) is a noisy observation that sharpens that belief, and the 
 computing while the **expected** value of another computation exceeds its cost.
 
 The key quantity is **prior uncertainty over the argmax** — how unsure the agent is about which
-move is best *before* searching. With more plausible candidates (higher branching, flatter
+move is best *before* searching. With more plausible candidates (more legal moves, flatter
 policy `π`), that uncertainty is larger, so:
 
 - **Expected** value of computation is high (a yet-unevaluated move is more likely to overturn
@@ -37,98 +37,98 @@ policy `π`), that uncertainty is larger, so:
   below cost → stop.
 
 So the resource-rational **stopping time increases with prior argmax-uncertainty ≈ policy
-entropy H(π) ≈ branching.** Realized `Gain` is the *outcome* of this process (usually small,
-because the prior-favored move usually survives); it is **not** the driver. This dissociation —
-RT tracks *expected* VOC (uncertainty) while being weakly related to *realized* VOC — is exactly
-what the data show.
+entropy H(π) ≈ the number of legal moves.** Realized `Gain` is the *outcome* of this process
+(usually small, because the prior-favored move usually survives); it is **not** the driver. This
+dissociation — RT tracks *expected* VOC (uncertainty) while being weakly related to *realized* VOC —
+is exactly what the data show.
 
 > **Modeling proposal (◆):** Replace "stop when the *value* is decided" with "stop when the
 > *argmax* is decided." Deliberation is resource-rational evidence accumulation about **which
 > move is best**; its optimal duration grows with the number/uncertainty of competing candidates.
 
 This is a chess instantiation of **Hick's law** (choice RT increases with the number of
-alternatives): branching is the candidate count, and a metalevel/sequential-sampling agent
-choosing among `N` near-tied options crosses its confidence threshold later as `N` grows. It also
-reframes the **lc0-too-strong** problem: lc0 collapses most positions to a decided *value*
+alternatives): the legal-move count is the candidate count, and a metalevel/sequential-sampling
+agent choosing among `N` near-tied options crosses its confidence threshold later as `N` grows. It
+also reframes the **lc0-too-strong** problem: lc0 collapses most positions to a decided *value*
 (|final Q| ≥ 0.9 in ~79%), but the *argmax* among near-equivalent moves can still be wide — and
 it is argmax-uncertainty, not value-uncertainty, that humans appear to spend time on.
 
-## How the tree could operate on branching
+## How the tree could operate on decision width
 
 Each idea is an instantiation of the same principle — allocate computation to resolve
-argmax-uncertainty — differing in where branching enters the lc0 search:
+argmax-uncertainty — differing in where decision width enters the lc0 search:
 
 1. **Width-gated stop (most direct, lc0-native).** Stop when the **root visit distribution
    concentrates** (top-move visit share > θ, or entropy of visits < τ). Wide decisions start
    diffuse and take many expansions to concentrate → search longer, by construction. This *is*
    the resource-rational "stop when the posterior over the argmax is peaked" rule.
 2. **Candidate-coverage search.** Require each plausible candidate to be visited ≥ k times before
-   committing → search effort ∝ effective branching. Branching sets the *width* of required
-   exploration; value-convergence sets the *depth*. (A fixed cost-per-candidate-evaluated makes
-   total deliberation ∝ branching, principled rather than ad hoc.)
+   committing → search effort ∝ effective decision width. The legal-move count sets the *width* of
+   required exploration; value-convergence sets the *depth*. (A fixed cost-per-candidate-evaluated
+   makes total deliberation ∝ the number of legal moves, principled rather than ad hoc.)
 3. **Expected-VOC / metalevel cost.** Make the controller's continue-value depend on E[VOC] =
    probability an unevaluated move overturns the current best, which is monotone in H(π). The
    normative *target* then rewards searching wide positions longer — so a controller trained on it
-   learns branching-sensitive stopping (the GNN already *encodes* branching; the current
+   learns width-sensitive stopping (the GNN already *encodes* the legal-move structure; the current
    value-convergence target just never rewards using it).
-4. **We already have an implicit branching channel — and discard it.** GSS (expansions-to-find-best)
-   is partly branching-mediated (wide → more expansions), which is *why* GSS↔RT > Gain↔RT. The
-   value-convergence stop halts early and throws that width signal away; a width-gated stop simply
-   stops discarding it.
+4. **We already have an implicit width channel — and discard it.** GSS (expansions-to-find-best)
+   is partly width-mediated (more legal moves → more expansions), which is *why* GSS↔RT > Gain↔RT.
+   The value-convergence stop halts early and throws that width signal away; a width-gated stop
+   simply stops discarding it.
 
 ## Predictions & experiments
 
-- **P1 (entropy ≈ branching) — tested (✓ direction, ✗ "≈ branching"):** root policy entropy H(π)
-  predicts log RT at **ρ ≈ +0.24** — ~3× any value-of-search metric (Gain +0.07, GSS +0.11, MQ −0.15)
-  and surviving controls for Gain/GSS — **but it does *not* match the raw legal-move count** (branching
-  ρ +0.33), which subsumes it (partial ρ(H(π), RT | branching) = +0.05; collinearity +0.61). See
-  *Prior argmax-uncertainty* below.
+- **P1 (entropy ≈ legal moves) — tested (✓ direction, ✗ "≈ legal moves"):** root policy entropy
+  H(π) predicts log RT at **ρ ≈ +0.24** — ~3× any value-of-search metric (Gain +0.07, GSS +0.11,
+  MQ −0.15) and surviving controls for Gain/GSS — **but it does *not* match the raw legal-move
+  count** (legal moves ρ +0.33), which subsumes it (partial ρ(H(π), RT | legal moves) = +0.05;
+  collinearity +0.61). See *Prior argmax-uncertainty* below.
 - **P2 (width-gated > value-convergence):** a halt-on-visit-concentration stopping rule predicts
   human RT better than the value-convergence oracle. Slots into the budgeted-baselines harness.
 - **P3 (expected ≫ realized VOC):** an *ex-ante* uncertainty signal (prior argmax entropy)
-  dominates realized `Gain` as an RT predictor, and adds unique variance over branching.
-- **P4 (scale vs modulation):** within fixed branching, residual RT tracks `Gain`/value — i.e.
-  branching sets the *scale* of deliberation, value-of-computation *modulates* it.
-- **P5 (Hick form):** check whether RT scales with `branching` or with `log(branching)` /
+  dominates realized `Gain` as an RT predictor, and adds unique variance over the legal-move count.
+- **P4 (scale vs modulation):** within a fixed legal-move count, residual RT tracks `Gain`/value —
+  i.e. decision width sets the *scale* of deliberation, value-of-computation *modulates* it.
+- **P5 (Hick form):** check whether RT scales with the `legal-move count` or with its `log` /
   H(π) — the functional form discriminates "enumerate all moves" (linear) from
   "evidence accumulation among alternatives" (log / entropy).
 
 > **Clarification:** This does not discard value-of-computation — it subordinates *realized* Gain
 > to *expected* Gain (argmax-uncertainty). The claim is that the resource-rational **driver** of
-> deliberation is uncertainty about which move is best (≈ branching/entropy), with value gain as
-> the modulating, ex-post quantity.
+> deliberation is uncertainty about which move is best (≈ legal moves / entropy), with value gain
+> as the modulating, ex-post quantity.
 
 ## Preliminary evidence: Gain vs GSS (tests P3–P4)
 
 A first pass on the 112.8K-FEN subset (one observation per FEN) already fits the account —
-**branching is the scale, value-of-search the modulation**:
+**decision width is the scale, value-of-search the modulation**:
 
 > **Note:** the Gain figures below predate the growing-tree Gain redefinition (now best@96 −
-> best@1-expansion; see the move-time model report). The directional P3–P4 conclusions are
-> unchanged (GSS still wins the linear race, Gain still the stronger rank predictor), but the exact
-> decimals are pending a re-run with the new Gain.
+> best@1-expansion; see the move-time model report, where Gain↔RT ≈ +0.085 on the full set). The
+> directional P3–P4 conclusions are unchanged (GSS still wins the linear race, Gain still the
+> stronger rank predictor); the exact decimals here are the old-definition values.
 
-- **Branching dominates.** Alone it explains R² ≈ **0.12** of log RT; both tree metrics *together*
-  add ΔR² ≤ 0.01. The width channel is the story; the value channel is a small correction.
-- **GSS is branching-mediated effort.** GSS is the metric most collinear with branching
+- **The legal-move count dominates.** Alone it explains R² ≈ **0.12** of log RT; both tree metrics
+  *together* add ΔR² ≤ 0.01. The width channel is the story; the value channel is a small correction.
+- **GSS is width-mediated effort.** GSS is the metric most collinear with the legal-move count
   (ρ ≈ +0.19 vs Gain +0.14), wins the *linear* comparison (Pearson +0.114 vs +0.073), and its
   unique signal sits in *decisive* positions ("effort to confirm the obvious best").
 - **Gain is the orthogonal value-of-search signal (P3/P4 supported, on ranks).** Gain is 0 in ~60%
   of positions, so Pearson understates it; on **ranks** it is the stronger predictor (Spearman
-  +0.138 vs GSS +0.123) and adds **more unique rank variance over branching** (ΔR² +0.009 vs
-  +0.0056). Its signal is **concentrated in non-decisive positions** (~21% of cases, where lc0 is
+  +0.138 vs GSS +0.123) and adds **more unique rank variance over the legal-move count** (ΔR² +0.009
+  vs +0.0056). Its signal is **concentrated in non-decisive positions** (~21% of cases, where lc0 is
   genuinely unsure): there Gain ≈ +0.13 while GSS ≈ **0** — exactly where value-of-computation
   should bite.
 
-> **Result:** Branching sets the **scale** of deliberation (P4) and realized Gain **modulates** it
-> only where the engine is genuinely uncertain (non-decisive positions) — matching the
+> **Result:** Decision width sets the **scale** of deliberation (P4) and realized Gain **modulates**
+> it only where the engine is genuinely uncertain (non-decisive positions) — matching the
 > resource-rational picture (uncertainty over the best move is the driver; value-of-search is a
 > second-order, ex-post correction). It also explains why naive *realized* Gain under-predicts RT
 > marginally: 60% zeros, swamped by the width channel. Still open: the *expected*-VOC / entropy
-> signal of P1–P3 (not yet computed) — the hypothesis is that it, not branching per se, is the true
-> driver and that branching is its observable proxy.
+> signal of P1–P3 (not yet computed) — the hypothesis is that it, not the legal-move count per se, is
+> the true driver and that the legal-move count is its observable proxy.
 
-## Prior argmax-uncertainty: H(π) vs raw branching (P1)
+## Prior argmax-uncertainty: H(π) vs raw legal-move count (P1)
 
 The cheapest version of the account — the **ex-ante policy entropy** `H(π) = −Σ π(a) log π(a)` over
 the root's legal moves (lc0's policy head; `node_features[:, prior]`) — computed on 157.8K trees
@@ -137,15 +137,17 @@ the root's legal moves (lc0's policy head; `node_features[:, prior]`) — comput
 - **The width/uncertainty channel is confirmed.** `H(π) ↔ log RT = +0.24`, ~3× any realized
   value-of-search metric (Gain +0.07, GSS +0.11, MQ −0.15), and it **survives** controlling for Gain
   and GSS (partial +0.215 / +0.221) — a genuinely distinct, *non-value* driver.
-- **But H(π) does not beat the raw move count, and is subsumed by it.** Raw branching `↔ log RT = +0.33`
-  &gt; H(π) +0.24; with branching partialled out H(π)'s signal nearly vanishes (partial ρ = **+0.05**;
-  +0.03 controlling for branching+Gain+GSS jointly), and `ρ(H(π), branching) = +0.61`.
+- **But H(π) does not beat the raw move count, and is subsumed by it.** The raw legal-move count
+  `↔ log RT = +0.33` &gt; H(π) +0.24; with the legal-move count partialled out H(π)'s signal nearly
+  vanishes (partial ρ = **+0.05**; +0.03 controlling for legal moves + Gain + GSS jointly), and
+  `ρ(H(π), legal moves) = +0.61`.
 
-> **Result:** The *width* channel dominates value-of-search (P1 direction ✓), but lc0's **over-confident
-> policy** makes H(π) a *weaker* proxy than the raw legal-move count — the opposite of the "effective
-> branching ≈ better" guess. lc0 down-weights moves a 2000-Elo human still weighs, so H(π) *understates*
-> the human's option set, while the raw count is closer to what the human enumerates. This leans **P5**
-> toward "enumerate the candidate set" over "evidence-accumulate among lc0-plausible moves."
+> **Result:** The *width* channel dominates value-of-search (P1 direction ✓), but lc0's
+> **over-confident policy** makes H(π) a *weaker* proxy than the raw legal-move count — the opposite
+> of the "effective width ≈ better" guess. lc0 down-weights moves a 2000-Elo human still weighs, so
+> H(π) *understates* the human's option set, while the raw count is closer to what the human
+> enumerates. This leans **P5** toward "enumerate the candidate set" over "evidence-accumulate among
+> lc0-plausible moves."
 
 > **P1′ (resolved — tempering doesn't help):** re-tempering the over-confident prior (π_T ∝ π^(1/T),
 > T up to 10) only lifts the *marginal* H(π)↔RT correlation by **collapsing H(π) onto the raw
@@ -165,5 +167,5 @@ the root's legal moves (lc0's policy head; `node_features[:, prior]`) — comput
   positions (vs lc0's collapse), making expected-VOC track human RT more cleanly? (Ties to the
   gated SF-2000 follow-up in the move-time model report.)
 
-*Draft proposal — captures the branching mechanisms and a resource-rational framing for the
-branching effect; experiments P1–P5 are not yet run. Not yet wired into the analysis roadmap.*
+*Draft proposal — captures the decision-width mechanisms and a resource-rational framing for the
+legal-moves effect; experiments P1–P5 are not yet run. Not yet wired into the analysis roadmap.*

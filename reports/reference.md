@@ -29,9 +29,9 @@ Reports come in two formats:
 
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
-| Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](movetime_board.md) | Scientific | Human | ✅ done |
-| Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](movetime_model.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
-| Branching & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
+| Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
+| Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
+| Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
@@ -42,17 +42,17 @@ lab notebook's [§ Legacy section](../labnotebook.md#legacy) (the former archive
 The repo centres on the **human move-time inquiry**, all sitting on [(R-DATA)](#data-reference-r-data)
 (the human Lichess dataset + the lc0 search-tree dataset):
 
-- [(R-MOVETIME-BOARD)](movetime_board.md) — what board features predict think time (branching dominates).
-- [(R-MOVETIME-MODEL)](movetime_model.md) — whether lc0-search quantities (Gain / MQ / GSS / action gap)
+- [(R-MOVETIME-BOARD)](board.md) — what board features predict think time (legal moves dominate).
+- [(R-MOVETIME-MODEL)](engine.md) — whether lc0-search quantities (Gain / MQ / GSS / action gap)
   and the normative oracle track human RT.
-- [(R-BRANCH)](branching.md) — a resource-rational account of the branching effect, with tree mechanisms
+- [(R-BRANCH)](branching.md) — a resource-rational account of the legal-moves effect, with tree mechanisms
   and predictions (draft).
 
 The **LMCOS model-training thread** (GNN encoder pretraining, the meta-controller and its budgeted
 baselines) is no longer tracked as standalone reports — its record lives in the lab notebook's
 [§ Legacy section](../labnotebook.md#legacy), the `lmcos/` code, and `lmcos/slurm/README.md`.
 
-**Cite:** `[(R-MOVETIME-MODEL)](movetime_model.md)` from this folder; `[(R-MOVETIME-MODEL)](reports/movetime_model.md)` from the notebook.
+**Cite:** `[(R-MOVETIME-MODEL)](engine.md)` from this folder; `[(R-MOVETIME-MODEL)](reports/engine.md)` from the notebook.
 
 ## Data reference (R-DATA)
 
@@ -92,8 +92,8 @@ facts and decisions are kept here.
 - Trees are `.pt` payloads (`format=cts_raw_pretrain_example_v5`): `root_position_spec`,
   `oracle_root_moves`, `oracle_final_root_q_values`, `oracle_best_move_index`, `oracle_root_q_trace`,
   `node_features`/`feature_names` (`value,wdl_*,prior`), `parent_index`, `is_expanded`, `depth`.
-  Exactly **96 expansions** per tree; total nodes ≈ 96 × branching (each expansion attaches the
-  node's legal children as unexpanded leaves).
+  Exactly **96 expansions** per tree; total nodes ≈ 96 × the per-node legal-move fan-out (each
+  expansion attaches the node's legal children as unexpanded leaves).
 
 #### Engineering decisions (what was tried; what shipped)
 - **Cost:** ~16.9 s/tree (A100, budget 96) → **~11 s** with the repetition guard (skip the
