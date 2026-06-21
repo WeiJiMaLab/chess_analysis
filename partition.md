@@ -105,3 +105,22 @@ we lift the cap so the rerun tracks the live count).
   exists (the figures don't strictly need the partition, but pinning to the same
   snapshot keeps every number in today's docs consistent).
   This is correct. 
+
+---
+
+## Update (2026-06-21) — re-partition on the grown set + intersection tree filter
+
+`human_trees` grew to **640,928** (ysagiv kept generating). We **re-partitioned the full set**
+50/50 (seed 0) → **320,464 train / 320,464 test** (supersedes the 405K split), then apply the
+**intersection tree filter** ([filter_trees_by_trace.py](lmcos/src/data/filter_trees_by_trace.py))
+to gate the trees used to train **both** the GNN encoder and the MC controller (matching ysagiv's
+"train GNN+MC on the filtered subset" pipeline, which we had skipped):
+
+- **PUCT-stability** — `bmi[0] ≠ final ∧ bmi[mid] ≠ final` (search materially changes the action) — ~32.7%.
+- **monotone-convergence** — once the eventual-best is first found it never leaves (`all(bmi[gss:]==final)`) — ~65.3%.
+- **intersection** — **15.9%** (101,812 trees). Filtered split: **50,674 clean train / 51,138 clean test**
+  (`/scratch/.../filtered/{train,test}_clean.txt`; full-path manifests in `packed/split_filtered/`).
+
+The episode-level **halt-reward-range** filter (`min_halt_reward_range=0.05`) is applied on top, at
+**MC-pack time** (drops trivially-decided episodes; range = `max(halt_rewards) − min(halt_rewards)`).
+Old unfiltered runs (encoder + 128 GB of packs) were removed; GNN + MC are rebuilt on this set.

@@ -1,11 +1,11 @@
 # partition/ — TEMPORARY train/test split (Part 1A)
 
-**Generated:** 2026-06-19T10:13:00
+**Generated:** 2026-06-21T11:56:00
 **Source:** `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees`
-**Snapshot tree count:** 405,659 `*.pt` files (one tree per root FEN)
+**Snapshot tree count:** 640,928 `*.pt` files (one tree per root FEN)
 **Split:** 50% train / 50% test,
 example-level, seed `0`.
-**Train:** 202,830   **Test:** 202,829
+**Train:** 320,464   **Test:** 320,464
 
 > ⚠️ TEMPORARY. `human_trees` is still being populated by ysagiv; this split is
 > pinned to the snapshot above. Files added later are unassigned. Re-running
