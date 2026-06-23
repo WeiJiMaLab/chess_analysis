@@ -1,8 +1,10 @@
 # diagnose_gain.md — Part 2: the Gain≈1.0 spike, the narrow-CI puzzle, and CI method audit
 
-**Status:** DONE. The diagnosis is complete and its conclusions are baked into the production
-figure standard (`utils/analysis.py`: LOWESS + bootstrap band for continuous predictors,
-native-integer for discrete) and the kept tests (`tests/test_gain.py`, `tests/test_jaggedness.py`).
+**Status:** DONE. The diagnosis is complete. **The current figure standard (2026-06-23) is K=10
+tie-safe quantile bins everywhere, with Gain on a √ x-axis (Russek 2025); LOWESS was trialled
+(see "Estimator-by-type" section below) then reverted in favour of transparent binning — see the
+"Update (2026-06-23)" note at the end.** Its conclusions remain baked into `utils/analysis.py` and
+the kept tests (`tests/test_gain.py`, `tests/test_jaggedness.py`).
 The one-off **diagnostic drivers this doc references have been removed** now that their findings
 are captured here and in the figure standard — `gain_dip_diagnostic.py`, `gain_ci_audit.py`,
 `gain_binning_diagnostic.py`, `jaggedness_diagnosis.py`, and `utils/ci.py` / `tests/test_ci.py`
@@ -443,7 +445,11 @@ brackets the fit and is tight at large n). Synthetic arrays only (no DB / parque
 
 ---
 
-## Estimator-by-type plotting standard (IMPLEMENTED 2026-06-19)
+## Estimator-by-type plotting standard (IMPLEMENTED 2026-06-19 — SUPERSEDED 2026-06-23)
+
+> **SUPERSEDED.** This LOWESS-by-type standard was trialled and then reverted to transparent
+> quantile binning — see "Update (2026-06-23)" at the end of the doc. Kept here as the record of
+> the trial. The `plot_lowess*` methods remain in `Analyzer` but are no longer wired to any figure.
 
 We promoted the recommendation above into a project-wide rule: **pick the curve estimator by the
 predictor's nature; standardize the uncertainty on a bootstrap-style band.** Implemented in
@@ -465,3 +471,35 @@ overlay** is drawn behind the smoother as a sanity check; fits are capped at 500
 `own_material_vs_movetime`, `ply_vs_movetime` (native-int); `clock_vs_movetime` (LOWESS).
 `gain_vs_rt` is now a smooth monotone rise with the 0-lump split out — the staircase is gone.
 See [[report-deck-format-convention]].
+
+---
+
+## Update (2026-06-23) — reverted to transparent binning (the current standard)
+
+On review, **LOWESS was dropped in favour of plain quantile binning everywhere.** The case for the
+revert: (a) for the continuous predictors LOWESS and binning looked essentially the same — the
+curve-level bootstrap band had already shown the per-bin SEM was honest and the residual structure
+*real*, so the smoother was only hiding real structure behind a bandwidth knob; (b) binning is more
+transparent — every point is a literal bin mean + n + SEM a reader can verify, with no kernel/`frac`
+assumption. The genuine fixes from the diagnosis were kept; they were never about LOWESS:
+
+1. **K=10 tie-safe quantile bins everywhere** (continuous *and* discrete). Tie-safe = interior
+   cut-points from `quantile_cont` so all rows sharing one value land in one bin (no `ntile`
+   tie-splitting — the original GSS staircase cause); low-cardinality x (e.g. own material, 8
+   values) collapses to ≤10 integer points, recovering the native-integer view automatically.
+   K dropped 20→10 to fatten the bins (smoother) after the bin-count survived as the only residual
+   jaggedness; structure that persists across K (the √Gain≈0.2 dip, the clock peak) is real.
+2. **Point-mass isolation** retained for Gain / Action Gap (zero-inflated + tie-safe).
+3. **Gain on a √ x-axis** (`sqrt(voc)`), per **Russek et al. 2025** (*Cog Sci*): move time fits
+   √ΔUC better than linear ΔUC (concave / diminishing returns), and √ handles the 55%-exactly-zero
+   mass that `log` cannot (`log 0 = −∞`) while spreading the concentrated low-Gain region so the
+   bins resolve it. (Russek's Fig. 3 plots ΔUC linearly; the √ is their regression transform.)
+
+| predictor type | examples | estimator (current) |
+|---|---|---|
+| continuous | **√Gain, Action Gap** (RT vs x); **MQ, Player Clock** (x = log RT) | K=10 quantile bins + per-bin SEM; value point-masses isolated |
+| discrete / integer | **GSS, # legal moves, own non-pawn pieces, ply** | K=10 **tie-safe** quantile bins (≤K integer points for low-cardinality x) |
+
+Wired in `utils/analysis.py` via `save_dashboard()` (no `estimator=` kwarg → binned). The
+`plot_lowess*` methods + `utils/jaggedness.py` LOWESS helpers remain (available for a faint
+trend-line overlay) but are not used by any figure.

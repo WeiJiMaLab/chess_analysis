@@ -270,14 +270,13 @@ def save_mq_dashboard(analyzer: Analyzer, gss_analyzer: Analyzer, output_path: s
     on the same mq_rt table constructed with ``segment_column='gss'``."""
     apply_poster_style()
     fig, axes = plt.subplots(1, 3, figsize=(45, 13.72))
-    # x = log(RT) is CONTINUOUS → binning-free LOWESS + bootstrap band (the principled
-    # estimator-by-type standard; MQ's point-masses are on the Y axis, so averaging y per
-    # local x-window handles them — no x-mass to isolate). [global | ply tertile | GSS stratum]
-    analyzer.plot_lowess(axes[0])  # global panel: method in title, no legend needed
-    analyzer.plot_lowess_tertile_segmented(axes[1])
-    gss_analyzer.plot_lowess_tertile_segmented(axes[2])
+    # x = log(RT) binned (K=20 quantile); MQ's point-masses are on the Y axis, so per-bin
+    # averaging handles them. [global | ply tertile | GSS stratum]
+    analyzer.plot_quantile_bins(axes[0])
+    analyzer.plot_quantile_bins_tertile_segmented(axes[1])
+    gss_analyzer.plot_quantile_bins_tertile_segmented(axes[2])
     fig.subplots_adjust(top=0.80)
-    suptitle = fig.suptitle(f"{analyzer.title} — LOWESS + 95% bootstrap band\nn = {analyzer.n_moves:,} moves",
+    suptitle = fig.suptitle(f"{analyzer.title} — quantile bins\nn = {analyzer.n_moves:,} moves",
                             fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -375,7 +374,7 @@ def main(argv: list[str] | None = None) -> None:
     conn.register("_root_moves", root_moves)
     conn.execute("""
         CREATE OR REPLACE TEMP TABLE tree_rt AS
-        SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.fen, m.gid, m.move_ply, m.move_time
+        SELECT v.gss, v.voc, sqrt(v.voc) AS sqrt_voc, v.action_gap, v.h_pi, v.fen, m.gid, m.move_ply, m.move_time
         FROM _vals v
         JOIN processed_moves_nonzero m ON m.fen = v.fen
         WHERE m.move_time > 0
@@ -445,28 +444,31 @@ def main(argv: list[str] | None = None) -> None:
     #     best@96 vs best@1 expansion on the converged Q — which has no spurious ~1.0 spike;
     #     two earlier definitions did, from reading an unvisited-0.0 shallow value.)
     # min_bin_count drops the noisy sparse tails (high Gain / high GSS) from both panels.
-    # spec: (table, col, label, fname, kwargs-for-Analyzer)
-    # Estimator chosen by PREDICTOR TYPE (diagnose_gain.md "Gain binning (K-vs-n)"):
-    #   * DISCRETE/integer x (GSS) → native-integer binning (one point + SEM per value).
-    #   * CONTINUOUS x with a value point-mass (Gain, Action Gap: ~55% / heavy mass at 0,
-    #     which violates local smoothness and which a fixed-K staircase can't resolve) →
-    #     binning-free LOWESS + curve-level bootstrap band, with the 0-mass isolated as its
-    #     own labeled point. The old zero-inflated/tie-safe binning is kept on the Analyzer
-    #     only to draw the faint binned-means sanity overlay behind the smoother.
+    # Estimator chosen by PREDICTOR TYPE (transparent binning; see diagnose_gain.md):
+    #   * DISCRETE/integer x (GSS) → K=10 TIE-SAFE quantile bins (each repeated integer stays
+    #     in one bin via quantile_cont cut-points — no ntile tie-splitting; low-cardinality x
+    #     naturally collapses to ≤K integer points).
+    #   * CONTINUOUS x with a value point-mass (Gain, Action Gap: ~55% / heavy mass at 0) →
+    #     K=10 quantile bins with the near-zero mass ISOLATED as its own point (zero-inflated
+    #     + tie-safe), analytic SEM. Binning is transparent (each point = a real bin + n + SEM)
+    #     and the curve-level bootstrap matched the per-bin SEM, so the residual structure is
+    #     real, not a CI artifact — we show it rather than smooth it (LOWESS was dropped).
     # spec: (table, col, label, fname, Analyzer-kwargs, save_dashboard-kwargs)
     specs = [
         ("tree_rt", "gss", "Greedy stop step", "gss_vs_rt.png",
-         dict(bin_mode="integer", integer_bin_width=1,
+         dict(n_bins=10, tie_safe=True,
               filter_query="move_time > 0", min_bin_count=100),
          {}),
-        ("tree_rt", "voc", "Gain (lc0 tree)", "gain_vs_rt.png",
-         dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
+        # √Gain (Russek 2025: move time fits √ΔUC better than linear; √ handles the 55%
+        # exactly-zero mass that log can't, and spreads the concentrated low-Gain region).
+        ("tree_rt", "sqrt_voc", "√ Gain (lc0 tree)", "gain_vs_rt.png",
+         dict(zero_inflated=True, zero_threshold=0.0, tie_safe=True, n_bins=10,
               filter_query="move_time > 0", min_bin_count=100),
-         dict(estimator="lowess", mass_values=[0.0])),
+         {}),
         ("tree_rt", "action_gap", "Action Gap (lc0 tree)", "actiongap_vs_rt.png",
-         dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=8,
+         dict(zero_inflated=True, zero_threshold=0.05, tie_safe=True, n_bins=10,
               filter_query="move_time > 0", min_bin_count=100),
-         dict(estimator="lowess", mass_values=[0.0])),
+         {}),
     ]
     for table, col, label, fname, bin_kwargs, save_kwargs in specs:
         analyzer = Analyzer(
@@ -490,6 +492,7 @@ def main(argv: list[str] | None = None) -> None:
         filter_query="move_time > 0",
         title="MQ (lc0 tree) vs. log(RT)",
         min_bin_count=100,
+        n_bins=10,
     )
     mq_analyzer = Analyzer(conn, "mq_rt", **mq_kwargs)
     # Same plot, segmented by GSS stratum instead of ply tertile (cuts a-priori from mq_rt's

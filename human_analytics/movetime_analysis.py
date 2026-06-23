@@ -48,7 +48,7 @@ def legal_moves_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = 
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_possible_moves < 50",
         title="Legal Moves",
-        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE count → native-integer
+        n_bins=10, tie_safe=True, min_bin_count=100,  # K=10 tie-safe quantile bins
     )
     analyzer.save_dashboard(_fig(src_dir, "legal_moves_vs_movetime.png"))
 
@@ -63,7 +63,7 @@ def own_material_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None =
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="n_self_pieces_exc_pawns IS NOT NULL",
         title="Own Material",
-        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE count → native-integer
+        n_bins=10, tie_safe=True, min_bin_count=100,  # K=10 tie-safe quantile bins
     )
     analyzer.save_dashboard(_fig(src_dir, "own_material_vs_movetime.png"))
 
@@ -78,7 +78,7 @@ def ply_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) ->
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="move_ply <= 150",
         title="Game Stage",
-        bin_mode="integer", integer_bin_width=1, min_bin_count=100,  # DISCRETE ply → native-integer
+        n_bins=10, tie_safe=True, min_bin_count=100,  # K=10 tie-safe quantile bins
     )
     analyzer.save_dashboard(_fig(src_dir, "ply_vs_movetime.png"))
 
@@ -93,9 +93,10 @@ def clock_movetime(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None) 
         y_var=Variable(column="move_time", is_log=True, name="T"),
         filter_query="player_clock_time < 600",
         title="Player Clock Pressure",
+        n_bins=10,
     )
-    # CONTINUOUS clock → binning-free LOWESS + bootstrap band.
-    analyzer.save_dashboard(_fig(src_dir, "clock_vs_movetime.png"), estimator="lowess")
+    # CONTINUOUS clock → quantile bins (K=10).
+    analyzer.save_dashboard(_fig(src_dir, "clock_vs_movetime.png"))
 
 
 def board_feature_corr(conn: duckdb.DuckDBPyConnection, src_dir: str | None = None,
