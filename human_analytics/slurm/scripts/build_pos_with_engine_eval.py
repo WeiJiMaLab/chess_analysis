@@ -49,11 +49,7 @@ from _bootstrap import ensure_src
 ensure_src()
 
 from engine_analysis import PositionEval, evaluate_position
-from utils.helpers import (
-    STOCKFISH_SF14_PATH,
-    STOCKFISH_SF14_DIR,
-    get_lc0_engine,
-)
+from utils.helpers import get_engine
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 
 # ---------------------------------------------------------------------------
@@ -92,10 +88,9 @@ def _init_worker(
     _worker_nodes_deep = nodes_deep
     _worker_nodes_shallow = nodes_shallow
     if engine_type == "stockfish":
-        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_SF14_PATH, cwd=STOCKFISH_SF14_DIR)
-        engine.configure({"Threads": 1, "Hash": 32})
+        engine = get_engine("stockfish", threads=1, hash_mb=32)
     else:
-        engine = get_lc0_engine(threads=1)
+        engine = get_engine("lc0", threads=1)
     _worker_engine = engine
 
 

@@ -35,21 +35,31 @@ if str(_HA) not in sys.path:
     sys.path.insert(0, str(_HA))
 
 from engine import move_quality, voc
-from utils.helpers import STOCKFISH_SF14_PATH, STOCKFISH_SF14_DIR
+from utils.helpers import get_engine
 
 _DEPTH = 15
 _SHALLOW_DEPTH = 1
 
 
 def _engine() -> chess.engine.SimpleEngine:
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_SF14_PATH, cwd=STOCKFISH_SF14_DIR)
-    engine.configure({"Threads": 1, "Hash": 32})
-    return engine
+    return get_engine("stockfish", threads=1, hash_mb=32)
+
+
+def _stockfish_available() -> bool:
+    try:
+        engine = _engine()
+        engine.close()
+        return True
+    except Exception:
+        return False
+
+
+STOCKFISH_AVAILABLE = _stockfish_available()
 
 
 @unittest.skipUnless(
-    Path(STOCKFISH_SF14_PATH).exists(),
-    f"Stockfish not found at {STOCKFISH_SF14_PATH}",
+    STOCKFISH_AVAILABLE,
+    "Stockfish 14 not found or failed to initialize",
 )
 class TestMoveQuality(unittest.TestCase):
     """Tests for move_quality(board, move, engine, depth)."""
@@ -149,8 +159,8 @@ class TestMoveQuality(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    Path(STOCKFISH_SF14_PATH).exists(),
-    f"Stockfish not found at {STOCKFISH_SF14_PATH}",
+    STOCKFISH_AVAILABLE,
+    "Stockfish 14 not found or failed to initialize",
 )
 class TestVOC(unittest.TestCase):
     """Tests for voc(board, engine, depth_deep, depth_shallow)."""
