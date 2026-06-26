@@ -1,0 +1,85 @@
+# minimal_mc.yaml — the ONE config that prescribes the entire minimal meta-controller run.
+#
+# Everything the run does is fixed here. minimal_mc.py + this file are the whole
+# pipeline; no SLURM, no 7-stage chain, no scattered yamls. The run emits a log
+# (minimal_mc_run.log) recording this config verbatim plus every number's provenance,
+# so the result is reproducible from script+yaml alone.
+#
+# Phase 1+2 of mc_minimal_plan.md:
+#   - trivial hand-crafted root features (NOT the GNN) to isolate the MC head + objective
+#   - all models fit on REGRET, same train split, judged by ONE eval fn on the same val split
+#   - headline = regret(budget-only) - regret(full) = value of the root state for stopping.
+
+run:
+  seed: 0                       # fixed seed: subset draw + train/val split + torch init
+  device: cpu                   # tiny problem; CPU is plenty and deterministic
+  out_dir: /home/hl4291/chess_analysis
+  log_file: minimal_mc_run.log
+  figure_file: figures/minimal_mc_regret.png
+  table_file: minimal_mc_results.json
+
+data:
+  # CURRENT filtered tree set (basenames) -> the .pt files in human_trees/.
+  clean_trees_txt: /scratch/gpfs/GRIFFITHS/hl4291/filtered/clean_trees.txt
+  human_trees_dir: /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees
+  subset_size: 4000             # random subset of trees (~3-5k). seed-fixed.
+  val_fraction: 0.30            # train/val split of the subset (fixed seed)
+  # Disk-cache the built episodes so re-runs skip the ~20-min episode build.
+  # Cache key hashes subset_size + seed + val_fraction + ALL oracle params +
+  # feature names; any change to those auto-invalidates the cache.
+  cache_dir: /scratch/gpfs/GRIFFITHS/hl4291/minimal_mc_cache
+  use_cache: true               # set false to force a rebuild
+
+# Budgeted oracle = the canonical budgeted_controller_v1 params (mc_pipeline.md §6).
+# REUSED verbatim from cts.data.preprocess_mc.oracle so the METRIC is identical.
+# Do NOT silently change the cost model.
+oracle:
+  maintenance_scale: 0.0        # maintenance cost DISABLED
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  reward_scale: 1.0             # halt rewards multiplied by this before the oracle
+  samples_per_bucket: 2
+  seed: 0                       # base seed for the deterministic per-tree budget sampler
+  budget_buckets:               # the 5 canonical buckets (time units)
+    - {name: scramble,     min_time: 1,  max_time: 3}
+    - {name: medium-small, min_time: 4,  max_time: 10}
+    - {name: medium-large, min_time: 11, max_time: 25}
+    - {name: large,        min_time: 26, max_time: 60}
+    - {name: very-large,   min_time: 61, max_time: 120}
+
+# Trivial hand-crafted per-snapshot root feature vector (a few interpretable scalars).
+# The GNN is a deliberate later swap-in (clean seam in the code); the deliverable is
+# this trivial-feature version working first. The budget-only head ignores ALL of these
+# and sees only remaining_budget (the nested floor). Features are z-scored on TRAIN.
+features:
+  root: [root_value, policy_entropy, q_margin, bmi_stable, log_tree_size, frac_budget_used]
+
+# The FULL MC head: a tiny MLP over (root_features, budget) -> per-step advantage.
+# Selection criterion = TRAIN regret (sweep the decision threshold on train regret).
+# Kept tiny for <30 min CPU.
+head:
+  hidden_units: 16              # one hidden layer, ReLU; transparency over capacity
+  epochs: 150
+  lr: 0.01
+  weight_decay: 0.0
+  # the advantage head regresses the oracle's post-DP target_advantage; the STOP
+  # threshold is then chosen ON TRAIN REGRET (so selection == the judged metric).
+  threshold_grid_points: 81     # thresholds swept over the observed advantage range
+
+# Surrogate objective (the SECOND column) — faithfully replicates controller_train:
+#   loss = advantage_MSE + sign_loss_weight * sign_BCE ; FIXED adv<=0 stop rule
+#   (no regret-threshold tuning, no budget-only floor fallback).
+# Run for BOTH heads (budget-only input = frac_budget_used only; full = all feats).
+surrogate:
+  sign_loss_weight: 0.1         # the cluster controller's exact 0.1 (mc_pipeline.md §8)
+
+# Budget-only head (b): advantage = theta0 + theta1 * remaining_budget (one effective
+# threshold on budget). Fit by directly minimizing train regret over (no features).
+# This is Fraction-as-a-head; its regret is the nested floor the full head must beat.
+budget_only:
+  threshold_grid_points: 121    # budgets swept directly on train regret

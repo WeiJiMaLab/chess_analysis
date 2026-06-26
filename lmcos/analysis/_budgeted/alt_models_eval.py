@@ -131,19 +131,28 @@ def _fit_fraction(train: list[dict[str, Any]], config: BudgetedOracleConfig) -> 
     return best_f, curve
 
 
-def _plot(models: list[str], regrets: list[float], stop_acc: list[float], out_dir: Path) -> None:
-    """Two bar charts (Regret, P(stop==OSS)) with a reserved greyed controller slot."""
+def _plot(models: list[str], regrets: list[float], stop_acc: list[float], out_dir: Path,
+          controller_regret: float | None = None, controller_stop: float | None = None) -> None:
+    """Two bar charts (Regret, P(stop==OSS)). The GNN/MC controller slot is filled with a
+    highlighted bar when its metrics are supplied, else left greyed ('pending')."""
     out_dir.mkdir(parents=True, exist_ok=True)
     labels = models + ["GNN/MC controller"]
-    for values, title, fname, ylab in [
-        (regrets, "Regret on test (lower = better)", "regret_by_model.png", "mean regret"),
-        (stop_acc, "P(stop == OSS) on test", "stop_eq_oss_by_model.png", "fraction stop == OSS"),
+    for values, ctrl, title, fname, ylab in [
+        (regrets, controller_regret, "Regret on test (lower = better)", "regret_by_model.png", "mean regret"),
+        (stop_acc, controller_stop, "P(stop == OSS) on test", "stop_eq_oss_by_model.png", "fraction stop == OSS"),
     ]:
         fig, ax = plt.subplots(figsize=(7, 5))
-        colors = ["#4063A3"] * len(models) + ["#cccccc"]
-        bars = ax.bar(labels, values + [0.0], color=colors)
-        bars[-1].set_hatch("//")
-        ax.annotate("pending", (len(models), 0.0), ha="center", va="bottom", fontsize=9, color="#888")
+        has_ctrl = ctrl is not None
+        colors = ["#4063A3"] * len(models) + ["#B5475B" if has_ctrl else "#cccccc"]
+        bars = ax.bar(labels, values + [ctrl if has_ctrl else 0.0], color=colors)
+        for b, v in zip(bars[:len(models)], values):  # annotate baseline values
+            ax.annotate(f"{v:.3f}", (b.get_x() + b.get_width() / 2, v), ha="center", va="bottom", fontsize=9)
+        if has_ctrl:
+            ax.annotate(f"{ctrl:.3f}", (len(models), ctrl), ha="center", va="bottom", fontsize=9,
+                        color="#B5475B", fontweight="bold")
+        else:
+            bars[-1].set_hatch("//")
+            ax.annotate("pending", (len(models), 0.0), ha="center", va="bottom", fontsize=9, color="#888")
         ax.set_ylabel(ylab)
         ax.set_title(title)
         ax.set_xticks(range(len(labels)))
@@ -160,6 +169,10 @@ def main() -> None:
     ap.add_argument("--out-dir", default="figures")
     ap.add_argument("--max-episodes", type=int, default=None,
                     help="cap episodes loaded per split (means/fractions are stable on a large sample)")
+    ap.add_argument("--controller-regret", type=float, default=None,
+                    help="trained GNN/MC controller mean regret (from controller_train greedy eval); fills its slot")
+    ap.add_argument("--controller-stop", type=float, default=None,
+                    help="trained GNN/MC controller P(stop==OSS) (exact_stop_step_accuracy); fills its slot")
     args = ap.parse_args()
 
     packed_root = Path(args.packed_root)
@@ -181,7 +194,8 @@ def main() -> None:
         stop_acc.append(m["exact_stop_step_accuracy"])
         print(f"{name:<22s} {m['average_regret']:>10.4f} {m['exact_stop_step_accuracy']:>14.3f} {m['average_expansions']:>15.2f}")
 
-    _plot(models, regrets, stop_acc, Path(args.out_dir))
+    _plot(models, regrets, stop_acc, Path(args.out_dir),
+          controller_regret=args.controller_regret, controller_stop=args.controller_stop)
 
     # Appendix: the fraction-rho grid (test regret) for context.
     print("\nAppendix — Fraction-of-Budget test regret across the rho grid:")
