@@ -13,3 +13,11 @@ response_time_histogram_bins: 50
 
 # Number of quantile probe points used for the normal Q-Q plot
 qq_plot_quantile_probes: 200
+
+# =============================================================================
+# DuckDB Database and Table Configurations
+# =============================================================================
+selected_db_default: "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
+table_moves: "moves"
+table_processed_moves: "processed_moves"
+table_processed_moves_nonzero: "processed_moves_nonzero"
