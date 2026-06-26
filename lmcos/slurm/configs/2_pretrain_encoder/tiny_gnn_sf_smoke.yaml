@@ -1,0 +1,29 @@
+# P2 tiny-GNN POC: child-WDL pretrain on Stockfish trees.
+# Deliberately much smaller than the production encoder (k=2, d_embed=128):
+# k=1 (single message-passing layer), d_embed=32. Goal is "the loop trains in
+# minutes", not convergence. Train/validation dirs point at packed Stockfish
+# shards (one rung of the strength ladder).
+command: pretrain-child-wdl-encoder
+
+train_dir: /scratch/gpfs/GRIFFITHS/hl4291/sf_packed/elo1800/train_manifest.json
+validation_dir: /scratch/gpfs/GRIFFITHS/hl4291/sf_packed/elo1800/validation_manifest.json
+output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/sf_packed/elo1800/tiny_encoder.pt
+
+device: cpu
+
+# --- tiny encoder ---
+k: 1
+d_embed: 32
+d_message: 32
+node_embed_hidden: 32
+n_heads: 2
+d_att: 16
+decoder_hidden: 32
+
+batch_size: 32
+learning_rate: 1.0e-3
+epochs: 6
+loss_type: huber
+huber_delta: 1.0
+num_workers: 0
+log_interval: 5

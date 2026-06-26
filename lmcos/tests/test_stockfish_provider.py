@@ -1,14 +1,19 @@
 import unittest
 import os
+import random
 import chess
 import chess.engine
+import torch
 from cts.core.providers.process import UciEngineConfig, UciEngineProcess
 from cts.core.providers.stockfish import StockfishDirectEvalProvider
 from cts.data.preprocess_gnn.teacher_targets import (
     NodeBudgetDistribution,
     TeacherSearchConfig,
-    generate_partial_tree_from_provider
+    generate_partial_tree_from_provider,
+    build_pretrain_example,
+    RawPretrainExampleRecord,
 )
+from cts.data.build_tree import _require_engine_ready_root_fens, STOCKFISH_MIN_ELO
 
 class StockfishProviderTests(unittest.TestCase):
     def setUp(self):
@@ -96,6 +101,47 @@ class StockfishProviderTests(unittest.TestCase):
         self.assertEqual(result.num_expansions, 5)
         self.assertGreater(result.tree.num_nodes(), 5)
         self.assertTrue(result.tree.root_id == 0)
+
+    def test_pretrain_example_has_valid_edge_wdl_targets(self):
+        """End-to-end P2 check: a Stockfish-built pretrain example carries
+        finite, non-negative, sum-to-1 per-edge child-WDL targets that survive
+        serialization through the on-disk record format."""
+        provider = StockfishDirectEvalProvider(self.process, elo=1800)
+        root_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        search_config = TeacherSearchConfig(
+            max_depth=3, search_budget=12, c_puct=1.0,
+            prior_feature="prior", value_feature="value",
+            target_normalization_version="v1", search_config_id="test_sf_edge_wdl",
+        )
+        example = build_pretrain_example(
+            root_fen, provider, search_config,
+            node_budget_distribution=NodeBudgetDistribution(8, 8),
+            rng=random.Random(0), root_position_id="root_0",
+            include_edge_wdl_targets=True,
+        )
+        record = RawPretrainExampleRecord.from_example(example)  # exercises validation + serialization
+        ewt = record.edge_wdl_targets
+        self.assertEqual(ewt.shape[0], record.children_index.shape[0])
+        self.assertEqual(ewt.shape[1], 3)
+        self.assertTrue(torch.isfinite(ewt).all().item())
+        self.assertTrue((ewt >= 0).all().item())
+        sums = ewt.sum(dim=1)
+        self.assertTrue(torch.allclose(sums, torch.ones_like(sums), atol=1e-5))
+
+    def test_fen_wellformedness_guard_rejects_board_only(self):
+        """A board-only FEN (which segfaults Stockfish 14) must be rejected up
+        front by name, never fed to the engine."""
+        with self.assertRaises(ValueError):
+            _require_engine_ready_root_fens(
+                [(7, "rnb1kbnr/pp2pppp/2p5/q7/2PP4/8/PP3PPP/RNBQKBNR")]
+            )
+        # A well-formed 4-field FEN passes.
+        _require_engine_ready_root_fens([(0, "1B1K4/2P5/8/8/8/5k1b/8/8 w - -")])
+
+    def test_below_min_elo_is_rejected(self):
+        """sf_elo below Stockfish's UCI_Elo floor must be caught before spawning."""
+        self.assertEqual(STOCKFISH_MIN_ELO, 1350)
+
 
 if __name__ == "__main__":
     unittest.main()

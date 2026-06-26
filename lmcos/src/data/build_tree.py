@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from cts.core.providers import (
     Lc0DirectEvalProvider,
+    StockfishDirectEvalProvider,
     UciEngineConfig,
     UciEngineProcess,
 )
@@ -41,6 +42,11 @@ from cts.train.gnn_pretrain import (
 )
 
 
+# Stockfish 14 exposes UCI_Elo with ``min 1350``; setting it lower segfaults
+# the process. The strength-ladder bottom rung must respect this floor.
+STOCKFISH_MIN_ELO = 1350
+
+
 def _default_lc0_engine_path() -> str:
     """Default lc0 binary location on macOS Homebrew installs."""
     return "/opt/homebrew/bin/lc0"
@@ -58,6 +64,15 @@ class BuildTreeConfig(BaseModel):
     command: Literal["generate-dataset", "pretrain-child-wdl-encoder"]
 
     # generate-dataset
+    # Which engine drives expansion. "lc0" runs the two-engine prior+value
+    # provider; "stockfish" runs the single-process StockfishDirectEvalProvider
+    # (uniform priors, WDL from Stockfish's internal eval->WDL model). Both
+    # emit the same per-edge child-WDL targets the encoder pretrains on.
+    provider: Literal["lc0", "stockfish"] = "lc0"
+    # Stockfish-only knobs (ignored when provider == "lc0").
+    sf_elo: Optional[int] = None  # UCI_Elo strength limit; None => full strength
+    sf_search_limit_nodes: int = 100  # nodes per per-position Stockfish eval
+    sf_search_limit_depth: Optional[int] = None  # optional fixed depth per eval
     engine_path: str = _default_lc0_engine_path()
     weights_path: Optional[str] = _default_lc0_weights_path()
     backend: Optional[str] = None
@@ -279,6 +294,100 @@ def _generate_and_save_examples(
     return saved_paths
 
 
+def _require_engine_ready_root_fens(root_records: List[tuple[int, str]]) -> None:
+    """Reject malformed root FENs *before* any reach the engine.
+
+    Stockfish 14 segfaults on a ``position fen <board-only>`` line when the
+    FEN is missing its side-to-move/castling/en-passant fields (python-chess
+    silently defaults them, so the bug only surfaces at the engine). A bare
+    board placement is therefore ambiguous *and* engine-fatal: we fail loudly,
+    naming the offending root, rather than crashing mid-search or — worse —
+    silently corrupting the dataset with a guessed side-to-move.
+    """
+    bad: List[tuple[int, str]] = []
+    for index, fen in root_records:
+        # A well-formed FEN carries at least placement + side-to-move +
+        # castling + en-passant (4 fields). The half/full-move counters are
+        # optional for Stockfish, but the first four are load-bearing.
+        if len(fen.split()) < 4:
+            bad.append((index, fen))
+    if bad:
+        preview = ", ".join(f"index={i} fen={f!r}" for i, f in bad[:5])
+        raise ValueError(
+            f"{len(bad)} root FEN(s) are not well-formed (need >=4 space-separated "
+            f"fields: placement, side-to-move, castling, en-passant). Stockfish "
+            f"segfaults on board-only FENs. Fix the FEN source; do not feed these "
+            f"to the engine. First offenders: {preview}"
+        )
+
+
+def generate_dataset_stockfish_command(config: BuildTreeConfig) -> None:
+    """``generate-dataset`` with ``provider: stockfish``: one Stockfish process, expand each root, save.
+
+    Unlike the lc0 path (two engines for priors + value), Stockfish uses a
+    single process via ``StockfishDirectEvalProvider``: priors are uniform and
+    WDL comes from Stockfish's internal eval->WDL model. ``sf_elo`` limits
+    playing strength (the strength-ladder rungs); ``sf_search_limit_nodes``
+    sets the per-position node budget. Edge child-WDL targets are emitted
+    exactly as in the lc0 path.
+    """
+    search_config = _build_quality_config(
+        config,
+        target_normalization_version="v1",
+        search_config_id="supervised_branch_sf_v1",
+    )
+    # Stockfish 14's UCI_Elo floor is 1350; anything lower segfaults the
+    # process on the first analyse. Guard explicitly rather than letting the
+    # crash surface as a cryptic EOF deep in the search loop.
+    if config.sf_elo is not None and config.sf_elo < STOCKFISH_MIN_ELO:
+        raise ValueError(
+            f"sf_elo={config.sf_elo} is below Stockfish's UCI_Elo floor "
+            f"({STOCKFISH_MIN_ELO}); the engine segfaults below it. "
+            f"Use sf_elo>={STOCKFISH_MIN_ELO} or full strength (omit sf_elo)."
+        )
+
+    node_budget_distribution = NodeBudgetDistribution(config.min_nodes, config.max_nodes)
+    rng = random.Random(config.seed)
+    fens = _load_fens(config.fens)
+    root_records = _selected_root_records(fens, config.start_index, config.end_index)
+    if not root_records:
+        raise ValueError("No root positions selected for dataset generation.")
+    # Validate FEN well-formedness up front so a malformed root can never reach
+    # (and segfault) the engine; this also stops silent dataset corruption.
+    _require_engine_ready_root_fens(root_records)
+
+    engine_config = UciEngineConfig(
+        engine_path=config.engine_path,
+        engine_kind="stockfish",
+        movetime_ms=0,
+        multipv=1,
+        depth=config.sf_search_limit_depth,
+        nodes=config.sf_search_limit_nodes,
+    )
+    with UciEngineProcess(engine_config) as engine:
+        provider = StockfishDirectEvalProvider(
+            engine,
+            search_limit_nodes=config.sf_search_limit_nodes,
+            search_limit_depth=config.sf_search_limit_depth,
+            elo=config.sf_elo,
+            metadata={"value_source": "stockfish_wdl", "prior_source": "uniform"},
+        )
+        saved_paths = _generate_and_save_examples(
+            root_records,
+            provider,
+            search_config,
+            node_budget_distribution,
+            rng,
+            config,
+        )
+
+    print(
+        f"saved_examples={len(saved_paths)} output_dir={config.output_dir} "
+        f"provider=stockfish sf_elo={config.sf_elo} "
+        f"start_index={config.start_index} end_index={config.end_index if config.end_index is not None else len(fens)}"
+    )
+
+
 def generate_dataset_command(config: BuildTreeConfig) -> None:
     """Entry point for ``generate-dataset``: spin up engines, expand each root, save.
 
@@ -290,6 +399,9 @@ def generate_dataset_command(config: BuildTreeConfig) -> None:
     classic search, while the valuehead needs ``UCI_ShowWDL`` and a
     different engine mode.
     """
+    if config.provider == "stockfish":
+        generate_dataset_stockfish_command(config)
+        return
     search_config = _build_quality_config(
         config,
         target_normalization_version="v1",
