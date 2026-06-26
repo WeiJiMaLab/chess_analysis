@@ -16,7 +16,7 @@ the labnotebook holds history and resolved diagnoses).
 |---|---|---|---|
 | P1 | cost-regime oracle relabel | ✅ merged `0ca7e7c` | `costsweep_relabel.py` + 11 tests; 7 regimes in `packed/mc_costsweep/` |
 | P0 | Readout harness + D0 tiers 1–4 | ✅ merged `0ca7e7c` | `readout.py`, 5-model `barh` eval, 25 tests; tiers 1–4 real, GNN-z pending |
-| VG | value-gain MC (train-once, sweep cost) | ⏳ running | redirected: trajectory + real-DP-at-eval (greedy threshold is misaligned) |
+| VG | value-gain MC (train-once, sweep cost) | ✅ merged `ca5a583` | trajectory + DP-at-eval; 8 tests; results below — **validation TODO** |
 | P2 | Stockfish ladder + tiny GNN | ✅ merged `eacfa1a` | ladder 1350/1800/full; valid child-WDL; tiny GNN trains in 14s; crashes/OOM root-caused |
 
 **P0 — D0 tiers 1–4 (smoke; regret, lower=better; tier 5 GNN-z = Wave 3)**
@@ -34,6 +34,25 @@ budget-only). **First evidence the tree carries stopping value — but only once
 relaxed, and already without the GNN.** Method: tier-4 threshold tuned on TRAIN regret directly (the
 regret-direct fix); height/width
 derived in-loader from the `depth` array (no pack change).
+
+**VG — value-gain train-once / sweep-many (~3000 ep/regime; regret, lower=better; `value_gain_sweep.json`)**
+
+| regime | Fraction | VG-DP | VG-greedy | DP-stop==OSS |
+|---|---|---|---|---|
+| linear_0.0 | 0.008 | 0.034 | 0.024 | 0.12 |
+| lambda_0.1 | 0.016 | 0.036 | 0.029 | 0.12 |
+| lambda_1.0 | 0.041 | 0.049 | 0.064 | 0.12 |
+| linear_0.003 | 0.052 | 0.060 | 0.059 | 0.12 |
+| lambda_5.0 | 0.054 | 0.075 | 0.182 | 0.12 |
+| lambda_18.537 | 0.068 | 0.120 | 0.405 | 0.13 |
+| linear_0.02 | 0.147 | 0.129 | 0.282 | 0.12 |
+
+*Supported by this run (facts):* DP **beats** greedy at higher cost (redirect justified — reversals matter);
+VG-DP **loses to per-regime Fraction in every regime**; DP-predicted stop matches oracle OSS only **~12%**.
+*Not yet evidenced (open, do NOT conclude):* whether the gap is (a) poor halt-curve prediction from root
+features or (b) a DP-eval/metric problem. **Decisive check still TODO:** run DP on the **true oracle
+halt-curve** — should reproduce OSS ~100% + relabeled regret; if yes → prediction error, if no → machinery.
+Also disagrees with P0 tier-4 (tree-stats beat Fraction at λ=1.0) — different model/sample, reconcile.
 
 **P1 — cost sweep (smoke, 4000 ep/split; regret, lower=better; f\* fit on train, eval on val)**
 
