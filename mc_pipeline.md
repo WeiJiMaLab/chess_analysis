@@ -160,7 +160,8 @@ This **resolves issues 1–3 above** (the scaling bug is real but secondary; the
 - **Phase 1/2 — the 2×2** (`minimal_mc.py`: {regret-direct, MSE+BCE} × {budget-only, full}). Fit on
   regret directly, the full head matches the budget-only floor (root state adds **0**). Trained on the
   cluster recipe (MSE + 0.1·sign-BCE + fixed `adv≤0`), **even a ONE-parameter budget-only head blows
-  up to regret ≈0.29 — reproducing the cluster controller's 0.288** — exonerating the encoder, `z_t`,
+  up to regret 0.303 (clean 4000-tree SLURM run) — reproducing the cluster controller's 0.288** —
+  exonerating the encoder, `z_t`,
   materialization, and feature-scaling entirely. **The objective is the whole bug.**
 
 **Fix:** train/select the controller on regret directly (or tune its decision threshold on regret),
