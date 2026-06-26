@@ -36,6 +36,7 @@ from cts.data.preprocess_mc.oracle import (
     BudgetedOracleConfig,
     budgeted_oracle_config_from_metadata,
     budgeted_oracle_metadata,
+    compute_budgeted_oracle,
     predicted_stop_from_advantages,
     return_for_stop_step,
 )
@@ -103,6 +104,7 @@ class ControllerTrainConfig(BaseModel):
     time_tau: float = 2.5
     time_delta: int = 1
     timeout_value: float = -1.0
+    time_mode: str = "power_law"
     samples_per_bucket: int = 2
     scramble_min_time: int = 1
     scramble_max_time: int = 3
@@ -1089,6 +1091,7 @@ def _oracle_config(config: ControllerTrainConfig) -> BudgetedOracleConfig:
         time_tau=config.time_tau,
         time_delta=config.time_delta,
         timeout_value=config.timeout_value,
+        time_mode=config.time_mode,
         budget_buckets=(
             BudgetBucket("scramble", config.scramble_min_time, config.scramble_max_time),
             BudgetBucket("medium-small", config.medium_small_min_time, config.medium_small_max_time),
@@ -1748,11 +1751,17 @@ def _aggregate_greedy_rollout_metrics(
             predicted_stop,
             oracle_config,
         )
-        regret = meta.oracle_value - predicted_return
+        # Recompute oracle_value under the current oracle_config so that cost-sweep
+        # runs (different lambda) report regret consistently, even when the packed
+        # shard oracle_value was computed under a different cost config.
+        live_oracle_value = compute_budgeted_oracle(
+            meta.halt_rewards, meta.tree_sizes, meta.starting_budget, oracle_config
+        ).oracle_value
+        regret = live_oracle_value - predicted_return
         exact += int(predicted_stop == meta.oracle_stop_step)
         first_action += int((predicted_stop == 0) == (meta.oracle_stop_step == 0))
         total_return += predicted_return
-        total_oracle_value += meta.oracle_value
+        total_oracle_value += live_oracle_value
         total_expansions += predicted_stop
 
         if diagnostics_out is not None:
@@ -1767,7 +1776,7 @@ def _aggregate_greedy_rollout_metrics(
                     "time_budgets": meta.time_budgets,
                     "halt_rewards": meta.halt_rewards,
                     "oracle_stop_step": meta.oracle_stop_step,
-                    "oracle_value": meta.oracle_value,
+                    "oracle_value": live_oracle_value,
                     "predicted_stop_step": predicted_stop,
                     "predicted_value": predicted_return,
                     "regret": regret,
@@ -1889,6 +1898,11 @@ def _validate_packed_manifest_oracle(manifest_path: str, oracle_config: Budgeted
     for field in int_fields:
         if int(getattr(manifest_config, field)) != int(getattr(oracle_config, field)):
             raise ValueError(f"Packed manifest {field} does not match requested training config.")
+    if manifest_config.time_mode != oracle_config.time_mode:
+        raise ValueError(
+            f"Packed manifest time_mode={manifest_config.time_mode!r} does not match "
+            f"requested training config time_mode={oracle_config.time_mode!r}."
+        )
     manifest_buckets = [(bucket.name, bucket.min_time, bucket.max_time) for bucket in manifest_config.budget_buckets]
     requested_buckets = [(bucket.name, bucket.min_time, bucket.max_time) for bucket in oracle_config.budget_buckets]
     if manifest_buckets != requested_buckets:

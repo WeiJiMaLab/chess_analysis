@@ -34,7 +34,7 @@ _HA = Path(__file__).resolve().parent.parent
 if str(_HA) not in sys.path:
     sys.path.insert(0, str(_HA))
 
-from engine_analysis import move_quality, voc
+from engine import move_quality, voc
 from utils.helpers import STOCKFISH_SF14_PATH, STOCKFISH_SF14_DIR
 
 _DEPTH = 15

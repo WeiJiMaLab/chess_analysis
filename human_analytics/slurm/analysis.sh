@@ -18,18 +18,7 @@ if [[ -f .venv/bin/activate ]]; then
 fi
 export PYTHONPATH="${PYTHONPATH:-}:human_analytics"
 
-echo "Running full-dataset analysis pipeline at $(date)"
-
-echo "1. Move time: log(MT) histogram + normal QQ..."
-python3 human_analytics/move_time_summary.py
-
-echo "2. Move-time dashboards (clock, branching, own non-pawn material, ply)..."
-python3 human_analytics/movetime_analysis.py --only clock npossiblemoves self_pieces_exc ply
-
-echo "3. Game stage (ply vs instant-move probability)..."
-python3 human_analytics/ply_premove.py
-
-# MQ moved to the lc0-tree SUBSET (Lc0 final_Q loss of the played move); it is
-# produced by slurm/tree_values.slurm, not here.
+echo "Running full-dataset board analysis pipeline..."
+python3 human_analytics/board.py --all
 
 echo "Analysis complete at $(date)"

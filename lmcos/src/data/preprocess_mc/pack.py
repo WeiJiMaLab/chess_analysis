@@ -70,6 +70,7 @@ class PackControllerEpisodesConfig(BaseModel):
     time_tau: float = 2.5
     time_delta: int = 1
     timeout_value: float = -1.0
+    time_mode: str = "power_law"
     samples_per_bucket: int = 2
     seed: int = 0
     scramble_min_time: int = 1
@@ -145,6 +146,7 @@ def _oracle_config(config: PackControllerEpisodesConfig) -> BudgetedOracleConfig
         time_tau=config.time_tau,
         time_delta=config.time_delta,
         timeout_value=config.timeout_value,
+        time_mode=config.time_mode,
         budget_buckets=(
             BudgetBucket("scramble", config.scramble_min_time, config.scramble_max_time),
             BudgetBucket("medium-small", config.medium_small_min_time, config.medium_small_max_time),

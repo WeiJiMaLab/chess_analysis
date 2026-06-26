@@ -1,0 +1,12 @@
+packed_train_manifest: /scratch/gpfs/GRIFFITHS/hl4291/packed/mc/train_manifest.json
+packed_validation_manifest: /scratch/gpfs/GRIFFITHS/hl4291/packed/mc/validation_manifest.json
+materialized_train_cache: /scratch/gpfs/GRIFFITHS/hl4291/packed/materialized/train_cache.pt
+materialized_validation_cache: /scratch/gpfs/GRIFFITHS/hl4291/packed/materialized/validation_cache.pt
+output_dir: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/linear_0.003
+time_lambda: 0.003
+time_p: 2.8
+time_tau: 2.5
+time_delta: 1
+timeout_value: -1.0
+time_mode: linear
+maintenance_scale: 0.0

@@ -127,6 +127,9 @@ def display_fen(fen: str, size: int = 200) -> None:
     board = chess.Board(fen)
     display(SVG(chess.svg.board(board=board, size=size)))
 
+import contextlib
+from utils.selected_db import SELECTED_DB_DEFAULT
+
 def get_db_connection(
     database: str = ":memory:",
     *,
@@ -142,4 +145,14 @@ def get_db_connection(
         **kwargs,
     }
     return duckdb.connect(database=database, config=config)
+
+
+@contextlib.contextmanager
+def db_connection(database: str = SELECTED_DB_DEFAULT, read_only: bool = True):
+    """Context manager for acquiring and safely releasing a DuckDB connection."""
+    conn = duckdb.connect(database=database, read_only=read_only)
+    try:
+        yield conn
+    finally:
+        conn.close()
 

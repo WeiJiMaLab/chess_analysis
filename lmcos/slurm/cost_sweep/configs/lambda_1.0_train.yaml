@@ -1,0 +1,51 @@
+# Cost sweep: power_law lambda=1.0
+packed_train_data: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/train_manifest.json
+packed_validation_data: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/validation_manifest.json
+encoder_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/GNN/encoder_best.pt
+materialized_train_cache: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/train_cache.pt
+materialized_validation_cache: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/validation_cache.pt
+output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/controller.pt
+output_diagnostics: /scratch/gpfs/GRIFFITHS/hl4291/cost_sweep/lambda_1.0/diagnostics.jsonl
+metrics_path: slurm/cost_sweep/outputs/lambda_1.0_metrics.yaml
+metrics_plot_path: slurm/cost_sweep/outputs/lambda_1.0_metrics.png
+metrics_run_name: "power_law(lambda=1.0)"
+
+device: cuda
+seed: 0
+k: 1
+node_embed_hidden: 128
+d_embed: 128
+d_message: 128
+n_heads: 4
+d_att: 32
+hidden_dim: 256
+hidden_layers: 3
+unfreeze_encoder: false
+
+batch_size: 18000
+episode_batch_size: 4
+epochs: 3
+learning_rate: 1.0e-3
+min_lr: 0.0
+weight_decay: 0.0
+sign_loss_weight: 0.1
+nontrivial_loss_weight: 1.0
+inverse_freq_weights: false
+separate_sign_head: false
+max_grad_norm: 1.0
+num_workers: 0
+log_interval: 10
+metrics_log_interval: 20
+validation_step_interval: 100
+greedy_eval_step_interval: 100
+validation_interval: 0
+greedy_eval_interval: 0
+
+controller_inputs: [z_t, T_t]
+
+time_lambda: 1.0
+time_p: 2.8
+time_tau: 2.5
+time_delta: 1
+timeout_value: -1.0
+time_mode: power_law

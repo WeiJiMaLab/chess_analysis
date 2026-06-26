@@ -32,6 +32,10 @@ Reports come in two formats:
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
 | Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
 | Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
+| The Unified Readout Abstraction — software architecture for stopping policies | [(R-MC-READOUT)](readout_abstraction.md) | Architectural | LMCOS | 📝 proposal |
+| Meta-controller cost structure — does convex cost force budget-dominance? | [(R-MC-COST)](cost_structure.md) | Scientific | LMCOS | 📝 proposal |
+| Meta-controller training signal — is advantage regression too lossy? | [(R-MC-SIGNAL)](lossy_signal.md) | Scientific | LMCOS | 📝 proposal |
+| Meta-controller deliberation value — do teacher trees have low search value? | [(R-MC-DELIB)](deliberation_value.md) | Scientific | LMCOS | 📝 proposal |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the

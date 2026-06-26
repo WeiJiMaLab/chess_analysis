@@ -1,12 +1,11 @@
 # pipeline.yaml — THE single config for the full-scale GNN/MC roundtrip.
 # Replaces 12 scattered per-stage YAMLs. One section per stage; run top-to-bottom.
-# Narrative lineage + provenance: mc_pipeline.md. Fast iteration loop: minimal_mc.py + minimal_mc.yaml.
+# Narrative lineage + provenance: mc_pipeline.md.
 #
 # NOTE on instance vs forward-config: the CURRENT artifact controller_filtered.pt was produced
 # with min_halt_reward_range=0.05 and RAW (unnormalized) scalar features — it is DIAGNOSED BROKEN
-# (loses to Fraction-f*; see mc_pipeline.md §10 + mc_minimal_plan.md). The values below are the
+# (loses to Fraction-f*; see mc_pipeline.md §10). The values below are the
 # YSAGIV-FAITHFUL FORWARD config: halt-range 0.1; the z-score feature fix is intrinsic to mc.py;
-# Phase 2 may switch controller SELECTION to regret-direct (mc_minimal_plan.md §4).
 
 run_name: filtered_v1
 seed: 0

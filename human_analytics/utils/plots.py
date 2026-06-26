@@ -274,3 +274,33 @@ def highlight_corr_row(ax, n_cols, idx=0):
         k = idx * n_cols + j
         if k < len(ax.texts):
             ax.texts[k].set_fontweight("bold")
+
+
+def save_figure(fig, category: str, filename: str) -> str:
+    """Save a matplotlib figure under figures/<category>/<filename> as both PDF and PNG.
+    
+    Creates the subdirectory if it doesn't exist.
+    """
+    if category not in ("board", "engine"):
+        raise ValueError(f"Invalid figure category: {category}. Must be 'board' or 'engine'.")
+    
+    base, _ = os.path.splitext(filename)
+    
+    # Locate repository root (one level up from human_analytics/)
+    utils_dir = os.path.dirname(os.path.abspath(__file__))
+    ha_dir = os.path.dirname(utils_dir)
+    repo_root = os.path.dirname(ha_dir)
+    
+    out_dir = os.path.join(repo_root, "figures", category)
+    os.makedirs(out_dir, exist_ok=True)
+    
+    out_path_pdf = os.path.join(out_dir, f"{base}.pdf")
+    out_path_png = os.path.join(out_dir, f"{base}.png")
+    
+    # Save both formats
+    fig.savefig(out_path_pdf, dpi=300, bbox_inches="tight", pad_inches=0.3)
+    fig.savefig(out_path_png, dpi=300, bbox_inches="tight", pad_inches=0.3)
+    plt.close(fig)
+    print(f"Saved figures: {out_path_pdf} and {out_path_png}")
+    return out_path_pdf
+

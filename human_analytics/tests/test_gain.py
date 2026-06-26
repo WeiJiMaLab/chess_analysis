@@ -24,7 +24,7 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tree_values_analysis import _tree_voc_and_gap  # noqa: E402
+from engine import _tree_voc_and_gap  # noqa: E402
 
 
 def _make_tree(*, child_values, final_q, q_trace, root_moves=None):

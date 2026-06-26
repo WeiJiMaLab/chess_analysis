@@ -29,13 +29,6 @@ from cts.models.gnn import TreeEncoderOutput, TreeEncoder
 # ``T_t``).
 CONTROLLER_INPUT_NAMES: Tuple[str, ...] = ("z_t", "N_t", "T_t")
 
-# Z-score normalization for the scalar state features. Raw N_t (tree size, ~O(1e3))
-# and T_t (time budget, mean~35) otherwise swamp z_t (per-elem std~0.56), so the head
-# keys off budget and ignores the encoder embedding (diagnosed 2026-06-23: corr(stop,
-# budget)=0.84 >> corr(stop, z_t)). Constants from the filtered train cache. Applied at
-# the head boundary in ``_select_features`` so the cache stays the raw [z_t, N_t, T_t].
-_SIZE_MEAN, _SIZE_STD = 1116.0, 935.0    # N_t (tree size)
-_BUDGET_MEAN, _BUDGET_STD = 35.0, 28.0   # T_t (remaining time budget)
 
 
 def validate_controller_inputs(controller_inputs: Sequence[str]) -> Tuple[str, ...]:
@@ -190,9 +183,9 @@ class MetaController(nn.Module):
         if "z_t" in self.controller_inputs:
             parts.append(features[..., :d_embed])
         if "N_t" in self.controller_inputs:
-            parts.append((features[..., d_embed : d_embed + 1] - _SIZE_MEAN) / _SIZE_STD)
+            parts.append(features[..., d_embed : d_embed + 1])
         if "T_t" in self.controller_inputs:
-            parts.append((features[..., d_embed + 1 : d_embed + 2] - _BUDGET_MEAN) / _BUDGET_STD)
+            parts.append(features[..., d_embed + 1 : d_embed + 2])
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=-1)
 
     def predict_from_features(

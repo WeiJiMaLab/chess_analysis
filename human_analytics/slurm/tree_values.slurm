@@ -30,7 +30,8 @@ N_TREES="${N_TREES:-100000}"
 N_WORKERS="${N_WORKERS:-${SLURM_CPUS_PER_TASK:-40}}"
 
 echo "tree values: n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $(date)"
-PYTHONPATH=human_analytics python3 human_analytics/tree_values_analysis.py \
+PYTHONPATH=human_analytics python3 human_analytics/engine.py \
+    --mode tree_values \
     --n-trees "${N_TREES}" \
     --n-workers "${N_WORKERS}"
 echo "Finished at $(date)"

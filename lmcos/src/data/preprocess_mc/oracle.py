@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Literal, Sequence
 
 
 @dataclass(frozen=True)
@@ -69,10 +69,11 @@ class BudgetedOracleConfig:
     maintenance_ref_nodes: float = 30.0  # reference tree size used to normalize maintenance cost
     maintenance_exponent: float = 1.1  # superlinear growth exponent for maintenance cost vs. node count
     time_lambda: float = 18.537  # overall scale of the time-cost term
-    time_p: float = 2.8  # convexity exponent for the time-cost term; must be > 1
-    time_tau: float = 2.5  # offset that softens the singularity as budget → 0
+    time_p: float = 2.8  # convexity exponent for the time-cost term; must be > 1 (unused when time_mode="linear")
+    time_tau: float = 2.5  # offset that softens the singularity as budget → 0 (unused when time_mode="linear")
     time_delta: int = 1  # minimum remaining budget required to still consider continuing
     timeout_value: float = -1.0  # terminal value assigned when the budget is exhausted
+    time_mode: Literal["power_law", "linear"] = "power_law"  # "linear" gives constant cost=time_lambda per step
     budget_buckets: tuple[BudgetBucket, ...] = DEFAULT_BUDGET_BUCKETS  # bucket partition over expansion counts
     samples_per_bucket: int = 2  # number of starting budgets drawn from each bucket per source tree
     seed: int = 0  # base seed mixed into the deterministic bucket sampler
@@ -88,10 +89,12 @@ class BudgetedOracleConfig:
             raise ValueError("maintenance_exponent must be positive.")
         if self.time_lambda < 0.0:
             raise ValueError("time_lambda must be non-negative.")
-        if self.time_p <= 1.0:
+        if self.time_mode == "power_law" and self.time_p <= 1.0:
             raise ValueError("time_p must be > 1.")
-        if self.time_tau <= 0.0:
+        if self.time_mode == "power_law" and self.time_tau <= 0.0:
             raise ValueError("time_tau must be positive.")
+        if self.time_mode not in ("power_law", "linear"):
+            raise ValueError(f"time_mode must be 'power_law' or 'linear', got {self.time_mode!r}.")
         if self.time_delta <= 0:
             raise ValueError("time_delta must be positive.")
         if self.samples_per_bucket <= 0:
@@ -162,14 +165,17 @@ def maintenance_cost(num_nodes: int, config: BudgetedOracleConfig) -> float:
 
 
 def time_cost(remaining_budget: int, config: BudgetedOracleConfig) -> float:
-    """Convex time cost that grows sharply as the remaining budget approaches zero.
+    """Per-step time cost of choosing to expand.
 
-    Implemented as the finite difference of an offset power-law potential,
-    so summing per-step costs telescopes into a clean total cost-of-time
-    expression with closed-form properties.
+    Two modes controlled by ``config.time_mode``:
+    - ``"power_law"``: convex cost that grows sharply as remaining budget approaches zero,
+      implemented as a finite difference of an offset power-law potential.
+    - ``"linear"``: constant cost equal to ``time_lambda`` per step, independent of budget.
     """
     if remaining_budget <= 0:
         raise ValueError("remaining_budget must be positive.")
+    if config.time_mode == "linear":
+        return float(config.time_lambda)
     # Two power-law evaluations one step apart; the subtraction is the
     # per-step time cost when integrated as the difference of a potential.
     left = (remaining_budget - config.time_delta + config.time_tau) ** (-(config.time_p - 1.0))
@@ -391,6 +397,7 @@ def budgeted_oracle_metadata(config: BudgetedOracleConfig) -> Dict[str, Any]:
         "time_tau": config.time_tau,
         "time_delta": config.time_delta,
         "timeout_value": config.timeout_value,
+        "time_mode": config.time_mode,
         "samples_per_bucket": config.samples_per_bucket,
         "budget_seed": config.seed,
         "budget_buckets": [
@@ -425,6 +432,7 @@ def budgeted_oracle_config_from_metadata(metadata: Dict[str, Any]) -> BudgetedOr
         time_tau=float(metadata["time_tau"]),
         time_delta=int(metadata["time_delta"]),
         timeout_value=float(metadata["timeout_value"]),
+        time_mode=str(metadata.get("time_mode", "power_law")),
         budget_buckets=buckets,
         samples_per_bucket=int(metadata["samples_per_bucket"]),
         seed=int(metadata.get("budget_seed", 0)),
