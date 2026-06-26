@@ -1,11 +1,13 @@
 # mc_pipeline.md — Authoritative end-to-end lineage of the current GNN/MC controller
 
 **Purpose.** The single reproducibility record for *this* GNN/MC instance: where every datum came
-from, every filter, every training step, the architecture, the packing, and the cost/loss math.
-If a number in a figure can't be traced to a stage here, that's a bug in this doc — fix it here.
+from, every filter, every training step, the architecture, the packing, and the cost/loss math —
+a **current reflection of what the code does**, kept in sync with the code. History, diagnoses, and
+resolved bugs belong in the **labnotebook** (archival), never here. If a number can't be traced to a
+stage below, that's a bug in this doc — fix it here.
 
-**The instance this describes:** `controller_filtered.pt` (the diagnosed-underperforming run,
-2026-06-23). Status: **known-broken** (loses to Fraction-`f*`; see §10). Kept for reference.
+**The instance this describes:** `controller_filtered.pt`. Forward work / live experiments:
+`mc_minimal_plan.md`.
 
 ---
 
@@ -22,6 +24,40 @@ ysagiv human_trees (640,605 *.pt)
                       └─[controller train, [z_t,T_t], MSE+0.1·signBCE, 3 ep]→ GNN/controller_filtered.pt §8
                            └─[eval vs baselines]→ figures/{regret,stop_eq_oss}_by_model.png §9
 ```
+
+---
+
+## Definitions (verified against code — every row cross-checked to `file:line`)
+
+**These mechanisms have never changed since the inception of this code.** Do not infer them — this is
+the authoritative statement, each row read from the cited construction site (not the labnotebook).
+`t` = expansion step (0-indexed, post-trim); `B` = starting budget.
+
+| Symbol | Definition | Code (verified) |
+|---|---|---|
+| `bmi[t]` (`oracle_best_move_index`) | index of the **best-so-far root move** at step `t` (argmax of the root Q estimate *at that expansion*) | raw tree field |
+| `oracle_final_root_q_values[m]` | **depth-96 (full-search) Q** of root move `m` — fixed teacher value, not evolving | raw tree field |
+| **`halt_reward[t]`** (= `halt_value[t]`) | `oracle_final_root_q_values[ bmi[t] ]` — **full-search Q of the move best-so-far at `t`** (what you'd get committing now, scored under the *complete* search). **NOT** the evolving shallow estimate. | [pack.py:660](lmcos/src/data/preprocess_mc/pack.py#L660), [oracle.py:270](lmcos/src/data/preprocess_mc/oracle.py#L270) |
+| `T_t` (remaining budget) | `B − t` | [oracle.py:259](lmcos/src/data/preprocess_mc/oracle.py#L259) |
+| `N_t` (tree size) | node count at step `t` | [pack.py:660](lmcos/src/data/preprocess_mc/pack.py#L660) |
+| `time_cost(T_t)` | power-law: `λ·[(T_t−δ+τ)^{−(p−1)} − (T_t+τ)^{−(p−1)}]`; linear: constant `λ` | [oracle.py:167-183](lmcos/src/data/preprocess_mc/oracle.py#L167) |
+| `maintenance_cost(N_t)` | `scale·(N_t/ref)^exp` — **DISABLED** (`scale=0`) | [oracle.py:160-164](lmcos/src/data/preprocess_mc/oracle.py#L160) |
+| `continue_cost` | `maintenance_cost + time_cost` | [oracle.py:186-188](lmcos/src/data/preprocess_mc/oracle.py#L186) |
+| `continue_value[t]` | `−continue_cost(N_t,T_t) + next_value`; `next_value` = `V*(t+1)`, else `timeout_value` if `T_t≤δ`, else `halt_reward[t]` at the data-truncation boundary | [oracle.py:277-285](lmcos/src/data/preprocess_mc/oracle.py#L277) |
+| `V*(t)` (oracle value) | `max(halt_value, continue_value)`, **tie → halt** (`≥`) — backward induction | [oracle.py:290-295](lmcos/src/data/preprocess_mc/oracle.py#L290) |
+| **`target_advantage[t]`** (controller regression target) | `continue_value[t] − halt_value[t]` (positive ⇒ continue) | [oracle.py:286](lmcos/src/data/preprocess_mc/oracle.py#L286) |
+| `OSS` (optimal stop step) | cost-aware DP stop from `t`: `t` if halting, else propagate | [oracle.py:293,297](lmcos/src/data/preprocess_mc/oracle.py#L293) |
+| greedy decision rule | stop at **first** `t` with `advantage(t) ≤ 0`, else last step | [oracle.py:152-157](lmcos/src/data/preprocess_mc/oracle.py#L152) |
+| `GSS` (greedy stopping step) | `argmax(bmi == bmi[-1])` — first step the eventual-best move appears (zero-cost stop) | [filter_trees_by_trace.py:63](lmcos/src/data/filter_trees_by_trace.py#L63) |
+| PUCT-stable filter | `bmi[0] ≠ bmi[-1]  AND  bmi[mid] ≠ bmi[-1]` | [filter_trees_by_trace.py:62](lmcos/src/data/filter_trees_by_trace.py#L62) |
+| monotone-convergence filter | `all(bmi[gss:] == bmi[-1])` — best move, once found, never abandoned (acts on **move identity**, not value) | [filter_trees_by_trace.py:64](lmcos/src/data/filter_trees_by_trace.py#L64) |
+| `value_gain[t]` (VG, new) | `V*_zerocost(t) − halt_reward[t] ≥ 0` — DP value with cost disabled (reuses the oracle, captures reversals) | [value_gain.py:74](lmcos/src/data/preprocess_mc/value_gain.py#L74) |
+| `Gain` / VOC (analysis-side) | `Q_final[bmi[-1]] − Q_final[bmi[1]]` (human-analytics, not the MC target) | labnotebook:190 |
+
+**Known consequence of the `halt_reward` definition** (verified, not inferred): once `bmi[t]` locks onto
+the final move the curve is flat at the trajectory max (gain ≡ 0 after convergence; 100% of `packed/mc`
+trajectories); any non-monotonicity is **pre-convergence only** (best-so-far move identity hopping among
+candidates of non-monotone final Q).
 
 ---
 
@@ -79,6 +115,13 @@ ysagiv human_trees (640,605 *.pt)
 - **Oracle:** `budgeted_controller_v1`. Per tree, a budget bucket is drawn; the oracle runs DP over
   expansion steps to get, per step, `halt_reward`, `continue_value` (post-DP), `tree_size`, and the
   **optimal stop step (OSS)**.
+- **`halt_reward[t]` definition (load-bearing; [pack.py:660](lmcos/src/data/preprocess_mc/pack.py#L660)):**
+  `halt_reward[t] = oracle_final_root_q_values[ oracle_best_move_index[t] ]` — the **depth-96 (full-search)
+  Q-value of the move that is best-so-far at step t**, i.e. what you'd get by committing now to your
+  current best move, scored under the *complete* search. It is **NOT** the evolving shallow Q-estimate at
+  step t. Consequences (verifiable, not inferred): once `bmi[t]` reaches the final best move the curve is
+  **flat at the trajectory max** (gain ≡ 0 after convergence); any non-monotonicity is **pre-convergence
+  only**, from the best-so-far move's *identity* hopping among candidates with non-monotone final Q.
 - **Cost model (the meta-controller's "cost"; [oracle.py:157-180](lmcos/src/data/preprocess_mc/oracle.py#L157)):**
   - **time cost** `= time_lambda · (convex term in remaining_budget)`, params `time_lambda=18.537,
     time_p=2.8, time_tau=2.5, time_delta=1`.
@@ -129,48 +172,9 @@ ysagiv human_trees (640,605 *.pt)
 - **Baselines:** Always-Stop (stop@0), Never-Stop (full budget), Fraction-of-Budget `f*` (stop iff
   `N_t ≥ f·B`, `f` fit on **train** regret, evaluated on **val**).
 - **Result (filtered val):** Fraction `f*=0.17` regret **0.077**; Always 0.467; Never 1.388;
-  GNN/MC **0.209** (selected) — i.e. **the controller loses to the 1-parameter fraction**. This is
-  the open mystery (see §10 + `mc_minimal_plan.md`).
+  GNN/MC **0.209** (selected). Forward work and the live experiment status: `mc_minimal_plan.md`.
 
-## 10. Known issues / diagnosed bugs (as of 2026-06-23)
-1. **Feature-scaling bug (patched, uncommitted):** raw `T_t`(~35)/`N_t`(~1116) swamped `z_t`(std~0.56),
-   so the head keyed off budget and ignored the encoder (`corr(stop,budget)=0.84`). Fix: z-score
-   normalize in `mc.py _select_features`. NOT yet retrained/committed.
-2. **Objective/threshold mismatch (open, leading hypothesis):** controller minimizes a surrogate
-   (advantage-MSE + sign-BCE) with a fixed `adv≤0` threshold, while `f*` is fit directly on regret.
-   A nested model should never lose — see `mc_minimal_plan.md`.
-3. **Near-zero targets at the boundary:** ~50% of `target_advantage` have |adv|<0.01 (decision
-   boundary = weakest signal). `min_decision_margin` would filter these but is **not ysagiv's** (they
-   used 0.0); not enabled.
-4. **Snapshot drift** (§1) and **halt-range 0.05 vs ysagiv 0.1** (§6) — minor, flagged.
-
-## 10b. Diagnosis RESOLVED (2026-06-26) — it was the objective, conclusively
-
-Two controlled experiments settle why the controller (regret 0.21–0.29) loses to a 1-parameter
-Fraction baseline (0.077), despite Always/Never/Fraction being *nested* in the MC head's class.
-This **resolves issues 1–3 above** (the scaling bug is real but secondary; the objective is primary):
-
-- **Phase 0 — decoy-head test (harness exonerated).** Decoy heads that IGNORE `z_t` and implement
-  Always/Never/Fraction, pushed through the controller's *own* greedy-eval, reproduce the standalone
-  baselines to 4 dp (Fraction 0.0775 = 0.0775). The harness is fair and the MC class *demonstrably
-  contains* the 0.077 solution → the gap is the **objective/decision rule**, not the comparison.
-  Provenance warts found (harmless to the means): manifest-order vs sorted-glob shard misalignment
-  between the two eval paths (38/40 positions); continuous- vs clamped-stop forms. Rebuild rule:
-  route every model through ONE loader over ONE physical dir.
-- **Phase 1/2 — the 2×2** (`minimal_mc.py`: {regret-direct, MSE+BCE} × {budget-only, full}). Fit on
-  regret directly, the full head matches the budget-only floor (root state adds **0**). Trained on the
-  cluster recipe (MSE + 0.1·sign-BCE + fixed `adv≤0`), **even a ONE-parameter budget-only head blows
-  up to regret 0.303 (clean 4000-tree SLURM run) — reproducing the cluster controller's 0.288** —
-  exonerating the encoder, `z_t`,
-  materialization, and feature-scaling entirely. **The objective is the whole bug.**
-
-**Fix:** train/select the controller on regret directly (or tune its decision threshold on regret),
-every model behind one eval entrypoint over one physical split. **Finding:** on this budgeted oracle
-optimal stopping is ~budget-determined (1-param ≈ full) — the tree's value for *when to stop*,
-properly measured, is ~0 here (a Phase-3 question: oracle cost structure / stronger features).
-Method/plan: `mc_minimal_plan.md`. (Folds the former standalone `phase0_verdict.md`.)
-
-## 11. Reproduce (exact commands)
+## 10. Reproduce (exact commands)
 ```bash
 # env
 source /home/hl4291/venv/bin/activate; export PYTHONPATH=/home/hl4291/chess_analysis/lmcos/src
@@ -190,7 +194,7 @@ sbatch GNN/controller_filtered.slurm                                       # -> 
 python -m analysis._budgeted.alt_models_eval --packed-root packed/mc --out-dir figures
 ```
 
-## 12. File map (where everything lives)
+## 11. File map (where everything lives)
 | what | path |
 |---|---|
 | source trees | `/scratch/.../ysagiv/.../human_trees/*.pt` |
