@@ -155,3 +155,101 @@ def test_gain_nan_on_degenerate_tree():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Unit and Integration Tests for Active Engine Evaluations ---
+import chess
+import chess.engine
+from utils.engine_eval import _win_prob, evaluate_position, move_quality, voc
+from utils.helpers import get_engine
+
+
+class TestActiveEngineEval(unittest.TestCase):
+    """Unit and integration tests for engine_eval.py functions on key board positions."""
+
+    # --- Unit tests using chess.Board directly (game-over/terminal states) ---
+    def test_win_prob_checkmate(self) -> None:
+        """Verify win probability in checkmate is exactly 0.0 for the mated side."""
+        # 1.f3 e5 2.g4 Qh4# (Fool's mate) - Black checkmates White. White is in checkmate.
+        board = chess.Board("rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2")
+        board.push(chess.Move.from_uci("d8h4")) # Qh4#
+        # White to move is in checkmate; win probability should be 0.0
+        info = {}
+        self.assertTrue(board.is_checkmate())
+        self.assertEqual(_win_prob(info, board), 0.0)
+
+    def test_win_prob_stalemate(self) -> None:
+        """Verify win probability in stalemate is exactly 0.5."""
+        # Valid stalemate FEN: White King on a1, Black King on c3, Black Queen on c2. White to move.
+        board = chess.Board("k7/8/8/8/8/2k5/2q5/K7 w - - 0 1")
+        info = {}
+        self.assertTrue(board.is_game_over())
+        self.assertTrue(board.is_stalemate())
+        self.assertEqual(_win_prob(info, board), 0.5)
+
+    def test_evaluate_position_checkmate(self) -> None:
+        """Verify evaluate_position handles checkmate without engine queries."""
+        board = chess.Board("rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2")
+        board.push(chess.Move.from_uci("d8h4"))
+        res = evaluate_position(board, chess.Move.from_uci("g1f3"), engine=None)
+        self.assertEqual(res.e_win_best, 0.0)
+        self.assertEqual(res.e_win_second_best, 0.0)
+        self.assertEqual(res.e_win_taken, 0.0)
+        self.assertEqual(res.voc, 0.0)
+        self.assertEqual(res.mq, 0.0)
+
+    def test_evaluate_position_stalemate(self) -> None:
+        """Verify evaluate_position handles stalemate without engine queries."""
+        # Valid stalemate FEN
+        board = chess.Board("k7/8/8/8/8/2k5/2q5/K7 w - - 0 1")
+        res = evaluate_position(board, chess.Move.from_uci("a1a2"), engine=None)
+        self.assertEqual(res.e_win_best, 0.5)
+        self.assertEqual(res.e_win_second_best, 0.5)
+        self.assertEqual(res.e_win_taken, 0.5)
+        self.assertEqual(res.voc, 0.0)
+        self.assertEqual(res.mq, 0.0)
+
+    # --- Integration tests using Stockfish (if available) ---
+    def test_opening_position_eval(self) -> None:
+        """Verify that opening position evaluations yield balanced win probabilities (~0.5)."""
+        try:
+            engine = get_engine("stockfish", threads=1, hash_mb=32)
+        except Exception:
+            self.skipTest("Stockfish not available for active eval tests")
+            
+        try:
+            board = chess.Board()
+            move = chess.Move.from_uci("e2e4")
+            res = evaluate_position(board, move, engine, depth_deep=5, depth_shallow=1)
+            self.assertIsNotNone(res.e_win_best)
+            self.assertIsNotNone(res.e_win_taken)
+            self.assertIsNotNone(res.voc)
+            # In opening, White's win prob is close to 0.5 (typically 0.51 - 0.55)
+            self.assertTrue(0.4 <= res.e_win_best <= 0.65)
+            self.assertTrue(res.voc >= 0.0)
+            self.assertTrue(res.mq <= 0.0)
+        finally:
+            engine.close()
+
+    def test_obvious_win_loss_eval(self) -> None:
+        """Verify that a winning position yields a high win probability, and blunders yield negative MQ."""
+        try:
+            engine = get_engine("stockfish", threads=1, hash_mb=32)
+        except Exception:
+            self.skipTest("Stockfish not available for active eval tests")
+
+        try:
+            # White is completely winning (King + Queen vs King)
+            board = chess.Board("4k3/8/8/8/8/8/4Q3/4K3 w - - 0 1")
+            best_move = chess.Move.from_uci("e2e7")
+            res_win = evaluate_position(board, best_move, engine, depth_deep=5, depth_shallow=1)
+            # White's win prob should be extremely high (close to 1.0)
+            self.assertGreater(res_win.e_win_best, 0.85)
+            
+            # Blundering the King (e1e2) instead of playing the winning Queen move yields a negative MQ
+            bad_move = chess.Move.from_uci("e1e2")
+            mq_bad = move_quality(board, bad_move, engine, depth=5)
+            self.assertLessEqual(mq_bad, 0.0)
+        finally:
+            engine.close()
+
