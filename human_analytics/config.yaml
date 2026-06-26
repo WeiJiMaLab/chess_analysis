@@ -1,0 +1,15 @@
+# =============================================================================
+# Cache and Tree Defaults (Leela Chess Zero / LC0)
+# =============================================================================
+trees_default: "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
+cache_default: "/scratch/gpfs/GRIFFITHS/hl4291/tree_values_cache"
+key_default: "human_trees_200000_7"
+
+# =============================================================================
+# Response Time (RT) Plotting & Analysis Configurations
+# =============================================================================
+# Number of bins used for SQL-side response time histogram binning
+response_time_histogram_bins: 50
+
+# Number of quantile probe points used for the normal Q-Q plot
+qq_plot_quantile_probes: 200

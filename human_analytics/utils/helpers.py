@@ -5,6 +5,18 @@ Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engin
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import yaml
+
+# Load the shared configuration
+def _load_shared_config() -> dict:
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Shared config not found at {config_path}")
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f) or {}
+
+CONFIG = _load_shared_config()
 
 import chess
 import chess.engine
@@ -155,4 +167,16 @@ def db_connection(database: str = SELECTED_DB_DEFAULT, read_only: bool = True):
         yield conn
     finally:
         conn.close()
+
+
+def partial_spearman(df, x: str, y: str, controls: list[str]) -> float:
+    """Spearman rank correlation ρ(x, y) controlling for covariates."""
+    import numpy as np
+    df = df[[x, y] + controls].dropna()
+    R = df.rank()
+    A = np.c_[np.ones(len(R)), R[controls].to_numpy()]
+    def resid(col: str) -> np.ndarray:
+        beta, *_ = np.linalg.lstsq(A, R[col].to_numpy(), rcond=None)
+        return R[col].to_numpy() - A @ beta
+    return float(np.corrcoef(resid(x), resid(y))[0, 1])
 

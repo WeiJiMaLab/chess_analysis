@@ -7,8 +7,6 @@ All generated plots are saved in PDF format under figures/board/.
 """
 
 import argparse
-import os
-import sys
 import duckdb
 import numpy as np
 from scipy import stats
@@ -24,6 +22,7 @@ from utils.helpers import (
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     MAIN_COLOR,
+    CONFIG,
 )
 from utils.plots import (
     highlight_corr_row,
@@ -36,14 +35,14 @@ from utils.selected_db import (
     TABLE_PROCESSED_MOVES_NONZERO,
 )
 
-N_BINS = 50
-N_QQ = 200  # number of quantile probe points for the QQ plot
-
 
 def run_move_time_summary(conn):
     """Response time distribution: log(RT) histogram (left) + normal QQ plot (right).
     Collapsed from move_time_summary.py.
     """
+    n_bins = CONFIG["response_time_histogram_bins"]
+    n_qq = CONFIG["qq_plot_quantile_probes"]
+
     n_moves = conn.execute(f"SELECT count(*) FROM {TABLE_PROCESSED_MOVES_NONZERO}").fetchone()[0]
     print(f"Running response time summary: n = {n_moves:,} moves")
 
@@ -58,15 +57,15 @@ def run_move_time_summary(conn):
         WITH stats AS (SELECT min(ln_move_time) AS min_v, max(ln_move_time) AS max_v FROM _summary_view),
         bins AS (
             SELECT i AS bin_idx,
-                   min_v + (max_v - min_v) * i / {N_BINS} AS bin_left,
-                   min_v + (max_v - min_v) * (i + 1) / {N_BINS} AS bin_right
-            FROM stats, range({N_BINS}) AS t(i)
+                   min_v + (max_v - min_v) * i / {n_bins} AS bin_left,
+                   min_v + (max_v - min_v) * (i + 1) / {n_bins} AS bin_right
+            FROM stats, range({n_bins}) AS t(i)
         )
         SELECT b.bin_idx, b.bin_left, b.bin_right, count(v.ln_move_time) AS n
         FROM bins b
         LEFT JOIN _summary_view v
             ON v.ln_move_time >= b.bin_left
-           AND (v.ln_move_time < b.bin_right OR (b.bin_idx = {N_BINS - 1} AND v.ln_move_time <= b.bin_right))
+           AND (v.ln_move_time < b.bin_right OR (b.bin_idx = {n_bins - 1} AND v.ln_move_time <= b.bin_right))
         GROUP BY b.bin_idx, b.bin_left, b.bin_right
         ORDER BY b.bin_idx
     """)
@@ -74,7 +73,7 @@ def run_move_time_summary(conn):
 
     # Moments + empirical quantiles for the QQ plot (all SQL-side).
     mean, std = conn.execute("SELECT avg(ln_move_time), stddev(ln_move_time) FROM _summary_view").fetchone()
-    probs = (np.arange(1, N_QQ + 1)) / (N_QQ + 1)
+    probs = (np.arange(1, n_qq + 1)) / (n_qq + 1)
     emp_q = np.array(conn.execute(
         "SELECT quantile_cont(ln_move_time, ?) FROM _summary_view", [probs.tolist()]
     ).fetchone()[0], dtype=float)
