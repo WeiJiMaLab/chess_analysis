@@ -227,3 +227,258 @@ def test_sample_before_where_returns_fewer_rows(mock_db_conn):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Skeptical Robustness Tests for the Analyzer Pipeline ---
+from utils.analysis import Analyzer, Variable
+
+class TestAnalyzerCorrectness(unittest.TestCase):
+    """Rigorous tests designed to verify math, row conservation, tie-safety, and SQL security in Analyzer."""
+
+    def setUp(self) -> None:
+        self.con = duckdb.connect()
+        self.con.execute("""
+            CREATE TABLE test_moves (
+                gid INT,
+                move_ply INT,
+                move_time DOUBLE,
+                x_val DOUBLE
+            )
+        """)
+
+    def tearDown(self) -> None:
+        self.con.close()
+
+    def _populate_data(self, rows: list[tuple]) -> None:
+        for row in rows:
+            self.con.execute("INSERT INTO test_moves VALUES (?, ?, ?, ?)", row)
+
+    def test_row_conservation_with_zero_inflation_and_edge_mass(self) -> None:
+        """Verify that zero-inflation, interior binning, and edge-masses conserve the total row count."""
+        # 100 rows total: 40 are exactly 0.0, 40 are normal (1.0 to 4.0), 20 are edge mass (>= 10.0)
+        data = []
+        for i in range(40):
+            data.append((1, 20, 5.0, 0.0))  # zero-inflated lump
+        for i in range(40):
+            data.append((1, 20, 5.0, 1.0 + (i % 4)))  # interior
+        for i in range(20):
+            data.append((1, 20, 5.0, 10.0))  # edge mass
+        self._populate_data(data)
+
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            zero_inflated=True,
+            zero_threshold=0.01,
+            edge_mass=[(">=", 10.0)],
+            ply_tertile_source="test_moves"
+        )
+
+        # The sum of all counts in the binned dataframe must exactly equal the total rows (100)
+        total_binned_rows = analyzer.quantile_df["n"].sum()
+        self.assertEqual(total_binned_rows, 100, f"Expected 100 rows, got {total_binned_rows} (leakage or duplication!)")
+
+    def test_tie_safety_grouping(self) -> None:
+        """Verify that tie_safe=True groups identical values into the same bin instead of splitting them."""
+        # 100 rows: 80 rows have x=5.0, 20 rows have x=10.0
+        data = [(1, 20, 5.0, 5.0)] * 80 + [(1, 20, 5.0, 10.0)] * 20
+        self._populate_data(data)
+
+        # In tie_safe mode, we should get exactly 2 bins because there are only 2 distinct values,
+        # and no row with x=5.0 should be split into the x=10.0 bin.
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            tie_safe=True,
+            ply_tertile_source="test_moves"
+        )
+
+        self.assertEqual(len(analyzer.quantile_df), 2)
+        # Check that the bins contain exactly the 80 and 20 counts
+        counts = sorted(analyzer.quantile_df["n"].tolist())
+        self.assertEqual(counts, [20, 80])
+
+    def test_empty_dataset_graceful_handling(self) -> None:
+        """Verify that the analyzer does not crash when the filtered dataset is completely empty."""
+        # No data populated, table is empty
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            ply_tertile_source="test_moves"
+        )
+        self.assertEqual(analyzer.n_moves, 0)
+        self.assertTrue(analyzer.quantile_df.empty or len(analyzer.quantile_df) == 0)
+
+    def test_null_value_omission(self) -> None:
+        """Verify that NULL/None values are skipped and do not cause SQL crashes."""
+        # 5 rows, one has NULL x_val
+        data = [
+            (1, 20, 5.0, 1.0),
+            (1, 20, 5.0, 2.0),
+            (1, 20, 5.0, None),
+            (1, 20, 5.0, 4.0),
+        ]
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=2,
+            ply_tertile_source="test_moves"
+        )
+        # The NULL row is ignored in counting because it is filtered out by the finite condition in the view definition
+        self.assertEqual(analyzer.n_moves, 3)
+
+    def test_sql_injection_prevention(self) -> None:
+        """Verify that SQL injection in identifiers raises a ValueError."""
+        with self.assertRaises(ValueError):
+            # Malicious table name with injection
+            Analyzer(
+                db_conn=self.con,
+                table_name="test_moves",
+                x_var=Variable("x_val"),
+                y_var=Variable("move_time"),
+                ply_tertile_source="test_moves; DROP TABLE test_moves;"
+            )
+
+    def test_nan_inf_handling(self) -> None:
+        """Verify that NaN, Inf, and -Inf values in the database are handled gracefully."""
+        data = [
+            (1, 20, 5.0, 1.0),
+            (1, 20, float('nan'), 2.0),
+            (1, 20, 5.0, float('inf')),
+            (1, 20, float('-inf'), 4.0),
+        ]
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=2,
+            ply_tertile_source="test_moves"
+        )
+        # Verify the pipeline runs and does not raise an exception.
+        # Valid numerical rows are processed.
+        self.assertGreater(analyzer.n_moves, 0)
+
+    def test_log_variable_non_positive_values(self) -> None:
+        """Verify that non-positive values for log-transformed variables do not crash the pipeline."""
+        data = [
+            (1, 20, 5.0, 1.0),
+            (1, 20, -5.0, 0.0),  # Non-positive values for x or y
+            (1, 20, 0.0, -10.0),
+            (1, 20, 10.0, 2.0),
+        ]
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val", is_log=True),
+            y_var=Variable("move_time", is_log=True),
+            n_bins=2,
+            ply_tertile_source="test_moves"
+        )
+        # ln(0) or ln(negative) will yield NULL in DuckDB, which is skipped by ntile and aggregations.
+        # The pipeline should complete without crashing.
+        self.assertGreater(analyzer.n_moves, 0)
+
+    def test_edge_mass_overlapping_and_disjoint(self) -> None:
+        """Verify behavior of both disjoint and overlapping edge masses."""
+        # 10 rows: x values from 1 to 10
+        data = [(1, 20, 5.0, float(i)) for i in range(1, 11)]
+        self._populate_data(data)
+
+        # 1. Disjoint edge masses: should conserve exactly 10 rows.
+        analyzer_disjoint = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=3,
+            edge_mass=[("<=", 2.0), (">=", 9.0)],
+            ply_tertile_source="test_moves"
+        )
+        self.assertEqual(analyzer_disjoint.quantile_df["n"].sum(), 10)
+
+        # 2. Overlapping edge masses: a skeptical agent expects duplication to be handled or documented.
+        # Let's verify the exact duplication behavior to be precise.
+        analyzer_overlap = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=3,
+            edge_mass=[(">=", 7.0), (">=", 9.0)],
+            ply_tertile_source="test_moves"
+        )
+        # Rows with x >= 9.0 match both clauses, so they are duplicated in the union.
+        # Rows with x=9.0, 10.0 (2 rows) are duplicated. Total rows = 10 + 2 = 12.
+        self.assertEqual(analyzer_overlap.quantile_df["n"].sum(), 12)
+
+    def test_single_distinct_value_tie_safety(self) -> None:
+        """Verify that tie_safe grouping works correctly when there is only a single distinct x value."""
+        data = [(1, 20, 5.0, 42.0)] * 50
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            tie_safe=True,
+            ply_tertile_source="test_moves"
+        )
+        # Should result in exactly 1 bin containing all 50 rows, without division by zero or out of bounds.
+        self.assertEqual(len(analyzer.quantile_df), 1)
+        self.assertEqual(analyzer.quantile_df.iloc[0]["n"], 50)
+
+    def test_single_row_dataset_stddev_and_plotting(self) -> None:
+        """Verify that a dataset with exactly 1 row (where stddev is NULL/NaN) does not crash plotting."""
+        data = [(1, 20, 5.0, 10.0)]
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            ply_tertile_source="test_moves"
+        )
+        self.assertEqual(analyzer.n_moves, 1)
+        # stddev of a single row is NaN. Verify that we can still plot it without crashing.
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        analyzer.plot_quantile_bins(ax)
+        plt.close(fig)
+
+    def test_extreme_min_bin_count_filtering(self) -> None:
+        """Verify that when min_bin_count filters out all bins, the plotting functions handle it gracefully."""
+        data = [(1, 20, 5.0, float(i)) for i in range(10)]
+        self._populate_data(data)
+        analyzer = Analyzer(
+            db_conn=self.con,
+            table_name="test_moves",
+            x_var=Variable("x_val"),
+            y_var=Variable("move_time"),
+            n_bins=5,
+            min_bin_count=100,  # higher than any bin count (bins have size 2)
+            ply_tertile_source="test_moves"
+        )
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        # Should not crash even though all bins are filtered out
+        analyzer.plot_quantile_bins(ax)
+        plt.close(fig)
+
+

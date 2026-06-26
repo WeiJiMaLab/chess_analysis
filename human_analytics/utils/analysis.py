@@ -53,6 +53,8 @@ def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[in
         c1, c2 = conn.execute(
             f"SELECT quantile_disc({column}, 1.0/3), quantile_disc({column}, 2.0/3) FROM {source}"
         ).fetchone()
+        if c1 is None or c2 is None:
+            c1, c2 = 0, 0
         _TERTILE_CUTS_CACHE[key] = (int(c1), int(c2))
     return _TERTILE_CUTS_CACHE[key]
 
@@ -83,7 +85,7 @@ class Variable:
     def sql_expression(self):
         """Returns the SQL expression for the variable, including log-transform if needed."""
         if self.is_log:
-            return f"ln({self.column})"
+            return f"CASE WHEN {self.column} > 0 THEN ln({self.column}) ELSE NULL END"
         return self.column
 
 
@@ -340,8 +342,16 @@ class Analyzer:
         self.ply_cuts = (c1, c2)
         tertile_expr = f"(1 + ({self.segment_column} > {c1})::INT + ({self.segment_column} > {c2})::INT)"
 
-        # 1. Prepare temporary analysis view
-        where_clause = f"WHERE {self.filter_query}" if self.filter_query else ""
+        # 1. Prepare temporary analysis view.
+        # Filter out non-finite (NaN, Inf, -Inf) values to prevent mathematical out-of-range errors in stddev/aggregates.
+        finite_cond = (
+            f"({self.x.column} IS NOT NULL AND NOT isnan({self.x.column}) AND NOT isinf({self.x.column})) AND "
+            f"({self.y.column} IS NOT NULL AND NOT isnan({self.y.column}) AND NOT isinf({self.y.column}))"
+        )
+        if self.filter_query:
+            where_clause = f"WHERE ({self.filter_query}) AND {finite_cond}"
+        else:
+            where_clause = f"WHERE {finite_cond}"
         self.conn.execute(f"""
             CREATE OR REPLACE TEMPORARY VIEW _analyzer_view AS
             SELECT
