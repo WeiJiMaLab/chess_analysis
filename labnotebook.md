@@ -31,6 +31,18 @@ Older lmcos work (Apr–May 2026) lives in the [§ Legacy lmcos lab notebook](#l
 - **Tree spec (verified):** `max_depth=10`, value = **raw value-head** (win−loss), budget = **96 expansions** (total nodes ≈ 96 × branching).
 - **Open:** the resource-rational branching account ([R-BRANCH](reports/branching.md) P1–P5: policy-entropy ≈ branching; width-gated stop vs value-convergence); difficulty-residualized MQ; strength-matched SF-2000 oracle.
 
+## 2026-06-26 {#2026-06-26}
+
+Refactored the engine and configuration architecture, consolidated the test suite, mitigated bivariate pipeline vulnerabilities, and profiled MCTS tree rollout generation.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **Centralized Config & Unified Constructor** | Centralize DuckDB and plotting parameters; simplify engine popen interfaces | ✅ Created `config.yaml` and global `CONFIG` dictionary. Unified constructors into a case-insensitive `get_engine(kind, ...)` function. Localized paths and removed obsolete Stockfish 15 binary. | — |
+| **Test Suite Consolidation & Database Mocking** | Speed up unit tests; eliminate the DuckDB scan bottleneck over 135M rows | ✅ Merged 5 test files into `test_board.py` and `test_engine.py`. Created in-memory mock databases populated with 1,000-row samples. Reduced test suite execution time from ~45s to **10.03s** (100% pass). | — |
+| **Bivariate Analysis Pipeline Vulnerability Mitigation** | Mitigate OutOfRangeException crashes on NaN/Inf and non-positive log evaluations in DuckDB | ✅ Updated `_run_sql_pipeline` to filter out non-finite and NULL values in the temporary view. Updated `Variable.sql_expression` to use a SQL `CASE` statement protecting `ln()`. Added 6 new edge-case robustness tests. | — |
+| **MCTS Tree Rollout Throughput Profiling** | Profile CPU-only tree search performance comparing Stockfish and Lc0 | ✅ **Stockfish is 1,155× faster** than Lc0 (Eigen CPU) at MCTS tree generation. A 10-expansion rollout (305 nodes) took **0.181s** for Stockfish vs. **209.55s** for Lc0. The gap is driven by sequential NN evaluation latency and IPC overhead. | — |
+| **Elo-Matched MCTS Rollouts (1800 Elo)** | Evaluate the performance cost of simulating human-strength playing limits (e.g. 1800 Elo) | ✅ Stockfish configured to **1800 Elo** with a search budget of `nodes=100` took **0.174s** (no overhead), and `depth=5` took **0.492s** (still ~425× faster than Lc0). Highly viable for CPU-bound tree generation. | — |
+
 ---
 
 ## 2026-06-18 {#2026-06-18}

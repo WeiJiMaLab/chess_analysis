@@ -71,6 +71,7 @@ def get_engine(
     weights_path: str | None = None,
     threads: int = 1,
     hash_mb: int = 128,
+    backend: str | None = None,
 ) -> chess.engine.SimpleEngine:
     """Get a chess engine instance (Stockfish 14 or Leela Chess Zero)."""
     kind = kind.lower()
@@ -105,6 +106,8 @@ def get_engine(
             "WeightsFile": w_path,
             "UCI_ShowWDL": "true",
         }
+        if backend:
+            options["Backend"] = backend
         engine.configure(options)
         return engine
 
