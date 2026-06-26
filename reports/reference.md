@@ -6,7 +6,7 @@ Reports come in two formats:
 
 - **Scientific-inquiry reports** follow the **scientific template**: *Overview → Results (plot-heavy,
   figures first) → Methods → Appendix (Logs)*. Figures are embedded from the repo-root `figures/`
-  (human analytics) or `lmcos/analysis/figures/` (LMCOS), with `figures/archive/` for historical
+  (human analytics) or `figures/lmcos/` (LMCOS), with `figures/archive/` for historical
   snapshots.
 - **Reference / engineering / archive reports** keep their original format (summary
   table · `| Step | Status |` procedure · notes).
@@ -32,10 +32,7 @@ Reports come in two formats:
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
 | Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
 | Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
-| The Unified Readout Abstraction — software architecture for stopping policies | [(R-MC-READOUT)](readout_abstraction.md) | Architectural | LMCOS | 📝 proposal |
-| Meta-controller cost structure — does convex cost force budget-dominance? | [(R-MC-COST)](cost_structure.md) | Scientific | LMCOS | 📝 proposal |
-| Meta-controller training signal — is advantage regression too lossy? | [(R-MC-SIGNAL)](lossy_signal.md) | Scientific | LMCOS | 📝 proposal |
-| Meta-controller deliberation value — do teacher trees have low search value? | [(R-MC-DELIB)](deliberation_value.md) | Scientific | LMCOS | 📝 proposal |
+| Meta-controller — why is tree value ≈0 for stopping, and the minimal forward plan (folds the former R-MC-READOUT/COST/SIGNAL/DELIB proposals) | [(R-MC-PLAN)](../mc_minimal_plan.md) | Plan | LMCOS | 📝 active; P0–P3 |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
@@ -109,8 +106,11 @@ facts and decisions are kept here.
   and the in-process **batched evaluator** (NO-GO — only ~2× on the raw path, below the ≥5× gate;
   the bottleneck is Python 112-plane encoding/bookkeeping, not the GPU). Throughput is bought via
   parallelism + the QoS fix (`gpu-short`), not new code.
-- **Stockfish swap:** held as a contingency only — far faster on CPU but α-β, so it produces no
-  value-network WDL and cannot make the child-WDL target.
+- **Stockfish swap:** `StockfishDirectEvalProvider` (Elo-limitable) is implemented and ~1,155× faster
+  on CPU. It sets `UCI_ShowWDL` and returns a WDL per node, so it **does** produce child-WDL targets
+  (the `edge_wdl_targets` backup loop is provider-agnostic). Differences vs lc0: WDL from Stockfish's
+  internal eval→WDL model (not a trained value head); **uniform priors** (no policy head). See
+  `mc_minimal_plan.md` P2/P3. *(Supersedes the earlier "α-β cannot make child-WDL" note.)*
 - **JAX / `mctx`** (batched MCTS): deferred to v2 — our trees are ragged/dynamically grown, so a
   fixed-size padded-array port is a substantial parity risk; not justified unless CPU-side
   bookkeeping becomes the bottleneck.
