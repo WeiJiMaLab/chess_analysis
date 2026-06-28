@@ -377,45 +377,81 @@ def _fraction_operating_curve(episodes: list[dict[str, Any]], config: BudgetedOr
     return pts
 
 
-def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: str,
-          xlabel: str, out_path: Path) -> None:
-    """One horizontal bar chart: models top->bottom in `labels` order (tier 1->5).
+def _log_axis(ax, which: str) -> None:
+    """Log-scale the given axis with clean 1/2/5-per-decade decimal tick labels (regret is
+    > 0, so the near-zero models separate out without the minor-tick label clutter)."""
+    from matplotlib.ticker import LogLocator, ScalarFormatter, NullFormatter
+    if which == "x":
+        ax.set_xscale("log")
+        axis = ax.xaxis
+    else:
+        ax.set_yscale("log")
+        axis = ax.yaxis
+    axis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)))   # 0.1,0.2,0.5,1,2,...
+    axis.set_major_formatter(ScalarFormatter())
+    axis.set_minor_locator(LogLocator(base=10.0, subs=tuple(range(1, 10))))
+    axis.set_minor_formatter(NullFormatter())                            # gridlines only, no labels
 
-    ``barh`` plots bottom->top, so we reverse the y positions to put labels[0]
-    at the top. The last model (GNN-z) is drawn hatched/grey + 'pending' when
-    ``pending_last``.
+
+def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: str,
+          xlabel: str, out_path: Path, cis: list[tuple[float, float]] | None = None,
+          log_x: bool = False) -> None:
+    """Horizontal comparison, models top->bottom in `labels` order (tier 1->5).
+
+    Default: bars + value labels. If ``cis`` (per-model 95% CIs) is given, render points
+    with horizontal 95%-CI error bars instead and drop the value labels — used for regret,
+    where the CI matters more than the number. ``log_x`` log-scales the value axis.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     n = len(labels)
     y = list(range(n))[::-1]  # reverse so labels[0] is at the top
-    colors = [_MAIN_COLOR] * n
-    plot_values = list(values)
-    if pending_last:
-        colors[-1] = _PENDING_COLOR
-        plot_values[-1] = 0.0
-
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    bars = ax.barh(y, plot_values, color=colors)
+
+    if cis is not None:
+        for yi, val, ci in zip(y, values, cis):
+            lo, hi = ci
+            if lo == lo and hi == hi:  # finite CI -> point + horizontal error bar
+                ax.errorbar([val], [yi], xerr=[[max(val - lo, 0.0)], [max(hi - val, 0.0)]],
+                            fmt="o", color=_MAIN_COLOR, ecolor=_MAIN_COLOR, capsize=4,
+                            markersize=6, zorder=3)
+            else:
+                ax.scatter([val], [yi], color=_PENDING_COLOR, zorder=3)  # scalar / pending: no CI
+        finite = [c for c in cis if c[0] == c[0]]
+        if log_x:
+            _log_axis(ax, "x")
+            if finite:  # tight bounds so the axis doesn't run off to 0.01
+                ax.set_xlim(min(c[0] for c in finite) * 0.8, max(c[1] for c in finite) * 1.3)
+        ax.margins(y=0.15)
+    else:
+        colors = [_MAIN_COLOR] * n
+        plot_values = list(values)
+        if pending_last:
+            colors[-1] = _PENDING_COLOR
+            plot_values[-1] = 0.0
+        bars = ax.barh(y, plot_values, color=colors)
+        for idx, (bar, val) in enumerate(zip(bars, values)):
+            if pending_last and idx == n - 1:
+                bar.set_hatch("//")
+                ax.annotate("pending", (0.0, bar.get_y() + bar.get_height() / 2),
+                            va="center", ha="left", fontsize=9, color="#888")
+            else:
+                ax.annotate(f"{val:.3f}", (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                            va="center", ha="left", fontsize=9)
+
+    if cis is None:
+        ax.margins(x=0.15)
     ax.set_yticks(y)
     ax.set_yticklabels(labels)
-    for idx, (bar, val) in enumerate(zip(bars, values)):
-        if pending_last and idx == n - 1:
-            bar.set_hatch("//")
-            ax.annotate("pending", (0.0, bar.get_y() + bar.get_height() / 2),
-                        va="center", ha="left", fontsize=9, color="#888")
-        else:
-            ax.annotate(f"{val:.3f}", (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-                        va="center", ha="left", fontsize=9)
     ax.set_xlabel(xlabel)
     ax.set_title(title)
-    ax.margins(x=0.15)
     _style_ax(ax)
     fig.tight_layout()
     _save_fig(fig, out_path)
 
 
 def _plot_tradeoff(labels: list[str], regrets: list[float], expansions: list[float],
-                   pending_last: bool, frac_curve: list[tuple[float, float]], *, out_path: Path) -> None:
+                   pending_last: bool, frac_curve: list[tuple[float, float]], *, out_path: Path,
+                   cis: list[tuple[float, float]] | None = None) -> None:
     """Regret vs compute, against the Fraction-θ operating curve.
 
     The Fraction-θ family is drawn as its continuous curve (θ: 0=Always → 1=Never,
@@ -439,11 +475,15 @@ def _plot_tradeoff(labels: list[str], regrets: list[float], expansions: list[flo
     ax.scatter([fx[opt]], [fy[opt]], marker="*", s=240, color=_STAR_COLOR,
                edgecolor="#7d6608", linewidth=0.7, zorder=6, label=r"$\theta^*$ (sweep optimum)")
 
-    # Learned readouts as off-curve points (the comparison): tree-stats, GNN-z.
+    # Learned readouts as off-curve points (the comparison): tree-stats, GNN-z, with
+    # 95% CI bars on regret (the y-axis is log, so error bars are asymmetric there).
     learned = [3] + ([] if pending_last else [4])
-    ax.scatter([expansions[i] for i in learned], [regrets[i] for i in learned],
-               color=_LEARNED_COLOR, s=34, zorder=5)
     for i in learned:
+        ci = cis[i] if cis else None
+        yerr = ([[max(regrets[i] - ci[0], 0.0)], [max(ci[1] - regrets[i], 0.0)]]
+                if ci and ci[0] == ci[0] else None)
+        ax.errorbar([expansions[i]], [regrets[i]], yerr=yerr, fmt="o", color=_LEARNED_COLOR,
+                    ecolor=_LEARNED_COLOR, capsize=4, markersize=7, zorder=5)
         ax.annotate(labels[i], (expansions[i], regrets[i]),
                     textcoords="offset points", xytext=(6, 4), fontsize=8)
     # The sweep endpoints are Always (θ=0) and Never (θ=1).
@@ -451,8 +491,9 @@ def _plot_tradeoff(labels: list[str], regrets: list[float], expansions: list[flo
     ax.annotate(r"Never ($\theta$=1)", (fx[-1], fy[-1]), textcoords="offset points",
                 xytext=(-6, 6), fontsize=8, ha="right")
 
+    _log_axis(ax, "y")  # regret on log scale (>0; spreads the near-zero models)
     ax.set_xlabel("Mean Expansions\n" + r"$\leftarrow$ cheaper")
-    ax.set_ylabel("Mean Regret\n" + r"$\leftarrow$ better")
+    ax.set_ylabel("Mean Regret  (log)\n" + r"$\leftarrow$ better")
     ax.set_title(r"Regret vs compute — learned readouts vs the Fraction-$\theta$ curve")
     ax.margins(0.16)
     ax.legend(loc="upper left", fontsize=8)
@@ -677,12 +718,13 @@ def main() -> None:
 
     out_dir = Path(args.out_dir)
     _plot(labels, regret_full, pending, title="Regret by readout model (lower = better)",
-          xlabel="Mean Regret", out_path=out_dir / "regret_by_model.png")
+          xlabel="Mean Regret  (log scale; bars = 95% CI)", out_path=out_dir / "regret_by_model.png",
+          cis=cis, log_x=True)
     _plot(labels, stop_full, pending, title="P(stop == OSS) by readout model",
           xlabel="fraction stop == OSS", out_path=out_dir / "oss_by_model.png")
     frac_curve = _fraction_operating_curve(test, config, [round(0.1 * k, 1) for k in range(11)])
     _plot_tradeoff(labels, regret_full, expansions_full, pending, frac_curve,
-                   out_path=out_dir / "regret_vs_compute.png")
+                   out_path=out_dir / "regret_vs_compute.png", cis=cis)
     _plot_regret_distribution(labels, metric_dicts, out_path=out_dir / "regret_distribution.png")
     _plot_regret_decomposition(labels, metric_dicts, out_path=out_dir / "regret_decomposition.png")
 
