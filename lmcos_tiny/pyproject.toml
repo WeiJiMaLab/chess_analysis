@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Same import name (`cts`) as the parent so the forked modules read byte-identically.
+# Standalone src-layout: `cts.analysis` is folded under src/cts/analysis here (the
+# parent splits it into a sibling analysis/ dir via package-dir). Runtime deps come
+# from the shared venv (torch, numpy, matplotlib, pydantic, pyyaml, python-chess).
+name = "cts-tiny"
+version = "0.1.0"
+description = "Self-contained extract of the lmcos Stockfish mini-GNN / mini-MC halt-model pipeline."
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

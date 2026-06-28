@@ -1,4 +1,4 @@
-# P2 Stockfish strength ladder — rung 1800.
+# P2 Stockfish strength ladder — rung 2200.
 # Shared root FENs (uniform 50k sample of the 2023 human-game ground-truth pool,
 # fens.txt); only sf_elo differs across the 1800/2000/2200 rungs so the ladder
 # isolates teacher strength. Edge child-WDL targets are emitted as in lc0.
@@ -8,7 +8,7 @@ provider: stockfish
 engine_path: /home/hl4291/stockfish/src/stockfish
 
 fens: /scratch/gpfs/GRIFFITHS/hl4291/sf_ladder_roots_50k.txt  # 50k 4-field FENs, uniform-random from fens.txt (_load_fens reads whole file; 50k is tiny)
-output_dir: /scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo1800
+output_dir: /scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2200
 
 # Match the human_trees search shape (depth 4, 96-node PUCT budget).
 search_budget: 96
@@ -17,7 +17,7 @@ max_nodes: 96
 max_depth: 4
 
 # Stockfish provider knobs.
-sf_elo: 1800
+sf_elo: 2200
 sf_search_limit_nodes: 100
 
 seed: 42
