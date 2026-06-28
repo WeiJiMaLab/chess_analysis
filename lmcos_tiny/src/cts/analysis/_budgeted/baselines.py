@@ -86,6 +86,48 @@ def _fixed_fraction_stop_step(episode: dict[str, Any], rho: float) -> int:
     return int(round(rho * starting_budget))
 
 
+def stop_fit_metrics(
+    stops: list[int],
+    oracle_stops: list[int],
+    regrets: list[float],
+) -> dict[str, float]:
+    """Tier-1 goodness-of-fit of stop decisions vs the oracle's OSS.
+
+    All derived from per-episode ``(predicted stop, oracle stop, regret)``:
+
+    - ``stop_bias`` = E[stop - OSS]; **positive => systematic over-search** (stops late),
+      negative => under-search. The single most diagnostic stat for the
+      Fraction-vs-MCHalt gap (MCHalt stops much later).
+    - ``stop_mae`` = E[|stop - OSS|]: absolute stop-step fit (vs the brittle
+      exact-match P(stop==OSS), which scores a 1-step miss as fully wrong even
+      though the return curve is ~flat near OSS).
+    - ``tol_acc_1`` / ``tol_acc_2`` = P(|stop - OSS| <= 1 / 2): near-miss-tolerant
+      stop accuracy (k=0 recovers exact-match).
+    - ``frac_early`` / ``frac_late`` = P(stop < OSS) / P(stop > OSS).
+    - ``regret_from_early`` / ``regret_from_late`` = mean over ALL episodes of the
+      regret restricted to stop<OSS / stop>OSS. Regret at stop==OSS is 0 by
+      construction, so these two **sum to average_regret** — an exact decomposition
+      of the value loss into *under-searching* (missed value) vs *over-searching*
+      (wasted cost).
+    """
+    n = len(stops)
+    if n == 0:
+        keys = ("stop_bias", "stop_mae", "tol_acc_1", "tol_acc_2",
+                "frac_early", "frac_late", "regret_from_early", "regret_from_late")
+        return {k: 0.0 for k in keys}
+    diffs = [int(s) - int(o) for s, o in zip(stops, oracle_stops)]
+    return {
+        "stop_bias": sum(diffs) / n,
+        "stop_mae": sum(abs(d) for d in diffs) / n,
+        "tol_acc_1": sum(abs(d) <= 1 for d in diffs) / n,
+        "tol_acc_2": sum(abs(d) <= 2 for d in diffs) / n,
+        "frac_early": sum(d < 0 for d in diffs) / n,
+        "frac_late": sum(d > 0 for d in diffs) / n,
+        "regret_from_early": sum(r for d, r in zip(diffs, regrets) if d < 0) / n,
+        "regret_from_late": sum(r for d, r in zip(diffs, regrets) if d > 0) / n,
+    }
+
+
 def _evaluate_baseline(
     diagnostics: list[dict[str, Any]],
     oracle_config: BudgetedOracleConfig,
@@ -99,6 +141,8 @@ def _evaluate_baseline(
     """
     returns = []
     regrets = []
+    stops: list[int] = []
+    oracle_stops: list[int] = []
     exact = 0
     first = 0
     expansions = 0
@@ -112,10 +156,13 @@ def _evaluate_baseline(
             stop_step,
             oracle_config,
         )
+        oracle_stop = int(episode["oracle_stop_step"])
         returns.append(predicted_return)
         regrets.append(float(episode["oracle_value"]) - predicted_return)
-        exact += int(stop_step == int(episode["oracle_stop_step"]))
-        first += int((stop_step == 0) == (int(episode["oracle_stop_step"]) == 0))
+        stops.append(stop_step)
+        oracle_stops.append(oracle_stop)
+        exact += int(stop_step == oracle_stop)
+        first += int((stop_step == 0) == (oracle_stop == 0))
         expansions += stop_step
     n = len(diagnostics)
     return {
@@ -124,6 +171,7 @@ def _evaluate_baseline(
         "exact_stop_step_accuracy": exact / n,
         "first_action_accuracy": first / n,
         "average_expansions": expansions / n,
+        **stop_fit_metrics(stops, oracle_stops, regrets),
     }
 
 

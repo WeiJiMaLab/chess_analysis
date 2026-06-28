@@ -38,6 +38,7 @@ from cts.train.controller_train import (
     _aggregate_greedy_rollout_metrics,
     _collect_episode_metadata_and_step_count,
 )
+from cts.train.gnn_pretrain import load_encoder_architecture
 
 
 def _load_materialized_cache_unchecked(cache_index_path: Path) -> MaterializedCache:
@@ -89,15 +90,28 @@ def _build_controller_from_checkpoint(
     controller_inputs = list(metadata.get("controller_inputs", CONTROLLER_INPUT_NAMES))
     separate_sign_head = bool(metadata.get("separate_sign_head", False))
     schema = tree_encoder_feature_schema()
+
+    # Resolve the encoder architecture from the encoder checkpoint this controller
+    # was trained against, so the rebuilt MetaController matches whatever encoder
+    # was used (tiny SF k=1/d_embed=32, or prod lc0 k=2/d_embed=128). The kwargs
+    # above are only fallbacks for when the encoder checkpoint is unavailable.
+    arch: dict[str, Any] = {}
+    enc_ckpt = metadata.get("encoder_checkpoint")
+    if enc_ckpt and Path(enc_ckpt).exists():
+        try:
+            arch = load_encoder_architecture(enc_ckpt) or {}
+        except Exception:
+            arch = {}
+
     model = MetaController(
-        k=k,
-        node_feat=len(schema.feature_names),
+        k=arch.get("k", k),
+        node_feat=arch.get("node_feat", len(schema.feature_names)),
         device=device,
-        node_embed_hidden=node_embed_hidden,
-        d_embed=d_embed,
-        d_message=d_message,
-        n_heads=n_heads,
-        d_att=d_att,
+        node_embed_hidden=arch.get("node_embed_hidden", node_embed_hidden),
+        d_embed=arch.get("d_embed", d_embed),
+        d_message=arch.get("d_message", d_message),
+        n_heads=arch.get("n_heads", n_heads),
+        d_att=arch.get("d_att", d_att),
         hidden_dim=hidden_dim,
         hidden_layers=hidden_layers,
         separate_sign_head=separate_sign_head,

@@ -20,11 +20,11 @@ The per-rung JSON schema (written by ``alt_models_eval._maybe_write_results``):
 ``mchalt`` carries ``null`` if that rung's controller was not yet scored
 (pending); such a rung is dropped from the MCHalt line rather than plotted as 0.
 
-    PYTHONPATH=lmcos/src python -m cts.analysis._budgeted.ladder_plot \
+    PYTHONPATH=lmcos_tiny/src python -m cts.analysis._budgeted.ladder_plot \
         --rung 1800 elo1800_results.json \
         --rung 2000 elo2000_results.json \
         --rung 2200 elo2200_results.json \
-        --out-dir figures/lmcos
+        --out-dir figures/lmcos_tiny
 """
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rung", nargs=2, action="append", metavar=("ELO", "JSON"), required=True,
                     help="an Elo rung and its results JSON; repeatable (e.g. --rung 1800 a.json)")
-    ap.add_argument("--out-dir", default="figures/lmcos")
+    ap.add_argument("--out-dir", default="figures/lmcos_tiny")
     ap.add_argument("--title", default=None)
     args = ap.parse_args()
     rung_args = [(int(elo), path) for elo, path in args.rung]

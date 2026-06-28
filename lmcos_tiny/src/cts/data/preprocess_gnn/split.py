@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,12 +25,34 @@ class SplitConfig(BaseModel):
     validation_fraction: float = 0.05
     seed: int = 0
     clear: bool = False
+    # Optional path to a clean_trees.txt (one basename per line, e.g. from
+    # filter_trees_by_trace). When set, the split is restricted to those trees
+    # under source_root instead of every *.pt — this is how tree filtering feeds
+    # the encoder/MC packs.
+    include_list: Optional[str] = None
 
 
-def _gather_examples(source_root: Path) -> list[Path]:
-    """Recursively collect every ``.pt`` example under ``source_root``, sorted."""
+def _gather_examples(source_root: Path, include_list: Optional[str] = None) -> list[Path]:
+    """Collect example ``.pt`` files under ``source_root``, sorted.
+
+    With ``include_list``, take only the basenames it lists (the filtered subset);
+    otherwise recursively glob every ``.pt``.
+    """
     if not source_root.exists():
         raise FileNotFoundError(f"source_root does not exist: {source_root}")
+    if include_list:
+        names = [ln.strip() for ln in Path(include_list).read_text().splitlines() if ln.strip()]
+        examples = [source_root / name for name in names]
+        missing = [str(p) for p in examples if not p.exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"{len(missing)} trees from include_list {include_list!r} not under "
+                f"{source_root} (e.g. {missing[:3]})"
+            )
+        if not examples:
+            raise ValueError(f"include_list {include_list!r} is empty")
+        # Sort so the seeded shuffle depends only on --seed, not list order.
+        return sorted(examples)
     # Sort so the deterministic shuffle below depends only on --seed,
     # not on filesystem walk order (which varies across machines).
     examples = sorted(source_root.rglob("*.pt"))
@@ -55,7 +78,7 @@ def main(config: SplitConfig) -> None:
     train_manifest = split_root / "train_manifest.txt"
     validation_manifest = split_root / "validation_manifest.txt"
 
-    examples = _gather_examples(source_root)
+    examples = _gather_examples(source_root, config.include_list)
     # Seeded shuffle: identical (source_root, seed) reproduces the same split.
     rng = random.Random(config.seed)
     rng.shuffle(examples)

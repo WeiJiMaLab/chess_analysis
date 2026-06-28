@@ -354,18 +354,18 @@ def main() -> None:
         _always_stop, _never_stop, _fraction_rule(best_f), _stats_rule(stats_model),
     ]
 
-    regrets, stop_acc = [], []
+    model_keys = ["always", "never", "fraction", "stats", "mchalt"]
+    metric_dicts: list[dict[str, Any] | None] = []
+
     print(f"\n{'model':<26s} {'regret':>10s} {'P(stop==OSS)':>14s} {'avg_expansions':>15s}")
     for name, rule in zip(labels[:4], rules):
         m = _evaluate_baseline(test, config, rule)
-        regrets.append(m["average_regret"])
-        stop_acc.append(m["exact_stop_step_accuracy"])
+        metric_dicts.append(m)
         print(f"{name:<26s} {m['average_regret']:>10.4f} {m['exact_stop_step_accuracy']:>14.3f} {m['average_expansions']:>15.2f}")
 
     # Tier 5 (MCHalt): scored for real from a trained controller checkpoint when
     # one is supplied; else the back-compat scalar slot; else 'pending'.
-    mchalt_regret: float | None = None
-    mchalt_stop: float | None = None
+    mc: dict[str, Any] | None = None
     if args.controller_checkpoint is not None:
         if args.materialized_validation_cache is None:
             raise ValueError(
@@ -381,18 +381,28 @@ def main() -> None:
             max_episodes=args.max_episodes,
             device=args.controller_device,
         )
-        mchalt_regret = mc["average_regret"]
-        mchalt_stop = mc["exact_stop_step_accuracy"]
-        print(f"{labels[4]:<26s} {mchalt_regret:>10.4f} {mchalt_stop:>14.3f} "
+        print(f"{labels[4]:<26s} {mc['average_regret']:>10.4f} {mc['exact_stop_step_accuracy']:>14.3f} "
               f"{mc['average_expansions']:>15.2f}  (checkpoint, n={int(mc['evaluated_episodes'])})")
     elif args.gnn_regret is not None:
-        mchalt_regret = args.gnn_regret
-        mchalt_stop = args.gnn_stop or 0.0
-        print(f"{labels[4]:<26s} {mchalt_regret:>10.4f} {mchalt_stop:>14.3f}  (scalar)")
+        mc = {"average_regret": args.gnn_regret, "exact_stop_step_accuracy": args.gnn_stop or 0.0}
+        print(f"{labels[4]:<26s} {mc['average_regret']:>10.4f} {mc['exact_stop_step_accuracy']:>14.3f}  (scalar)")
+    metric_dicts.append(mc)
 
-    pending = mchalt_regret is None
-    regret_full = regrets + [mchalt_regret if not pending else 0.0]
-    stop_full = stop_acc + [mchalt_stop if not pending else 0.0]
+    pending = mc is None
+    regret_full = [float(d["average_regret"]) if d else 0.0 for d in metric_dicts]
+    stop_full = [float(d["exact_stop_step_accuracy"]) if d else 0.0 for d in metric_dicts]
+
+    # Tier-1 goodness-of-fit table: how well each policy's stop matches the oracle's
+    # OSS, decomposed into under-/over-search (reg_early + reg_late == mean regret).
+    print(f"\n{'model':<26s} {'stop_bias':>9s} {'stop_MAE':>8s} {'tol@1':>6s} {'tol@2':>6s} "
+          f"{'%early':>7s} {'%late':>6s} {'reg_early':>9s} {'reg_late':>9s}")
+    for label, d in zip(labels, metric_dicts):
+        if not d or "stop_bias" not in d:
+            print(f"{label:<26s} {'(no per-episode fit — scalar/pending)':>}")
+            continue
+        print(f"{label:<26s} {d['stop_bias']:>+9.2f} {d['stop_mae']:>8.2f} {d['tol_acc_1']:>6.3f} "
+              f"{d['tol_acc_2']:>6.3f} {100*d['frac_early']:>6.1f}% {100*d['frac_late']:>5.1f}% "
+              f"{d['regret_from_early']:>9.4f} {d['regret_from_late']:>9.4f}")
 
     out_dir = Path(args.out_dir)
     _plot(labels, regret_full, pending, title="Regret by readout model (lower = better)",
@@ -404,13 +414,21 @@ def main() -> None:
     # mapping per rung. Keyed by stable short model names (not the numbered/themed
     # bar labels) so the ladder plotter can join across rungs.
     if args.results_json is not None:
-        model_keys = ["always", "never", "fraction", "stats", "mchalt"]
+        tier1_keys = ["stop_bias", "stop_mae", "tol_acc_1", "tol_acc_2",
+                      "frac_early", "frac_late", "regret_from_early", "regret_from_late"]
         results: dict[str, dict[str, float | None]] = {}
-        for key, regret, stop in zip(model_keys, regret_full, stop_full):
-            if key == "mchalt" and pending:
+        for key, d in zip(model_keys, metric_dicts):
+            if d is None:
                 results[key] = {"regret": None, "stop_acc": None}
-            else:
-                results[key] = {"regret": float(regret), "stop_acc": float(stop)}
+                continue
+            entry: dict[str, float | None] = {
+                "regret": float(d["average_regret"]),
+                "stop_acc": float(d["exact_stop_step_accuracy"]),
+            }
+            for t in tier1_keys:  # absent for the scalar MCHalt slot
+                if t in d:
+                    entry[t] = float(d[t])
+            results[key] = entry
         out_json = Path(args.results_json)
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps(results, indent=2))

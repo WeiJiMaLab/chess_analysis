@@ -38,6 +38,8 @@ from cts.train.controller_train import (
     _aggregate_greedy_rollout_metrics,
     _collect_episode_metadata_and_step_count,
 )
+from cts.train.gnn_pretrain import load_encoder_architecture
+from cts.analysis._budgeted.baselines import stop_fit_metrics
 
 
 def _load_materialized_cache_unchecked(cache_index_path: Path) -> MaterializedCache:
@@ -89,15 +91,28 @@ def _build_controller_from_checkpoint(
     controller_inputs = list(metadata.get("controller_inputs", CONTROLLER_INPUT_NAMES))
     separate_sign_head = bool(metadata.get("separate_sign_head", False))
     schema = tree_encoder_feature_schema()
+
+    # Resolve the encoder architecture from the encoder checkpoint this controller
+    # was trained against, so the rebuilt MetaController matches whatever encoder
+    # was used (tiny SF k=1/d_embed=32, or prod lc0 k=2/d_embed=128). The kwargs
+    # above are only fallbacks for when the encoder checkpoint is unavailable.
+    arch: dict[str, Any] = {}
+    enc_ckpt = metadata.get("encoder_checkpoint")
+    if enc_ckpt and Path(enc_ckpt).exists():
+        try:
+            arch = load_encoder_architecture(enc_ckpt) or {}
+        except Exception:
+            arch = {}
+
     model = MetaController(
-        k=k,
-        node_feat=len(schema.feature_names),
+        k=arch.get("k", k),
+        node_feat=arch.get("node_feat", len(schema.feature_names)),
         device=device,
-        node_embed_hidden=node_embed_hidden,
-        d_embed=d_embed,
-        d_message=d_message,
-        n_heads=n_heads,
-        d_att=d_att,
+        node_embed_hidden=arch.get("node_embed_hidden", node_embed_hidden),
+        d_embed=arch.get("d_embed", d_embed),
+        d_message=arch.get("d_message", d_message),
+        n_heads=arch.get("n_heads", n_heads),
+        d_att=arch.get("d_att", d_att),
         hidden_dim=hidden_dim,
         hidden_layers=hidden_layers,
         separate_sign_head=separate_sign_head,
@@ -183,13 +198,22 @@ def score_mchalt_checkpoint(
         dataset, max_episodes=max_episodes
     )
     all_advantages = _predict_advantages_first_n(model, cache, total_steps, device=device)
+    # Collect per-episode diagnostics so we can compute the Tier-1 stop-fit metrics
+    # from the SAME greedy rollout (predicted_stop_step / oracle_stop_step / regret),
+    # using the identical helper the baselines use — no training-code change.
+    diagnostics: list[dict[str, Any]] = []
     metrics = _aggregate_greedy_rollout_metrics(
         episode_metadata,
         all_advantages,
         oracle_config,
         log_interval=0,
         started=0.0,
-        diagnostics_out=None,
+        diagnostics_out=diagnostics,
+    )
+    fit = stop_fit_metrics(
+        [d["predicted_stop_step"] for d in diagnostics],
+        [d["oracle_stop_step"] for d in diagnostics],
+        [d["regret"] for d in diagnostics],
     )
     return {
         "average_regret": metrics.average_regret,
@@ -198,4 +222,5 @@ def score_mchalt_checkpoint(
         "average_oracle_value": metrics.average_oracle_value,
         "average_expansions": metrics.average_expansions,
         "evaluated_episodes": float(metrics.evaluated_episodes),
+        **fit,
     }

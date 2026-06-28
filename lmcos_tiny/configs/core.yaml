@@ -1,0 +1,185 @@
+# ============================================================================
+# core.yaml — shared base for every rung of the Stockfish ladder.
+# Not used directly: each rung spinoff (elo1800.yaml / elo2000.yaml / elo2200.yaml)
+# does `extends: core.yaml` and sets only `globals.sf_elo`. Everything below is
+# written in terms of ${sf_elo} / ${scratch_dir}, so the rungs are identical
+# except that one number. One section per pipeline stage; each section is the
+# EXACT flat config its entry point consumes (pydantic extra="forbid").
+#
+#   Phase 1 (CPU)  tree gen + pack trees : treegen, split, gnn_pack, mc_pack
+#   Phase 2 (GPU)  train encoder + reps  : encoder, materialize
+#   Phase 3 (GPU)  train readout (MCHalt): train
+#   Phase 4 (CPU)  eval                  : eval
+# ============================================================================
+
+globals:
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291
+  # sf_elo is supplied by the rung spinoff (elo1800.yaml etc.)
+  config_dir: ${scratch_dir}/sf_pack_configs/elo${sf_elo}
+  log_dir: ${scratch_dir}/sf_pack_logs
+  mc_packed_dir: ${scratch_dir}/sf_mc_packed/elo${sf_elo}
+  materialized_dir: ${scratch_dir}/sf_mc_materialized/elo${sf_elo}
+  filtered_dir: ${scratch_dir}/sf_filtered/elo${sf_elo}
+  figures_dir: /home/hl4291/chess_analysis/figures/lmcos_tiny
+
+# ── Phase 1 ─────────────────────────────────────────────────────────────────
+# stage: tree filter (PUCT-stable ∩ monotone)  ->  cts.data.filter_trees_by_trace
+# Writes clean_trees.txt (informative-stopping subset); split reads it via include_list.
+filter:
+  trees_dir: ${scratch_dir}/sf_trees/elo${sf_elo}
+  output_dir: ${filtered_dir}
+  n_workers: 32
+  min_steps: 3
+
+# stage: tree gen  ->  cts.data.build_tree
+treegen:
+  command: generate-dataset
+  provider: stockfish
+  engine_path: /home/hl4291/stockfish/src/stockfish
+  fens: ${scratch_dir}/sf_ladder_roots_50k.txt
+  output_dir: ${scratch_dir}/sf_trees/elo${sf_elo}
+  search_budget: 96
+  min_nodes: 96
+  max_nodes: 96
+  max_depth: 4
+  sf_elo: ${sf_elo}
+  sf_search_limit_nodes: 100
+  seed: 42
+  resume: true
+  log_interval: 50
+
+# stage: train/val split  ->  cts.data.preprocess_gnn.split
+# include_list restricts the split to the filtered (informative-stopping) trees.
+split:
+  source_root: ${scratch_dir}/sf_trees/elo${sf_elo}
+  include_list: ${filtered_dir}/clean_trees.txt
+  split_root: ${scratch_dir}/sf_split/elo${sf_elo}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+# stage: GNN pack (encoder training examples)  ->  cts.data.preprocess_gnn.pack
+gnn_pack:
+  split_root: ${scratch_dir}/sf_split/elo${sf_elo}
+  output_root: ${scratch_dir}/sf_packed/elo${sf_elo}
+  shard_size: 2000
+  clear: true
+
+# stage: MC pack (budgeted-DP oracle episodes)  ->  cts.data.preprocess_mc.pack
+mc_pack:
+  split_root: ${scratch_dir}/sf_split/elo${sf_elo}
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 32
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  search_budget: 96
+  max_depth: 4
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: power_law
+  samples_per_bucket: 2
+  seed: 0
+  clear: true
+
+# ── Phase 2 ─────────────────────────────────────────────────────────────────
+# stage: encoder pretrain (child-WDL, TINY)  ->  cts.data.build_tree
+encoder:
+  command: pretrain-child-wdl-encoder
+  train_dir: ${scratch_dir}/sf_packed/elo${sf_elo}/train_manifest.json
+  validation_dir: ${scratch_dir}/sf_packed/elo${sf_elo}/validation_manifest.json
+  output_checkpoint: ${scratch_dir}/sf_packed/elo${sf_elo}/tiny_encoder.pt
+  device: cuda
+  k: 1
+  d_embed: 32
+  d_message: 32
+  node_embed_hidden: 32
+  n_heads: 2
+  d_att: 16
+  decoder_hidden: 32
+  batch_size: 256
+  learning_rate: 1.0e-3
+  epochs: 6
+  loss_type: huber
+  huber_delta: 1.0
+  loss_weight_by_subtree_size: true
+  num_workers: 0
+  log_interval: 20
+
+# stage: materialize root reps (frozen encoder -> z_t cache)  ->  cts.data.preprocess_mc.materialize
+materialize:
+  encoder_checkpoint: ${scratch_dir}/sf_packed/elo${sf_elo}/tiny_encoder.pt
+  device: cuda
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 256
+  hidden_layers: 3
+
+# ── Phase 3 ─────────────────────────────────────────────────────────────────
+# stage: readout (MCHalt) training  ->  cts.train.controller_train
+train:
+  metrics_run_name: sf_mchalt[elo${sf_elo}]
+  packed_train_data: ${mc_packed_dir}/train_manifest.json
+  packed_validation_data: ${mc_packed_dir}/validation_manifest.json
+  materialized_train_cache: ${materialized_dir}/train_cache.pt
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  encoder_checkpoint: ${scratch_dir}/sf_packed/elo${sf_elo}/tiny_encoder.pt
+  output_checkpoint: ${scratch_dir}/sf_packed/elo${sf_elo}/sf_mchalt_controller.pt
+  device: cuda
+  controller_inputs: ['z_t', 'T_t']
+  k: 1
+  node_embed_hidden: 32
+  d_embed: 32
+  d_message: 32
+  n_heads: 2
+  d_att: 16
+  hidden_dim: 256
+  hidden_layers: 3
+  unfreeze_encoder: false
+  separate_sign_head: false
+  batch_size: 18000
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  sign_loss_weight: 0.1
+  nontrivial_loss_weight: 1.0
+  inverse_freq_weights: false
+  epochs: 3
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  metrics_log_interval: 20
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  seed: 0
+  scramble_min_time: 1
+  scramble_max_time: 3
+  medium_small_min_time: 4
+  medium_small_max_time: 10
+  medium_large_min_time: 11
+  medium_large_max_time: 25
+  large_min_time: 26
+  large_max_time: 60
+  very_large_min_time: 61
+  very_large_max_time: 120
+
+# ── Phase 4 ─────────────────────────────────────────────────────────────────
+# stage: eval (4 halt models + per-rung results JSON)  ->  cts.analysis._budgeted.alt_models_eval
+eval:
+  packed_root: ${mc_packed_dir}
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  controller_checkpoint: ${scratch_dir}/sf_packed/elo${sf_elo}/sf_mchalt_controller.pt
+  results_json: ${figures_dir}/sf_elo${sf_elo}_results.json
+  out_dir: ${figures_dir}

@@ -6,8 +6,7 @@ Reports come in two formats:
 
 - **Scientific-inquiry reports** follow the **scientific template**: *Overview → Results (plot-heavy,
   figures first) → Methods → Appendix (Logs)*. Figures are embedded from the repo-root `figures/`
-  (human analytics) or `figures/lmcos/` (LMCOS), with `figures/archive/` for historical
-  snapshots.
+  (human analytics), with `figures/archive/` for historical snapshots.
 - **Reference / engineering / archive reports** keep their original format (summary
   table · `| Step | Status |` procedure · notes).
 

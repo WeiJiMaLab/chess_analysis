@@ -60,13 +60,16 @@ are consumed by the readout in Phase 3.
 `configs/core.yaml` holds **one section per stage**
 (`treegen, split, gnn_pack, mc_pack, encoder, materialize, train, eval`). All paths are parameterized via the `globals` section.
 
-Each `cts` entry point still takes a single flat `--config FILE` (pydantic, `extra="forbid"`),
-so the slurm scripts slice the relevant section with **`configs/render_stage.py`** and inject/override variables using `--set`:
+Each `cts` entry point reads that merged config **directly** — no intermediary rendered YAML.
+The shared loader (`cts._config`) accepts `--stage` to slice a section and `--set` to patch it
+(dotted keys hit `globals` before `${}` interpolation; bare keys patch the section):
 ```bash
-python configs/render_stage.py configs/core.yaml mc_pack --out mc_pack.yaml --set globals.sf_elo=1800 --set num_workers=32
-#                              └ merged config      └ stage  └ flat YAML     └ override variables
+python -m cts.data.preprocess_mc.pack --config configs/core.yaml --stage mc_pack \
+    --set globals.sf_elo=1800 --set num_workers=32
+#         └ merged config              └ section   └ pick rung (pre-interp)  └ patch field
 ```
-`render_stage.py` applies overrides before doing path template interpolation.
+`configs/render_stage.py` remains as a shell helper for **querying** resolved values
+(`--get globals.materialized_dir`), used by `pipeline/helpers/setup_env.sh` to derive paths.
 
 ## Directory layout
 ```
@@ -76,20 +79,19 @@ lmcos_tiny/
 ├── env.sh                  `source env.sh` → PYTHONPATH=src (this fork wins over the editable install)
 ├── configs/
 │   ├── core.yaml           merged source-of-truth base config file with path templates
-│   └── render_stage.py     slice a section -> flat per-stage YAML with pre-interpolation overrides
-├── pipeline/               orchestration, one dir per PHASE
-│   ├── 0_helpers/
+│   └── render_stage.py     shell helper to QUERY resolved values (--get), used by setup_env.sh
+├── pipeline/               orchestration, one slurm file per STAGE (helpers/ aside)
+│   ├── helpers/
 │   │     setup_env.sh      (Shared helper to load modules, activate venv, and export paths)
-│   ├── 1_treegen_pack_trees/
-│   │     gen_trees.slurm                       (CPU array: treegen)
-│   │     pack_trees.slurm                       (CPU: split + gnn_pack + mc_pack)
-│   ├── 2_train_encoder_pack_rootreps/
-│   │     train_encoder.slurm                    (GPU: encoder)
-│   │     pack_rootreps.slurm                    (GPU: materialize cached root reps)
-│   ├── 3_train_readout/
-│   │     train_readout.slurm                    (GPU: controller_train)
-│   └── 4_eval/
-│         run_eval.sh                            (CPU: 4-model eval + ladder plot)
+│   ├── submit_all.sh                           (chains every stage for all three rungs)
+│   ├── 1a_gen_trees.slurm                      (CPU array: treegen)
+│   ├── 1b_filter_trees.slurm                   (CPU array: PUCT∩monotone filter shards)
+│   ├── 1c_pack_trees.slurm                     (CPU: merge shards + split + gnn_pack + mc_pack)
+│   ├── 2a_train_encoder.slurm                  (GPU: encoder)
+│   ├── 2b_pack_root.slurm                      (GPU array: materialize cached root reps)
+│   ├── 2c_merge_root.slurm                     (CPU: stitch worker shards → z_t cache)
+│   ├── 3_train_readout.slurm                   (GPU: controller_train)
+│   └── 4_eval.sh                               (CPU: 4-model eval + ladder plot)
 ├── slurm/logs/             job logs
 └── src/cts/                the 38-file import closure (byte-identical to ../lmcos)
     ├── _config.py                       YAML→pydantic loader (the `--config FILE` contract)
@@ -108,14 +110,18 @@ lmcos_tiny/
 source lmcos_tiny/env.sh        # PYTHONPATH=src (this fork) + venv
 ```
 
-| phase | command (per rung unless noted) | resource | measured time¹ |
+> `bash pipeline/submit_all.sh` chains every stage below for all three rungs. To run a single stage:
+
+| stage | command (per rung unless noted) | resource | measured time¹ |
 |---|---|---|---|
-| 1 gen-trees | `ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 sbatch --array=0-19 pipeline/1_treegen_pack_trees/gen_trees.slurm` | CPU ×20 | 35 min–1h11 / task |
-| 1 pack-trees | `ELO=1800 sbatch --dependency=afterok:<gen> pipeline/1_treegen_pack_trees/pack_trees.slurm` | 32 CPU | 18–24 min |
-| 2a train-enc | `ELO=1800 sbatch --dependency=afterok:<pack> pipeline/2_train_encoder_pack_rootreps/train_encoder.slurm` | 1 GPU | ~2 min |
-| 2b pack-reps | `ELO=1800 sbatch --dependency=afterok:<enc> pipeline/2_train_encoder_pack_rootreps/pack_rootreps.slurm` (or `--array=0-2` to run all) | 1 GPU | ~25–45 min |
-| 3 readout | `ELO=1800 sbatch --dependency=afterok:<reps> pipeline/3_train_readout/train_readout.slurm` | 1 GPU | ~10–15 min |
-| 4 eval | `bash pipeline/4_eval/run_eval.sh` | CPU | < 5 min |
+| 1a gen-trees | `ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 sbatch --array=0-19 pipeline/1a_gen_trees.slurm` | CPU ×20 | 35 min–1h11 / task |
+| 1b filter | `ELO=1800 sbatch --dependency=afterok:<gen> --array=0-99 pipeline/1b_filter_trees.slurm` | CPU ×100 | ~10 min / task |
+| 1c pack-trees | `ELO=1800 sbatch --dependency=afterok:<filter> pipeline/1c_pack_trees.slurm` | 16 CPU | 18–24 min |
+| 2a train-enc | `ELO=1800 sbatch --dependency=afterok:<pack> pipeline/2a_train_encoder.slurm` | 1 GPU | ~2 min |
+| 2b pack-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<enc> --array=0-39 pipeline/2b_pack_root.slurm` | 40 GPU | ~25–45 min |
+| 2c merge-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<reps> pipeline/2c_merge_root.slurm` | CPU | ~5 min |
+| 3 readout | `ELO=1800 sbatch --dependency=afterok:<merge> pipeline/3_train_readout.slurm` | 1 GPU | ~10–15 min |
+| 4 eval | `bash pipeline/4_eval.sh` | CPU | < 5 min |
 
 ¹ Measured on Della from the actual runs (jobs 10323846 / 10324132 / 10368943); phase 3/4 from
 the lc0-prod reference (same code, 12 min train). The long poles are **phase 1 gen-trees** and
@@ -131,7 +137,7 @@ sf_packed/elo{ELO}/              phase 1+2 — gnn pack + tiny_encoder.pt (+ sf_
 sf_mc_packed/elo{ELO}/           phase 1 — ~360k oracle-labelled episodes / rung
 sf_mc_materialized/elo{ELO}/     phase 2 — {train,validation}_cache.pt  (z_t root reps)
 sf_pack_configs/elo{ELO}/        rendered per-stage YAMLs (render_stage output)
-figures/lmcos/                   phase 4 — regret/oss/ladder plots + results JSON
+figures/lmcos_tiny/              phase 4 — regret/oss/ladder plots + results JSON
 ```
 
 ## Two gotchas baked into the scripts (so you don't rediscover them)

@@ -103,8 +103,6 @@ The clearest signal is *which features* drive the oracle versus the human. On 39
 the same four features point the same way for the oracle's stop step and human RT (**4/4
 directions agree**) — but the emphasis is opposite:
 
-![oracle stop step vs human RT — feature correlations](../figures/lmcos/oracle_stop_step_vs_human_rt.png)
-
 | Feature | r(oracle stop) | r(human RT) |
 |---|---|---|
 | legal moves | +0.014 | **+0.195** |
@@ -118,7 +116,6 @@ matched human-FEN trees the oracle stop step still correlates positively with lo
 r = **+0.091**, n = 497), but gain_depth predicts the *oracle's* halt strongly (+0.463) while
 being near-zero for *humans* (+0.020).
 
-![same-FEN oracle vs human RT](../figures/lmcos/human_oracle_rt_comparison.png)
 
 > **Result:** The oracle and humans agree on the sign of every feature but not the mechanism:
 > the oracle stops when the value gap is decided; humans deliberate when the move set is wide.

@@ -4,21 +4,21 @@
 # over a contiguous FEN index range per array task.
 #
 #   ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 \
-#     sbatch --array=0-19 pipeline/1_treegen_pack_trees/gen_trees.slurm
+#     sbatch --array=0-19 pipeline/1a_gen_trees.slurm
 #SBATCH --job-name=tiny-gentrees
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%A_%a.out
 #SBATCH --error=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 : "${SHARD_SIZE:?SHARD_SIZE required}"; : "${BASE_START:?BASE_START required}"; : "${LANE_END:?LANE_END required}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
-source "$TINY/pipeline/0_helpers/setup_env.sh"
+source "$TINY/pipeline/helpers/setup_env.sh"
 
 start=$(( BASE_START + SLURM_ARRAY_TASK_ID * SHARD_SIZE ))
 end=$(( start + SHARD_SIZE )); (( end > LANE_END )) && end=${LANE_END}

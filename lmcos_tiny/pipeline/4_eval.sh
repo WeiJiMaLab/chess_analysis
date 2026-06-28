@@ -3,7 +3,7 @@
 # The `eval` section of each configs/elo${ELO}.yaml supplies the paths; this entry
 # point is argv-driven (not --config), so we read the section's fields here.
 #
-#   bash pipeline/4_eval/run_eval.sh            # all three rungs + ladder
+#   bash pipeline/4_eval.sh            # all three rungs + ladder
 set -euo pipefail
 
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
@@ -33,4 +33,4 @@ done
 
 echo "=== ladder plot ==="
 python -m cts.analysis._budgeted.ladder_plot "${LADDER_ARGS[@]}" --out-dir "$(rung_field 1800 out_dir)"
-echo "done -> figures/lmcos/{regret_by_model,oss_by_model,ladder_by_model}.png + sf_elo*_results.json"
+echo "done -> figures/lmcos_tiny/{regret_by_model,oss_by_model,ladder_by_model}.png + sf_elo*_results.json"

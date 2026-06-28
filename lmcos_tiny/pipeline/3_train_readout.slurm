@@ -4,20 +4,21 @@
 # encoder + ReLU advantage MLP on [z_t, T_t]; checkpoint selected by val regret.
 #
 #   ELO=1800 sbatch --dependency=afterok:<rootreps_jobid> \
-#     pipeline/3_train_readout/train_readout.slurm
+#     pipeline/3_train_readout.slurm
 #SBATCH --job-name=tiny-readout
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%j.err
+#SBATCH --qos=gpu-short
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=01:00:00
+#SBATCH --mem=12G
+#SBATCH --time=00:10:00
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
-source "$TINY/pipeline/0_helpers/setup_env.sh" gpu
+source "$TINY/pipeline/helpers/setup_env.sh" gpu
 
 echo "elo=$ELO host=$(hostname)"; nvidia-smi -L || true; date
 # controller_train reads the `train` section of core.yaml directly.
