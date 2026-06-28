@@ -1,4 +1,4 @@
-"""Shared config loading: YAML file + CLI ``--override`` mechanism + Pydantic validation.
+"""Shared config loading: YAML file + CLI mechanism + Pydantic validation.
 
 Every CTS entry point uses this. The pattern at each call site is:
 
@@ -15,20 +15,28 @@ Every CTS entry point uses this. The pattern at each call site is:
     if __name__ == "__main__":
         run_with_config_cli(MyConfig, run)
 
-The CLI accepts ``--config PATH`` (required, path to a YAML file) plus zero
-or more ``--override key=value`` flags. Override keys support dot-notation
-for nested fields (``--override head.hidden_dim=512``). Values are parsed as
-YAML scalars so ``--override seed=7`` yields an int, ``--override use_flag=true``
-yields a bool, etc. — no manual type coercion.
+Two CLI shapes are supported:
 
-Pydantic validates the merged config and rejects unknown fields by default,
-so a typo in a YAML file or a CLI override is caught at load time instead of
-silently producing the wrong behavior.
+1. **Flat config** (the original contract): ``--config PATH`` points at a YAML
+   file whose top level *is* the config. ``--override key=value`` (repeatable,
+   dot-notation, YAML-parsed) patches individual fields.
+
+2. **Merged config** (lmcos_tiny): ``--config PATH --stage NAME`` points at a
+   multi-stage config — a ``globals`` block plus one section per stage — and
+   ``NAME`` selects the section to validate. ``${...}`` placeholders are resolved
+   against ``globals`` first. ``--set key=value`` patches a *global* before
+   interpolation when dotted (e.g. ``--set globals.sf_elo=1800``) or the selected
+   *section* when bare (e.g. ``--set num_workers=32``). This lets every entry
+   point read one shared ``core.yaml`` directly — no intermediary rendered YAML.
+
+Pydantic validates the result and rejects unknown fields, so a typo in a YAML
+file or a CLI flag is caught at load time.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
@@ -61,54 +69,114 @@ def _set_nested(target: Dict[str, Any], dotted_key: str, value: Any) -> None:
     cursor[keys[-1]] = value
 
 
+def _parse_kv(item: str, flag: str) -> tuple[str, Any]:
+    """Split a ``"key=value"`` CLI item; the value is parsed as a YAML scalar."""
+    if "=" not in item:
+        raise ValueError(f"{flag} must be of the form 'key=value', got: {item!r}")
+    key, value_text = item.split("=", 1)
+    return key.strip(), yaml.safe_load(value_text)
+
+
+# --- merged-config helpers (the `--stage` path) -----------------------------
+
+def _interpolate(value: Any, variables: Dict[str, Any]) -> Any:
+    """Recursively substitute ``${key}`` / ``${globals.key}`` placeholders."""
+    if isinstance(value, str):
+        def repl(match: "re.Match[str]") -> str:
+            name = match.group(1).removeprefix("globals.")
+            return str(variables[name]) if name in variables else match.group(0)
+        return re.sub(r"\$\{([^}]+)\}", repl, value)
+    if isinstance(value, dict):
+        return {k: _interpolate(v, variables) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate(v, variables) for v in value]
+    return value
+
+
+def _resolve_globals(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the variable table from ``data['globals']``, resolving nested refs."""
+    variables: Dict[str, Any] = {}
+    for key, value in (data.get("globals") or {}).items():
+        variables[key] = value
+        variables[f"globals.{key}"] = value
+    for _ in range(5):  # fixpoint for globals that reference other globals
+        variables = {k: _interpolate(v, variables) for k, v in variables.items()}
+        for key, value in list(variables.items()):
+            clean = key.removeprefix("globals.")
+            variables[clean] = value
+            variables[f"globals.{clean}"] = value
+    return variables
+
+
 def load_config(
     config_class: Type[C],
     path: str,
     overrides: Optional[List[str]] = None,
+    stage: Optional[str] = None,
+    sets: Optional[List[str]] = None,
 ) -> C:
-    """Load ``path`` as YAML, apply ``overrides``, validate against ``config_class``.
+    """Load ``path`` as YAML and validate against ``config_class``.
 
     Args:
-        config_class: Pydantic model the merged data must satisfy.
-        path: filesystem path to a YAML file. Empty/missing top-level
-            content is treated as ``{}`` (the config is assumed to be
-            fully-defaulted).
-        overrides: list of ``"key=value"`` strings. ``key`` may be
-            dot-separated for nested fields. ``value`` is parsed as a
-            YAML scalar (``"7"`` -> int 7, ``"true"`` -> bool True,
-            ``"foo bar"`` -> str ``"foo bar"``).
+        config_class: Pydantic model the result must satisfy.
+        path: filesystem path to a YAML file.
+        overrides: ``"key=value"`` patches (dot-notation, YAML-parsed) applied to
+            the validated mapping — the flat top level, or the selected section
+            when ``stage`` is given.
+        stage: when set, ``path`` is treated as a merged multi-stage config; the
+            ``globals`` block is interpolated into every ``${...}`` and this named
+            section is sliced out and validated.
+        sets: ``"key=value"`` patches for the merged path — dotted keys patch the
+            raw data (e.g. ``globals.sf_elo``) *before* interpolation; bare keys
+            patch the selected section *after* it.
 
     Returns:
         A validated instance of ``config_class``.
     """
-    raw_text = Path(path).read_text()
-    data: Dict[str, Any] = yaml.safe_load(raw_text) or {}
+    data: Dict[str, Any] = yaml.safe_load(Path(path).read_text()) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path!r} must contain a YAML mapping at the top level.")
-    for override in overrides or []:
-        if "=" not in override:
-            raise ValueError(f"--override must be of the form 'key=value', got: {override!r}")
-        key, value_text = override.split("=", 1)
-        _set_nested(data, key.strip(), yaml.safe_load(value_text))
-    return config_class.model_validate(data)
+
+    # Dotted --set (e.g. globals.sf_elo) patches the raw tree before interpolation.
+    for item in sets or []:
+        key, value = _parse_kv(item, "--set")
+        if "." in key:
+            _set_nested(data, key, value)
+
+    if stage is not None:
+        data = _interpolate(data, _resolve_globals(data))
+        if not isinstance(data.get(stage), dict):
+            sections = sorted(k for k, v in data.items() if isinstance(v, dict) and k != "globals")
+            raise ValueError(f"--stage {stage!r} is not a section in {path!r} (have: {sections})")
+        result: Dict[str, Any] = dict(data[stage])
+        for item in sets or []:  # bare --set patches the section
+            key, value = _parse_kv(item, "--set")
+            if "." not in key:
+                result[key] = value
+    else:
+        result = data
+
+    for override in overrides or []:  # --override patches the final mapping
+        key, value = _parse_kv(override, "--override")
+        _set_nested(result, key, value)
+    return config_class.model_validate(result)
 
 
 def run_with_config_cli(config_class: Type[C], runner: Callable[[C], None]) -> None:
     """Standard ``if __name__ == "__main__"`` wiring for any CTS entry point.
 
-    Parses ``--config PATH`` and ``--override key=value`` (repeatable),
-    loads the validated config, and hands it to ``runner``. Use this in
-    every entry point so the CLI shape stays consistent across the project.
+    Parses ``--config PATH`` plus the optional merged-config selectors
+    (``--stage``, ``--set``) and the flat-config patcher (``--override``), loads
+    the validated config, and hands it to ``runner``.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to a YAML config file.")
-    parser.add_argument(
-        "--override",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="Override a config field (repeatable). Supports dot-notation for nested keys.",
-    )
+    parser.add_argument("--stage", default=None,
+                        help="Select a section of a merged multi-stage config (with globals).")
+    parser.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
+                        help="Merged-config patch: dotted keys hit globals (pre-interp), bare keys the section.")
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                        help="Patch a field of the final config (repeatable, dot-notation).")
     args = parser.parse_args()
-    config = load_config(config_class, args.config, args.override)
+    config = load_config(config_class, args.config, args.override, stage=args.stage, sets=args.sets)
     runner(config)

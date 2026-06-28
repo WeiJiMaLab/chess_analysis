@@ -10,11 +10,7 @@ TINY=/home/hl4291/chess_analysis/lmcos_tiny
 source "$TINY/env.sh"
 
 rung_field() {  # rung_field <ELO> <key>
-  python - "$TINY/configs/elo$1.yaml" "$2" <<'PY'
-import sys, yaml
-cfg, key = sys.argv[1], sys.argv[2]
-print(yaml.safe_load(open(cfg))["eval"][key])
-PY
+  python "$TINY/configs/render_stage.py" "$TINY/configs/core.yaml" --set globals.sf_elo="$1" --get "eval.$2"
 }
 
 RUNGS=(1800 2000 2200)

@@ -56,21 +56,17 @@ why it was confusing. It maps cleanly onto the phases above:
 `mc_pack` lives in Phase 1 (it's the *second* CPU "pack trees" op) even though its episodes
 are consumed by the readout in Phase 3.
 
-## Configs: one merged source-of-truth per rung
-`configs/elo{1800,2000,2200}.yaml` each hold **one section per stage**
-(`treegen, split, gnn_pack, mc_pack, encoder, materialize, train, eval`), with absolute
-paths spelled out — open one file and you see the entire rung. Across rungs only `sf_elo`
-and the `elo####` path component differ.
+## Configs: single source-of-truth base file
+`configs/core.yaml` holds **one section per stage**
+(`treegen, split, gnn_pack, mc_pack, encoder, materialize, train, eval`). All paths are parameterized via the `globals` section.
 
 Each `cts` entry point still takes a single flat `--config FILE` (pydantic, `extra="forbid"`),
-so the slurm scripts slice the relevant section with **`configs/render_stage.py`**:
+so the slurm scripts slice the relevant section with **`configs/render_stage.py`** and inject/override variables using `--set`:
 ```bash
-python configs/render_stage.py configs/elo1800.yaml mc_pack --out mc_pack.yaml --set num_workers=32
-#                              └ merged config        └ stage  └ flat YAML the entry point eats
+python configs/render_stage.py configs/core.yaml mc_pack --out mc_pack.yaml --set globals.sf_elo=1800 --set num_workers=32
+#                              └ merged config      └ stage  └ flat YAML     └ override variables
 ```
-`--set` injects the few per-invocation values that aren't per-rung (e.g. materialize's
-per-split `output_dir`/`packed_data`, or mc_pack's worker count). `render_stage.py` is the
-*only* glue — the copied `src/cts` code is untouched.
+`render_stage.py` applies overrides before doing path template interpolation.
 
 ## Directory layout
 ```
@@ -79,17 +75,17 @@ lmcos_tiny/
 ├── pyproject.toml          installable `cts` package (src-layout)
 ├── env.sh                  `source env.sh` → PYTHONPATH=src (this fork wins over the editable install)
 ├── configs/
-│   ├── elo1800.yaml        merged source-of-truth, one section per stage  ┐ only sf_elo +
-│   ├── elo2000.yaml                                                       │ elo#### path
-│   ├── elo2200.yaml                                                       ┘ differ
-│   └── render_stage.py     slice a section → flat per-stage YAML (+ --set overrides)
+│   ├── core.yaml           merged source-of-truth base config file with path templates
+│   └── render_stage.py     slice a section -> flat per-stage YAML with pre-interpolation overrides
 ├── pipeline/               orchestration, one dir per PHASE
+│   ├── 0_helpers/
+│   │     setup_env.sh      (Shared helper to load modules, activate venv, and export paths)
 │   ├── 1_treegen_pack_trees/
 │   │     gen_trees.slurm                       (CPU array: treegen)
 │   │     pack_trees.slurm                       (CPU: split + gnn_pack + mc_pack)
 │   ├── 2_train_encoder_pack_rootreps/
-│   │     train_encoder_pack_rootreps.slurm      (GPU: encoder + materialize)
-│   │     pack_rootreps_rerun.slurm              (GPU array: materialize-only, reuse encoders)
+│   │     train_encoder.slurm                    (GPU: encoder)
+│   │     pack_rootreps.slurm                    (GPU: materialize cached root reps)
 │   ├── 3_train_readout/
 │   │     train_readout.slurm                    (GPU: controller_train)
 │   └── 4_eval/
@@ -116,8 +112,8 @@ source lmcos_tiny/env.sh        # PYTHONPATH=src (this fork) + venv
 |---|---|---|---|
 | 1 gen-trees | `ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 sbatch --array=0-19 pipeline/1_treegen_pack_trees/gen_trees.slurm` | CPU ×20 | 35 min–1h11 / task |
 | 1 pack-trees | `ELO=1800 sbatch --dependency=afterok:<gen> pipeline/1_treegen_pack_trees/pack_trees.slurm` | 32 CPU | 18–24 min |
-| 2 enc+reps | `ELO=1800 sbatch --dependency=afterok:<pack> pipeline/2_train_encoder_pack_rootreps/train_encoder_pack_rootreps.slurm` | 1 GPU | enc ~2 min · materialize ~25–45 min |
-| 2 reps-rerun | `sbatch --array=0-2 pipeline/2_train_encoder_pack_rootreps/pack_rootreps_rerun.slurm` (materialize all rungs, reuse encoders) | 1 GPU ×3 | ~25–45 min |
+| 2a train-enc | `ELO=1800 sbatch --dependency=afterok:<pack> pipeline/2_train_encoder_pack_rootreps/train_encoder.slurm` | 1 GPU | ~2 min |
+| 2b pack-reps | `ELO=1800 sbatch --dependency=afterok:<enc> pipeline/2_train_encoder_pack_rootreps/pack_rootreps.slurm` (or `--array=0-2` to run all) | 1 GPU | ~25–45 min |
 | 3 readout | `ELO=1800 sbatch --dependency=afterok:<reps> pipeline/3_train_readout/train_readout.slurm` | 1 GPU | ~10–15 min |
 | 4 eval | `bash pipeline/4_eval/run_eval.sh` | CPU | < 5 min |
 

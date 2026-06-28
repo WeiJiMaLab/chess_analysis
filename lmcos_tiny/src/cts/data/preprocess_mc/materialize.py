@@ -47,6 +47,7 @@ class MaterializeConfig(BaseModel):
     worker_index: Optional[int] = None
     device: str = "cuda"
     episode_batch_size: int = 8
+    loader_workers: int = 0
     max_snapshots_per_shard: int = 250000
     log_interval: int = 100
     # Advantage-head architecture. The encoder's architecture is read out
@@ -114,14 +115,12 @@ def materialize_worker(config: MaterializeConfig) -> None:
         flush=True,
     )
 
-    # num_workers=0 keeps loading in the main process: the encoder forward
-    # dominates wall time, so spawning DataLoader workers adds overhead
-    # without speedup.
+    # num_workers=config.loader_workers allows background data loading processes.
     loader = DataLoader(
         subset,
         batch_size=config.episode_batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=config.loader_workers,
         collate_fn=collate_controller_episodes,
     )
 

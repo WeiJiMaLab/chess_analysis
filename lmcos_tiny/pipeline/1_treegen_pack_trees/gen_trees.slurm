@@ -18,25 +18,17 @@ set -euo pipefail
 : "${SHARD_SIZE:?SHARD_SIZE required}"; : "${BASE_START:?BASE_START required}"; : "${LANE_END:?LANE_END required}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
-VENV_DIR=/home/hl4291/venv
-CONFIG=$TINY/configs/elo${ELO}.yaml
-WORK=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_configs/elo${ELO}
-mkdir -p "$TINY/slurm/logs" "$WORK"
+source "$TINY/pipeline/0_helpers/setup_env.sh"
 
 start=$(( BASE_START + SLURM_ARRAY_TASK_ID * SHARD_SIZE ))
 end=$(( start + SHARD_SIZE )); (( end > LANE_END )) && end=${LANE_END}
 if (( start >= LANE_END )); then echo "no-op: start=${start} >= LANE_END=${LANE_END}"; exit 0; fi
 
-set +u
-module --force purge >/dev/null 2>&1 || true
-module load anaconda3/2023.3
-source "$VENV_DIR/bin/activate"
-set -u
-export PYTHONPATH="$TINY/src"; export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"
 
 echo "elo=$ELO task=${SLURM_ARRAY_TASK_ID} start=${start} end=${end} host=$(hostname)"; date
-python "$TINY/configs/render_stage.py" "$CONFIG" treegen --out "$WORK/treegen.yaml"
-python -m cts.data.build_tree --config "$WORK/treegen.yaml" \
+# build_tree reads the `treegen` section of core.yaml directly; --set resolves
+# ${sf_elo} in the paths, --override sets this task's FEN index range.
+python -m cts.data.build_tree --config "$CONFIG" --stage treegen --set globals.sf_elo="$ELO" \
     --override start_index=${start} --override end_index=${end}
 date

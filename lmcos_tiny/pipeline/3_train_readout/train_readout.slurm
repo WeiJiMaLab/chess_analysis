@@ -17,20 +17,9 @@ set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
-VENV_DIR=/home/hl4291/venv
-CONFIG=$TINY/configs/elo${ELO}.yaml
-WORK=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_configs/elo${ELO}
-mkdir -p "$TINY/slurm/logs" "$WORK"
-
-set +u
-module --force purge >/dev/null 2>&1 || true
-module load anaconda3/2023.3
-module load cudatoolkit/12.8
-source "$VENV_DIR/bin/activate"
-set -u
-export PYTHONPATH="$TINY/src"; export PYTHONUNBUFFERED=1
+source "$TINY/pipeline/0_helpers/setup_env.sh" gpu
 
 echo "elo=$ELO host=$(hostname)"; nvidia-smi -L || true; date
-python "$TINY/configs/render_stage.py" "$CONFIG" train --out "$WORK/train.yaml"
-python -m cts.train.controller_train --config "$WORK/train.yaml"
+# controller_train reads the `train` section of core.yaml directly.
+python -m cts.train.controller_train --config "$CONFIG" --stage train --set globals.sf_elo="$ELO"
 date
