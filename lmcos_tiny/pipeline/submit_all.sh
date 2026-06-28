@@ -7,9 +7,10 @@ TINY=/home/hl4291/chess_analysis/lmcos_tiny
 cd "$TINY"
 
 RUNGS=(2000)
-NFILTER=100   # CPU filter array size (max 100)
+NFILTER=10    # CPU filter array size (few large shards: per-shard work is tiny, array start-up dominates)
 NWORKERS=40   # GPU materialize array size (max 40)
 
+READOUT_IDS=()
 for ELO in "${RUNGS[@]}"; do
   echo "=== Submitting ELO ${ELO} ==="
 
@@ -33,7 +34,16 @@ for ELO in "${RUNGS[@]}"; do
   MERGE_ID=$(sbatch --parsable --export=ALL,ELO=${ELO},NWORKERS=${NWORKERS} --dependency=afterok:${REPS_ID} pipeline/2c_merge_root.slurm)
   echo "  2c_merge_root: ${MERGE_ID}"
 
-  # 3. train_readout (readout MLP training, GPU)
-  READOUT_ID=$(sbatch --parsable --export=ALL,ELO=${ELO} --dependency=afterok:${MERGE_ID} pipeline/3_train_readout.slurm)
-  echo "  3_train_readout: ${READOUT_ID}"
+  # 3. train_readout by POLICY GRADIENT (direct E[regret]; CPU). MSE variant is
+  #    pipeline/3_train_readout.slurm if a baseline is wanted.
+  READOUT_ID=$(sbatch --parsable --export=ALL,ELO=${ELO} --dependency=afterok:${MERGE_ID} pipeline/3_train_readout_pg.slurm)
+  echo "  3_train_readout_pg: ${READOUT_ID}"
+  READOUT_IDS+=("${READOUT_ID}")
 done
+
+# 4. eval (CPU): 4-model eval per rung + cross-Elo ladder, afterok on ALL readouts
+echo "=== Submitting eval (after all rungs) ==="
+RUNGS_CSV=$(IFS=,; echo "${RUNGS[*]}")
+READOUT_DEP=$(IFS=:; echo "${READOUT_IDS[*]}")
+EVAL_ID=$(sbatch --parsable --export=ALL,RUNGS=${RUNGS_CSV} --dependency=afterok:${READOUT_DEP} pipeline/4_eval.slurm)
+echo "  4_eval: ${EVAL_ID} (afterok:${READOUT_DEP}, rungs=${RUNGS_CSV})"

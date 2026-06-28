@@ -5,16 +5,17 @@
 # A separate 1c_pack_trees.slurm (afterok) concatenates the shards into the
 # canonical clean_trees.txt and runs split/gnn_pack/mc_pack.
 #
-#   ELO=2000 sbatch --array=0-99 --dependency=afterok:<gentrees_jobid> \
+#   ELO=2000 sbatch --array=0-9 --dependency=afterok:<gentrees_jobid> \
 #       pipeline/1b_filter_trees.slurm
 #
 #SBATCH --job-name=tiny-filter
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%A_%a.out
 #SBATCH --error=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
+#SBATCH --qos=short
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
-#SBATCH --time=00:10:00
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"

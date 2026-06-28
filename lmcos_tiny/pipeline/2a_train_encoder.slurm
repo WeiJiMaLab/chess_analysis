@@ -8,9 +8,9 @@
 #SBATCH --output=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%j.out
 #SBATCH --error=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%j.err
 #SBATCH --qos=gpu-short
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=12G
-#SBATCH --time=00:15:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
+#SBATCH --time=01:15:00
 #SBATCH --gres=gpu:1
 
 set -euo pipefail

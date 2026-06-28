@@ -29,9 +29,10 @@ Reports come in two formats:
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
-| Human move time — does a normative lc0 model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, lc0 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done; SF-2000 + residualized MQ open |
+| Human move time — does a normative engine model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, SF-2000 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done (SF-2000); residualized MQ open |
 | Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
 | Meta-controller — why is tree value ≈0 for stopping, and the minimal forward plan (folds the former R-MC-READOUT/COST/SIGNAL/DELIB proposals) | [(R-MC-PLAN)](../mc_minimal_plan.md) | Plan | LMCOS | 📝 active; P0–P3 |
+| Halt-policy comparison — do learned readouts beat blind stopping on the SF-2000 budgeted oracle? (regret-vs-compute, PG vs MSE surrogate, GNN-z vs tree-stats) | [(R-LMCOS-TINY)](lmcos_tiny.md) | Scientific | LMCOS | ✅ done (elo2000); seeds/rungs open |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
@@ -43,8 +44,8 @@ The repo centres on the **human move-time inquiry**, all sitting on [(R-DATA)](#
 (the human Lichess dataset + the lc0 search-tree dataset):
 
 - [(R-MOVETIME-BOARD)](board.md) — what board features predict think time (legal moves dominate).
-- [(R-MOVETIME-MODEL)](engine.md) — whether lc0-search quantities (Gain / MQ / GSS / action gap)
-  and the normative oracle track human RT.
+- [(R-MOVETIME-MODEL)](engine.md) — whether engine-search quantities (Gain / MQ / GSS / action gap,
+  now on Stockfish Elo-2000 trees) and the normative oracle track human RT.
 - [(R-BRANCH)](branching.md) — a resource-rational account of the legal-moves effect, with tree mechanisms
   and predictions (draft).
 

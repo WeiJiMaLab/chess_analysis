@@ -109,13 +109,22 @@ def stop_fit_metrics(
       construction, so these two **sum to average_regret** — an exact decomposition
       of the value loss into *under-searching* (missed value) vs *over-searching*
       (wasted cost).
+    - ``regret_median`` / ``regret_p90`` / ``regret_p99`` = the regret distribution's
+      median and upper tail (nearest-rank percentiles), so a low *mean* that hides a
+      heavy catastrophic-stop tail is visible.
     """
     n = len(stops)
     if n == 0:
         keys = ("stop_bias", "stop_mae", "tol_acc_1", "tol_acc_2",
-                "frac_early", "frac_late", "regret_from_early", "regret_from_late")
+                "frac_early", "frac_late", "regret_from_early", "regret_from_late",
+                "regret_median", "regret_p90", "regret_p99")
         return {k: 0.0 for k in keys}
     diffs = [int(s) - int(o) for s, o in zip(stops, oracle_stops)]
+    srt = sorted(regrets)
+
+    def _pct(p: float) -> float:  # nearest-rank percentile of the regret distribution
+        return srt[min(n - 1, max(0, int(round(p * (n - 1)))))]
+
     return {
         "stop_bias": sum(diffs) / n,
         "stop_mae": sum(abs(d) for d in diffs) / n,
@@ -125,6 +134,12 @@ def stop_fit_metrics(
         "frac_late": sum(d > 0 for d in diffs) / n,
         "regret_from_early": sum(r for d, r in zip(diffs, regrets) if d < 0) / n,
         "regret_from_late": sum(r for d, r in zip(diffs, regrets) if d > 0) / n,
+        # regret DISTRIBUTION, not just its mean: median + upper tail. The mean can
+        # be dragged by a few catastrophic over/under-stops; p90/p99 expose whether
+        # a policy's edge is broad or hides a heavy tail.
+        "regret_median": _pct(0.50),
+        "regret_p90": _pct(0.90),
+        "regret_p99": _pct(0.99),
     }
 
 
@@ -171,6 +186,7 @@ def _evaluate_baseline(
         "exact_stop_step_accuracy": exact / n,
         "first_action_accuracy": first / n,
         "average_expansions": expansions / n,
+        "per_episode_regrets": list(regrets),  # for bootstrap CIs
         **stop_fit_metrics(stops, oracle_stops, regrets),
     }
 

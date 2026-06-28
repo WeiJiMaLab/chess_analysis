@@ -91,7 +91,7 @@ lmcos_tiny/
 │   ├── 2b_pack_root.slurm                      (GPU array: materialize cached root reps)
 │   ├── 2c_merge_root.slurm                     (CPU: stitch worker shards → z_t cache)
 │   ├── 3_train_readout.slurm                   (GPU: controller_train)
-│   └── 4_eval.sh                               (CPU: 4-model eval + ladder plot)
+│   └── 4_eval.slurm                            (CPU: 4-model eval + ladder plot; afterok all readouts)
 ├── slurm/logs/             job logs
 └── src/cts/                the 38-file import closure (byte-identical to ../lmcos)
     ├── _config.py                       YAML→pydantic loader (the `--config FILE` contract)
@@ -101,7 +101,7 @@ lmcos_tiny/
     │   └── preprocess_mc/   pack, oracle, materialize
     ├── models/      gnn, tree_mha, mc (MetaController), readout (the 4-policy family)
     ├── train/       gnn_pretrain, controller_train
-    └── analysis/_budgeted/  alt_models_eval, mchalt_scorer, ladder_plot, baselines
+    └── analysis/_budgeted/  evaluate, mchalt_scorer, ladder_plot, baselines
 ```
 
 ## How to run
@@ -121,7 +121,7 @@ source lmcos_tiny/env.sh        # PYTHONPATH=src (this fork) + venv
 | 2b pack-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<enc> --array=0-39 pipeline/2b_pack_root.slurm` | 40 GPU | ~25–45 min |
 | 2c merge-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<reps> pipeline/2c_merge_root.slurm` | CPU | ~5 min |
 | 3 readout | `ELO=1800 sbatch --dependency=afterok:<merge> pipeline/3_train_readout.slurm` | 1 GPU | ~10–15 min |
-| 4 eval | `bash pipeline/4_eval.sh` | CPU | < 5 min |
+| 4 eval | `RUNGS=2000 sbatch --dependency=afterok:<readouts> pipeline/4_eval.slurm` | CPU / short | < 5 min |
 
 ¹ Measured on Della from the actual runs (jobs 10323846 / 10324132 / 10368943); phase 3/4 from
 the lc0-prod reference (same code, 12 min train). The long poles are **phase 1 gen-trees** and

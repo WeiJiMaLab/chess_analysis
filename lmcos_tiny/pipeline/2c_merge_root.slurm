@@ -10,9 +10,10 @@
 #SBATCH --output=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%j.out
 #SBATCH --error=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%j.err
 #SBATCH --partition=cpu
+#SBATCH --qos=short
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
-#SBATCH --time=00:10:00
+#SBATCH --time=01:30:00
 
 set -euo pipefail
 : "${ELO:?ELO required (e.g. 2000)}"

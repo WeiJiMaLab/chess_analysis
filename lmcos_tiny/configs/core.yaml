@@ -148,6 +148,7 @@ train:
   learning_rate: 1.0e-3
   weight_decay: 0.0
   sign_loss_weight: 0.1
+  sign_pos_weight: 1.0   # PROTOTYPE: <1 penalises over-search (false-continue) in the sign-BCE; 1.0 = off
   nontrivial_loss_weight: 1.0
   inverse_freq_weights: false
   epochs: 3

@@ -1,13 +1,13 @@
 """Cross-Elo "ladder" plot: the 4 halt policies vs Stockfish strength rung.
 
 Reads one per-rung results JSON per Elo rung (each emitted by
-``alt_models_eval.py --results-json``) and draws, for the four headline halt
+``evaluate.py --results-json``) and draws, for the four headline halt
 policies (Always / Never / Fraction / MCHalt), how their **Regret** and
 **P(stop==OSS)** move as the opponent Stockfish strength climbs the ladder
 (elo1800 -> 2000 -> 2200). The StatsReadout (tree-stats) tier is an optional
 5th line, included only if every rung scored it.
 
-The per-rung JSON schema (written by ``alt_models_eval._maybe_write_results``):
+The per-rung JSON schema (written by ``evaluate._maybe_write_results``):
 
     {
       "always":   {"regret": <float>, "stop_acc": <float>},

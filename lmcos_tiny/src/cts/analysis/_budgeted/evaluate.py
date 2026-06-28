@@ -1,32 +1,38 @@
-"""D0 — the five-model readout comparison on the human_trees budgeted oracle.
+"""Five-model readout comparison on the budgeted oracle (SF-2000 ladder trees).
 
-Every model is a :class:`cts.models.readout.Readout`: it emits a per-step
-advantage and STOPS at the first step with ``A <= 0`` (continue iff ``A > 0``)
-— ONE decision rule shared across all five tiers, so the comparison isolates
-the *advantage signal* and nothing else. The five tiers:
+Every model emits a per-step advantage and STOPS at the first step with ``A <= 0``
+(continue iff ``A > 0``) — ONE decision rule across all five tiers, so the comparison
+isolates the *advantage signal*. The five tiers:
 
-  1. Always Stop          -- stop@0                              (no fit)
-  2. Never Stop           -- full budget                         (no fit)
-  3. Fraction-of-Budget   -- continue iff N_t < theta*B          (theta fit on regret)
-  4. Readout(tree-stats)  -- MLP on [height, width, n_nodes, B]  (fit, threshold tuned on regret)
-  5. Readout(GNN-z)       -- MLP on [z, B]                       (pending: needs the P2 tiny encoder)
+  1. Always Stop          -- stop@0                                (no fit)
+  2. Never Stop           -- full budget                           (no fit)
+  3. Fraction-of-Budget   -- stop at round(theta*B)               (theta fit on regret)
+  4. Readout(tree-stats)  -- MLP on [height, width, n_nodes, T_t]  (policy gradient)
+  5. Readout(GNN-z)       -- MLP on [z_t, T_t]                      (policy gradient; checkpoint)
 
-THE §10b FIX: every fitted model is SELECTED on regret directly (theta by a
-regret grid; the stats MLP by tuning its decision threshold on TRAIN regret),
-NOT on the surrogate advantage-MSE / sign-BCE that broke the old controller.
+Tiers 4 and 5 are trained by POLICY GRADIENT on the exact expected return — the SAME
+objective (see ``cts.train.pg_controller_train``) — so 4-vs-5 isolates the
+REPRESENTATION (hand-crafted tree stats vs learned ``z_t``), not the objective. Both
+read the per-step remaining budget ``T_t``. (``--stats-objective regret_threshold``
+recovers the legacy §10b BCE-backbone + regret-tuned-threshold fit for tier 4.)
 
-Metrics on the TEST split (the 'validation' shard slot is the held-out test):
-  * Regret         = oracle_value - return_for_stop_step(...)  (minimize)
+Metrics on the held-out validation split:
+  * Regret         = oracle_value - return_for_stop_step(...) (minimize); mean +
+                     bootstrap 95% CI, plus median / p90 / p99 (the tail the mean hides)
   * P(stop == OSS) = fraction whose chosen stop step == the DP-optimal stop
+  * Expansions     = mean steps before halt = the COMPUTE spent; regret-vs-expansions
+                     is the real tradeoff (regret_vs_compute.png: the Fraction-θ curve
+                     with its θ* optimum, plus the learned readouts off the curve)
 
-height / width are NOT stored per-snapshot in the packed shards; they are
-derived here from the trajectory ``depth`` array + ``step_node_cutoffs``
-(``height = max depth over the first n_nodes``, ``width = max nodes at any one
-depth``). ``n_nodes`` (== ``step_node_cutoffs``) is already present.
+height / width are NOT stored per-snapshot in the packed shards; they are derived here
+from the trajectory ``depth`` array + ``step_node_cutoffs`` (``height = max depth over
+the first n_nodes``, ``width = max nodes at any one depth``). ``n_nodes`` is present.
 
-    PYTHONPATH=lmcos/src python -m cts.analysis._budgeted.alt_models_eval \
-        --packed-root /scratch/gpfs/GRIFFITHS/hl4291/packed/mc \
-        --out-dir figures --max-episodes 2000
+    python -m cts.analysis._budgeted.evaluate \
+        --packed-root /scratch/gpfs/GRIFFITHS/hl4291/sf_mc_packed/elo2000 \
+        --controller-checkpoint /scratch/.../sf_mchalt_pg.pt \
+        --materialized-validation-cache /scratch/.../validation_cache.pt \
+        --out-dir figures/lmcos_tiny
 """
 from __future__ import annotations
 
@@ -196,7 +202,8 @@ def _fit_stats_readout(
     path_lengths = [len(ep["heights"]) for ep in train]
     feats = torch.cat([_stats_features(ep) for ep in train], dim=0)
     budgets = torch.cat(
-        [torch.full((n, 1), float(ep["starting_budget"])) for n, ep in zip(path_lengths, train)], dim=0
+        [torch.tensor(ep["time_budgets"], dtype=torch.float32).unsqueeze(1)  # per-step remaining T_t (parity with GNN-z)
+         for n, ep in zip(path_lengths, train)], dim=0
     )
     full = torch.cat([feats, budgets], dim=-1)
     # z-score so the MLP trains stably (height/width/n_nodes/B differ by orders
@@ -243,6 +250,69 @@ def _fit_stats_readout(
     return model, best_tau
 
 
+def _fit_stats_readout_pg(
+    train: list[dict[str, Any]],
+    config: BudgetedOracleConfig,
+    *,
+    epochs: int = 30,
+    lr: float = 1e-2,
+    seed: int = 0,
+    episode_batch: int = 512,
+) -> tuple[StatsReadout, float]:
+    """Fit the StatsReadout by POLICY GRADIENT (exact expected-return) — the SAME
+    objective the GNN-z controller's pg trainer uses. The head's scalar output is the
+    continue logit; the stop step is marginalized in closed form over the full trace.
+    So tier-4 (this) vs tier-5 (GNN-z) isolates the REPRESENTATION (hand-crafted tree
+    stats vs learned z_t), not the training objective. Deploys greedily (stop at first
+    advantage <= 0; no threshold tau).
+    """
+    from cts.train.pg_controller_train import expected_regret_batched, _scatter_to_padded, _pad_scalars
+
+    torch.manual_seed(seed)
+    model = StatsReadout()
+    path_lengths = [len(ep["heights"]) for ep in train]
+    feats = torch.cat([_stats_features(ep) for ep in train], dim=0)
+    budgets = torch.cat(
+        [torch.tensor(ep["time_budgets"], dtype=torch.float32).unsqueeze(1)  # per-step remaining T_t (parity with GNN-z)
+         for n, ep in zip(path_lengths, train)], dim=0
+    )
+    full = torch.cat([feats, budgets], dim=-1)
+    mean = full.mean(dim=0)
+    std = full.std(dim=0).clamp_min(1e-6)
+
+    ep_x, ep_g, ep_ov, off = [], [], [], 0
+    for n, ep in zip(path_lengths, train):
+        ep_x.append((full[off:off + n] - mean) / std)
+        off += n
+        g = [return_for_stop_step(ep["halt_rewards"], ep["tree_sizes"], ep["time_budgets"], s, config)
+             for s in range(n)]
+        ep_g.append(torch.tensor(g, dtype=torch.float32))
+        ep_ov.append(float(ep["oracle_value"]))
+
+    g_pad, mask, lengths, ov = _pad_scalars(ep_g, ep_ov, torch.device("cpu"))
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    n_ep = len(ep_x)
+    for _ in range(epochs):
+        perm = torch.randperm(n_ep)
+        for i in range(0, n_ep, episode_batch):
+            idxs = perm[i:i + episode_batch]
+            opt.zero_grad()
+            cat = torch.cat([ep_x[j] for j in idxs.tolist()], dim=0)
+            A_flat = model.head(cat).reshape(-1)
+            L = lengths[idxs]
+            A_pad = _scatter_to_padded(A_flat, L)
+            t = A_pad.shape[1]
+            loss = expected_regret_batched(A_pad, g_pad[idxs, :t], mask[idxs, :t], L, ov[idxs])
+            loss.backward()
+            opt.step()
+
+    model.eval()
+    model._norm_mean = mean  # type: ignore[attr-defined]
+    model._norm_std = std  # type: ignore[attr-defined]
+    model._tau = 0.0  # type: ignore[attr-defined]  # greedy: stop at advantage <= 0
+    return model, 0.0
+
+
 def _stats_rule(model: StatsReadout) -> Callable[[dict[str, Any]], int]:
     """Deployable stop rule for a fitted StatsReadout (applies its tuned threshold)."""
     mean = model._norm_mean  # type: ignore[attr-defined]
@@ -251,8 +321,7 @@ def _stats_rule(model: StatsReadout) -> Callable[[dict[str, Any]], int]:
 
     def rule(episode: dict[str, Any]) -> int:
         f = _stats_features(episode)
-        n = f.shape[0]
-        b = torch.full((n, 1), float(episode["starting_budget"]))
+        b = torch.tensor(episode["time_budgets"], dtype=torch.float32).unsqueeze(1)  # per-step T_t (parity with GNN-z)
         x = (torch.cat([f, b], dim=-1) - mean) / std
         with torch.no_grad():
             adv = model.head(x).squeeze(-1) - tau
@@ -261,9 +330,51 @@ def _stats_rule(model: StatsReadout) -> Callable[[dict[str, Any]], int]:
     return rule
 
 
-# --- D0 figure (horizontal bars, models top->bottom 1->5) -------------------
-_TIER_COLOR = "#4063A3"
+# --- figure style (matches the human_analytics engine/board plots) ----------
+_MAIN_COLOR = "#2E86C1"      # steel blue (human_analytics MAIN_COLOR)
+_LEARNED_COLOR = "#C0392B"   # brick red — learned readouts / over-search
+_STAR_COLOR = "#F1C40F"      # gold — the fitted operating point (theta*)
 _PENDING_COLOR = "#cccccc"
+
+plt.rcParams.update({
+    "font.size": 12, "axes.labelsize": 13, "axes.titlesize": 13,
+    "xtick.labelsize": 11, "ytick.labelsize": 11, "legend.fontsize": 10,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "axes.grid": True, "grid.alpha": 0.3,
+})
+
+
+def _style_ax(ax) -> None:
+    ax.set_axisbelow(True)  # grid behind the data (spines/grid come from rcParams)
+
+
+def _save_fig(fig, out_path: Path) -> None:
+    """Save PNG + PDF at dpi 300 (matches human_analytics save_figure)."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    for ext in ("png", "pdf"):
+        fig.savefig(out_path.with_suffix("." + ext), dpi=300, bbox_inches="tight", pad_inches=0.2)
+    plt.close(fig)
+    print(f"  saved {out_path.with_suffix('.png')} (+ .pdf)")
+
+
+def _fraction_operating_curve(episodes: list[dict[str, Any]], config: BudgetedOracleConfig,
+                              thetas: list[float]) -> list[tuple[float, float]]:
+    """(mean_expansions, mean_regret) per theta for the Fraction-θ family.
+
+    This is the one-parameter operating curve whose endpoints are Always-Stop
+    (θ=0, 0 compute) and Never-Stop (θ=1, full budget) and whose minimum is θ*.
+    Drawn behind the discrete models so the vertical gap a learned readout opens
+    BELOW it (= how much it beats blind fraction at the same compute) is visible.
+    """
+    n = len(episodes)
+    pts: list[tuple[float, float]] = []
+    for th in thetas:
+        rule = _fraction_rule(th)
+        regret = _mean_regret(episodes, config, rule)
+        exps = sum(max(0, min(rule(ep), len(ep["halt_rewards"]) - 1)) for ep in episodes) / n
+        pts.append((exps, regret))
+    return pts
 
 
 def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: str,
@@ -277,7 +388,7 @@ def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     n = len(labels)
     y = list(range(n))[::-1]  # reverse so labels[0] is at the top
-    colors = [_TIER_COLOR] * n
+    colors = [_MAIN_COLOR] * n
     plot_values = list(values)
     if pending_last:
         colors[-1] = _PENDING_COLOR
@@ -298,10 +409,140 @@ def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: 
     ax.set_xlabel(xlabel)
     ax.set_title(title)
     ax.margins(x=0.15)
+    _style_ax(ax)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+    _save_fig(fig, out_path)
+
+
+def _plot_tradeoff(labels: list[str], regrets: list[float], expansions: list[float],
+                   pending_last: bool, frac_curve: list[tuple[float, float]], *, out_path: Path) -> None:
+    """Regret vs compute, against the Fraction-θ operating curve.
+
+    The Fraction-θ family is drawn as its continuous curve (θ: 0=Always → 1=Never,
+    minimum at θ*), with the fitted θ* marked as a star. The learned readouts
+    (tree-stats, GNN-z) sit as points; their vertical gap BELOW the curve is how
+    much better than blind fraction they are AT THE SAME COMPUTE. Indices are the
+    fixed tier order: 0 always, 1 never, 2 fraction(θ*), 3 stats, 4 mchalt.
+    """
+    out_path = Path(out_path)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    _style_ax(ax)
+
+    # Fraction-θ sweep curve (the U). The STAR is its optimal MEMBER (min-regret θ*),
+    # highlighted but part of the sweep — not a separate model.
+    fx = [e for e, _ in frac_curve]
+    fy = [r for _, r in frac_curve]
+    ax.plot(fx, fy, "-", color=_MAIN_COLOR, lw=1.8, zorder=2,
+            label=r"Fraction-$\theta$ sweep ($\theta$: 0$\to$1, step 0.1)")
+    ax.scatter(fx, fy, color=_MAIN_COLOR, s=14, zorder=3)
+    opt = min(range(len(frac_curve)), key=lambda k: fy[k])  # optimal member of the sweep
+    ax.scatter([fx[opt]], [fy[opt]], marker="*", s=240, color=_STAR_COLOR,
+               edgecolor="#7d6608", linewidth=0.7, zorder=6, label=r"$\theta^*$ (sweep optimum)")
+
+    # Learned readouts as off-curve points (the comparison): tree-stats, GNN-z.
+    learned = [3] + ([] if pending_last else [4])
+    ax.scatter([expansions[i] for i in learned], [regrets[i] for i in learned],
+               color=_LEARNED_COLOR, s=34, zorder=5)
+    for i in learned:
+        ax.annotate(labels[i], (expansions[i], regrets[i]),
+                    textcoords="offset points", xytext=(6, 4), fontsize=8)
+    # The sweep endpoints are Always (θ=0) and Never (θ=1).
+    ax.annotate(r"Always ($\theta$=0)", (fx[0], fy[0]), textcoords="offset points", xytext=(6, 4), fontsize=8)
+    ax.annotate(r"Never ($\theta$=1)", (fx[-1], fy[-1]), textcoords="offset points",
+                xytext=(-6, 6), fontsize=8, ha="right")
+
+    ax.set_xlabel("Mean Expansions\n" + r"$\leftarrow$ cheaper")
+    ax.set_ylabel("Mean Regret\n" + r"$\leftarrow$ better")
+    ax.set_title(r"Regret vs compute — learned readouts vs the Fraction-$\theta$ curve")
+    ax.margins(0.16)
+    ax.legend(loc="upper left", fontsize=8)
+    fig.tight_layout()
+    _save_fig(fig, out_path)
+
+
+def _plot_regret_distribution(labels: list[str], metric_dicts: list[dict[str, Any] | None],
+                              *, out_path: Path) -> None:
+    """Per-model regret distribution: median dot, mean diamond, p90/p99 tail ticks.
+
+    Surfaces what the mean alone hides — when the mean sits far right of the median,
+    a few catastrophic stops carry the regret. Models without a per-episode fit
+    (the scalar/pending GNN-z slot) are skipped.
+    """
+    items = [(lab, d) for lab, d in zip(labels, metric_dicts) if d and "regret_median" in d]
+    if not items:
+        return
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    labs = [lab for lab, _ in items]
+    n = len(items)
+    y = list(range(n))[::-1]
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    for k, (yi, (_, d)) in enumerate(zip(y, items)):
+        med, p90, p99, mean = d["regret_median"], d["regret_p90"], d["regret_p99"], d["average_regret"]
+        first = k == 0
+        ax.plot([med, p99], [yi, yi], color="#B8B8B8", lw=2, zorder=1)
+        ax.scatter([med], [yi], color=_MAIN_COLOR, s=45, zorder=3, label="median" if first else None)
+        ax.scatter([p90], [yi], marker="|", color="#444", s=130, zorder=3, label="p90" if first else None)
+        ax.scatter([p99], [yi], marker="|", color="#999", s=130, zorder=3, label="p99" if first else None)
+        ax.scatter([mean], [yi], marker="D", color=_LEARNED_COLOR, s=35, zorder=4, label="mean" if first else None)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labs)
+    ax.set_xlabel("regret  (median ● · mean ◆ · p90/p99 ticks · tail line median→p99)")
+    ax.set_title("Regret distribution by model  (mean ≫ median ⇒ heavy tail)")
+    ax.legend(loc="lower right", fontsize=8)
+    ax.margins(x=0.12)
+    _style_ax(ax)
+    fig.tight_layout()
+    _save_fig(fig, out_path)
+
+
+def _plot_regret_decomposition(labels: list[str], metric_dicts: list[dict[str, Any] | None],
+                               *, out_path: Path) -> None:
+    """Stacked bars: mean regret split into under-search (stop<OSS) + over-search (stop>OSS).
+
+    The two pieces sum to mean regret by construction, so this reads off *why* a
+    policy loses value — stopping too soon (missed value) vs too late (wasted cost).
+    """
+    items = [(lab, d) for lab, d in zip(labels, metric_dicts) if d and "regret_from_early" in d]
+    if not items:
+        return
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    labs = [lab for lab, _ in items]
+    early = [d["regret_from_early"] for _, d in items]
+    late = [d["regret_from_late"] for _, d in items]
+    n = len(items)
+    y = list(range(n))[::-1]
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.barh(y, early, color=_MAIN_COLOR, label="under-search (stop < OSS)")
+    ax.barh(y, late, left=early, color=_LEARNED_COLOR, label="over-search (stop > OSS)")
+    for yi, e, l in zip(y, early, late):
+        ax.annotate(f"{e + l:.3f}", (e + l, yi), textcoords="offset points",
+                    xytext=(4, 0), va="center", fontsize=8)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labs)
+    ax.set_xlabel("mean regret  ( = under-search + over-search )")
+    ax.set_title("Regret decomposition: under- vs over-searching")
+    ax.legend(loc="lower right", fontsize=8)
+    ax.margins(x=0.12)
+    _style_ax(ax)
+    fig.tight_layout()
+    _save_fig(fig, out_path)
+
+
+def _bootstrap_ci(values: list[float], *, n_boot: int = 2000, seed: int = 0,
+                  alpha: float = 0.05) -> tuple[float, float]:
+    """Percentile bootstrap (n_boot resamples) 95% CI on the MEAN of per-episode regrets."""
+    if not values:
+        return (float("nan"), float("nan"))
+    t = torch.tensor(values, dtype=torch.float64)
+    n = t.numel()
+    gen = torch.Generator().manual_seed(seed)
+    boot, done = [], 0
+    while done < n_boot:
+        b = min(256, n_boot - done)
+        boot.append(t[torch.randint(0, n, (b, n), generator=gen)].mean(dim=1))
+        done += b
+    boot = torch.cat(boot)
+    return (float(torch.quantile(boot, alpha / 2)), float(torch.quantile(boot, 1 - alpha / 2)))
 
 
 def main() -> None:
@@ -328,6 +569,10 @@ def main() -> None:
     ap.add_argument("--results-json", default=None,
                     help="if set, write {model: {regret, stop_acc}} for all scored tiers to this "
                          "JSON path (consumed by the cross-Elo ladder plotter)")
+    ap.add_argument("--stats-objective", choices=["pg", "regret_threshold"], default="pg",
+                    help="tier-4 StatsReadout fit: 'pg' (policy-gradient expected return — "
+                         "matches the GNN-z controller's objective, so tier4-vs-tier5 isolates the "
+                         "representation) or 'regret_threshold' (legacy §10b BCE backbone + regret-tuned threshold).")
     args = ap.parse_args()
 
     # The fit is a tiny full-batch MLP; cap BLAS threads so it doesn't thrash on
@@ -344,12 +589,20 @@ def main() -> None:
     best_f, _ = _fit_fraction(train, config)
     print(f"tier 3 Fraction theta* = {best_f:.2f} (min mean TRAIN regret)")
 
-    # Tier 4: StatsReadout MLP, threshold SELECTED on TRAIN regret directly.
-    stats_model, stats_tau = _fit_stats_readout(train, config)
-    print(f"tier 4 StatsReadout tau* = {stats_tau:+.1f} (decision threshold tuned on TRAIN regret)")
+    # Tier 4: StatsReadout — PG (same objective as the GNN-z controller) by default, so
+    # tier4-vs-tier5 isolates the representation; --stats-objective regret_threshold
+    # recovers the legacy §10b BCE+threshold fit.
+    if args.stats_objective == "pg":
+        stats_model, _ = _fit_stats_readout_pg(train, config)
+        stats_tier_label = "4. Readout(tree-stats, PG)"
+        print("tier 4 StatsReadout: policy-gradient expected-return fit (greedy stop)")
+    else:
+        stats_model, stats_tau = _fit_stats_readout(train, config)
+        stats_tier_label = "4. Readout(tree-stats)"
+        print(f"tier 4 StatsReadout tau* = {stats_tau:+.1f} (decision threshold tuned on TRAIN regret)")
 
     labels = ["1. Always Stop", "2. Never Stop", f"3. Fraction theta*={best_f:.2f}",
-              "4. Readout(tree-stats)", "5. Readout(GNN-z)"]
+              stats_tier_label, "5. Readout(GNN-z)"]
     rules: list[Callable[[dict[str, Any]], int]] = [
         _always_stop, _never_stop, _fraction_rule(best_f), _stats_rule(stats_model),
     ]
@@ -391,6 +644,7 @@ def main() -> None:
     pending = mc is None
     regret_full = [float(d["average_regret"]) if d else 0.0 for d in metric_dicts]
     stop_full = [float(d["exact_stop_step_accuracy"]) if d else 0.0 for d in metric_dicts]
+    expansions_full = [float(d["average_expansions"]) if d else 0.0 for d in metric_dicts]
 
     # Tier-1 goodness-of-fit table: how well each policy's stop matches the oracle's
     # OSS, decomposed into under-/over-search (reg_early + reg_late == mean regret).
@@ -404,27 +658,54 @@ def main() -> None:
               f"{d['tol_acc_2']:>6.3f} {100*d['frac_early']:>6.1f}% {100*d['frac_late']:>5.1f}% "
               f"{d['regret_from_early']:>9.4f} {d['regret_from_late']:>9.4f}")
 
+    # Regret DISTRIBUTION + compute: the mean alone hides tails and ignores the
+    # cost actually paid. expansions = mean steps before halt (the compute axis).
+    # Bootstrap 95% CI on each model's mean regret.
+    cis = [_bootstrap_ci(d.get("per_episode_regrets") or []) if d else (float("nan"), float("nan"))
+           for d in metric_dicts]
+    print(f"\n{'model':<26s} {'mean_reg':>9s} {'regret 95% CI':>20s} {'med_reg':>9s} {'p90_reg':>9s} "
+          f"{'p99_reg':>9s} {'expansions':>11s}")
+    for label, d, ci in zip(labels, metric_dicts, cis):
+        if not d:
+            print(f"{label:<26s} {'(pending)':>}")
+            continue
+        med = d.get("regret_median"); p90 = d.get("regret_p90"); p99 = d.get("regret_p99")
+        dist = (f"{med:>9.4f} {p90:>9.4f} {p99:>9.4f}" if med is not None
+                else f"{'(scalar — no dist)':>29s}")
+        ci_str = f"[{ci[0]:.4f},{ci[1]:.4f}]" if d.get("per_episode_regrets") else f"{'—':>18s}"
+        print(f"{label:<26s} {d['average_regret']:>9.4f} {ci_str:>20s} {dist} {d['average_expansions']:>11.2f}")
+
     out_dir = Path(args.out_dir)
     _plot(labels, regret_full, pending, title="Regret by readout model (lower = better)",
-          xlabel="mean regret", out_path=out_dir / "regret_by_model.png")
+          xlabel="Mean Regret", out_path=out_dir / "regret_by_model.png")
     _plot(labels, stop_full, pending, title="P(stop == OSS) by readout model",
           xlabel="fraction stop == OSS", out_path=out_dir / "oss_by_model.png")
+    frac_curve = _fraction_operating_curve(test, config, [round(0.1 * k, 1) for k in range(11)])
+    _plot_tradeoff(labels, regret_full, expansions_full, pending, frac_curve,
+                   out_path=out_dir / "regret_vs_compute.png")
+    _plot_regret_distribution(labels, metric_dicts, out_path=out_dir / "regret_distribution.png")
+    _plot_regret_decomposition(labels, metric_dicts, out_path=out_dir / "regret_decomposition.png")
 
     # Results JSON for the cross-Elo ladder plotter: one {model: {regret, stop_acc}}
     # mapping per rung. Keyed by stable short model names (not the numbered/themed
     # bar labels) so the ladder plotter can join across rungs.
     if args.results_json is not None:
         tier1_keys = ["stop_bias", "stop_mae", "tol_acc_1", "tol_acc_2",
-                      "frac_early", "frac_late", "regret_from_early", "regret_from_late"]
+                      "frac_early", "frac_late", "regret_from_early", "regret_from_late",
+                      "regret_median", "regret_p90", "regret_p99"]
         results: dict[str, dict[str, float | None]] = {}
-        for key, d in zip(model_keys, metric_dicts):
+        for key, d, ci in zip(model_keys, metric_dicts, cis):
             if d is None:
-                results[key] = {"regret": None, "stop_acc": None}
+                results[key] = {"regret": None, "stop_acc": None, "expansions": None,
+                                "regret_ci_lo": None, "regret_ci_hi": None}
                 continue
             entry: dict[str, float | None] = {
                 "regret": float(d["average_regret"]),
                 "stop_acc": float(d["exact_stop_step_accuracy"]),
+                "expansions": float(d["average_expansions"]),  # compute axis (mean steps before halt)
             }
+            if d.get("per_episode_regrets"):  # bootstrap 95% CI on mean regret
+                entry["regret_ci_lo"], entry["regret_ci_hi"] = float(ci[0]), float(ci[1])
             for t in tier1_keys:  # absent for the scalar MCHalt slot
                 if t in d:
                     entry[t] = float(d[t])

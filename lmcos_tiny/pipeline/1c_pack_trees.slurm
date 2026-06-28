@@ -15,9 +15,10 @@
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/lmcos_tiny/slurm/logs/%x_%j.err
 #SBATCH --partition=cpu
+#SBATCH --qos=short
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
-#SBATCH --time=00:30:00
+#SBATCH --time=04:00:00
 
 set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"

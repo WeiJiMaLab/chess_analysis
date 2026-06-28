@@ -222,5 +222,6 @@ def score_mchalt_checkpoint(
         "average_oracle_value": metrics.average_oracle_value,
         "average_expansions": metrics.average_expansions,
         "evaluated_episodes": float(metrics.evaluated_episodes),
+        "per_episode_regrets": [float(d["regret"]) for d in diagnostics],  # for bootstrap CIs
         **fit,
     }

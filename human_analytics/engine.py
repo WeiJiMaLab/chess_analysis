@@ -380,14 +380,16 @@ def main(argv=None):
     
     args = parser.parse_args(argv)
 
+    # tree_values BUILDS the cache parquet that mq_gss READS, so it must run first
+    # in --mode all (otherwise a fresh cache, e.g. the first SF-2000 run, fails).
     modes = {
-        "mq_gss": {
-            "func": run_difficulty_confound_stats,
-            "args": [Path(args.cache_dir), args.key, args.db]
-        },
         "tree_values": {
             "func": run_tree_values_pipeline,
             "args": [args.trees_dir, args.n_trees, args.n_workers, args.seed, args.db, args.cache_dir, args.refresh]
+        },
+        "mq_gss": {
+            "func": run_difficulty_confound_stats,
+            "args": [Path(args.cache_dir), args.key, args.db]
         }
     }
 

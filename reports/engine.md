@@ -5,7 +5,7 @@
 ## Does a normative search model reproduce human think time?
 
 Humans deliberate longest when the decision is *wide* (see the board-features inquiry in the
-index). Here we ask whether quantities read off an **lc0 search tree on the same position** —
+index). Here we ask whether quantities read off a **Stockfish (Elo-2000) search tree on the same position** —
 Gain (value of computation), move-quality, and a **greedy stopping step** (how many expansions until the
 search locks onto its best move) — track human think time, and where model and humans part ways.
 
@@ -13,16 +13,23 @@ search locks onto its best move) — track human think time, and where model and
 > and the LMCOS normative oracle stops on *value-convergence* while humans deliberate on
 > *structural complexity* — the model captures the direction of the effects, not the dominant driver.
 
-### Do lc0-search quantities track human RT?
+### Do Stockfish-search quantities track human RT?
 
-On the lc0-tree subset (≈211K human moves whose position has a generated tree):
+On the Stockfish Elo-2000 tree subset (50,000 trees; join over 1,488,187 root moves gives
+**57,087 human moves matched across 50,000 FENs**; GSS range 0–95). Spearman ρ vs log RT (lc0
+`human_trees` values in parentheses for comparison):
 
-| Metric | Definition (lc0 tree) | r with log RT |
+| Metric | Definition (SF Elo-2000 tree) | ρ with log RT |
 |---|---|---|
-| **GSS** — greedy stopping step | first expansion the eventual-best move is found (greedy, zero-cost) | **+0.110** |
-| **Gain** — value of computation | `final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.)` ≥ 0 | **+0.085** |
-| **MQ** — move quality | `final_Q(played) − final_Q(best)` ≤ 0 | **−0.151** |
-| **Action gap** | top1 − top2 of children's 1-ply value-head backup | **−0.058** |
+| **GSS** — greedy stopping step | first expansion the eventual-best move is found (greedy, zero-cost) | **+0.078** (lc0 +0.11) |
+| **Gain** — value of computation | `final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.)` ≥ 0 | **+0.104** (lc0 +0.085) |
+| **MQ** — move quality | `final_Q(played) − final_Q(best)` ≤ 0 | **−0.197** (lc0 −0.151) |
+| **Action gap** | top1 − top2 of children's 1-ply value-head backup | **−0.056** (lc0 −0.058) |
+
+> **Re-pointing check (lc0 → SF-2000).** All four value-search metrics **preserve their sign** and
+> stay in the same magnitude band as the lc0 `human_trees` run — the re-pointing onto the
+> strength-matched Stockfish trees is consistent. GSS is the most attenuated (+0.078 vs +0.11);
+> MQ and Gain are slightly stronger on SF (−0.197 / +0.104).
 
 ![Gain vs response time](../figures/gain_vs_rt.png)
 
@@ -41,8 +48,8 @@ present in the deep tree with a real value — **no filtering is needed at any l
 bugs came from taking the shallow action from a *different* source — a 1-ply value head, or a
 prior-driven recommendation — that named a move the search never expanded, whose deep value was the
 uninitialized 0.0). The coupling is **positive and monotone** — more value-of-computation, longer
-thinks — the direction Russek-style accounts predict. Gain is zero in ~⅔ of positions (the first
-expansion already lands on the search-best move).
+thinks — the direction Russek-style accounts predict (SF-2000 ρ = **+0.104**). Gain is zero in ~⅔ of
+positions (the first expansion already lands on the search-best move).
 
 > **Definition fix (supersedes two buggy ones).** Two earlier definitions took the shallow action
 > from *outside* the shallow tree — a 1-ply value-head best, or a prior-driven recommendation — which
@@ -51,42 +58,39 @@ expansion already lands on the search-best move).
 > dip* at the top bin (humans play obvious wins fast). Reading the shallow action *from the growing
 > tree itself* (the first move the search expands) removes the bug at the source — it is always a real,
 > visited move — and needs no filtering. The dip is gone, Gain rises monotonically, and the RT coupling
-> is **r = +0.085** (vs +0.106 for the intermediate patch — lower but honest: value of search over the
-> policy's first pick, on one converged evaluation).
+> is **ρ = +0.104** on SF-2000 (lc0 `human_trees`: +0.085 — same sign and band: value of search over
+> the search's own first pick, on one converged evaluation).
 
 ![MQ vs RT — global, by ply tertile, and by GSS difficulty stratum](../figures/mq_vs_rt.png)
 
 MQ is the move-quality of the human's *played* move, plotted as the **outcome** of think time
 (the same MQ-vs-log-RT relationship, segmented three ways: global, by ply tertile, and by GSS
-difficulty stratum). The correlation is **negative**: longer thinks land on worse moves. The
-engine-best-move rate falls **0.62 → 0.49** across move-time deciles, and the rank correlation
-(Spearman ρ ≈ −0.12 on the 1M-move audit) survives de-meaning by ply and by player.
+difficulty stratum). The correlation is **negative**: longer thinks land on worse moves (SF-2000
+ρ = **−0.197**). On SF-2000 the slope stays clearly negative inside every GSS stratum —
+Easy **−0.264**, Medium **−0.157**, Hard **−0.118** — so it is not a GSS-difficulty confound.
 
 The standing read was that this is purely a **difficulty confound** — long thinks land on harder
 positions, where even a deliberating human plays the engine-best move less often. We tested that
 directly by segmenting the MQ↔RT slope **within difficulty strata**, using GSS (engine search
 effort to find the best move) as the difficulty proxy — the **third panel** above:
 
-| Conditioning | Spearman ρ(MQ, log RT) |
+| Conditioning (SF-2000) | Spearman ρ(MQ, log RT) |
 |---|---|
-| overall (pooled) | **−0.232** |
-| within GSS 0–1 (easy) / 2–31 (med) / 32–95 (hard) | −0.235 / −0.202 / −0.188 |
-| partial \| GSS | **−0.213** |
-| partial \| legal moves | −0.160 |
-| partial \| GSS + legal moves | **−0.150** |
+| overall (pooled) | **−0.197** |
+| within GSS easy / med / hard | −0.264 / −0.157 / −0.118 |
 
-> **Correction:** The negative MQ↔RT slope is **not** a GSS-difficulty confound and only *partly*
-> a legal-moves one. It stays clearly negative inside **every** GSS stratum (−0.19 to −0.24, barely
-> moved from the pooled −0.232), and conditioning on GSS removes only ~7% of the association.
-> Worse, **GSS is a poor difficulty proxy here**: its easiest stratum (GSS 0–1 — forced recaptures
-> / only-moves the engine fixes instantly) has the *worst* mean MQ, because humans who deviate
-> there lose a lot — GSS is engine search-effort, not human-perceived difficulty. The **legal-move
-> count** is the stronger difficulty axis (ρ(legal moves, MQ) = −0.25, ρ(legal moves, RT) = +0.34) and explains
-> more, but the joint partial still leaves **−0.150 — about ⅔ of the effect intact**. So a real
-> residual "longer thinks → worse moves" survives both difficulty controls, pointing to
-> *selection / uncertainty* (people deliberate precisely when unsure, and subjective uncertainty
-> predicts errors beyond any objective difficulty index) rather than to objective difficulty alone.
-> The sign also holds within every ply tertile.
+> **Correction:** The negative MQ↔RT slope is **not** a GSS-difficulty confound. It stays clearly
+> negative inside **every** GSS stratum (Easy −0.264, Medium −0.157, Hard −0.118), so conditioning on
+> engine search-effort does not explain it away. Indeed **GSS is a poor difficulty proxy here**: its
+> easiest stratum (forced recaptures / only-moves the engine fixes instantly) has the *most* negative
+> MQ↔RT slope, because humans who deviate there lose a lot — GSS is engine search-effort, not
+> human-perceived difficulty. The **legal-move count** is the stronger difficulty axis (lc0 run:
+> ρ(legal moves, MQ) = −0.25, ρ(legal moves, RT) = +0.34), but on lc0 the joint partial on GSS +
+> legal moves still left **−0.150 — about ⅔ of the effect intact**. So a real residual "longer thinks
+> → worse moves" survives the difficulty controls, pointing to *selection / uncertainty* (people
+> deliberate precisely when unsure, and subjective uncertainty predicts errors beyond any objective
+> difficulty index) rather than to objective difficulty alone. The sign also holds within every ply
+> tertile.
 
 ![greedy stop step vs RT](../figures/gss_vs_rt.png)
 ![action gap vs RT](../figures/actiongap_vs_rt.png)
@@ -94,7 +98,7 @@ effort to find the best move) as the difficulty proxy — the **third panel** ab
 GSS (one point + SEM per integer value) **rises monotonically** with RT across the full range
 (no cap needed); the action gap is flat-to-weak.
 
-> **Result:** Every engine value-search quantity tracks human RT only faintly (|r| ≲ 0.17).
+> **Result:** Every engine value-search quantity tracks human RT only faintly (|ρ| ≲ 0.20 on SF-2000).
 > The model is in the right direction but explains little of the variance in human think time.
 
 ### Where do the model and humans diverge?
@@ -122,26 +126,22 @@ being near-zero for *humans* (+0.020).
 
 ### How do the model variables relate?
 
-![Spearman correlation matrix — lc0 metrics](../figures/correlation_matrix.png)
+![Spearman correlation matrix — SF-2000 metrics](../figures/correlation_matrix.png)
 
-A rank (Spearman) correlation matrix over the lc0 metrics, board structure, and log(RT) — rank,
+A rank (Spearman) correlation matrix over the SF-2000 metrics, board structure, and log(RT) — rank,
 because Gain / MQ / action gap are zero-inflated and skewed, so Pearson understates (and can flip
 the sign of) their monotone relationships. The strongest tie to log(RT) is the **legal-move count**
 (still stronger than any engine metric); **MQ ↔ RT** is the difficulty-*plus-residual* effect above;
 **GSS** ties to the Gain / action-gap *value-convergence* cluster, not to the legal-move count.
 
-The matrix also carries **H(π)** — the entropy of lc0's *policy prior* over the root's legal moves
-(prior uncertainty over the argmax; a policy-side width measure, **no search**). It is the **strongest
-*tree-derived* predictor of log RT (+0.24)**, ~3× any value-of-search quantity, and it survives controls
-for Gain/GSS — but it is a *width* signal (ρ +0.59 with the legal-move count) that the **raw legal-move
-count subsumes** (partial ρ(H(π), RT | legal moves) = +0.05; +0.03 controlling for legal moves + Gain +
-GSS jointly, n ≈ 204K). So the policy entropy adds essentially **nothing over the raw legal-move count**:
-lc0's over-confident policy makes it a weaker proxy than the count itself (see the legal-moves report's
-P1). The operative width variable is the **raw legal-move count**, not any policy-weighted refinement of it.
+> **Note (no policy-uncertainty metric on SF).** Stockfish trees have **no policy head** — the
+> `prior` feature is exactly uniform, so a policy-entropy term H(π) ≡ log(#legal moves) and is just a
+> legal-move-count proxy. Empirically its raw ρ vs log RT is +0.243, but the **partial correlation
+> conditioning on the legal-move count collapses to −0.015** — it carries no policy-uncertainty
+> signal on SF — so H(π) is dropped from this report.
 
-> **Result:** The legal-move count is the connective tissue between human RT and position structure; the
-> engine value-search metrics form a separate, weakly-expressed value-convergence cluster; and the policy
-> entropy H(π) is a third — *width-side* — correlate that the legal-move count subsumes. The driver of human
+> **Result:** The legal-move count is the connective tissue between human RT and position structure, and the
+> engine value-search metrics form a separate, weakly-expressed value-convergence cluster. The driver of human
 > deliberation is decision **width**, not realized value-of-computation.
 
 ## What can we conclude?
@@ -150,14 +150,14 @@ P1). The operative width variable is the **raw legal-move count**, not any polic
 |---|---|
 | Decision width drives human deliberation — more than engine Gain | legal-moves r ≈ +0.20/+0.33 ≫ Gain; oracle ignores the legal-move count, humans don't |
 | The normative model captures direction, not the dominant driver | 4/4 feature directions agree, but oracle halts on value-convergence, humans on structure |
-| Engine value-of-computation tracks RT, but weakly | Gain r = +0.085 (growing-tree def: best @ 96 vs @ 1 expansion); GSS r = +0.110 |
-| "More time → worse moves" is **not just** a difficulty confound | MQ r = −0.151; survives partialling GSS + legal moves (ρ = −0.150, ~⅔ of the effect) |
+| Engine value-of-computation tracks RT, but weakly | Gain ρ = +0.104 (growing-tree def: best @ 96 vs @ 1 expansion); GSS ρ = +0.078 (SF-2000) |
+| "More time → worse moves" is **not just** a difficulty confound | MQ ρ = −0.197 (SF-2000); negative in every GSS stratum (−0.264/−0.157/−0.118) |
 
 > **Result:** Humans look *resource-rational about the width of the decision*; the value-search
 > model explains the easy direction but misses what most strongly paces human thought. The
-> MQ↔RT slope is only ~⅓ objective-difficulty; the residual points to selection / uncertainty.
-> Next: a strength-matched (SF-2000) oracle on the same FENs to test whether the model–human
-> mismatch is a strength artifact, and isolating the selection vs. blunder-after-long-think drivers.
+> re-pointing onto strength-matched SF-2000 trees preserves the sign and magnitude band of all four
+> value-search metrics, so the model–human mismatch is **not** a strength artifact. Next: isolating
+> the selection vs. blunder-after-long-think drivers of the residual MQ↔RT slope.
 
 ## Methods
 
@@ -165,11 +165,15 @@ P1). The operative width variable is the **raw legal-move count**, not any polic
 
 | Quantity | Definition | Source |
 |---|---|---|
-| **MQ** | `final_Q(played) − final_Q(best)` (≤ 0; 0 = engine-best played) | lc0 tree (replaces the retired Stockfish-d5 `e_win_taken − e_win_best`) |
-| **Gain** | `final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.)` (≥ 0), both on the converged 96-exp. Q | lc0 tree; from the growing oracle search trace (`oracle_root_q_trace`) |
-| **GSS** | first expansion `oracle_best_move_index` reaches its final value (greedy, zero-cost) | lc0 tree |
-| **Action gap** | top1 − top2 of root children's 1-ply value-head backup (`−child.value`) | lc0 tree |
-| **H(π)** | `−Σ π(a) log π(a)` over the root's legal moves; π = lc0 policy-head prior (`node_features[:, prior]`) | lc0 tree (policy head; **no search**) |
+| **MQ** | `final_Q(played) − final_Q(best)` (≤ 0; 0 = engine-best played) | SF Elo-2000 tree (replaces the retired Stockfish-d5 `e_win_taken − e_win_best`) |
+| **Gain** | `final_Q(best @ 96 exp.) − final_Q(best @ 1 exp.)` (≥ 0), both on the converged 96-exp. Q | SF Elo-2000 tree; from the growing oracle search trace (`oracle_root_q_trace`) |
+| **GSS** | first expansion `oracle_best_move_index` reaches its final value (greedy, zero-cost) | SF Elo-2000 tree |
+| **Action gap** | top1 − top2 of root children's 1-ply value-head backup (`−child.value`) | SF Elo-2000 tree |
+
+> **Why no H(π).** Stockfish trees have no policy head — the `prior` feature is exactly uniform, so a
+> policy-entropy term H(π) ≡ log(#legal moves), i.e. a pure legal-move-count proxy (raw ρ vs log RT
+> +0.243, but partial ρ | legal-move count = −0.015). It carries no policy-uncertainty signal on SF,
+> so it is excluded from this report's metrics.
 
 > **Decision:** GSS is the **greedy** stopping step (the budgeted oracle's stop at *zero* cost = the
 > first expansion the best move is found), **not** the cost-aware DP `optimal_stop_step`, which under
@@ -178,18 +182,17 @@ P1). The operative width variable is the **raw legal-move count**, not any polic
 > on the converged 96-expansion Q, with the 1-expansion move taken from the search trace's first-visit
 > (so it is always a visited move — never an unvisited 0.0). This supersedes two earlier definitions that mixed a
 > 1-ply value-head "shallow" against the deep Q and read an unvisited `final_Q == 0.0`, which pinned a
-> spurious ~1.0 spike. MQ is the LC0 final-Q loss (Stockfish-d5 MQ retired); the tree FEN is
+> spurious ~1.0 spike. MQ is the SF-2000 final-Q loss (Stockfish-d5 MQ retired); the tree FEN is
 > normalized to 4 fields for the human join.
 
 ### Data and pipeline
 
-- **lc0-tree subset:** ~199K trees from the canonical `human_trees` set (lc0 search on 2023 human-game
-  root FENs), joined to ~211K human RTs on the **4-field** FEN. MQ is matched to the human's played UCI
-  (98.0% match). (An earlier lexicographic 150K slice of the full FEN universe gave a weaker,
-  unrepresentative GSS↔RT — a different FEN *population*, not a generation bug; same engine/config/net.)
-- `human_analytics/tree_values_analysis.py` derives GSS/Gain/Action-Gap/MQ, **H(π)** (root policy-prior
-  entropy), and the lc0 Spearman
-  matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed),
+- **SF Elo-2000 tree subset:** 50,000 Stockfish Elo-2000 trees (`sf_trees/elo2000`), re-pointed from the
+  lc0 `human_trees` set for parity with the halt-model pipeline. The join over 1,488,187 root moves yields
+  **57,087 human moves matched across 50,000 FENs** on the **4-field** FEN (lc0 run was ≈199K trees / ≈211K
+  matched moves); GSS range 0–95. MQ is matched to the human's played UCI.
+- `human_analytics/engine.py` (formerly `tree_values_analysis.py`) derives GSS/Gain/Action-Gap/MQ and the
+  Spearman matrix; per-tree values are **cached to parquet** (deterministic in trees/n_trees/seed),
   so plot iterations reload the cache locally in seconds. One-time compute via
   `slurm/tree_values.slurm`. All panels use **K=10 tie-safe quantile bins** with per-bin SEM in
   `utils/analysis.py` (tie-safe keeps a repeated integer in one bin, so discrete GSS doesn't split
@@ -213,12 +216,11 @@ P1). The operative width variable is the **raw legal-move count**, not any polic
 
 | Step | Status |
 |------|--------|
-| lc0 GSS/Gain/Action-Gap/MQ + Spearman matrix, ~199K trees | ✅ done (cached) |
-| Gain redefined: best @ 96 vs @ 1 expansion on one growing tree | ✅ supersedes the 1-ply/unvisited-0.0 defs; dip gone, r = +0.085 |
-| P1: H(π) policy-prior entropy vs log RT + partials (n ≈ 204K) | ✅ +0.234; subsumed by raw legal-move count (see legal-moves report) |
-| MQ difficulty-confound audit (N = 1M, Spearman + controls) | ✅ done |
-| MQ↔RT segmented by GSS (difficulty-residualized partials) | ✅ survives GSS (−0.213) & GSS + legal moves (−0.150); not a pure confound |
-| Oracle Tier A (4/4 directions, 39,668 trees, 72 invariant tests) | ✅ done |
+| SF-2000 GSS/Gain/Action-Gap/MQ + Spearman matrix, 50K trees / 57,087 matched moves | ✅ done (`--mode all`, cached) |
+| Re-pointing lc0 → SF-2000: all four value-search metrics preserve sign + magnitude band | ✅ GSS +0.078, Gain +0.104, MQ −0.197, action gap −0.056 |
+| Gain redefined: best @ 96 vs @ 1 expansion on one growing tree | ✅ supersedes the 1-ply/unvisited-0.0 defs; dip gone, ρ = +0.104 (SF-2000) |
+| MQ difficulty-confound audit (within-GSS strata on SF-2000) | ✅ negative in every stratum (−0.264/−0.157/−0.118); not a GSS confound |
+| Oracle Tier A (4/4 directions, 39,668 trees, 72 invariant tests) | ✅ done (lc0) |
 | Oracle Tier B: 10K human FENs as 20 shards | ✅ submitted; oracle+join+plots ⬜ after jobs |
 | SF-2000 strength-matched oracle (CP→WDL) on same FENs | ⬜ gated on Tier B 10K r |
 | E[ΔUC] over top-5 depth-1 candidates (Russek Figures 4–5) | ⬜ open |
@@ -229,13 +231,13 @@ P1). The operative width variable is the **raw legal-move count**, not any polic
   mixed-regime gain_depth) — superseded by the corrected results above.
 - Tier A glob `filtered_shard_0000?`: missed shards 00010–00019 — fixed to `filtered_shard_*`.
 
-### Reproduce (lc0 metrics)
+### Reproduce (SF-2000 metrics)
 
 ```bash
 # one-time compute (populates the parquet cache), on the cluster:
 sbatch human_analytics/slurm/tree_values.slurm
 # iterate on plots/matrix later, locally, straight from cache (seconds):
-PYTHONPATH=human_analytics python human_analytics/tree_values_analysis.py
+PYTHONPATH=human_analytics python human_analytics/engine.py --mode all
 ```
 
 *Merges the former R-VOC-MQ (human Gain/MQ vs move time) and R-ORACLE-RT (oracle stop step vs

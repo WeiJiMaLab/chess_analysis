@@ -77,7 +77,19 @@ class ControllerTrainConfig(BaseModel):
     min_lr: float = 0.0
     weight_decay: float = 0.0
     sign_loss_weight: float = 1.0
+    # PROTOTYPE — asymmetric over-search penalty on the sign-BCE. That loss treats the
+    # predicted advantage as a logit for "continue"; pos_weight < 1 down-weights the
+    # "continue" class, so FALSE-CONTINUE (predicting continue when the oracle says STOP)
+    # is penalised more than false-stop. This pulls the advantage zero-crossing earlier,
+    # directly countering the controller's chronic over-search. 1.0 = symmetric/original.
+    # Checkpoint selection stays on validation regret, not this loss (the §10b rule).
+    sign_pos_weight: float = 1.0
     nontrivial_loss_weight: float = 1.0
+    # --- policy-gradient (exact expected-return) trainer: cts.train.pg_controller_train ---
+    # Directly optimizes E[regret] under the stochastic stop policy (continue prob = sigmoid(A_t)),
+    # with the stop step marginalized in closed form over the full trace (no REINFORCE sampling).
+    pg_episode_batch: int = 1024        # episodes per PG gradient step
+    pg_max_episodes: Optional[int] = None  # cap train/val episodes (smoke / quick runs)
     inverse_freq_weights: bool = False
     separate_sign_head: bool = False
     max_grad_norm: float = 1.0
@@ -1309,6 +1321,11 @@ def _advantage_loss_components(
     return advantage_mse, mean_abs_advantage_error, sign_accuracy
 
 
+# Prototype over-search knob; set once from ControllerTrainConfig.sign_pos_weight at the
+# top of main(). <1 penalises false-continue (over-search) in the sign-BCE below.
+_SIGN_POS_WEIGHT: float = 1.0
+
+
 def _sign_auxiliary_loss(
     predicted_advantages: torch.Tensor,
     target_advantages: torch.Tensor,
@@ -1318,13 +1335,19 @@ def _sign_auxiliary_loss(
 
     The auxiliary loss the regression head uses to anchor its sign decision
     even when small-magnitude regression errors would otherwise leave it
-    ambiguous.
+    ambiguous. ``_SIGN_POS_WEIGHT`` < 1 makes it asymmetric, penalising
+    false-continue (over-search) more than false-stop.
     """
     sign_targets = (target_advantages > 0).to(dtype=predicted_advantages.dtype)
+    pos_weight = (
+        torch.as_tensor(_SIGN_POS_WEIGHT, dtype=predicted_advantages.dtype, device=predicted_advantages.device)
+        if _SIGN_POS_WEIGHT != 1.0 else None
+    )
     if weights is not None:
-        per_element = F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets, reduction="none")
+        per_element = F.binary_cross_entropy_with_logits(
+            predicted_advantages, sign_targets, pos_weight=pos_weight, reduction="none")
         return (per_element * weights).sum() / weights.sum()
-    return F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets)
+    return F.binary_cross_entropy_with_logits(predicted_advantages, sign_targets, pos_weight=pos_weight)
 
 
 def _train_epoch(
@@ -2555,6 +2578,11 @@ def _save_fallback_checkpoint_if_needed(
 
 def main(config: ControllerTrainConfig) -> None:
     """End-to-end driver: validate args, materialize cache (if frozen), train, eval, save."""
+    global _SIGN_POS_WEIGHT
+    _SIGN_POS_WEIGHT = config.sign_pos_weight
+    if _SIGN_POS_WEIGHT != 1.0:
+        print(f"[compute_advantage] sign_pos_weight={_SIGN_POS_WEIGHT} "
+              f"(<1 penalises over-search in the sign-BCE)", flush=True)
     device, train_cache_path, validation_cache_path, oracle_config, schema = _seed_and_resolve_paths(config)
     model, optimizer, scheduler = _build_model_and_optimizer(config, schema)
     train_loader_raw, validation_loader_raw = _build_train_and_validation_loaders(config)
