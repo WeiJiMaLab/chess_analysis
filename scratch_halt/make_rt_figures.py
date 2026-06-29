@@ -28,7 +28,7 @@ CONFIGS = ["power_law_p1.5_x0.25", "power_law_p1.5_x1.0", "power_law_p1.5_x4.0",
            "power_law_p2.8_x0.25", "power_law_p2.8_x1.0", "power_law_p2.8_x4.0",
            "linear_x0.25", "linear_x1.0", "linear_x4.0",
            "quadratic_x0.25", "quadratic_x1.0", "quadratic_x4.0"]
-TAUS = [0.05, 0.1, 0.25, 0.5, 1.0]
+TAUS = [0.001, 0.01, 0.05, 0.1, 0.2]
 
 
 def _ranks(a): return pd.Series(a).rank().to_numpy()
@@ -86,7 +86,7 @@ def hbar_grouped(ax, labels, A, B, cA, cB, lA, lB, title, n=None, ref=None, hatc
 
 def main():
     voc = pd.read_parquet(VOCPQ)
-    tau = pd.read_parquet(TAU)[["fen"] + [f"softmax_voc_tau{t if t != 1.0 else 1}__free" for t in TAUS]]
+    tau = pd.read_parquet(TAU)[["fen"] + [f"softmax_voc_tau{t:g}__free" for t in TAUS]]
     df = voc.merge(tau, on="fen", how="left").drop(columns=[c for c in ["legal_moves"] if c in voc.columns])
     conn = duckdb.connect(DB, read_only=True); conn.register("_s", df[["fen"]])
     mv = conn.execute("""SELECT m.fen, ln(m.move_time) AS log_rt, m.n_possible_moves AS legal_moves
@@ -147,10 +147,11 @@ def main():
     plt.close(fig)
 
     # ===== FIG 4b: softmax-VOC by temperature =====
-    rs = [sb(j[f"softmax_voc_tau{t if t != 1.0 else 1}__free"].to_numpy(float), rt) for t in TAUS]
-    cols = [REF if t == 0.1 else VOC for t in TAUS]
+    rs = [sb(j[f"softmax_voc_tau{t:g}__free"].to_numpy(float), rt) for t in TAUS]
+    best_i = int(np.nanargmax([r[0] for r in rs]))
+    cols = [REF if i == best_i else VOC for i in range(len(TAUS))]
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    hbar(ax, [f"τ = {t}" + ("  (best)" if t == 0.1 else "") for t in TAUS], rs, cols,
+    hbar(ax, [f"τ = {t:g}" + ("  (best)" if i == best_i else "") for i, t in enumerate(TAUS)], rs, cols,
          "Softmax-VOC vs human RT, by temperature (deep-tree supervisor)", n=N, ref=lm_ref)
     fig.tight_layout(); [fig.savefig(f"{FIG}/voc_tau_sweep.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)

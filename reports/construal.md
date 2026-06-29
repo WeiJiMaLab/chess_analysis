@@ -1,11 +1,14 @@
 # When ought one to think? A meta-rational account of chess deliberation time
 
-**Ref:** `R-METAREASON` · [Index](reference.md)
+**Ref:** `R-CONSTRUAL` · [Index](reference.md)
 
-> **Status:** 📝 active. Restructured around the **normative core** — deliberation time as the *optimal amount
-> of computation under a cost*, fit to human RT. Powered on filtered elo2000 (n≈65k moves, bootstrap 95% CIs);
-> the decisive *fit-cost-to-RT on a construal substrate* run is the open frontier. Calibration detail in
-> [(R-HALT-CALIB)](halt_calibration.md); data provenance in [(R-DATA)](reference.md).
+> **Status:** 📝 active. The **model paper** — it **picks up where [(R-VOC)](voc.md) leaves off**. R-VOC showed
+> that value-of-computation (in every form) is a legal-moves *proxy* and the real structure is *satisficed
+> decision difficulty*; here we formalize that as one optimization — deliberation time as the *optimal amount of
+> computation under a cost* — and lay out the fit-to-RT program. See R-VOC for the full empirical journey +
+> figures (this report owns the **model + all forward proposals**). Powered on filtered elo2000 (n≈65k moves,
+> bootstrap 95% CIs); the decisive *fit-cost-to-RT on a construal substrate* run is the open frontier.
+> Calibration detail in [(R-HALT-CALIB)](halt_calibration.md); data in [(R-DATA)](reference.md).
 
 ## 1 · The claim, as one optimization
 

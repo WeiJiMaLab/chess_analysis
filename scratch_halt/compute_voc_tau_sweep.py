@@ -42,7 +42,7 @@ FILTER_TXT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt
 OUT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_tau_sweep.parquet"
 STARTING_BUDGET = 96
 
-TAUS = [0.05, 0.10, 0.25, 0.50, 1.0]
+TAUS = [0.001, 0.01, 0.05, 0.1, 0.2]
 
 # Current pipeline cost (matches power_law_p2.8 with the raw base lambda).
 CUR = BudgetedOracleConfig(

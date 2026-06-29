@@ -5,7 +5,7 @@
 > **Status:** 📝 active. Metric reframed to **step\* (optimal stop step) vs human RT** (the regret-vs-RT
 > framing is retired — see *Why step\*, not regret*). Interim findings on filtered elo2000 (n≈13k moves);
 > a definitive ~61k re-run and the SF-1350 weak rung are in progress. Sibling of
-> [(R-METAREASON)](metareasoning.md), which changes the *mechanism*; this report only *calibrates* it.
+> [(R-CONSTRUAL)](construal.md), which changes the *mechanism*; this report only *calibrates* it.
 
 ## What is the normative "when to think," and what should it be graded against?
 
@@ -81,6 +81,6 @@ human log-RT)** with bootstrap 95% CIs on held-out moves, plus step\*↔legal-mo
 ## Caveat
 
 Calibration sharpens the *value-convergence* mechanism; it does **not** add the missing **uncertainty**
-mechanism (the softmax VOC of [(R-METAREASON)](metareasoning.md), which at calibrated temperature also
+mechanism (the softmax VOC of [(R-VOC)](voc.md), which at calibrated temperature also
 plateaus at ρ≈+0.12 on RT). step\*↔RT topping out near +0.12 — half the width effect — says calibration
 alone will not close the convergence-vs-width gap; it makes the cost knob *meaningful*, not *sufficient*.
