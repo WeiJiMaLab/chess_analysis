@@ -89,8 +89,39 @@ leaf-count becomes the cost. Two locked-in design choices (from R-TREESEARCH §9
 > `/scratch` with 1.7 TB free — feasible if we **free `elo1350`** (~55 GB) and delete the losing grid levels
 > after picking ε.
 
-## Next concrete step
+## Step 1 result — the proxy (2026-06-29)
 
-Add the `prune_epsilon` parameter to `build_tree`'s child-enumeration (relative-to-best by leaf-eval value), and
-write the proxy script (`lmcos_tiny/analysis/prune_proxy.py`) that post-hoc prunes the existing 250K n=1 trees
-across an ε sweep and reports pruned-leaf-cost ↔ RT — to fix the 2–3 levels to re-generate.
+`prune_proxy.py` on all **250K n=1 trees**, joined to **262,286 human moves**:
+
+| ε | pruned/legal | ρ(pruned, RT) | partial \| legal |
+|---|---|---|---|
+| *floor: legal_moves* | — | **+0.341** | — |
+| *n_total (unpruned)* | 96 | +0.319 | +0.112 |
+| 0.0  | 0.17 | −0.163 | −0.085 |
+| 0.05 | 1.7  | −0.152 | −0.078 |
+| 0.1  | 7    | −0.142 | −0.074 |
+| 0.2  | 17   | −0.124 | −0.070 |
+| 0.3  | 23   | −0.107 | −0.067 |
+| 0.5  | 32   | −0.070 | −0.059 |
+| 1.0  | 58   | +0.094 | −0.019 |
+
+> **Result:** ε is a **dial along the size ↔ satisfaction axis**. Aggressive pruning (ε→0) makes the
+> pruned-count a **satisfaction** signal (−0.16: many near-best moves → faster); no pruning (ε→2) makes it the
+> **size** signal (+0.32); the correlation crosses zero at ε≈0.9. **No single ε beats the bare legal-moves floor
+> (+0.34)** in magnitude — but the **partial-controlling-for-legal-moves** is non-zero at both ends (−0.085
+> satisfaction, +0.112 deep-branching), so the pruned count *does* carry information beyond raw width.
+>
+> **Clarification:** this is the **loose** proxy (post-hoc prune of the *completed* tree, final values, no budget
+> redeploy, no stopping dynamics). It cannot show pruning's value-add — it only confirms ε is the right knob and
+> locates the action at **low ε**. The regen is the real test.
+
+## Chosen regen levels & next step
+
+The proxy puts the satisfaction signal at **low ε** (the cognitively plausible regime: ε=0.05→~58 nodes,
+ε=0.1→~240, ε=0.3→~790; vs ~3370 unpruned). Regen grid (step 2): **ε ∈ {0.05, 0.2, 0.5}** — aggressive / mid /
+loose — spanning the transition, with the existing no-prune trees as the size baseline.
+
+**Next:** add `prune_epsilon` to `build_tree`'s PUCT child-enumeration (at each node, drop children whose
+**early/leaf-eval** value is >ε below the sibling-best; the freed budget drives deeper), and regenerate ~250K at
+each of the three ε at n=1. Then compare the *regenerated* pruned-leaf-cost ↔ RT (and the oracle step\* with that
+cost) against the +0.34 floor — the test the proxy cannot do.

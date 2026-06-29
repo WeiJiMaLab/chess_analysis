@@ -133,11 +133,14 @@ def analyze():
     import duckdb
     df = pd.read_parquet(OUT)
     con = duckdb.connect(DB, read_only=True)
-    rt = con.execute(
-        "SELECT fen, move_time FROM processed_moves_nonzero WHERE move_time > 0"
+    con.register("proxy", df)
+    # push the join into DuckDB so only matched move-rows are materialized (not all 135M)
+    m = con.execute(
+        "SELECT p.*, m.move_time FROM proxy p "
+        "JOIN processed_moves_nonzero m ON p.fen = m.fen "
+        "WHERE m.move_time > 0"
     ).df()
     con.close()
-    m = rt.merge(df, on="fen", how="inner")
     print(f"joined human moves: {len(m):,}  (unique FENs: {m.fen.nunique():,})\n")
     y = m["move_time"].to_numpy()  # Spearman is rank-based; log is monotone, so raw RT is fine
     leg = m["legal_moves"].to_numpy()
