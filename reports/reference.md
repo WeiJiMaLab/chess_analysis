@@ -35,6 +35,7 @@ Reports come in two formats:
 | Halt-policy comparison — do learned readouts beat blind stopping on the SF-2000 budgeted oracle? (regret-vs-compute, PG vs MSE surrogate, GNN-z vs tree-stats) | [(R-LMCOS-TINY)](lmcos_tiny.md) | Scientific | LMCOS | ✅ done (elo2000); seeds/rungs open |
 | When ought one think? — calibrating the budgeted-oracle **step\*** against human RT (step\*=0 degeneracy, cost shape/scale, weak-engine rung) | [(R-HALT-CALIB)](halt_calibration.md) | Scientific | LMCOS | 📝 active; step\*↔RT reframe, interim elo2000 |
 | **Tree search & deliberation** — the single linear story (mermaid map): when/do people search like an engine? → VOC fails (every signal a legal-moves proxy) → RT = satisficed decision difficulty (size − satisfaction + sharpness) → a meta-rational reward−cost model + the fit-`c`-to-RT program | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; 63k; the single deliberation report (folds in the former R-VOC) |
+| **Value-pruning** — changing the **cost profile** (the only live lever once trees are filtered for reward-to-planning) via ε-pruning of implausible leaves; staged plan + feasibility (750K @ n=1) | [(R-PRUNING)](pruning.md) | Plan | Deliberation | 📝 proposal; ε-grid + regen + normative fit |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the

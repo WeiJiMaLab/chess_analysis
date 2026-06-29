@@ -31,6 +31,19 @@ Older lmcos work (Apr–May 2026) lives in the [§ Legacy lmcos lab notebook](#l
 - **Tree spec (verified):** `max_depth=10`, value = **raw value-head** (win−loss), budget = **96 expansions** (total nodes ≈ 96 × branching).
 - **Open:** the resource-rational branching account ([R-BRANCH](reports/branching.md) P1–P5: policy-entropy ≈ branching; width-gated stop vs value-convergence); difficulty-residualized MQ; strength-matched SF-2000 oracle.
 
+## 2026-06-29 {#2026-06-29}
+
+Converged the deliberation thread on a single umbrella — **think-time is the cost of the *leaves* (the consideration set), which the oracle never charged for** — restyled the deck/graph around it, and scoped a cost-profile (value-pruning) experiment as the next sub-report.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **Node-count audit: expansions vs leaves** | Decide what the cost should charge for | ✅ The oracle charged for **expansions** (`n_expanded == n_steps`, ~const at M=96) → ρ(RT) = **+0.018** (noise); the omitted **leaf** cost (`n_total`/`n_leaf`, `maintenance_scale=0`) gives ρ(RT) = **+0.323** — strongest single signal, **0.857-collinear with legal-moves**. The legal-moves effect **is** the enumeration floor of a leaf-cost. | [(R-TREESEARCH)](reports/treesearch.md) §8 |
+| **New plot — hindsight (causal halter vs oracle)** | The old slide reused `regret_by_model`, no hindsight evidence | ✅ causal halter **+0.02** ≈ hindsight oracle **+0.06**, both ≪ legal-moves **+0.31**. Information asymmetry isn't it. `figures/lmcos_tiny/hindsight_halter.png` | [(R-TREESEARCH)](reports/treesearch.md) |
+| **New plot — evaluator strength (SF-1 vs SF-100)** | Frame the strength axis as N (search nodes), not UCI_Elo | ✅ RT-correlations **near-identical** SF-1/SF-100 (legal +0.30/+0.31, gain +0.16/+0.16); values differ per-FEN (ρ≈0.93) but the **RT story doesn't move**. Evaluator strength is not the driver. `figures/lmcos_tiny/sf_n1_vs_n100.png` | [(R-TREESEARCH)](reports/treesearch.md) |
+| **Deck/graph restyle (2 subagents)** | Make the question-graph the navigational artifact | ✅ Theme-colored plots (x∈[−0.4,0.4], CIs, larger fonts, "log-RT"→"RT"); graph restructured (q3 under q2; q1b→"How do people spend their time thinking?"; hindsight under q4); 3-part slides (did/expected/takeaway). Overstated resolved-nodes qualified (q1, plan: meta-rational fit is the *open test*, not settled). | `presentations/src/tree-search.md` |
+| **Reward- vs cost-profile insight** | Explain *why* the reward knobs were no-ops | ✅ We filtered for **reward to planning** → reward profile held monotone → optimal stop is pinned by **cost**, not reward. The only live lever is the **cost profile** → value-pruning. | [(R-PRUNING)](reports/pruning.md) |
+| **Value-pruning plan + feasibility** | Scope the cost-profile experiment at scale | 📝 Plan staged: pick ε via completed-tree proxy on existing **250K n=1** trees → regen with pruning in PUCT → lock ε, fit normative model. **750K @ n=1 ≈ 1.5–3 h** (1.36 trees/s/proc), **~165 GB** (220 KB/tree; /scratch 95% full, free `elo1350` ~55 GB). Open decisions interviewed. | [(R-PRUNING)](reports/pruning.md) |
+
 ## 2026-06-26 {#2026-06-26}
 
 Refactored the engine and configuration architecture, consolidated the test suite, mitigated bivariate pipeline vulnerabilities, and profiled MCTS tree rollout generation.

@@ -25,7 +25,7 @@ const W = 1760, H = 1360
 const TREE = {
   id: 'q1', cx: 750, cy: 60, w: 380, h: 92,
   q: 'Do People Meta-Control Their Thinking in Chess?',
-  a: 'Yes — paced by decision width, not value-of-computation.',
+  a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
     {
       id: 'q1a', cx: 360, cy: 250, w: 360, h: 92,

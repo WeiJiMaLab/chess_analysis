@@ -118,22 +118,36 @@ Two facts crack it open:
 
 ## 9 · The model & the plan
 
+**Why the reward knobs were all dead ends — and the cost is the only live one.** In hindsight the no-ops
+(evaluator strength, `UCI_Elo`, hindsight-vs-causal) were *predictable*. We **filtered the trees for reward to
+planning** — positions where searching deeper improves the value (roughly monotone gain with depth). On that
+filtered set the **reward profile is held roughly fixed**, so manipulating it barely moves *when* it is worth
+stopping: the value curve stays monotone, and the optimal stop is pinned by the **cost**, not the reward. To move
+the optimal stop you must change the **cost profile** — which is exactly what **value-pruning** does: drop the
+implausible leaves, the leaf-cost (hence the cost) falls, and *where* stopping is optimal re-shapes. This is the
+one lever we have not pulled, and it is the subject of a dedicated sub-report **[(R-PRUNING)](pruning.md)**.
+
 Human think-time = the cost of **building the consideration set (the leaves)**, satisficed and pruned:
 
 - **The floor** — enumerate the root = `n` leaves — gives the +0.31 legal-moves effect *for free* (you pay ∝ `n`
-  just to look). Explained, not mysterious.
+  just to look). Explained, not mysterious — but note it is a **reframing**, not a new predictor: the leaf-count
+  is 0.857-collinear with legal-moves, so on its own it only *re-describes* decision width.
 - **The model's job** — does **satisficing** (stop enumerating once good-enough) + **value-pruning** (count only
   the *plausible* leaves, by the prior values) shape the leaf-cost so it carries **satisfaction / sharpness**
-  *beyond* the bare floor? That is the only place "meta-rational" earns its keep.
+  *beyond* the bare floor? That is the only place "meta-rational" earns its keep, and the only way pruning beats
+  a re-description.
 - **P-FIT:** fit the stop/prune threshold (~1–2 params) to RT; does `size − satisfaction + sharpness` emerge from
   it, vs the ±0.31 ceiling?
 - **Value-pruning needs regeneration** (pruning changes the tree's *shape* — the freed budget drives deeper, so a
-  post-hoc prune is invalid). Prune by the **prior** (early/n1 values, not hindsight `final_Q`), **relative to
-  best**, sweep the threshold.
+  post-hoc prune is invalid for the *fit*, though a useful proxy for *choosing* the threshold). Prune by the
+  **prior** (early/n1 values, not hindsight `final_Q`), **relative to best**, sweep the threshold. Plan in
+  [(R-PRUNING)](pruning.md).
 
-> **Root question, answered (provisionally):** people *do* meta-control — resource-rationally over **decision
-> width (the leaves they consider), satisficing once good-enough** — not over engine value-of-computation. The
-> remaining number: does a 1–2-parameter **leaf-cost + satisficing** model beat the bare ±0.31 floor.
+> **Root question — the working conclusion (not yet a fitted model):** the *correlational* picture is that RT
+> tracks **decision width**, with a **satisficing signature** (satisfaction reshapes the RT-vs-n curve), and the
+> value-of-computation signals add nothing beyond width. Whether this is genuinely **meta-rational** — a
+> reward−cost optimum a 1–2-parameter model reproduces — is the **open test**, not a settled result. The pruning
+> experiment is the way to earn that claim.
 
 ---
 
