@@ -165,14 +165,25 @@ Almost — and the gap between them *is* our whole result. Write **VOC = value(t
   choice (you're already near-optimal) ⇒ low VOC **and** easy ⇒ fast. *Sharpness*: a contested/critical move
   ⇒ high VOC **and** hard ⇒ slow. On these, difficulty and VOC predict the *same* thing — and indeed our VOC
   signals capture them (that's the +0.04 they legitimately own).
-- **They diverge on the cost side.** Human RT carries an **enumeration cost ∝ size** (you must scan the
-  options even to dismiss them) — a cost of the *process*, not the *value of its outcome*. Our oracle's cost
-  was **position-independent**, so the VOC ledger never charged for size and missed it entirely.
+- **They diverge on what gets *considered*.** This is **not** a pure scanning *cost* — it is a
+  **consideration *benefit***: you cannot reap a move's value without first **including it in your
+  consideration set**, and inclusion carries a (tunable) **fixed cost per move**. You add a move when the
+  expected benefit of considering it clears that inclusion cost — so the **size of the consideration set you
+  choose to build** is what drives RT. Our oracle never modelled set *construction*: it took the whole tree as
+  given (every move pre-included, for free), so it structurally could not produce a size effect.
 
-> **Clarification:** decision difficulty is **not a rival to VOC — it is VOC with a cost calibrated to the
-> person's effort.** They coincide exactly when the computation cost scales with the problem (∝ enumeration);
-> ours didn't, so our VOC kept only the *value* side (+0.04) and dropped the dominant *cost* side (+0.25). The
-> legal-moves effect is the human computation cost our oracle forgot to bill.
+> **Clarification (construals):** decision difficulty is **VOC over a *constructed* consideration set**, not
+> over a fixed option list. The set is a **construal** (value-guided construal; Ho, Griffiths et al.) — built
+> by paying a per-move inclusion cost wherever the benefit of considering it justifies the cost. This unifies
+> the three RT terms:
+> - **size (+):** more legal moves ⇒ more candidates clear the include-it bar ⇒ a bigger set ⇒ longer;
+> - **satisfaction (−):** once a good-enough move is *in* the set you stop expanding it (**satisficing**) ⇒ shorter;
+> - **sharpness (+):** high stakes raise the benefit of including more ⇒ people are **willing to pay** for a
+>   bigger set ⇒ longer.
+>
+> Our VOC — all moves pre-included, position-independent cost — kept only the *post-construal refinement*
+> value (+0.04) and missed the construal itself (the +0.25). The legal-moves effect is the size of the
+> consideration set a person rationally chooses to build, not a scanning overhead.
 
 ### The flip is also an engine-strength litmus test
 
@@ -188,17 +199,19 @@ the best-matched strength.
 The Step-3/5 reframe says the failure is a **mis-specified VOC**, in four concrete, separable ways. Each is a
 hypothesis with an experiment — and note **"weaken the model" (H3) is only one of them**, not the whole fix.
 
-- **H1 — wrong cost.** Our cost is position-independent; the human cost scales with **enumeration (∝ size)** —
-  the +0.25 the VOC ledger never billed. *Fix:* a position-dependent cost ∝ legal-moves. (→ R-HALT-CALIB / P2.)
+- **H1 — no consideration-set cost.** The oracle pre-includes every move for free; there is no **per-move
+  inclusion cost** for *building* the consideration set, so a size effect can't arise. *Fix:* a tunable
+  per-move (construal) inclusion cost. (→ R-HALT-CALIB / P2.)
 - **H2 — wrong value / supervisor.** step\* is graded against the *engine's* values; if **engine-good ≠
   human-good** (strength mismatch) it optimizes the wrong objective. *Fix:* the strength ladder + the
   sign-flip litmus. (→ P1.)
 - **H3 — generator too smart.** A strong MCTS+SF prunes the breadth humans actually traverse, so the
   tree-stats carry a *machine's* consideration, not a person's. *Fix:* a **dumber, more human-like generator**
   (noisy-myopic eval → optimistic Best-First-Search). (→ P2/P3.)
-- **H4 — missing the enumeration stage.** The oracle starts *after* the moves are evaluated — it models only
-  *refinement*, never the dominant **enumeration** stage — and has no **policy prior**, so it "considers" all
-  `n`. *Fix:* an upfront consideration cost + a policy prior (prior-focused, not all-`n`). (→ P4.)
+- **H4 — missing the construal stage.** The oracle takes the whole tree as given — it never *builds* the
+  consideration set, only *refines* within it; with uniform priors it implicitly "considers" all `n` at once.
+  *Fix:* model consideration-set **construction** (per-move inclusion cost + a policy prior to order
+  candidates), with **satisficing** as the stop rule. (→ P4.)
 - **(H5 — hindsight asymmetry: rejected** by the causal halter, Step 4c.)
 
 The experiments map one-to-one onto H1–H4, cheapest → most invasive:
