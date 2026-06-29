@@ -251,11 +251,46 @@ The experiments map one-to-one onto H1–H4, cheapest → most invasive:
 | **P2** | `sf_search_limit_nodes` 100→1 (noisy-myopic leaf values) | isolates dumb *values* from a weak *engine* | teed up (needs config-override verify) |
 | **P3** | optimistic **Best-First-Search** generator vs UCT | does a deliberately dumber search recover human breadth? | gated on P1/P2 |
 | **P4** | **policy-prior** hybrid (lc0 policy guides expansion, SF evaluates) | prior-focused consideration; *(top-k × stakes)* cost vs raw `n` | gated on P3 |
+| **P5** | **SF MultiPV (`n_pvs`) sweep**: breadth-value vs RT | the construal-breadth / saturation claim — *no new generator* | staged (cheapest breadth test) |
 
 > **Decision:** P0/P1 build the powered dataset + the strength litmus overnight. The headline test for the
 > generative-search thesis is **does a dumber engine/eval make tree-width recover the +0.25 legal-moves
 > effect** — if yes, build the BeFS generator (P3) and the policy prior (P4); both re-open the
 > strength-ladder + faithfulness contracts ([(R-DATA)](reference.md)), so they are explicit v2 work.
+
+### Building up to the generator: a construal-breadth ladder
+
+The H3/H4 breadth models form a ladder — cheap-and-direct → faithful-and-expensive — and we build up only as
+each rung earns the next. The unit cost throughout is **`n_nodes`** (total nodes considered), which subsumes
+beam×depth and operationalizes H1's per-move inclusion cost.
+
+1. **SF MultiPV (`n_pvs`) sweep — cheapest, off-the-shelf, most direct (P5).** Stockfish reports its top-`k`
+   root lines with values; the *marginal value of the k-th line* is exactly the breadth-VOC the saturation
+   model needs, and optimal breadth `k*` is where it drops below the per-line cost. **Test:** does `k*` (the
+   marginal-value-≈-cost breadth) track RT, and does value saturate in `k`? No new generator — the **first**
+   breadth experiment. *(Caveat: each PV is deeply searched, so it's "breadth of deeply-evaluated lines," not a
+   shallow human read.)*
+2. **Fixed-width beam search (beam = 1…K, depth `d`) — middle.** Keep the top-`beam` candidates per ply; sweep
+   `beam`. Adds *lookahead* to breadth; cost ∝ `n_nodes` ∝ beam×depth. A discretized, fixed-width BeFS — needs
+   a new generator, moderate cost.
+3. **Incremental optimistic BeFS — faithful, expensive (P3).** Adaptive width grown one candidate at a time,
+   stop at satisficing. `RT ∝ expansion-count`. Re-opens the faithfulness contracts (v2 generator).
+
+**Granularity (secondary axis):** the consideration *unit* could be **moves** (all of the above) or **pieces**
+(include a piece's whole move-set at once — coarser, perhaps closer to perceptually "looking at a piece").
+Cheap to probe by aggregating moves by source piece.
+
+> **Principle:** MultiPV first (tests the breadth/saturation claim cheaply, no generator) → beam (adds depth) →
+> BeFS (adaptive width). Don't build a rung until the previous shows breadth-value tracks RT.
+
+### Staged for the 63k landing
+
+- **Concavity / plateau-shift** (`concavity_test.py` → `rt_vs_n_concavity`): is RT(`n`) saturating, and does the
+  plateau *drop* with satisfaction / *rise* with stakes? **Interim 12k:** RT is ≈**linear** in `n` over the
+  narrow filtered range (~10–45), no visible plateau — consistent with the **unsaturated `S*≈n` regime** (low
+  per-move cost ⇒ ~all moves considered up to `n`), so the **plateau-shift** (needs the 63k `n_good`/`action_gap`
+  columns) is the real diagnostic, not the bare RT(`n`) shape.
+- **MultiPV sweep (P5)** — the first breadth experiment.
 
 ---
 
