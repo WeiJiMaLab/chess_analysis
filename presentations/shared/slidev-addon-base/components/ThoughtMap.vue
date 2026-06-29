@@ -65,7 +65,7 @@ const TREE = {
               children: [
                 { id: 'h5', cx:  870, cy: 840, w: 280, h: 104, q: 'Is It the Wrong Cost Shape?',  a: 'No — regret is flat.',           children: [] },
                 { id: 'h6', cx: 1170, cy: 840, w: 280, h: 104, q: 'Is Uncertainty Missing?',      a: 'It recovers, but never beats.',  children: [] },
-                { id: 'h9', cx: 1470, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?', a: 'No — only N matters, not Elo.',   children: [] },
+                { id: 'h9', cx: 1470, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?', a: 'No — SF-1 ≈ SF-100 on every RT-corr.',   children: [] },
                 {
                   id: 'h8', cx: 1170, cy: 1000, w: 300, h: 104, star: true,
                   q: 'Is It Just a Legal-Moves Proxy?',

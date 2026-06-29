@@ -78,7 +78,7 @@ Correlate every signal with human log-RT:
 - **H2 — missing uncertainty?** Softmax-VOC (value of *sharpening* the policy) → **recovers** the argmax value (~+0.16), never exceeds it. *(`voc_tau_sweep`)*
 - **H3 — hindsight asymmetry?** A causal halter (sees only the tree-so-far) → **no** (≈0). *(`regret_by_model`)*
 - **H4 — just a legal-moves proxy?** Partial out legal-moves → **YES**: every signal collapses to **≈+0.04**; legal-moves survives at +0.22. *(`rt_partials`)*
-- **H5 — evaluator too strong?** Vary N → **N matters** (n1≠n100); `UCI_Elo` is a no-op. *(`litmus_strength`)*
+- **H5 — evaluator too strong?** Compare SF-1 vs SF-100 → **no**: the RT-correlations are near-identical (legal +0.30/+0.31, gain +0.16/+0.16); the per-position values differ (n1≠n100, ρ≈0.93) but the RT story doesn't move; `UCI_Elo` a no-op. *(`sf_n1_vs_n100`)*
 
 > **Result:** no value-of-computation or stopping-time signal tracks RT beyond ≈+0.04 over legal-moves.
 

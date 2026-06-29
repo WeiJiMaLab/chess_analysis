@@ -277,7 +277,7 @@ transition: zoom-in
       <div class="mdl-title"><span class="mdl-kicker">Hypothesis 3 of 4</span>Is the evaluator too strong?</div>
       <div class="mdl-proc"><strong>What we did.</strong> The realization: <strong>UCI_Elo is a gameplay parameter that doesn't change the evaluation</strong> — the only knob that does is <strong>N</strong> (leaf-eval nodes). So we compare <strong>SF-1 vs SF-100</strong> (N=1 vs N=100) and correlate each with RT.</div>
       <div class="mdl-intuition"><span class="lbl">We expected</span> A weaker, noisier "gut" (fewer leaf-eval nodes) might think more like a person. Read it as: does a 1-node eval (SF-1) shift the RT correlation versus a 100-node eval (SF-100)?</div>
-      <div class="mdl-conv warn"><span class="lbl">N matters; Elo doesn't</span> SF-1 vs SF-100 genuinely differ (ρ≈0.93), so the leaf budget is a real lever — but neither closes the gap to people. UCI_Elo is a no-op. Open thread, not the main driver.</div>
+      <div class="mdl-conv warn"><span class="lbl">No — the evaluator isn't it</span> <strong>SF-1 ≈ SF-100 on every RT-correlation</strong> (legal +0.30/+0.31, gain +0.16/+0.16). The per-position values <em>do</em> differ (ρ≈0.93), but the RT story doesn't move — and UCI_Elo changes nothing. Evaluator strength is not the missing driver.</div>
     </div>
     <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/sf_n1_vs_n100.png" /></div>
   </div>
