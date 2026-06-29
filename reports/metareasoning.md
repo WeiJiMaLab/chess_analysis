@@ -241,6 +241,15 @@ hypothesis with an experiment — and note **"weaken the model" (H3) is only one
   *Fix:* model consideration-set **construction** (per-move inclusion cost + a policy prior to order
   candidates), with **satisficing** as the stop rule. (→ P4.)
 - **(H5 — hindsight asymmetry: rejected** by the causal halter, Step 4c.)
+- **H6 — the human prior is too weak (the *other* strength axis).** A strong player's policy prior prunes hard
+  ⇒ a small consideration set ⇒ RT **saturates** in `n`; a weak prior ⇒ consider ~all moves ⇒ `S*≈n` ⇒ RT
+  **linear** in `n` (exactly the interim 12k read). Our pool is **≥2000 Lichess 10+0** — club-level (Lichess
+  ratings run high vs FIDE) and time-pressured — so the unsaturated/linear regime is *expected*. This is
+  distinct from H2 (engine = the *value* supervisor); H6 is the human's *pruning* prior (breadth) and predicts
+  **more saturation at higher player strength**. *Data gap:* per-player Elo is **not stored** in `personal.db`
+  (only the ≥2000 filter), so banding by strength needs upstream re-ingestion or an Elo-banded dataset; the only
+  within-dataset proxy is **clock-time remaining** (time pressure caps the consideration budget — a related but
+  distinct mechanism).
 
 The experiments map one-to-one onto H1–H4, cheapest → most invasive:
 
