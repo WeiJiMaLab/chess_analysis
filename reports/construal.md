@@ -97,8 +97,12 @@ argmax value but does not exceed it:
 
 **(B) The values — the supervisor:**
 
-- **H2 — engine strength.** `V_sup` must be *human-relevant*: the sign-flip is a **litmus** — it appears only
-  if engine-good = human-good (clean at SF-2000; SF-1350 vs SF-2000 finds the best-matched rung).
+- **H2 — engine strength.** `V_sup` must be *human-relevant*: the sign-flip is a **litmus**. **Update
+  (2026-06-29):** the `UCI_Elo` ladder is a **no-op** — SF-1350 and SF-2000 trees are *bit-identical* per FEN
+  (max|Δ|=0, ρ=1), because `StockfishDirectEvalProvider` returns the static eval/WDL and `UCI_Elo` only weakens
+  *play*, not the eval [[sf-uci-elo-noop-for-eval]]. So strength must be varied via the **search**
+  (`sf_search_limit_nodes`/depth), not `UCI_Elo` — which is exactly the dumb-eval run below (and folds H2 into
+  H3). The elo1350 rung is a wasted duplicate (cleanup candidate).
 
 **(H5 — hindsight asymmetry: rejected** — the causal halter ≈ the hindsight oracle on RT.)
 
@@ -120,9 +124,10 @@ The one thing we have **not** done: fit `c` (+prior) to **human RT** — we fit 
 |---|---|---|---|
 | **P0** | 63k powered re-run | every §2 signature, tight CIs | ✅ done |
 | **P-FIT** | **fit `c`(+prior) to RT on the construal (incremental-inclusion) substrate** | the headline: meta-RL variance explained vs the ±0.31 ceiling, and whether the §2 signatures fall out of 1–2 params | **the frontier** |
-| **P5** | SF **MultiPV** (`n_pvs`) sweep — breadth-value vs RT | the construal/saturation claim, *no new generator* | cheapest next |
-| **P1** | SF-1350 vs SF-2000 | engine-value **litmus** (H2) + dumber-engine width | running |
-| **P3** | optimistic **BeFS** generator | RT ∝ expansion-count (the construal, H3) | gated on P5 |
+| **P5** | SF **MultiPV** (`n_pvs`) sweep — breadth-value vs RT | the construal/saturation claim | needs a **prior** (caveat ↓) |
+| **P2** | **dumb-eval** gen: `sf_search_limit_nodes` 100→1 → `elo2000_n1` | does a dumber *search* recover width↔RT (H2 folds in + H3) | **running overnight** (`10399953`→`55`) |
+| ~~P1~~ | ~~SF-1350 vs SF-2000 (UCI_Elo)~~ | **RETIRED** — `UCI_Elo` no-op; 1350≡2000 bit-identical [[sf-uci-elo-noop-for-eval]] | retired |
+| **P3** | optimistic **BeFS** generator | RT ∝ expansion-count (the construal, H3) | gated on P2/P5 |
 | **P4** | lc0 **policy-prior** hybrid | prior-focused consideration (H4) | gated on P3 |
 
 **The breadth ladder** (how P5→P3 build up, cheap → faithful; unit cost = `n_nodes`):
@@ -133,6 +138,13 @@ The one thing we have **not** done: fit `c` (+prior) to **human RT** — we fit 
 
 *(Granularity is a secondary axis: the consideration unit could be **moves** or **pieces** — the latter closer
 to perceptual "looking at a piece," cheap to probe by aggregating moves by source piece.)*
+
+> **Caveat — P5/P-FIT need a *prior*, not just `final_Q`.** Breadth-VOC over the *true* converged values is
+> degenerate: the best move is always considered first, so nothing can flip. The construal model is non-trivial
+> only under **uncertainty** — a noisy prior over move values (you *discover* values by including, paying `c`),
+> so a later candidate can overtake your current best. So P-FIT/P5 require a small uncertainty/prior model
+> (noise σ, cost `c`) — light to code, but **not** parameter-free, and they make **H4's policy-prior
+> essential** rather than optional.
 
 > **Decision:** the **headline number is the variance a 1–2-parameter meta-RL explains vs the ±0.31
 > descriptive ceiling** — *if it reaches it with the §2 signatures emerging, we have a parsimonious
