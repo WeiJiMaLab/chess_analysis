@@ -6,6 +6,7 @@ on its own. Every deck is a flat entry file under **`src/<deck>.md`**:
 | Deck | Entry | Topic |
 | --- | --- | --- |
 | `main` | `src/main.md` | Learned meta-control of tree search — motivation, methods, human-timing validation (was `lmcos-overview`) |
+| `tree-search` | `src/tree-search.md` | Tree search & human deliberation — the linear story (mermaid map, PUCT/BFS/MCTS animation, lc0→SF, satisficing) |
 | `modelrecovery` | `src/modelrecovery.md` | Parameter recovery / identifiability *(stub)* |
 | `modelcomparison` | `src/modelcomparison.md` | Cross-model fit & selection *(stub)* |
 | `gazeanalysis` | `src/gazeanalysis.md` | Eye-movement / deliberation-window analyses *(stub)* |
