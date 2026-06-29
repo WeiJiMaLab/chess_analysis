@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 PARQ = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_signals.parquet"
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 FIG = "/home/hl4291/chess_analysis/figures/lmcos_tiny"
-MAIN, ACC, GRN = "#2E86C1", "#C0392B", "#27AE60"
+MAIN, ACC, MID = "#475569", "#e11d48", "#6366f1"  # slate / rose / indigo (theme)
 
 
 def r2(x, y):
@@ -65,7 +65,7 @@ def main():
         ax2 = axes[0][1]
         # satisfaction tertiles: does the plateau drop?
         ter = pd.qcut(j["frac_good"], 3, labels=["low sat", "med sat", "high sat"])
-        for lab, c in zip(["low sat", "med sat", "high sat"], [ACC, "#E67E22", GRN]):
+        for lab, c in zip(["low sat", "med sat", "high sat"], [ACC, MID, MAIN]):
             s = j[ter == lab]
             curve(ax2, s["n"].to_numpy(float), s["move_time"].to_numpy(float), c, lab)
         ax2.set_xscale("log"); ax2.set_xlabel("# legal moves (log)"); ax2.set_ylabel("median RT (s)")

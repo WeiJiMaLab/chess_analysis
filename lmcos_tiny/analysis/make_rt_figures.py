@@ -17,13 +17,14 @@ FILT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt"
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 FIG = "/home/hl4291/chess_analysis/figures/lmcos_tiny"
 
-# ---- shared palette (semantic; from the Step-3 plot the user liked) ----
-SIZE = "#2E86C1"   # problem size / structural-positive (legal moves, action gap, # all)
-SAT = "#C0392B"    # satisfaction / good-moves (negative term)
-VOC = "#7F8C8D"    # value-of-computation family (gain, regret, step*, softmax-VOC)
-VOC2 = "#34495E"   # second VOC series (step* vs regret) in grouped plots
-HALT = "#BDC3C7"   # causal halter
-REF = "#27AE60"    # reference line (legal-moves)
+# ---- shared palette (semantic; mapped to the deck theme) ----
+SIZE = "#475569"   # structural / problem size (legal moves, action gap) — slate
+SAT = "#e11d48"    # satisfaction / good-moves (negative term) — rose
+VOC = "#6366f1"    # value-of-computation family (gain, regret, step*, softmax-VOC) — indigo
+VOC2 = "#a5b4fc"   # second VOC series (step* vs regret) in grouped plots — indigo-light
+HALT = "#94a3b8"   # causal halter — light slate
+REF = "#475569"    # reference line (legal-moves) — slate (thin dashed)
+XLIM = (-0.4, 0.4)  # fixed x-axis for every ρ-vs-RT bar figure
 CONFIGS = ["power_law_p1.5_x0.25", "power_law_p1.5_x1.0", "power_law_p1.5_x4.0",
            "power_law_p2.8_x0.25", "power_law_p2.8_x1.0", "power_law_p2.8_x4.0",
            "linear_x0.25", "linear_x1.0", "linear_x4.0",
@@ -54,8 +55,10 @@ def pb(x, y, z, nb=300, seed=0):
 
 def _style(ax, title, n=None):
     ax.axvline(0, color="#222", lw=0.9); ax.invert_yaxis()
-    ax.set_xlabel("Spearman ρ vs human log-RT", fontsize=10)
-    ax.set_title(title + (f"  (n={n:,})" if n else ""), fontsize=12)
+    ax.set_xlim(*XLIM)
+    ax.set_xlabel("Spearman ρ vs human RT", fontsize=13)
+    ax.set_title(title + (f"  (n={n:,})" if n else ""), fontsize=15)
+    ax.tick_params(axis="x", labelsize=11); ax.tick_params(axis="y", labelsize=11)
     ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
 
@@ -66,9 +69,9 @@ def hbar(ax, labels, rs, colors, title, n=None, ref=None):
     ax.errorbar(pts, y, xerr=[[r[0] - r[1] for r in rs], [r[2] - r[0] for r in rs]],
                 fmt="none", ecolor="#222", capsize=3, lw=1)
     if ref is not None:
-        ax.axvline(ref, color=REF, lw=1.6, ls="--", label=f"legal moves ({ref:+.2f})")
-        ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.12), frameon=False)
-    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9); _style(ax, title, n)
+        ax.axvline(ref, color=REF, lw=1.0, ls="--", label=f"legal moves ({ref:+.2f})")
+        ax.legend(fontsize=10, loc="upper center", bbox_to_anchor=(0.5, -0.12), frameon=False)
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=10); _style(ax, title, n)
 
 
 def hbar_grouped(ax, labels, A, B, cA, cB, lA, lB, title, n=None, ref=None, hatchB=True):
@@ -79,9 +82,9 @@ def hbar_grouped(ax, labels, A, B, cA, cB, lA, lB, title, n=None, ref=None, hatc
     ax.errorbar([r[0] for r in A], y - 0.2, xerr=[[r[0]-r[1] for r in A], [r[2]-r[0] for r in A]], fmt="none", ecolor="#222", capsize=2, lw=1)
     ax.errorbar([r[0] for r in B], y + 0.2, xerr=[[r[0]-r[1] for r in B], [r[2]-r[0] for r in B]], fmt="none", ecolor="#222", capsize=2, lw=1)
     if ref is not None:
-        ax.axvline(ref, color=REF, lw=1.6, ls="--", label=f"legal moves ({ref:+.2f})")
-    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9); _style(ax, title, n)
-    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=3, frameon=False)
+        ax.axvline(ref, color=REF, lw=1.0, ls="--", label=f"legal moves ({ref:+.2f})")
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=10); _style(ax, title, n)
+    ax.legend(fontsize=10, loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=3, frameon=False)
 
 
 def main():
@@ -132,8 +135,8 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 6))
     hbar(ax, [items[i][0] for i in order], [items[i][1] for i in order], [items[i][2] for i in order],
          "What predicts human response time? (filtered elo2000)", n=N)
-    ax.text(0.99, 0.02, "blue = problem size · red = satisfaction · grey = value-of-computation",
-            transform=ax.transAxes, ha="right", fontsize=8, color="#555")
+    ax.text(0.99, 0.02, "slate = problem size · rose = satisfaction · indigo = value-of-computation",
+            transform=ax.transAxes, ha="right", fontsize=9, color="#555")
     fig.tight_layout(); [fig.savefig(f"{FIG}/rt_headline.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
 
@@ -175,7 +178,7 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 5))
     hbar_grouped(ax, [f"# good ≤ {e}" for e in eps], raw_g, par_g, SAT, SAT,
                  "raw ρ vs RT", "ρ vs RT | legal-moves",
-                 "The sign flip: more OPTIONS slower (blue), more GOOD options faster (red)",
+                 "The sign flip: more OPTIONS slower (slate), more GOOD options faster (rose)",
                  n=Ng, ref=sb(lmg, rtg)[0])
     fig.tight_layout(); [fig.savefig(f"{FIG}/good_moves_signflip.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
@@ -184,8 +187,8 @@ def main():
     sig = voc
     fig, ax = plt.subplots(figsize=(7.5, 5))
     edges = np.arange(0, 99, 3); ctr = (edges[:-1] + edges[1:]) / 2; maxoss = 0
-    for cfg, c, lab in [("power_law_p2.8_x1.0", "#8E44AD", "power-law"),
-                        ("linear_x1.0", "#16A085", "linear"), ("quadratic_x1.0", "#E67E22", "quadratic")]:
+    for cfg, c, lab in [("power_law_p2.8_x1.0", VOC, "power-law"),
+                        ("linear_x1.0", SIZE, "linear"), ("quadratic_x1.0", SAT, "quadratic")]:
         v = sig[f"oss__{cfg}"].to_numpy(float); maxoss = max(maxoss, np.nanpercentile(v, 99.5))
         d, _ = np.histogram(v, bins=edges, density=True)
         ax.plot(ctr, d, lw=2.2, color=c, label=lab)
@@ -193,8 +196,9 @@ def main():
     ax.annotate("forced choice —\nOSS truncated near budget 96", xy=(maxoss, ax.get_ylim()[1] * 0.6),
                 xytext=(maxoss - 38, ax.get_ylim()[1] * 0.8), fontsize=8, color="#555",
                 arrowprops=dict(arrowstyle="->", color="#555", lw=0.8))
-    ax.set_xlabel("oracle stop step (OSS)"); ax.set_ylabel("density")
-    ax.legend(fontsize=9, title="cost shape"); ax.set_title("OSS distribution by cost shape (mult=1, filtered elo2000)", fontsize=12)
+    ax.set_xlabel("oracle stop step (OSS)", fontsize=13); ax.set_ylabel("density", fontsize=13)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=10, title="cost shape"); ax.set_title("OSS distribution by cost shape (mult=1, filtered elo2000)", fontsize=15)
     ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right"): ax.spines[sp].set_visible(False)
     fig.tight_layout(); [fig.savefig(f"{FIG}/oss_dist_elo2000.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 FIG = "/home/hl4291/chess_analysis/figures/lmcos_tiny"
-SIZE, SAT, GREY = "#2E86C1", "#C0392B", "#7F8C8D"
+SIZE, SAT, GREY = "#475569", "#e11d48", "#6366f1"  # slate / rose / indigo (theme)
 
 
 def sb(x, y, nb=400, seed=0):
@@ -61,10 +61,12 @@ def main():
             ax.barh(y + off, pts, height=0.36, color=cols, hatch=hatch, edgecolor="white" if hatch else None,
                     label=f"SF-{elo}" + (" (weaker)" if elo == 1350 else ""))
             ax.errorbar(pts, y + off, xerr=err, fmt="none", ecolor="#222", capsize=2, lw=1)
-        ax.axvline(0, color="#222", lw=0.9); ax.set_yticks(y); ax.set_yticklabels([l for l, _, _ in sigs])
-        ax.invert_yaxis(); ax.set_xlabel("Spearman ρ vs human log-RT")
-        ax.set_title("Strength litmus: decision-difficulty structure at SF-2000 vs SF-1350\n(solid=2000, hatched=1350)", fontsize=12)
-        ax.legend(fontsize=9, loc="lower right"); ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
+        ax.axvline(0, color="#222", lw=0.9); ax.set_yticks(y); ax.set_yticklabels([l for l, _, _ in sigs], fontsize=10)
+        ax.set_xlim(-0.4, 0.4)
+        ax.invert_yaxis(); ax.set_xlabel("Spearman ρ vs human RT", fontsize=13)
+        ax.tick_params(axis="x", labelsize=11)
+        ax.set_title("Strength litmus: decision-difficulty structure at SF-2000 vs SF-1350\n(solid=2000, hatched=1350)", fontsize=15)
+        ax.legend(fontsize=10, loc="lower right"); ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
         for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
         fig.tight_layout()
         for e in ("png", "pdf"): fig.savefig(f"{FIG}/litmus_strength.{e}", dpi=200, bbox_inches="tight")
