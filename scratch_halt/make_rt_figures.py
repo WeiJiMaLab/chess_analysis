@@ -59,9 +59,6 @@ def hbar(ax, labels, pts, los, his, colors, title, xlabel="Spearman ρ vs human 
     ax.set_xlabel(xlabel, fontsize=10); ax.set_title(title, fontsize=12)
     ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
-    for yi, p in zip(y, pts):
-        ax.text(p + (0.006 if p >= 0 else -0.006), yi, f"{p:+.2f}", va="center",
-                ha="left" if p >= 0 else "right", fontsize=8)
 
 
 def main():
@@ -106,7 +103,7 @@ def main():
              ("softmax-VOC (τ0.1)", j[P["softmax-VOC (τ0.1)"]].to_numpy(float), GREY),
              ("step* (best cost)", j[P["step* (best cost)"]].to_numpy(float), GREY),
              ("regret / cost-free Gain", j["gain_costfree"].to_numpy(float), GREY),
-             ("fraction good (forgiveness)", jg["frac_good_0.05"].to_numpy(float), ACC),
+             ("satisfaction (fraction good)", jg["frac_good_0.05"].to_numpy(float), ACC),
              ("# good moves (≤0.1)", jg["n_good_0.1"].to_numpy(float), ACC)]
     L, Pt, Lo, Hi, C = [], [], [], [], []
     for lab, col, c in items:
@@ -118,7 +115,7 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 6))
     hbar(ax, [L[i] for i in order], [Pt[i] for i in order], [Lo[i] for i in order], [Hi[i] for i in order],
          [C[i] for i in order], "What predicts human response time? (filtered elo2000)")
-    ax.text(0.99, 0.02, "blue=problem size · red=forgiveness · grey=value-of-computation",
+    ax.text(0.99, 0.02, "blue=problem size · red=satisfaction · grey=value-of-computation",
             transform=ax.transAxes, ha="right", fontsize=8, color="#555")
     fig.tight_layout(); [fig.savefig(f"{FIG}/rt_headline.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
@@ -133,32 +130,35 @@ def main():
     ax.errorbar([r[0] for r in raw], ybase - 0.2, xerr=[[r[0]-r[1] for r in raw], [r[2]-r[0] for r in raw]], fmt="none", ecolor="#222", capsize=2, lw=1)
     ax.errorbar([r[0] for r in par], ybase + 0.2, xerr=[[r[0]-r[1] for r in par], [r[2]-r[0] for r in par]], fmt="none", ecolor="#222", capsize=2, lw=1)
     ax.axvline(0, color="#222", lw=0.9); ax.set_yticks(ybase); ax.set_yticklabels(labs, fontsize=9); ax.invert_yaxis()
-    ax.set_xlabel("Spearman ρ vs human log-RT"); ax.legend(fontsize=9, loc="lower right")
+    ax.set_xlabel("Spearman ρ vs human log-RT")
+    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, frameon=False)
     ax.set_title("Value-of-computation signals are proxies for legal-moves\n(every one collapses when legal-moves is partialled out)", fontsize=12)
     ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
     # reference: legal-moves controlling for the signal stays high
     lm_par = pb(lm, rt, j[P["regret-alwaysstop"]].to_numpy(float))
-    ax.text(0.99, 0.02, f"by contrast: legal-moves ρ|regret = {lm_par[0]:+.2f} (survives)", transform=ax.transAxes, ha="right", fontsize=8, color=GRN)
+    ax.text(0.99, 0.97, f"by contrast: legal-moves ρ|regret = {lm_par[0]:+.2f} (survives)", transform=ax.transAxes, ha="right", va="top", fontsize=8, color=GRN)
     fig.tight_layout(); [fig.savefig(f"{FIG}/rt_partials.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
 
-    # ===== FIG 3: sign flip =====
-    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    # ===== FIG 3: sign flip (grouped bars, like 4d) =====
+    fig, ax = plt.subplots(figsize=(9, 5.5))
     eps = [0.02, 0.05, 0.1, 0.2, 0.5]
     raw_all = sb(lmg, rtg)
     raw_good = [sb(jg[f"n_good_{e}"].to_numpy(float), rtg) for e in eps]
     par_good = [pb(jg[f"n_good_{e}"].to_numpy(float), rtg, lmg) for e in eps]
-    ax.axhline(raw_all[0], color=MAIN, lw=2, label=f"# ALL legal moves ({raw_all[0]:+.2f})")
-    ax.fill_between([eps[0], eps[-1]], raw_all[1], raw_all[2], color=MAIN, alpha=0.12)
-    ax.errorbar(eps, [r[0] for r in raw_good], yerr=[[r[0]-r[1] for r in raw_good], [r[2]-r[0] for r in raw_good]],
-                fmt="o-", color=ACC, capsize=3, label="# GOOD moves (raw)")
-    ax.errorbar(eps, [r[0] for r in par_good], yerr=[[r[0]-r[1] for r in par_good], [r[2]-r[0] for r in par_good]],
-                fmt="s--", color="#E67E22", capsize=3, label="# GOOD moves | legal (partial)")
-    ax.axhline(0, color="#222", lw=0.9); ax.set_xscale("log")
+    x = np.arange(len(eps))
+    ax.bar(x - 0.2, [r[0] for r in raw_good], width=0.38, color=ACC, label="# good moves (raw)")
+    ax.bar(x + 0.2, [r[0] for r in par_good], width=0.38, color="#E67E22", label="# good moves | legal-moves (partial)")
+    ax.errorbar(x - 0.2, [r[0] for r in raw_good], yerr=[[r[0]-r[1] for r in raw_good], [r[2]-r[0] for r in raw_good]], fmt="none", ecolor="#222", capsize=2, lw=1)
+    ax.errorbar(x + 0.2, [r[0] for r in par_good], yerr=[[r[0]-r[1] for r in par_good], [r[2]-r[0] for r in par_good]], fmt="none", ecolor="#222", capsize=2, lw=1)
+    ax.axhline(raw_all[0], color=MAIN, lw=2, ls="--", label=f"# ALL legal moves (+{raw_all[0]:.2f})")
+    ax.axhline(0, color="#222", lw=0.9)
+    ax.set_xticks(x); ax.set_xticklabels([f"≤{e}" for e in eps])
     ax.set_xlabel("'good' threshold ε  (win-prob below best move)"); ax.set_ylabel("Spearman ρ vs human log-RT")
     ax.set_title("The sign flip: more OPTIONS ⇒ slower, more GOOD options ⇒ faster", fontsize=12)
-    ax.legend(fontsize=9, loc="center left"); ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
+    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=3, frameon=False)
+    ax.grid(True, axis="y", alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right"): ax.spines[sp].set_visible(False)
     fig.tight_layout(); [fig.savefig(f"{FIG}/good_moves_signflip.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)

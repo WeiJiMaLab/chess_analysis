@@ -71,12 +71,16 @@ steps:
 
 ![What predicts human response time — the landscape](../figures/lmcos_tiny/rt_headline.png)
 
-The dominant drivers are **problem size (# legal moves, +0.25)** and **forgiveness (fraction of good moves,
+The dominant drivers are **problem size (# legal moves, +0.25)** and **satisfaction (fraction of good moves,
 −0.26)** — *not* any normative value-of-computation signal (all clustered at +0.11–0.12), and *not* the causal
 controller (≈0).
 
-> **Result:** normative *when-to-think* ≠ human *when-to-think*. The dominant human driver is decision-width,
-> ~2× any normative signal. Closing that gap is the rest of the report.
+> **Result (carefully):** it is **not** that "normative when-to-think ≠ human when-to-think." It is that our
+> **current measure of optimal stop-time** — the budgeted-oracle step\* computed on strong-engine trees with a
+> position-independent cost — does not match human when-to-think. "Optimal" here is normative only *with
+> respect to that specific model*; it is not a verdict on metareasoning. The dominant human driver
+> (decision-width, ~2× any of our signals) says the *model* is mis-specified, and Steps 4–6 enumerate **why**
+> (concrete, fixable hypotheses) — not that the enterprise is foolish.
 
 ---
 
@@ -88,7 +92,20 @@ Sweep cost shape × scale. **Regret barely moves** — because cost-aware regret
 the cost-free Gain (ρ=0.98; the cost is position-independent). **step\*** *does* respond to cost but tops out
 at +0.12.
 
-![Regret / regret-fraction / softmax-VOC vs RT, by cost config](../figures/lmcos_tiny/voc_rt_costsweep.png)
+**No normative signal vs human RT comes close** (filtered elo2000, bootstrap 95% CIs; softmax-VOC at its best
+τ=0.1; "| legal" = partialling out legal-moves):
+
+| normative signal | ρ vs RT | ρ vs RT \| legal-moves |
+|---|---|---|
+| cost-free Gain | +0.108 [+0.09, +0.13] | +0.036 |
+| regret-alwaysstop (best cost) | +0.107 [+0.09, +0.12] | +0.037 |
+| step\* (best cost regime) | +0.119 [+0.10, +0.13] | +0.050 |
+| softmax-VOC (τ=0.1, deep-tree) | +0.120 [+0.10, +0.14] | — |
+| *reference:* **legal moves** | **+0.247** [+0.23, +0.26] | — |
+
+Every normative signal sits at ρ≈+0.11–0.12 — under half the legal-moves reference — and collapses to ≈+0.04
+once legal-moves is partialled out. step\* *is* the cost-sensitive one (figure below), but it tops out at the
+same ceiling.
 
 ![step\* (optimal stop step) vs RT and vs legal-moves, by cost regime](../figures/lmcos_tiny/oss_rt_costsweep.png)
 
@@ -98,9 +115,10 @@ at +0.12.
 ### 4b — Does an *uncertainty-aware* VOC help? (softmax policy, sweep τ)
 
 τ=1 is degenerate (softmax ≈ uniform at win-prob scale → the VOC inverts). At a calibrated **τ≈0.1** it flips
-positive and **recovers** the argmax Gain (+0.12 RT, +0.29 vs legal-moves) — but does **not exceed** it.
+positive and **recovers** the argmax Gain (ρ≈+0.12 vs RT) — but does **not exceed** it. (Deep-tree supervisor;
+τ is the only knob — the confusing cur/legal-moves panels are dropped to focus on human RT.)
 
-![Softmax-VOC vs RT and vs legal-moves, by temperature](../figures/lmcos_tiny/voc_tau_sweep.png)
+![Softmax-VOC vs human RT, by temperature (deep-tree supervisor)](../figures/lmcos_tiny/voc_tau_sweep.png)
 
 > **Result:** the uncertainty framing, properly tempered, *re-derives* the value signal; it adds no RT power.
 
@@ -132,14 +150,18 @@ and survives partialling on size.
 
 ![The sign flip — more options (slower) vs more good options (faster)](../figures/lmcos_tiny/good_moves_signflip.png)
 
-So human RT is **decision difficulty**, decomposing into **size (+)**, **forgiveness (−)**, **sharpness (+)**
+So human RT is **decision difficulty**, decomposing into **size (+)**, **satisfaction (−)**, **sharpness (+)**
 (the Step-3 landscape).
+
+> **satisfaction** (def.) = the fraction of legal moves that are *near-best* (within ε win-prob of the top
+> move) — how *forgiving* the position is. High satisfaction ⇒ many acceptable choices ⇒ the decision is easy
+> ⇒ people commit faster (the negative term).
 
 ### Are decision-difficulty and VOC the same thing? (the key conceptual point)
 
 Almost — and the gap between them *is* our whole result. Write **VOC = value(thinking) − cost(thinking).**
 
-- **They agree on the value side.** *Forgiveness*: many near-equal good moves ⇒ thinking can't improve your
+- **They agree on the value side.** *Satisfaction*: many near-equal good moves ⇒ thinking can't improve your
   choice (you're already near-optimal) ⇒ low VOC **and** easy ⇒ fast. *Sharpness*: a contested/critical move
   ⇒ high VOC **and** hard ⇒ slow. On these, difficulty and VOC predict the *same* thing — and indeed our VOC
   signals capture them (that's the +0.04 they legitimately own).
@@ -161,11 +183,25 @@ the best-matched strength.
 
 ---
 
-## Step 6 — What we're doing about it
+## Step 6 — Why our optimal-stop measure misses, and what we're doing about it
 
-The fix follows from Step 5: the tree is a model artifact, and our **search is too smart** (strong MCTS+SF
-prunes the human breadth; uniform priors mean no prior-focused consideration). Make the **generator
-human-like** and **calibrate the cost to enumeration**. Cheapest → most invasive:
+The Step-3/5 reframe says the failure is a **mis-specified VOC**, in four concrete, separable ways. Each is a
+hypothesis with an experiment — and note **"weaken the model" (H3) is only one of them**, not the whole fix.
+
+- **H1 — wrong cost.** Our cost is position-independent; the human cost scales with **enumeration (∝ size)** —
+  the +0.25 the VOC ledger never billed. *Fix:* a position-dependent cost ∝ legal-moves. (→ R-HALT-CALIB / P2.)
+- **H2 — wrong value / supervisor.** step\* is graded against the *engine's* values; if **engine-good ≠
+  human-good** (strength mismatch) it optimizes the wrong objective. *Fix:* the strength ladder + the
+  sign-flip litmus. (→ P1.)
+- **H3 — generator too smart.** A strong MCTS+SF prunes the breadth humans actually traverse, so the
+  tree-stats carry a *machine's* consideration, not a person's. *Fix:* a **dumber, more human-like generator**
+  (noisy-myopic eval → optimistic Best-First-Search). (→ P2/P3.)
+- **H4 — missing the enumeration stage.** The oracle starts *after* the moves are evaluated — it models only
+  *refinement*, never the dominant **enumeration** stage — and has no **policy prior**, so it "considers" all
+  `n`. *Fix:* an upfront consideration cost + a policy prior (prior-focused, not all-`n`). (→ P4.)
+- **(H5 — hindsight asymmetry: rejected** by the causal halter, Step 4c.)
+
+The experiments map one-to-one onto H1–H4, cheapest → most invasive:
 
 | # | experiment | tests | status |
 |---|---|---|---|

@@ -56,20 +56,20 @@ def main():
             res[sup][t] = (rrt, rlm)
             print(f"    τ={t:<5} RT rho={rrt[0]:+.4f} [{rrt[1]:+.4f},{rrt[2]:+.4f}]   legal_moves rho={rlm[0]:+.4f} [{rlm[1]:+.4f},{rlm[2]:+.4f}]")
 
-    # plot: rho vs tau, two panels (cur/free), RT + legal_moves curves
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
-    for ax, sup in zip(axes, ("cur", "free")):
-        for key, col, lab in [(0, MAIN, "vs log RT"), (1, ACC, "vs legal moves")]:
-            pts = [res[sup][t][key][0] for t in TAUS]
-            lo = [res[sup][t][key][0]-res[sup][t][key][1] for t in TAUS]
-            hi = [res[sup][t][key][2]-res[sup][t][key][0] for t in TAUS]
-            ax.errorbar(TAUS, pts, yerr=[lo, hi], fmt="o-", color=col, capsize=3, label=lab)
-        ax.axhline(0, color="#888", lw=0.8); ax.set_xscale("log")
-        ax.set_xlabel("temperature τ (win-prob units)"); ax.set_title(f"supervisor = {sup}")
-        ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
-        for sp in ("top", "right"): ax.spines[sp].set_visible(False)
-    axes[0].set_ylabel("Spearman ρ"); axes[0].legend(fontsize=9)
-    fig.suptitle("Softmax-VOC vs human RT and decision-width, by temperature (filtered elo2000)", fontsize=12)
+    # single clean panel: deep-tree (free) supervisor, human-RT focus
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    sup = "free"
+    pts = [res[sup][t][0][0] for t in TAUS]
+    lo = [res[sup][t][0][0] - res[sup][t][0][1] for t in TAUS]
+    hi = [res[sup][t][0][2] - res[sup][t][0][0] for t in TAUS]
+    ax.errorbar(TAUS, pts, yerr=[lo, hi], fmt="o-", color=MAIN, capsize=3, lw=1.8)
+    ax.axhline(0, color="#888", lw=0.8); ax.set_xscale("log")
+    ax.axvline(0.1, color="#27AE60", ls=":", lw=1.2)
+    ax.annotate("best τ", xy=(0.1, pts[1]), xytext=(0.13, pts[1]), color="#27AE60", fontsize=9, va="center")
+    ax.set_xlabel("temperature τ (win-prob units)"); ax.set_ylabel("Spearman ρ vs human log-RT")
+    ax.set_title("Softmax-VOC vs human RT, by temperature\n(deep-tree supervisor, filtered elo2000)", fontsize=12)
+    ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
+    for sp in ("top", "right"): ax.spines[sp].set_visible(False)
     fig.tight_layout()
     for ext in ("png", "pdf"): fig.savefig(f"{FIGDIR}/voc_tau_sweep.{ext}", dpi=200, bbox_inches="tight")
     print("\nsaved voc_tau_sweep.png/pdf")

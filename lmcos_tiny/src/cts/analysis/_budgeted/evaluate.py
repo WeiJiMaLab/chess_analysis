@@ -434,9 +434,7 @@ def _plot(labels: list[str], values: list[float], pending_last: bool, *, title: 
                 bar.set_hatch("//")
                 ax.annotate("pending", (0.0, bar.get_y() + bar.get_height() / 2),
                             va="center", ha="left", fontsize=9, color="#888")
-            else:
-                ax.annotate(f"{val:.3f}", (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-                            va="center", ha="left", fontsize=9)
+            # numeric value labels omitted — the bar + CI carry the magnitude
 
     if cis is None:
         ax.margins(x=0.15)
@@ -472,8 +470,8 @@ def _plot_tradeoff(labels: list[str], regrets: list[float], expansions: list[flo
             label=r"Fraction-$\theta$ sweep ($\theta$: 0$\to$1, step 0.1)")
     ax.scatter(fx, fy, color=_MAIN_COLOR, s=14, zorder=3)
     opt = min(range(len(frac_curve)), key=lambda k: fy[k])  # optimal member of the sweep
-    ax.scatter([fx[opt]], [fy[opt]], marker="*", s=240, color=_STAR_COLOR,
-               edgecolor="#7d6608", linewidth=0.7, zorder=6, label=r"$\theta^*$ (sweep optimum)")
+    ax.scatter([fx[opt]], [fy[opt]], marker="X", s=140, color=_STAR_COLOR,
+               edgecolor="#7d6608", linewidth=0.8, zorder=6, label=r"$\theta^*$ (sweep optimum)")
 
     # Learned readouts as off-curve points (the comparison): tree-stats, GNN-z, with
     # 95% CI bars on regret (the y-axis is log, so error bars are asymmetric there).

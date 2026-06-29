@@ -147,18 +147,32 @@ def main():
         for ext in ("png","pdf"): fig.savefig(f"{FIGDIR}/voc_vs_legalmoves.{ext}", dpi=200, bbox_inches="tight")
         plt.close(fig)
 
-    # ---- plot 3: OSS distribution across cost modes (mult=1) ----
-    fig, ax = plt.subplots(figsize=(7,5))
-    for cfg, c in [("power_law_p2.8_x1.0",MAIN),("linear_x1.0","#27AE60"),("quadratic_x1.0",ACC)]:
+    # ---- plot 3: OSS distribution by cost shape (smooth density lines) ----
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    edges = np.arange(0, 99, 3); ctr = (edges[:-1] + edges[1:]) / 2
+    maxoss = 0
+    for cfg, c, lab in [("power_law_p2.8_x1.0", "#8E44AD", "power-law"),
+                        ("linear_x1.0", "#16A085", "linear"),
+                        ("quadratic_x1.0", "#E67E22", "quadratic")]:
         col = f"oss__{cfg}"
-        if col in sig:
-            ax.hist(sig[col], bins=range(0,98,4), histtype="step", lw=2, color=c, label=cfg)
-    ax.set_xlabel("oracle stop step (OSS)"); ax.set_ylabel("trees"); ax.legend(fontsize=8)
-    ax.set_title("OSS distribution by cost shape (mult=1, filtered elo2000)")
+        if col not in sig: continue
+        v = sig[col].to_numpy(float)
+        maxoss = max(maxoss, np.nanpercentile(v, 99.5))
+        d, _ = np.histogram(v, bins=edges, density=True)
+        ds = np.convolve(d, np.ones(3) / 3, mode="same")  # light smoothing
+        ax.plot(ctr, ds, lw=2.2, color=c, label=lab)
+    # OSS is truncated: a move is forced before the full budget (root_rank trimming),
+    # so the power-law's late second rise gets cut off.
+    ax.axvline(maxoss, color="#555", ls="--", lw=1)
+    ax.annotate("forced choice —\nOSS truncated before budget 96", xy=(maxoss, ax.get_ylim()[1] * 0.6),
+                xytext=(maxoss - 34, ax.get_ylim()[1] * 0.78), fontsize=8, color="#555",
+                arrowprops=dict(arrowstyle="->", color="#555", lw=0.8))
+    ax.set_xlabel("oracle stop step (OSS)"); ax.set_ylabel("density"); ax.legend(fontsize=9, title="cost shape")
+    ax.set_title("OSS distribution by cost shape (mult=1, filtered elo2000)", fontsize=12)
     ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
-    for sp in ("top","right"): ax.spines[sp].set_visible(False)
+    for sp in ("top", "right"): ax.spines[sp].set_visible(False)
     fig.tight_layout()
-    for ext in ("png","pdf"): fig.savefig(f"{FIGDIR}/oss_dist_elo2000.{ext}", dpi=200, bbox_inches="tight")
+    for ext in ("png", "pdf"): fig.savefig(f"{FIGDIR}/oss_dist_elo2000.{ext}", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print("\nsaved: voc_rt_costsweep, voc_vs_legalmoves, oss_dist_elo2000 (png+pdf)", flush=True)
 
