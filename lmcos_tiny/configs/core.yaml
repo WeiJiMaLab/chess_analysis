@@ -41,7 +41,7 @@ treegen:
   search_budget: 96
   min_nodes: 96
   max_nodes: 96
-  max_depth: 4
+  max_depth: 36
   sf_elo: ${sf_elo}
   sf_search_limit_nodes: 100
   seed: 42
@@ -75,7 +75,7 @@ mc_pack:
   min_halt_reward_range: 0.05
   min_decision_margin: 0.0
   search_budget: 96
-  max_depth: 4
+  max_depth: 36
   maintenance_scale: 0.0
   maintenance_ref_nodes: 30.0
   maintenance_exponent: 1.1

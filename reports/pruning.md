@@ -121,7 +121,26 @@ The proxy puts the satisfaction signal at **low ε** (the cognitively plausible 
 ε=0.1→~240, ε=0.3→~790; vs ~3370 unpruned). Regen grid (step 2): **ε ∈ {0.05, 0.2, 0.5}** — aggressive / mid /
 loose — spanning the transition, with the existing no-prune trees as the size baseline.
 
-**Next:** add `prune_epsilon` to `build_tree`'s PUCT child-enumeration (at each node, drop children whose
-**early/leaf-eval** value is >ε below the sibling-best; the freed budget drives deeper), and regenerate ~250K at
-each of the three ε at n=1. Then compare the *regenerated* pruned-leaf-cost ↔ RT (and the oracle step\* with that
-cost) against the +0.34 floor — the test the proxy cannot do.
+**Implemented:** `prune_epsilon` threaded through `BuildTreeConfig → TeacherSearchConfig`; in the PUCT loop a
+node's children are value-pruned at depth≥1 (relative-to-best by leaf-eval value, negamax best=min; root keeps all
+legal moves). Pruned children are never attached → the freed budget redeploys deeper.
+
+## Step 2 — the depth-36 correction (the binding constraint)
+
+The smoke test exposed a latent bug: `max_depth` was **4**, which *capped the freed budget* — pruned forced
+positions hit the depth wall and stopped at <96 expansions instead of thinking deeper. Fixed to **36**
+(`configs/core.yaml`, both `treegen` and `mc_pack`). Effect (same FENs, n=1):
+
+| tree | n_total md4 / md36-none / md36-ε0.1 | max-depth md4 / md36-none / md36-ε0.1 |
+|---|---|---|
+| 1 | 3685 / 3671 / **220** | 4 / 5 / **19** |
+| 0 | 3632 / 4713 / 2446 | 4 / 6 / 4 |
+
+> **Result:** the depth lift matters **only for pruned trees** — uniform-prior PUCT is breadth-leaning, so
+> unpruned search barely used depth 4. With pruning + depth 36 the budget drives **deep** on forcing lines (tree
+> 1: depth **19**, avg expand depth 7.9, full 96 expansions) — the faithful model of human deep calculation.
+> Unpruned md36 ≠ md4 for some positions, so the **baseline is regenerated too**.
+
+**Running (full 250K each, n=1, md36):** `n1md36` (baseline) + `n1md36_eps{0.05,0.1,0.3}` via `prune_regen.slurm`.
+Readout: `prune_regen_analyze.py` → ρ(pruned cost, RT) + partial|legal per ε vs the +0.34 floor — the test the
+proxy cannot do (causal values + redeployed budget). Then step 4: oracle step\* / meta-MDP on the locked ε.
