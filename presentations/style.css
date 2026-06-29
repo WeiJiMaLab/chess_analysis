@@ -34,6 +34,19 @@
   --border-subtle: #e2e8f0;
 }
 
+/* ── Slide transitions: zoom INTO a node (enter) / zoom OUT to the tree (back) ──
+ * Fire on real navigation (not pre-render), so they're glitch-free. Set per-slide
+ * via `transition: zoom-in` (visiting a node) or `transition: zoom-out` (returning). */
+:root { --slidev-transition-duration: 600ms; }
+.zoom-in-enter-active, .zoom-in-leave-active,
+.zoom-out-enter-active, .zoom-out-leave-active {
+  transition: opacity var(--slidev-transition-duration) ease, transform var(--slidev-transition-duration) cubic-bezier(0.4, 0, 0.2, 1);
+}
+.zoom-in-enter-from { opacity: 0; transform: scale(0.78); }
+.zoom-in-leave-to  { opacity: 0; transform: scale(1.28); }
+.zoom-out-enter-from { opacity: 0; transform: scale(1.28); }
+.zoom-out-leave-to   { opacity: 0; transform: scale(0.78); }
+
 /* Global Styles */
 html,
 body,
@@ -413,3 +426,71 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
   color: var(--color-accent);
 }
 .mdl-design b { color: var(--color-primary); font-weight: 600; }
+
+/* ── Thought-map (Prezi-zoom) slide helpers ───────────────────────────────── */
+/* Full-bleed map container: fills the remaining slide height, clips overflow. */
+.mdl-map { flex: 1; min-height: 0; display: flex; align-items: stretch; justify-content: center; overflow: hidden; }
+.mdl-map > * { width: 100%; height: 100%; }
+/* Node-grammar legend row. */
+.mdl-legend { display: flex; gap: 1.1rem; flex-wrap: wrap; align-items: center; justify-content: center; margin-top: .55rem; font-size: .72rem; color: var(--color-secondary); }
+.mdl-legend .leg { display: inline-flex; align-items: center; gap: .4rem; }
+.mdl-legend .dot { width: .72rem; height: .72rem; border-radius: 4px; border: 2px solid; box-sizing: border-box; }
+.mdl-legend .dot.q { border-color: #6366f1; background: #f5f3ff; }
+.mdl-legend .dot.p { border-color: #0ea5e9; background: #f0f9ff; }
+.mdl-legend .dot.r { border-color: #0d9488; background: #f0fdfa; }
+.mdl-legend .dot.rn { border-color: #e11d48; background: #fff1f2; }
+.mdl-legend .dot.pl { border-color: #4338ca; background: #4338ca; }
+/* Q→P→R resolution caption under a zoom map. */
+.mdl-resolve { flex: 0 0 auto; margin-top: .6rem; display: flex; gap: .7rem; align-items: stretch; justify-content: center; }
+.mdl-resolve .step { font-size: .76rem; line-height: 1.35; color: var(--color-secondary); background: var(--bg-neutral); border: 1px solid var(--border-subtle); border-radius: 8px; padding: .45rem .7rem; flex: 1; max-width: 22rem; }
+.mdl-resolve .step .k { display: block; font-size: .56rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; margin-bottom: .15rem; }
+.mdl-resolve .step.q .k { color: #4f46e5; }
+.mdl-resolve .step.p .k { color: #0369a1; }
+.mdl-resolve .step.r .k { color: #0f766e; }
+.mdl-resolve .step.rn .k { color: #be123c; }
+.mdl-resolve .step strong { color: var(--color-primary); }
+/* "Why we're convinced" conviction callout. */
+.mdl-conv { font-size: .82rem; line-height: 1.45; color: var(--mdl-text); background: var(--bg-success); border-left: 3px solid var(--color-success); padding: .55rem .8rem; border-radius: .45rem; margin-top: auto; }
+.mdl-conv.warn { background: var(--bg-danger); border-left-color: var(--color-danger); }
+.mdl-conv .lbl { font-size: .6rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--color-success); display: block; margin-bottom: .15rem; }
+.mdl-conv.warn .lbl { color: var(--color-danger); }
+.mdl-conv strong { color: var(--color-primary); font-weight: 700; }
+
+/* Compact stacked hypothesis / item list (denser than .mdl-issue cards). */
+.mdl-hyplist { display: flex; flex-direction: column; gap: .4rem; }
+.mdl-hyp { display: grid; grid-template-columns: 2.2rem 1fr; gap: .6rem; align-items: baseline; border: 1px solid var(--border-subtle); border-radius: 8px; padding: .42rem .7rem; background: var(--bg-neutral); font-size: .8rem; line-height: 1.4; color: var(--mdl-muted); }
+.mdl-hyp .n { font-size: .62rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--color-accent); }
+.mdl-hyp .h { font-weight: 700; color: var(--color-primary); margin-right: .25rem; }
+.mdl-hyp strong { color: var(--color-primary); font-weight: 700; }
+.mdl-hyp.found { background: var(--bg-accent); border-color: rgba(99,102,241,.32); border-left: 3px solid var(--color-accent); }
+
+/* ── Question slide: zoomed map rail (left) + procedure/result body (right) ── */
+.mdl-qslide { display: grid; grid-template-columns: 33% 1fr; gap: 1.5rem; height: 100%; min-height: 0; }
+.mdl-qrail { min-height: 0; display: flex; border-right: 1px solid var(--border-subtle); padding-right: 1.2rem; }
+.mdl-qrail > * { width: 100%; height: 100%; }
+.mdl-qbody { display: flex; flex-direction: column; min-height: 0; }
+.mdl-qbody .figbox { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.mdl-qbody .figbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.mdl-qbody .figcap { font-size: .68rem; color: var(--mdl-subtle); text-align: center; margin-top: .25rem; }
+/* terse procedure line above the evidence */
+.mdl-proc { font-size: .82rem; color: var(--mdl-muted); margin: 0 0 .5rem; }
+.mdl-proc strong { color: var(--mdl-text); }
+
+/* centered figure that fills available height on a normal content slide */
+.mdl-fig { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: .2rem 0; }
+.mdl-fig img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.mdl-figcap2 { font-size: .68rem; color: var(--mdl-subtle); text-align: center; margin-top: .2rem; }
+
+/* ── Pinned-node question slide: map fills the slide; the focus node flies to the
+ *    upper-left "title" anchor and the body sits below it. ── */
+.mdl-qstage { position: relative; flex: 1; min-height: 0; }
+.mdl-qstage .stage-map { position: absolute; inset: 0; z-index: 0; }
+.mdl-qstage .stage-body { position: absolute; left: 0; right: 0; top: 23%; bottom: 0; z-index: 1; display: flex; flex-direction: column; min-height: 0; }
+.mdl-qstage .stage-body .figbox { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.mdl-qstage .stage-body .figbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.mdl-qstage .stage-body .figcap { font-size: .68rem; color: var(--mdl-subtle); text-align: center; margin-top: .25rem; }
+.mdl-qstage .stage-kicker { position: absolute; top: 2px; right: 2px; z-index: 2; font-size: .62rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--color-accent); }
+/* navigation-beat caption (tree-mode slides with no body) */
+.mdl-qstage .stage-cap { position: absolute; left: 0; right: 0; bottom: 7%; z-index: 1; text-align: center; font-size: .95rem; color: var(--mdl-muted); }
+.mdl-qstage .stage-cap strong { color: var(--mdl-text); font-weight: 700; }
+.mdl-qstage .stage-cap .k { display: block; font-size: .62rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--color-accent); margin-bottom: .3rem; }
