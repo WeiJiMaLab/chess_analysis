@@ -185,6 +185,33 @@ Almost — and the gap between them *is* our whole result. Write **VOC = value(t
 > value (+0.04) and missed the construal itself (the +0.25). The legal-moves effect is the size of the
 > consideration set a person rationally chooses to build, not a scanning overhead.
 
+### Is the construal *chosen* or *grown*? (three worries, resolved)
+
+The two-stage gloss — *pick a set size, then plan on it* — is wrong, and three worries expose why (and fix it):
+
+1. **You should be able to change the set as you go.** Right — the set isn't chosen up front, it's **grown
+   incrementally**: include one more candidate *iff you suspect it helps*.
+2. **That's just best-first search.** Also right — incremental costly inclusion **is** a best-first search with
+   a VOC stop rule: each step includes the most-promising not-yet-considered move (pay the per-move cost, learn
+   its value), and you stop when the **marginal** VOC of one more inclusion falls below the cost (Russell–Wefald
+   meta-greedy stopping = **satisficing**). So **the construal *is* the search** — H3 (the BeFS generator) isn't
+   a detour, it's the mechanism — and **RT ∝ the size of the tree you grow**, exactly as you'd expect if each
+   considered move costs.
+3. **A per-move cost should make sets *smaller* — the wrong sign.** The subtle one. The cost does **not** flip
+   the sign; it sets the **saturation** of set size. Optimal `S* ≈ min(n, S_unconstrained)`, where
+   `S_unconstrained` is where marginal VOC = cost. `n` is the **pool of worthwhile inclusions**: with few legal
+   moves you exhaust the pool fast (`S*≈n` ⇒ small ⇒ fast); with many, the marginal VOC stays above cost longer
+   ⇒ a bigger set ⇒ slower — until the cost **caps** it (the plateau). So RT rises with `n` and saturates (a
+   concave, Hick-like curve). The cost makes the human set **smaller than all-`n`** (it *does* prune — the
+   default is **not** "include everyone") — but the size *effect* comes from how far the incremental process
+   runs, which grows with the pool.
+
+> **Clarification:** this makes the oracle's error precise. It (a) **pre-includes all** root moves for free and
+> (b) spends its budget on **depth** (refining the top), whereas the human grows **breadth** incrementally and
+> pays per inclusion. So oracle expansions ≠ human inclusions, and step\* (a *depth*-stop) is the wrong axis for
+> RT. The right axis is **breadth grown before satisficing** — precisely what an optimistic BeFS produces
+> (H3/P3): the test is whether its breadth / expansion-count tracks RT.
+
 ### The flip is also an engine-strength litmus test
 
 `# good moves` is defined by the *engine's* values, so the flip appears **only if engine-good = human-good**.
@@ -205,9 +232,10 @@ hypothesis with an experiment — and note **"weaken the model" (H3) is only one
 - **H2 — wrong value / supervisor.** step\* is graded against the *engine's* values; if **engine-good ≠
   human-good** (strength mismatch) it optimizes the wrong objective. *Fix:* the strength ladder + the
   sign-flip litmus. (→ P1.)
-- **H3 — generator too smart.** A strong MCTS+SF prunes the breadth humans actually traverse, so the
-  tree-stats carry a *machine's* consideration, not a person's. *Fix:* a **dumber, more human-like generator**
-  (noisy-myopic eval → optimistic Best-First-Search). (→ P2/P3.)
+- **H3 — generator too smart / wrong axis.** A strong MCTS+SF spends its budget on **depth** and prunes the
+  **breadth** humans traverse, so the tree-stats carry a machine's consideration. *Fix:* an **incremental,
+  optimistic Best-First-Search** — which *is* the consideration-set construal (grow breadth, pay per inclusion,
+  satisfice when marginal VOC < cost). Prediction: **RT ∝ its expansion-count**. (→ P2/P3.)
 - **H4 — missing the construal stage.** The oracle takes the whole tree as given — it never *builds* the
   consideration set, only *refines* within it; with uniform priors it implicitly "considers" all `n` at once.
   *Fix:* model consideration-set **construction** (per-move inclusion cost + a policy prior to order
