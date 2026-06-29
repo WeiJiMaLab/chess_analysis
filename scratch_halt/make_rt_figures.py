@@ -97,20 +97,25 @@ def main():
     lm_ref = sb(lm, rt)[0]
     print(f"parquet join: {N:,} moves", flush=True)
 
-    # tree subsample for good-moves / action_gap
-    names = [l.strip() for l in open(FILT) if l.strip()]; random.seed(0); random.shuffle(names); names = names[:6000]
-    rows = []
-    for nm in names:
-        try: p = torch.load(os.path.join(TREES, nm), map_location="cpu", weights_only=False)
-        except Exception: continue
-        fq = np.asarray(p["oracle_final_root_q_values"], dtype=float).ravel()
-        if fq.size < 1: continue
-        mx = fq.max()
-        r = {"fen": " ".join(p["root_position_spec"].split()[:4]), "n_legal": int(fq.size),
-             "action_gap": float(mx - np.sort(fq)[-2]) if fq.size >= 2 else np.nan}
-        for e in (0.02, 0.05, 0.1, 0.2, 0.5): r[f"n_good_{e}"] = int((fq >= mx - e).sum())
-        rows.append(r)
-    gd = pd.DataFrame(rows); gd["frac_good_0.05"] = gd["n_good_0.05"] / gd["n_legal"]
+    # good-moves / action_gap: prefer the parquet columns (full set) if present, else tree subsample
+    if "n_good_0.1" in voc.columns:
+        cols = ["fen", "legal_moves", "action_gap"] + [f"n_good_{e}" for e in (0.02, 0.05, 0.1, 0.2, 0.5)]
+        gd = voc[cols].rename(columns={"legal_moves": "n_legal"}).copy()
+    else:
+        names = [l.strip() for l in open(FILT) if l.strip()]; random.seed(0); random.shuffle(names); names = names[:6000]
+        rows = []
+        for nm in names:
+            try: p = torch.load(os.path.join(TREES, nm), map_location="cpu", weights_only=False)
+            except Exception: continue
+            fq = np.asarray(p["oracle_final_root_q_values"], dtype=float).ravel()
+            if fq.size < 1: continue
+            mx = fq.max()
+            r = {"fen": " ".join(p["root_position_spec"].split()[:4]), "n_legal": int(fq.size),
+                 "action_gap": float(mx - np.sort(fq)[-2]) if fq.size >= 2 else np.nan}
+            for e in (0.02, 0.05, 0.1, 0.2, 0.5): r[f"n_good_{e}"] = int((fq >= mx - e).sum())
+            rows.append(r)
+        gd = pd.DataFrame(rows)
+    gd["frac_good_0.05"] = gd["n_good_0.05"] / gd["n_legal"]
     jg = mv.merge(gd, on="fen", how="inner"); rtg = jg["log_rt"].to_numpy(); lmg = jg["n_legal"].to_numpy(float); Ng = len(jg)
     print(f"good-moves join: {Ng:,} moves", flush=True)
 
