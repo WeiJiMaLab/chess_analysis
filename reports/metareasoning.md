@@ -1,148 +1,123 @@
-# Uncertainty-aware metareasoning: value of computation under a softmax policy
+# Uncertainty-aware metareasoning → what actually drives human deliberation time
 
 **Ref:** `R-METAREASON` · [Index](reference.md)
 
-> **Status:** 📝 proposal (analyses M1–M3). This is the report where the model's *mechanism* changes;
-> its sibling [(R-HALT-CALIB)](halt_calibration.md) only calibrates the existing one.
+> **Status:** 📝 active. The original mechanism question — *does an uncertainty-aware value of computation
+> explain when-to-think?* — is essentially **answered: no.** No value-of-computation signal tracks human RT
+> beyond a ≈+0.04 residual once decision-width is accounted for. The inquiry has pivoted to (1) a **positive
+> model** — RT as *decision difficulty* — and (2) a **generative-search hypothesis** — our search is too smart
+> to be human. Interim results on filtered elo2000 (n≈6–13k moves, bootstrap 95% CIs); a powered 61k re-run, a
+> strength-ladder, and a dumber-generator sweep are queued (see **Moving parts & overnight plan**).
+> Sibling [(R-HALT-CALIB)](halt_calibration.md) calibrates the value-convergence oracle (step\*↔RT).
 
-## Question
+## The question, and where it went
 
-The budgeted oracle has **no notion of uncertainty**: it commits to the argmax move and treats the
-search's own value as ground truth, so "value of computation" collapses to *value-gap-to-convergence*.
-But humans deliberate when **uncertain** — decision-width (legal moves) is the robust RT driver
-([(R-MOVETIME-MODEL)](engine.md)). **Does an uncertainty-aware value of computation — a softmax policy
-graded against a supervisor — make the normative *when-to-think* correspond to human deliberation?**
+We started from rational metareasoning (Russell & Wefald; Hay & Russell; Callaway/Lieder on resource-rational
+planning): the budgeted oracle is the degenerate, certainty-assuming special case (argmax, self-graded), and
+making the policy a softmax graded against a supervisor should recover a real value of computation (VOC) that —
+we hypothesized — would make normative "when to think" match human deliberation. The model spec (softmax-VOC,
+supervisor, τ) is in the **Appendix**.
 
-## Background: this is rational metareasoning
+The first pass answered it: **the uncertainty-aware VOC does not explain human RT.** So the live question became
+*what does, and why does the VOC frame miss it?*
 
-Value of computation (VOC) = the expected improvement in **decision quality** from more computation,
-**under uncertainty about which option is best** (the rational-metareasoning / VOC tradition — Russell
-& Wefald; Hay & Russell; and on the human side Callaway, Lieder et al. on resource-rational planning).
-Our current oracle is the degenerate, certainty-assuming special case (argmax, self-graded). Making the
-policy a *distribution* and grading it against a *supervisor* recovers the real VOC — and, we
-hypothesize, an uncertainty-driven "when to think" that looks like the human one.
+## What we found (established — filtered elo2000, bootstrap 95% CIs)
 
-## The model
-
-At search step `t`, with root-child values `v_t`:
-
-- **Policy = softmax(v_t / τ)** — a distribution over the move you'd play (not argmax); `τ` is the
-  one new knob.
-- **Halt value = E_{softmax}[ V_sup(child) ]** — the expected supervisor value of the move the policy
-  would pick. **Closed-form** (`Σ softmax·V_sup`), no sampling.
-- Early search ⇒ flat `v_t` ⇒ near-uniform softmax ⇒ averages good and bad moves ⇒ low value; search
-  **sharpens** the softmax ⇒ value rises. **The benefit of thinking = the sharpening = uncertainty
-  reduction.** That is the term the current oracle lacks.
-
-**Supervisor** (breaks the "search grades itself" circularity):
-
-- **First cut — free:** the **deep (96-expansion) tree value**. Grade the step-`t` softmax policy on
-  the converged tree's `final_Q`. Computable from existing `oracle_root_q_trace` / `final_q` — **no
-  re-generation** (a softmax generalization of the engine-eval "Gain/VOC").
-- **Refinement:** an **independent, stronger** Stockfish (deeper / higher-Elo) to remove the
-  self-grading circularity (requires re-generation).
-
-Keep the GNN encoder **unchanged**: uncertainty enters the **oracle reward**, not the representation.
-(Retraining the encoder on `E[V] + entropy` adds confounds — defer until the reward-side change is shown
-to matter.)
-
-## Analyses
-
-| # | analysis | feasibility |
+| signal vs human log-RT | ρ | note |
 |---|---|---|
-| **M1** | Deep-tree softmax-VOC oracle: `halt_reward[t] = E_softmax_τ[V_deep(child)]` at mc-pack; sweep `τ`. Eval: OSS distribution + Spearman(VOC/OSS, human RT) **vs** the value-convergence oracle. | **medium** (pack change; no re-gen) |
-| **M2** | Bridge to the human driver: does the uncertainty-aware VOC correlate with **decision-width (legal moves)** — the known RT driver? Direct test of "uncertainty ⇒ deliberation" as the shared mechanism. | **cheap** (correlation) |
-| **M3** | Independent supervisor: replace deep-tree with a stronger/deeper Stockfish; re-test M1/M2 without self-grading. | **medium-high** (re-gen) |
+| **legal moves** | **+0.26** | dominant, robust driver |
+| cost-free Gain / regret-alwaysstop | +0.11 | → **+0.04** controlling for legal-moves |
+| τ-calibrated softmax-VOC (τ≈0.1) | +0.12 | recovers but doesn't beat argmax Gain (τ=1 degenerate) |
+| step\* (OSS, best cost regime) | +0.12 | cost-dependent (regret is not — see R-HALT-CALIB) |
+| causal tree-stats halter | ≈0.00 | no better than hindsight oracle (+0.06); n≈2.5k val, provisional |
+| **# good moves** (≤ε below best) | **−0.12 … −0.20** | the sign-flip — see below |
 
-## Predictions
+- **Partial correlations (decisive):** control for legal-moves and *every* value/VOC/step\* signal collapses
+  (+0.11 → +0.04); control for any of them and legal-moves barely moves (+0.225). The value signals are
+  **proxies for legal-moves**, not independent deliberation signals.
+- **Causal ≠ the issue:** removing the oracle's hindsight (a causal halter) did not recover RT signal.
 
-If uncertainty is the missing mechanism: (i) the softmax-VOC OSS is no longer 0-spiked the same way
-(uncertain positions ⇒ think); (ii) VOC/OSS **correlates with legal moves** (M2); (iii)
-Spearman(VOC, RT) **exceeds** the value-convergence oracle's. A *null* result is also informative — it
-would say the human width-effect is **not** captured by normative VOC, which is itself a finding.
+> **Result:** no value-of-computation or stopping-time formulation (cost-tuned, τ-calibrated, causal, or
+> hindsight) captures human RT beyond ≈+0.04. *(figures: `voc_rt_costsweep`, `oss_rt_costsweep`,
+> `voc_tau_sweep`)*
 
-## Caveats / degrees of freedom
+## The emerging model: RT is decision *difficulty* (size − forgiveness + sharpness)
 
-`τ` and the supervisor are researcher DOF. Judge on **held-out** human-RT correspondence with bootstrap
-95% CIs ([[bootstrap-cis-always]]); pre-commit the metric before sweeping. Calibration of the existing
-mechanism (degeneracy, cost) is the separate [(R-HALT-CALIB)](halt_calibration.md) — run that first so
-M1's comparison is against a well-calibrated baseline rather than a degenerate one.
+The positive finding. Human RT decomposes into oppositely-signed decision-difficulty terms, each far larger
+than any VOC signal:
 
-## Where did M1–M3 actually land? (interim, filtered elo2000, n≈13k)
+| term | operationalization | ρ vs RT | reading |
+|---|---|---|---|
+| **size (+)** | # legal moves | **+0.26** | more options ⇒ more to scan |
+| **forgiveness (−)** | # / fraction good moves (≤ε of best) | **−0.12 … −0.26** | many acceptable ⇒ easy ⇒ faster |
+| **sharpness (+)** | action gap (top-1 − top-2) | **+0.19** | a critical move to *find* ⇒ calculate |
 
-- **M1 (τ-sweep).** τ=1 was degenerate (softmax ≈ uniform at win-prob scale ⇒ VOC inverts; it anti-correlated
-  with RT and legal-moves). At a calibrated τ≈0.1 the softmax-VOC flips positive and **recovers** the argmax
-  value-of-thinking (ρ≈+0.12 vs RT) but does **not exceed** it. (figure `voc_tau_sweep`.)
-- **M2 (width bridge).** The VOC couples to legal-moves at sharp τ (ρ≈+0.29) but is a **lossy proxy**: it
-  tracks width yet predicts RT at only +0.12, while raw width predicts RT at +0.25.
-- **Partial correlations (the decisive test).** Control for legal-moves and *every* value/VOC/step\* signal
-  collapses (+0.11 → **+0.04**); control for any of them and legal-moves barely moves (+0.225). So the value
-  signals are **proxies for legal-moves**, not independent deliberation signals.
-- **Causal vs hindsight (the halter check).** A causal tree-stats halter (sees only the tree-so-far) does
-  **not** beat the hindsight oracle on RT — both are weak (halter ≈0, oracle +0.06), both ≪ legal-moves
-  (+0.26). So the information-asymmetry story is not the explanation. *(n≈2.5k val — provisional; re-run on
-  the 61k set.)*
+The forgiveness term **survives partialling on n_legal** (−0.05 to −0.10), so it is not just the inverse of
+size. `action_gap` is *positive* (not the naïve "clear best ⇒ easy"): in chess a large gap is usually a
+sharp/tactical position whose one critical move must be calculated — stakes, not ease.
 
-> **Result:** legal-moves is a near-orthogonal, **dominant** RT driver (+0.26) that no flavor of
-> value-of-computation or stopping-time model (cost-tuned, τ-calibrated, causal, or hindsight) captures. The
-> normative *deliberation* residual beyond legal-moves is only ≈+0.04. *(figures: `voc_rt_costsweep`,
-> `oss_rt_costsweep`, `voc_tau_sweep`)*
+> **Result:** the driver is decision *difficulty*, not raw option count and not the VOC. `RT ≈ size(+) −
+> forgiveness(−) + sharpness(+)`, each ≈±0.2–0.26. *(figure: `good_moves_rt`)*
 
-## So what *is* the legal-moves effect — enumeration, Hick's law, or planning?
+### The sign-flip is also an engine-strength litmus test
 
-The pure-enumeration reading (cost ∝ raw move count) is too dumb, and three live objections sharpen what to
-do next. **These are open hypotheses, not settled** — recorded here so the next pass tests them rather than
-re-deriving them.
+`# good moves` is defined by the *engine's* values, so the flip appears **only if engine-good = human-good.**
+No flip ⇒ a strength mismatch — e.g. a superhuman engine whose move-goodness humans can't track (a human likes
+a move; the far-stronger engine disagrees ⇒ `# good` carries no human signal). The flip is clean at **SF-2000**
+(the dataset's players are ≥2000 Elo — exactly the correspondence we want), which *validates* that rung.
 
-### It shouldn't be raw count — it should be prior-weighted consideration
+> **Decision:** run the flip across the strength ladder (SF-1350 vs SF-2000 …). The strength where the flip is
+> **strongest** is the regime where engine-goodness = human-goodness — the precondition for every other
+> analysis here. If the flip *weakens* at higher strength, the engine is outrunning the humans and we should
+> grade against a population-matched strength, not maximal SF.
 
-People don't evaluate every legal move; a **policy prior** (pattern recognition) focuses attention on a few
-candidates, and search proceeds from there. So the right cost is something like *(size of the prior-plausible
-top set) × (stakes of getting it wrong)* — a decision-relevant VOC restricted to the candidate set, not all
-`n`. **The structural problem:** in our data Stockfish is doing double duty — it supplies the leaf *values*
-(the oracle) **and** stands in for the *search policy*, while having **no learned policy prior** (SF priors
-are uniform ⇒ H(π)=log(legal moves), degenerate [[engine-eval-sf2000-repoint]]). So the prior that should
-*focus* consideration is absent, and "consideration" defaults to ~all `n`. To model prior-guided
-consideration we need an explicit policy prior (e.g. an lc0 policy head guiding expansion order) — SF alone
-cannot separate "which moves to consider" from "how good they are."
+## Why the VOC frame misses it: the generator is too smart
 
-### It looks like Hick's law — which is supposed to be perceptual, not planning
+The tree we analyze is a **model artifact**. A strong MCTS/UCT + strong-Stockfish search prunes away exactly
+the breadth that drives human RT, so the tree-stats carry a *machine's* consideration, not a human's. Three
+coupled issues:
 
-`RT ∝ (log) n` is Hick's law, traditionally a perceptual / response-selection effect — i.e. *not* planning.
-That sits badly two ways: treating the dominant effect as perceptual nuisance to residualize out concedes the
-most robust phenomenon; folding it into planning conflates perception with deliberation.
+- **Prior.** People don't evaluate every move; a policy prior focuses attention, so the cost should be
+  *(prior-plausible top set) × stakes*, not raw `n`. But SF does double duty — leaf *values* (oracle) **and**
+  stand-in *search policy* — with **no learned prior** (uniform priors ⇒ H(π)=log n, degenerate
+  [[engine-eval-sf2000-repoint]]). So consideration defaults to ~all `n`.
+- **Hick's law.** `RT ∝ (log) n` is classically *perceptual*. In chess, legal-move count **conflates**
+  perceptual choice-set size with the planning branching factor; they can't be separated by observation. The
+  clean separation is whether a *human-like search's* node count tracks RT after controlling for raw `n`.
+- **Too-smart search.** UCT's principled selection prunes the breadth; a *dumber* generator should produce
+  bushier, more human-like trees whose stats carry the decision-difficulty signal.
 
-> **Clarification:** in chess, legal-move count **conflates** two co-varying things — the perceptual
-> choice-set size (Hick's) and the planning branching factor (more branches genuinely = more to search). They
-> can't be separated by observation alone. The partial correlation (planning residual after removing `n` ≈
-> +0.04) is the coarse separation; the clean separation is whether a *human-like search's* node count tracks
-> RT after controlling for raw `n` (next section). If it does, the effect is planning mediated by search
-> breadth, and Hick's is just the floor; if not, it's mostly perceptual + a thin planning residual.
+## Moving parts & overnight plan
 
-### Maybe our search is simply too smart — make the generator human-like
+Cheapest → most invasive. (a)–(b) are pure config/continuations and run **overnight on the cluster**; (c)–(e)
+are gated on them.
 
-MCTS/UCT is good: principled selection, non-greedy exploration, intermediate/deep rollouts. That smartness
-**prunes away exactly the breadth that drives human RT**, so the tree-stats carry a *machine's* consideration,
-not a human's. Two levers, cheap → expensive:
+| # | experiment | tests | cost | gate |
+|---|---|---|---|---|
+| **P0** | **61k powered re-run** of the whole suite (cost sweep, τ, step\*, halter, partials, sign-flip) on the 250k→~61k filtered set | tightens every CI above; confirms the halter (was n≈2.5k) | sbatch, **overnight** | 250k elo2000 filter |
+| **P1** | **SF-1350 vs SF-2000**: sign-flip strength + width↔RT + `# good`↔RT | dumber-engine width recovery **and** the strength litmus test | sbatch, **overnight** | both 250k filters |
+| **P2** | **`sf_search_limit_nodes` 100→1** generation (noisy-myopic leaf values), then the suite | isolates dumb *values* from a weak *engine*; "shorten rollouts" lever | gen (hrs), **overnight** | new config |
+| **P3** | **optimistic Best-First-Search** generator vs UCT (bushiness / expansion-count ↔ RT) | does a deliberately dumber search recover the human breadth? | v2 generator | P1/P2 positive |
+| **P4** | **policy-prior hybrid** (lc0 policy guides expansion, SF evaluates) | prior-focused consideration; *(top-k × stakes)* cost vs raw `n` | v2 generator | P3 |
 
-1. **Shorten rollouts / cap depth** — a parameter change; makes the search myopic and bushier, closer to human
-   look-ahead horizons.
-2. **Swap MCTS → optimistic Best-First-Search** — BeFS is *deliberately dumber*: expand the currently
-   most-promising node under an **optimistic** value heuristic. Optimistic null/unknown values get explored,
-   then **discarded as disappointments** — producing a **bushy** tree whose breadth reflects how many
-   candidates *looked* worth calculating. That "consider → calculate → reject, but you spent the time"
-   dynamic is far more human-like than UCT's, and its expansion count is a natural consideration-cost that
-   could track RT where the value-VOC can't.
+> **Decision (tonight):** launch P0 (61k suite) and P2 (`sf_search_limit_nodes=1` generation) overnight; P1 is
+> already in motion (SF-1350 250k generating). Light RT-join analyses run on completion. P3/P4 are gated on
+> P1/P2 showing a dumber search recovers width↔RT at all — and they re-open the strength-ladder + faithfulness
+> contracts ([(R-DATA)](reference.md)), so they are explicit v2-generator work.
 
-> **Decision (next pass), cheapest first:**
-> (a) **SF-1350 weak rung** — a dumber engine prunes less ⇒ tree-width → raw `n` ⇒ tree-stats should recover
->     the legal-moves signal and track RT better than SF-2000 (direct, falsifiable; data already generating);
-> (b) **shorten rollouts / cap depth** on SF and re-test tree-stats↔RT (parameter sweep);
-> (c) if (a)/(b) move the needle, implement **optimistic BeFS** as the tree generator and compare its
->     bushiness/expansion-count↔RT against UCT;
-> (d) inject a **policy prior** (lc0 policy head as expansion guide, SF as evaluator — a hybrid) to model
->     prior-focused consideration and test the *(top-k contested set × stakes)* cost rather than raw `n`.
+---
 
-> **Caveat:** (b)–(d) change the *generative model* of the tree, so they re-open the strength-laddering and
-> faithfulness contracts ([(R-DATA)](reference.md)). Treat as a v2 generator, gated on (a) showing that a
-> dumber search recovers the width effect at all.
+## Appendix — the softmax-VOC model (original M1–M3 spec)
+
+At search step `t` with root-child values `v_t`: **policy = softmax(v_t/τ)**; **halt value = E_softmax[V_sup]**
+(closed form `Σ softmax·V_sup`, no sampling). Early ⇒ flat `v_t` ⇒ near-uniform ⇒ averages good and bad ⇒ low;
+search sharpens ⇒ value rises ⇒ benefit of thinking = uncertainty reduction. **Supervisor:** the deep
+(96-expansion) tree `final_Q` (free, from `oracle_root_q_trace`), or an independent stronger Stockfish (M3,
+re-gen). Encoder unchanged — uncertainty enters the oracle reward, not the representation.
+
+- **M1** deep-tree softmax-VOC, sweep τ → *done*: τ=1 degenerate, τ≈0.1 recovers but doesn't beat argmax Gain.
+- **M2** width bridge → *done*: VOC↔legal-moves +0.29 at sharp τ, but lossy (predicts RT only +0.12).
+- **M3** independent stronger supervisor → folded into P1 (the strength ladder / litmus test).
+
+DOF: τ and supervisor are researcher choices — judged on held-out RT correspondence with bootstrap CIs
+([[bootstrap-cis-always]]); metric pre-committed before sweeping.

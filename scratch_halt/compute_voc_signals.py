@@ -27,9 +27,10 @@ from cts.data.preprocess_mc.oracle import (  # noqa: E402
 )
 from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload  # noqa: E402
 
-TREES_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000"
-FILTER_TXT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt"
-OUT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_signals.parquet"
+_ELO = os.environ.get("VOC_ELO", "2000")
+TREES_DIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo{_ELO}"
+FILTER_TXT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo{_ELO}/clean_trees.txt"
+OUT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo{_ELO}/voc_signals.parquet"
 STARTING_BUDGET = 96
 BASE_LAMBDA = 18.537
 
@@ -122,6 +123,13 @@ def _worker(path: str):
                 softmax_rewards = sr
 
         row: dict = {"fen": fen, "n_steps": n_steps, "legal_moves": int(final_q.size)}
+
+        # decision-difficulty signals (sign-flip test): # good moves within eps of best,
+        # and the top-1 minus top-2 action gap.
+        mxq = float(final_q.max())
+        row["action_gap"] = float(mxq - np.sort(final_q)[-2]) if final_q.size >= 2 else float("nan")
+        for _e in (0.02, 0.05, 0.1, 0.2, 0.5):
+            row[f"n_good_{_e}"] = int((final_q >= mxq - _e).sum())
 
         # gain_costfree = oracle_value(cost=0) - halt_rewards[0]
         pol0 = compute_budgeted_oracle(halt_rewards, tree_sizes, STARTING_BUDGET, COST_FREE)
