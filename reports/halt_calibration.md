@@ -81,6 +81,6 @@ human log-RT)** with bootstrap 95% CIs on held-out moves, plus step\*↔legal-mo
 ## Caveat
 
 Calibration sharpens the *value-convergence* mechanism; it does **not** add the missing **uncertainty**
-mechanism (the softmax VOC of [(R-VOC)](voc.md), which at calibrated temperature also
+mechanism (the softmax VOC of [(R-TREESEARCH)](treesearch.md), which at calibrated temperature also
 plateaus at ρ≈+0.12 on RT). step\*↔RT topping out near +0.12 — half the width effect — says calibration
 alone will not close the convergence-vs-width gap; it makes the cost knob *meaningful*, not *sufficient*.

@@ -1,223 +1,186 @@
-# When ought one to think? A meta-rational account of chess deliberation time
+# Tree search & human deliberation: when (and how) ought one to think?
 
 **Ref:** `R-TREESEARCH` · [Index](reference.md)
 
-> **Status:** 📝 active. The **model paper** — it **picks up where [(R-VOC)](voc.md) leaves off**. R-VOC showed
-> that value-of-computation (in every form) is a legal-moves *proxy* and the real structure is *satisficed
-> decision difficulty*; here we formalize that as one optimization — deliberation time as the *optimal amount of
-> computation under a cost* — and lay out the fit-to-RT program. See R-VOC for the full empirical journey +
-> figures (this report owns the **model + all forward proposals**). Powered on filtered elo2000 (n≈65k moves,
-> bootstrap 95% CIs); the decisive *fit-cost-to-RT on a construal substrate* run is the open frontier.
-> Calibration detail in [(R-HALT-CALIB)](halt_calibration.md); data in [(R-DATA)](reference.md).
+> **Status:** 📝 active. The **single linear narrative** for the deliberation inquiry — it folds in the former
+> VOC discovery report (R-VOC) and is the source-of-truth for the model + program. Powered on filtered SF-2000
+> trees (n≈65k human moves, bootstrap 95% CIs). Calibration detail of the budgeted-oracle step\* lives in
+> [(R-HALT-CALIB)](halt_calibration.md); data provenance in [(R-DATA)](reference.md).
 
-## 1 · The claim, as one optimization
+## The map
 
-**Hypothesis:** human deliberation time is the *optimal amount of computation* a meta-rational agent would
-spend, given a cost. Formally, a **meta-level MDP**:
+```mermaid
+flowchart TD
+  Q["<b>Question</b><br/>When should one search deeper in chess?<br/>Do people search when an engine would?"] --> TS
 
-- **state** = the consideration set / search built so far;
-- **actions** = *include the next-most-promising move* (grow the construal) **or** *stop and play current best*;
-- **reward** = on stop, the supervisor value `V_sup(chosen)`; each inclusion costs `c`;
-- **objective** = `max  E[V_sup(chosen)] − c·(#inclusions)` — i.e. **reward − cost**, which is exactly **−regret**;
-- **optimal policy** = grow while marginal VOC > `c`, stop otherwise (= **satisfice**); solvable by backward-DP
-  **or** learnable by RL.
+  subgraph PLAN["Planning box — the tree search"]
+    TS["AlphaZero-style PUCT (no rollouts)<br/>prior → exploration, value → leaves<br/>M=96 expansions, max_depth=4"]
+    ENG["Engine: lc0 (policy-prior + value-head)<br/>→ swapped to <b>Stockfish</b> (uniform prior,<br/>WDL value, N=100-node leaf eval) — ~1000× faster"]
+    TS --- ENG
+  end
 
-**Free parameters: ~1–2** — the cost `c` and a prior (which move to consider next / how sharply to prune); the
-value supervisor is given by the engine. **Prediction:** RT ∝ the number of computations the meta-optimal
-policy makes. **The test that makes this an *account* and not a *description*:** fit `c` (+prior) to human RT,
-and ask **how much of the RT structure a 1–2-parameter meta-RL reproduces vs the descriptive ceiling.**
+  subgraph META["Meta-control — when to stop"]
+    OR["Budgeted oracle: step* = argmax_s[V(s) − cost(s)]<br/>regret = reward − cost"]
+    RD["Learned readout (PG): GNN-z vs <b>tree-stats</b> [height,width,n_nodes]"]
+    OR --- RD
+  end
+  PLAN --> META
+  RD -->|"<b>found:</b> tree-stats ≻ GNN-z ≻ fraction-halt"| PIVOT
 
-> **Current answer (63k):** the 1-parameter meta-RL (DP-optimal stop, best cost) tracks RT at **ρ≈+0.16**; the
-> descriptive ceiling (legal-moves / satisfaction) is **±0.31**. So on the current substrate the rational model
-> explains **about half** — and closing that gap (or proving it can't be closed) is the whole game. §2 is what
-> the model must reproduce; §3 is its parameters; §4 is how we fit it.
+  PIVOT{"Is regret-minimization the same as<br/>matching human <b>response time</b>?"} -->|"test correspondence"| H
 
-## 1b · The architecture, and two questions about it
+  subgraph H["Hypotheses (why VOC ≠ human RT)"]
+    H1["cost-function shape?<br/>→ no (regret flat; step* swings but ≤+0.12)"]
+    H2["no uncertainty? softmax-VOC<br/>→ recovers argmax value, doesn't beat it"]
+    H3["hindsight asymmetry? causal halter<br/>→ no (≈0, not better than oracle)"]
+    H4["just a legal-moves proxy?<br/>→ <b>YES</b> — partial out legal moves ⇒ all collapse to ≈+0.04"]
+    H5["evaluator too strong (squashed)? SF n1<br/>→ N matters (n1≠n100); UCI_Elo a no-op"]
+  end
 
-Three knobs are easy to conflate — keep them separate:
-
-| knob | role | changes the values? |
-|---|---|---|
-| **`UCI_Elo`** | a *play* handicap | **no-op** for us — we read SF's *eval/WDL*, not its played move ([[sf-uci-elo-noop-for-eval]]) |
-| **N = `sf_search_limit_nodes`** | the **leaf evaluator** (each node valued by an N-node SF search; N=1 ≈ static head, N=100 ≈ shallow search) — the **heuristic / "gut"** | **yes** (n1 vs n100 differ per-FEN, ρ≈0.93) |
-| **M = `search_budget` = 96** | the **MCTS/PUCT expansions** built *on* the N-heuristic — the **planning** | the thing whose *trace* we analyze |
-
-The "thinking" we model as human-like is the **M-trace** (1→96 expansions, `oracle_root_q_trace`), bootstrapped
-on the N-heuristic. *(An earlier framing wrongly used n1→n100 as the prior→truth axis — that varies the
-heuristic N, not the planning M.)*
-
-### Q1 — Are we already doing best-first search? (yes — with a UCT selector)
-
-`build_tree` does **no rollouts**: each node is valued by the SF heuristic, and expansions are chosen by
-**PUCT**. With our **uniform priors**, PUCT reduces to **UCB** — exploit `Q` + a visit-count exploration bonus.
-So we are *already* running a **heuristic best-first tree search whose selector is UCT rather than greedy-argmax**,
-and the exploration bonus makes it **breadth-leaning** (it expands many root moves early before deepening). So
-the construal need not be a *new* generator: the existing expansion trace **is** an incremental, heuristic
-best-first inclusion. The real levers are the **selector** (UCT exploration vs optimism/argmax) and a **per-move
-cost + satisficing stop** — not "MCTS vs BeFS" wholesale.
-
-> **Decision:** first read the construal off the *existing* expansion trace (heuristic best-first inclusion
-> under UCT) + impose H1's per-move cost and a satisficing stop, before building a bespoke BeFS.
-
-### Q2 — Does the tree search actually add value? (the missing check)
-
-Planning is worth modelling only if it **changes the prognosis**. We have been varying the *prior* (N, the
-dumb-eval) assuming *it* is the fault while holding the tree-building fixed — but the search itself could be
-adding little, in which case the M-trace is ~flat and there is nothing for any VOC/cost to capture.
-**Provisional probe (n≈3k):** heuristic↔planned root-value rank-corr ≈ **0.33**, and the root argmax keeps
-changing until ~step **78 of 95** — so the search **reorders the policy heavily** (planning seems to add a lot,
-not little). But the probe is artifact-prone (the early trace is nearly *tied* — moves are undifferentiated
-until search separates them), so it needs a **clean 1-ply-heuristic-vs-M-converged measurement**, properly
-aligned, before the magnitudes are trustworthy.
-
-> **Decision:** before more prior/cost tuning, **measure the tree's value-add directly** — the decision-flip
-> rate and value-movement from the 1-ply heuristic to the M-converged policy. Large ⇒ the search is sound and
-> the prior/cost framing holds; small ⇒ the **tree-building is the weak link**, and the lever is the *search*
-> (selector/expansion), not the prior. *(There are two failure modes — a bad **prior** (N) and a weak
-> **search** (M); we have only stress-tested the prior.)*
-
-## 2 · The targets the model must reproduce
-
-What predicts human RT (n≈65k, bootstrap CIs):
-
-![What predicts human RT](../figures/lmcos_tiny/rt_headline.png)
-
-- **size +0.31** (# legal moves) and **satisfaction −0.31** (fraction of near-best moves) — two dominant,
-  equal-and-opposite drivers; **sharpness +0.24** (action gap).
-- the **value-of-computation family** (regret/Gain, step\*, softmax-VOC) sits at **+0.12–0.16**; the **causal
-  halter ≈ 0**.
-
-And the VOC family is not even *independent* — partial out legal-moves and every one collapses to a small
-residual (the proxy result):
-
-![VOC signals are legal-moves proxies](../figures/lmcos_tiny/rt_partials.png)
-
-The signed structure is a **sign flip** — more options slower, more *good* options faster:
-
-![The sign flip](../figures/lmcos_tiny/good_moves_signflip.png)
-
-And — the decisive one for the normative claim — **satisfaction reshapes the entire RT-vs-n curve**, exactly as
-a satisficing stop predicts:
-
-![Plateau shift by satisfaction](../figures/lmcos_tiny/rt_vs_n_concavity.png)
-
-High-satisfaction positions **plateau low** (you stop early no matter how many legal moves); low-satisfaction
-positions are **steep** (`n` drives you). The aggregate "RT ≈ linear in `n`" *hides* this family of
-satisfaction-conditioned curves — some saturating, some not.
-
-> **Result:** RT = **satisficed decision difficulty** (size − satisfaction + sharpness). The plateau-shift
-> shows the satisficing structure is *real*, not bare problem-size (Hick's law) — which is what makes a
-> meta-rational account viable rather than merely descriptive. These four signatures are what a correct
-> 1–2-parameter meta-RL must *generate from its parameters*, not fit feature-by-feature.
-
-## 3 · The model's parameters — and where each is mis-specified (H1–H6)
-
-Every hypothesis is a **parameter or substrate of the meta-MDP**, in two groups.
-
-**(A) The construal — actions, cost, process** (where the ±0.31 lives):
-
-- **H1 — the cost `c`.** Currently there is *no* per-inclusion cost (the oracle pre-includes every move free),
-  so no size effect can arise. `c` is the central parameter — it sets the *saturation* of consideration-set
-  size (`S* ≈ min(n, S_unconstrained)`), not the sign.
-- **H4 — the process.** Construct-then-satisfice with a prior ordering; the oracle only *refines* a given tree,
-  it never *constructs* the set.
-- **H3 — the implementation.** Optimistic Best-First-Search **is** the incremental construal (grow breadth, pay
-  per inclusion, stop when marginal VOC < `c`); its **expansion-count is the RT prediction**. The current
-  substrate spends budget on **depth**, not **breadth** — *the* reason the meta-RL underfits (+0.16).
-- **H6 — the prior strength.** How hard the prior prunes sets the set size (and saturation). A weak prior (our
-  ≥2000 Lichess pool — club-level, ratings high vs FIDE, time-pressured) ⇒ consider ~all moves ⇒ RT linear in
-  `n` (the unsaturated regime we see). Predicts **more saturation at higher player strength** *(data-gapped:
-  `personal.db` keeps only the ≥2000 filter, not per-player Elo)*.
-
-The cost sweep (below) shows the current-substrate behaviour: regret is **flat** across all 12 cost regimes
-(it's a monotone transform of Gain), while step\* *responds* to cost — but tops out at the same ceiling.
-
-![Normative signals vs RT, by cost regime](../figures/lmcos_tiny/cost_sweep_rt.png)
-
-The uncertainty knob (softmax temperature, the prior's sharpness) is similar — calibrated τ≈0.1 recovers the
-argmax value but does not exceed it:
-
-![Softmax-VOC vs RT by temperature](../figures/lmcos_tiny/voc_tau_sweep.png)
-
-**(B) The values — the supervisor:**
-
-- **H2 — engine strength.** `V_sup` must be *human-relevant*: the sign-flip is a **litmus**. **Update
-  (2026-06-29):** the `UCI_Elo` ladder is a **no-op** — SF-1350 and SF-2000 trees are *bit-identical* per FEN
-  (max|Δ|=0, ρ=1), because `StockfishDirectEvalProvider` returns the static eval/WDL and `UCI_Elo` only weakens
-  *play*, not the eval [[sf-uci-elo-noop-for-eval]]. So strength must be varied via the **search**
-  (`sf_search_limit_nodes`/depth), not `UCI_Elo` — which is exactly the dumb-eval run below (and folds H2 into
-  H3). The elo1350 rung is a wasted duplicate (cleanup candidate).
-
-**(H5 — hindsight asymmetry: rejected** — the causal halter ≈ the hindsight oracle on RT.)
-
-> **Clarification:** "weaken the generator" (H3) is one *parameter* of the optimization, not a rival theory.
-> And **H1 (low cost) and H6 (weak prior) are the same knob** — both make the set ≈ all-`n` (the linear regime);
-> they separate only by varying cost directly (the breadth ladder) or player strength (data-gapped).
-
-## 4 · Fitting it: the program
-
-We already have the meta-RL machinery — the budgeted-oracle DP **is** the meta-optimal stop for a given `c`,
-and the **PG controller is a learned meta-policy** maximizing `E[reward − cost]`:
-
-![Fitted controllers — regret vs compute](../figures/lmcos_tiny/regret_vs_compute.png)
-
-The one thing we have **not** done: fit `c` (+prior) to **human RT** — we fit it to the agent's own regret, then
-*checked* against RT. The decisive runs:
-
-| # | experiment | what it fits / tests | status |
-|---|---|---|---|
-| **P0** | 63k powered re-run | every §2 signature, tight CIs | ✅ done |
-| **P-FIT** | **fit `c`(+prior) to RT on the construal (incremental-inclusion) substrate** | the headline: meta-RL variance explained vs the ±0.31 ceiling, and whether the §2 signatures fall out of 1–2 params | **the frontier** |
-| **P5** | SF **MultiPV** (`n_pvs`) sweep — breadth-value vs RT | the construal/saturation claim | needs a **prior** (caveat ↓) |
-| **P2** | **dumb-eval** gen: `sf_search_limit_nodes` 100→1 → `elo2000_n1` | does a dumber *search* recover width↔RT (H2 folds in + H3) | **running overnight** (`10399953`→`55`) |
-| ~~P1~~ | ~~SF-1350 vs SF-2000 (UCI_Elo)~~ | **RETIRED** — `UCI_Elo` no-op; 1350≡2000 bit-identical [[sf-uci-elo-noop-for-eval]] | retired |
-| **P3** | optimistic **BeFS** generator | RT ∝ expansion-count (the construal, H3) | gated on P2/P5 |
-| **P4** | lc0 **policy-prior** hybrid | prior-focused consideration (H4) | gated on P3 |
-
-**The breadth ladder** (how P5→P3 build up, cheap → faithful; unit cost = `n_nodes`):
-1. **MultiPV (`n_pvs`)** — SF's top-`k` lines; marginal value of the k-th = breadth-VOC; `k*` where it drops
-   below cost. Tests the core claim off-the-shelf. *(Caveat: each PV is deeply searched.)*
-2. **Fixed-width beam** (beam=1…K) — adds *lookahead* to breadth; a discretized BeFS.
-3. **Incremental optimistic BeFS** — adaptive width grown to satisficing; the full construal.
-
-*(Granularity is a secondary axis: the consideration unit could be **moves** or **pieces** — the latter closer
-to perceptual "looking at a piece," cheap to probe by aggregating moves by source piece.)*
-
-> **Caveat — P5/P-FIT need a *prior*, not just `final_Q`.** Breadth-VOC over the *true* converged values is
-> degenerate: the best move is always considered first, so nothing can flip. The construal model is non-trivial
-> only under **uncertainty** — a noisy prior over move values (you *discover* values by including, paying `c`),
-> so a later candidate can overtake your current best. So P-FIT/P5 require a small uncertainty/prior model
-> (noise σ, cost `c`) — light to code, but **not** parameter-free, and they make **H4's policy-prior
-> essential** rather than optional.
-
-> **Decision:** the **headline number is the variance a 1–2-parameter meta-RL explains vs the ±0.31
-> descriptive ceiling** — *if it reaches it with the §2 signatures emerging, we have a parsimonious
-> meta-rational account; if it stalls at +0.16, the gap is the genuinely non-rational residual.* P5 (MultiPV)
-> is the cheapest probe; **P-FIT is definitive.** P3/P4 re-open the strength-ladder/faithfulness contracts
-> ([(R-DATA)](reference.md)) — explicit v2-generator work.
+  H4 --> FIND["<b>RT = satisficed decision difficulty</b><br/>size(+0.31) − satisfaction(−0.31) + sharpness(+0.24)<br/>satisfaction reshapes RT-vs-n (the satisficing signature)"]
+  FIND --> PLANBOX["<b>Plan</b>: meta-rational model — reward−cost over a<br/>CONSTRUCTED set (breadth), fit c to RT.<br/>Open: does the search add value? (Q2)"]
+```
 
 ---
 
-## Appendix
+## 1 · The question, and the planning box
 
-**Softmax-VOC model.** Policy = `softmax(v_t/τ)`; halt value = `E_softmax[V_sup]` (closed form, no sampling);
-benefit of thinking = the sharpening = uncertainty reduction. Supervisor = deep-tree `final_Q` (free) or an
-independent stronger Stockfish (→ folded into the strength litmus, P1). τ=1 degenerate, τ≈0.1 best.
+We began with a normative question — *when is it worth searching deeper in a chess position?* — and its behavioural
+twin — *do people deliberate longer where an engine would search more?* Both need a model of "searching," so we
+build one.
 
-**How the data were made (brief).** SF-2000 (`UCI_Elo`) search trees via `build_tree` — `search_budget=96`,
-`max_depth=4`, leaf eval `sf_search_limit_nodes=100`, uniform priors; 250k roots sampled from the 110M human
-pool; **PUCT-stable ∧ value-monotone** filter (≈24.6% kept → ~61k). step\* = `argmax_s[V(s) − cost(s)]`. OSS
-distribution (note the power-law's late mode is truncated by the forced-choice cap):
+**The tree search.** `build_tree` grows an **AlphaZero-style PUCT tree** — **no rollouts**; each node is valued by
+an engine heuristic, and which node to expand next is chosen by PUCT. Two heads matter and are easy to conflate:
 
-![OSS distribution by cost shape](../figures/lmcos_tiny/oss_dist_elo2000.png)
+- the **prior** `P(child)` enters *only* the **PUCT exploration term** (it biases *which* child to visit), and
+- the **value** is backed up from the leaves (it is *what* a node is worth).
 
-**Fitted-RL detail** (regret by model — tree-stats PG ≻ GNN-z ≻ blind; [(R-LMCOS-TINY)](lmcos_tiny.md)):
+**Engine (lc0 → Stockfish).** Originally lc0 supplied **both**: priors from its **policy head**, values from its
+**value head**. We swapped to **Stockfish** (~1000× faster on CPU): **priors are uniform** (α-β has no policy
+head) and **values are Stockfish's WDL** (its eval→win/draw/loss model). Everything below is on **SF** trees.
+Three knobs, kept distinct:
 
-![Regret by readout model](../figures/lmcos_tiny/regret_by_model.png)
+| knob | role | matters? |
+|---|---|---|
+| **`UCI_Elo`** | a *play* handicap | **no-op** for us — we read the eval, not the played move ([[sf-uci-elo-noop-for-eval]]) |
+| **N = `sf_search_limit_nodes`** = 100 | the **leaf evaluator** (N-node SF search per node) — the **heuristic / "gut"** | **yes** (n1 vs n100 differ, ρ≈0.93) |
+| **M = `search_budget`** = 96 | the **PUCT expansions** built on the heuristic — the **planning** | the trace we analyze |
 
-**Figure index** (all `figures/lmcos_tiny/`, n≈65k unless noted): `rt_headline`, `rt_partials`,
-`good_moves_signflip`, `rt_vs_n_concavity` (§2) · `cost_sweep_rt`, `voc_tau_sweep` (§3) · `regret_vs_compute`
-(§4) · `oss_dist_elo2000`, `regret_by_model` (appendix). One visual language (horizontal bars, ρ on x, names on
-y; blue=size, red=satisfaction, grey=value-of-computation, green dashed=legal-moves reference), produced by
-`lmcos_tiny/analysis/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
-([[bootstrap-cis-always]]); partials via the rank formula; metric pre-committed (human log-RT).
+The trees: SF-2000, `max_depth=4`, 96 expansions, uniform priors, then a **PUCT-consistent ∧ value-monotone**
+filter (~24.6% kept → ~61k). The step\* distribution (what the trees "believe" about stopping):
+
+![Optimal stop-step distribution by cost shape](../figures/lmcos_tiny/oss_dist_elo2000.png)
+
+> **Decision:** SF-2000, budget 96 / depth 4 / N=100 leaf eval, uniform priors, PUCT∧monotone filter — the
+> substrate for everything downstream.
+
+## 2 · Meta-control: can a learned readout decide when to stop?
+
+A budgeted-oracle DP turns each tree into an **optimal stop step, step\*** `= argmax_s[V(s) − cost(s)]`, and
+**regret** `= reward − cost`. *Internal* question first: can a learned controller minimize regret, beating blind
+rules? Two readouts trained by policy gradient — **GNN-z** (learned root embedding) vs **tree-stats**
+(`[height, width, n_nodes]` per step):
+
+![Regret vs compute](../figures/lmcos_tiny/regret_vs_compute.png) ![Regret by model](../figures/lmcos_tiny/regret_by_model.png)
+
+> **Result:** the controllers solve the regret problem (tree-stats PG ≻ GNN-z ≻ fraction-halt; [(R-LMCOS-TINY)](lmcos_tiny.md))
+> — and, tellingly, **raw tree structure carries more stopping signal than the learned embedding**. But low
+> regret is *self-consistency*, not correspondence to people. So: **is regret even the right target for RT?**
+
+## 3 · The pivot: does any of this match human response time?
+
+We correlated every signal with human log-RT. The landscape:
+
+![What predicts human RT](../figures/lmcos_tiny/rt_headline.png)
+
+The dominant drivers are **# legal moves (+0.31)** and **fraction of good moves (−0.31)** — *not* any
+value-of-computation signal (+0.12–0.16), *not* the causal controller (≈0).
+
+> **Result (carefully):** it is **not** that "normative ≠ human." Our *specific measure* of optimal stop-time
+> (step\* on strong-engine trees, position-independent cost) doesn't match human RT — the model is mis-specified,
+> and §4 enumerates the *why* we tested.
+
+## 4 · The hypotheses, and what each showed
+
+- **4a — Wrong cost shape?** Sweep it. Regret is **flat** (it's a monotone transform of cost-free Gain, ρ=0.98,
+  because the cost is position-independent); step\* *does* respond but tops out at +0.12. ![cost sweep](../figures/lmcos_tiny/cost_sweep_rt.png)
+- **4b — No uncertainty?** Re-grade the policy as a **softmax** over the root values and ask the value of
+  *sharpening* it. Precisely: at step `s`, halt value `= Σ_c softmax(q_trace[s,c]/τ)·V_deep(c)` — the expected
+  deep value of the move a softmax-`τ` policy would play. Early search ⇒ flat values ⇒ near-uniform softmax ⇒
+  averages good and bad ⇒ low; search **sharpens** the softmax ⇒ value rises. The "benefit of thinking" is this
+  sharpening = uncertainty reduction. At calibrated `τ` it **recovers** the argmax value (~+0.16) but does **not
+  exceed** it. ![tau sweep](../figures/lmcos_tiny/voc_tau_sweep.png)
+- **4c — Hindsight asymmetry?** step\* is computed by backward DP — it "knows the future." A **causal halter**
+  (tree-stats, sees only the tree-so-far) does **not** beat it (≈0 vs +0.06; both ≪ legal-moves, the grey vs
+  light-grey bars in §3). So information asymmetry is not it.
+- **4d — Just a legal-moves proxy?** The decisive test. Partial out legal-moves and **every** value/VOC/step\*
+  signal collapses (+0.12–0.16 → **≈+0.04**); legal-moves *survives* controlling for them (+0.22). ![partials](../figures/lmcos_tiny/rt_partials.png)
+- **4e — Evaluator too strong (values squashed)?** Vary the leaf eval `N`. **N matters** (n1 vs n100 differ,
+  ρ≈0.93 — the overnight `elo2000_n1` set is a genuinely noisier/myopic "gut"); separately, `UCI_Elo` is a
+  **no-op** for the eval (SF-1350 ≡ SF-2000 bit-identical) — so strength must be varied via the *search*
+  (nodes/depth), not `UCI_Elo`.
+
+> **Result:** no value-of-computation or stopping-time formulation tracks human RT beyond ≈+0.04. The driver is
+> something else.
+
+## 5 · What it actually is: satisficed decision difficulty
+
+RT decomposes into **size (+)**, **satisfaction (−)**, **sharpness (+)** — and the *good*-moves term flips the
+sign of the *all*-moves term:
+
+![sign flip](../figures/lmcos_tiny/good_moves_signflip.png)
+
+And the clincher: **satisfaction reshapes the entire RT-vs-`n` curve** — high-satisfaction positions plateau low
+(stop once good-enough, no matter `n`), low-satisfaction ones stay steep. That is **satisficing**, made visible:
+
+![plateau shift](../figures/lmcos_tiny/rt_vs_n_concavity.png)
+
+> **Result:** RT = **satisficed decision difficulty**. The plateau-shift shows it's not bare problem-size
+> (Hick's law) but a *stop-when-good-enough* rule — which is exactly what a meta-rational model predicts.
+
+## 6 · The model, and two questions about the search
+
+**The meta-MDP.** Deliberation time = optimal compute under a cost: state = the consideration set built so far;
+actions = *include the next candidate move* or *stop*; reward on stop = `V_sup(chosen) − c·#inclusions` (= −regret);
+optimal policy = grow while marginal VOC > `c`, else stop (**satisfice**). **~1–2 parameters** (`c`, prior
+noise). **Prediction:** RT ∝ #computations. **Test:** fit `c` to RT; how much of the §5 structure does a 1–2-param
+meta-RL reproduce vs the ±0.31 ceiling? *(Current 1-param meta-RL on the depth substrate: +0.16 vs ±0.31.)*
+
+**Q1 — are we already doing best-first search?** Yes. With **uniform priors**, PUCT reduces to **UCB** (exploit
+`Q` + visit-count exploration), so we're already running a heuristic best-first search with a **UCT selector**
+(not greedy-argmax), which is **breadth-leaning** (it touches many root moves early). So the construal can be read
+off the *existing* expansion trace; the levers are the **selector** and a **per-move cost + satisficing stop** —
+not "MCTS vs BeFS" wholesale.
+
+**Q2 — does the tree search add value?** *(open)* Planning is worth modelling only if it changes the prognosis.
+We've stressed the **prior** (N) but not the **search** (M). Provisional probe: heuristic↔planned rank-corr ≈0.33,
+argmax settles ~step 78/95 — the search **reorders heavily** (adds a lot), but it's artifact-prone and needs a
+clean 1-ply-vs-converged measurement. *The subtlety:* the search's value-add is in **depth** (where step\*/VOC
+live, +0.16), while RT is **breadth**-driven (+0.31) — and the breadth is already in the *early* UCT trace.
+
+## 7 · The plan from here
+
+| # | experiment | what it fits / tests | status |
+|---|---|---|---|
+| **P-FIT** | fit `c` (+prior noise) to RT on the **breadth trace** (root-move inclusion order from the existing UCT trees) + satisficing stop | the headline: meta-RL variance vs the ±0.31 ceiling, and whether the §5 signatures emerge from 1–2 params | the frontier |
+| **Q2-check** | clean 1-ply-heuristic vs M-converged: decision-flip + value-movement | does the *search* add value, or is the tree-building the weak link? | next |
+| **N-readout** | analyze the overnight **`elo2000_n1`** (dumb-eval) tree-stats↔RT | does a noisier "gut" make the tree more human-like? | data ready |
+| **selector** | swap UCT-exploration → optimism/argmax; compare breadth/expansion-count↔RT | is the *selector* the lever? | gated |
+| **prior** | a real policy prior (lc0 policy as expansion guide, SF value) | prior-focused consideration, not uniform | gated |
+
+> **Decision:** the breadth-trace `c`-fit (P-FIT) and the Q2 value-add check are next; both run on the **existing**
+> trees (no new generation). The model's headline number is *the RT variance a 1–2-parameter meta-RL explains vs
+> the ±0.31 descriptive ceiling* — if it reaches it with the §5 signatures emerging, we have a parsimonious
+> meta-rational account of deliberation time; if it stalls, the residual is the genuinely non-rational part.
+
+---
+
+## Appendix — definitions
+
+- **regret / reward−cost / step\***: `step* = argmax_s[V(s) − cost(s)]`; `regret = oracle_value − return(stop)`.
+- **tree-stats** = per-step `[height (deepest node), width (max nodes at a depth), n_nodes (total)]`.
+- **softmax-VOC**: `halt_reward[s] = Σ_c softmax(q_trace[s,c]/τ)·V_deep(c)`; supervisor = deep tree `final_Q`.
+- **size / satisfaction / sharpness** = # legal moves / fraction within ε of best / top-1−top-2 action gap.
+- One visual language for ρ-figures (horizontal bars, ρ on x; blue=size, red=satisfaction, grey=VOC, green=legal
+  reference), from `lmcos_tiny/analysis/make_rt_figures.py`. Method: Spearman + percentile-bootstrap 95% CIs
+  ([[bootstrap-cis-always]]).
