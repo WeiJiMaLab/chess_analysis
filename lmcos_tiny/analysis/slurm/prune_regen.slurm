@@ -17,15 +17,16 @@
 set -euo pipefail
 export ELO=2000
 EPS="${EPS:?set EPS=none|0.05|0.1|0.3 via --export=ALL,EPS=...}"
+N="${N:-1}"          # leaf-eval node budget (1 or 100)
 LANE_END="${LANE_END:-250000}"
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
 source "$TINY/pipeline/helpers/setup_env.sh"
 
 PRUNE_OVERRIDE=()
 if [ "$EPS" = "none" ]; then
-  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n1md36"
+  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36"
 else
-  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n1md36_eps${EPS}"
+  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36_eps${EPS}"
   PRUNE_OVERRIDE=(--override prune_epsilon=${EPS})
 fi
 
@@ -35,9 +36,9 @@ end=$(( start + SHARD_SIZE )); (( end > LANE_END )) && end=${LANE_END}
 if (( start >= LANE_END )); then echo "no-op: start=${start} >= LANE_END"; exit 0; fi
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"
 
-echo "PRUNE-REGEN eps=${EPS} md=36 task=${SLURM_ARRAY_TASK_ID} start=${start} end=${end} out=${OUTDIR} host=$(hostname)"; date
+echo "PRUNE-REGEN N=${N} eps=${EPS} md=36 task=${SLURM_ARRAY_TASK_ID} start=${start} end=${end} out=${OUTDIR} host=$(hostname)"; date
 python -m cts.data.build_tree --config "$CONFIG" --stage treegen --set globals.sf_elo=2000 \
-    --override sf_search_limit_nodes=1 --override max_depth=36 "${PRUNE_OVERRIDE[@]}" \
+    --override sf_search_limit_nodes=${N} --override max_depth=36 "${PRUNE_OVERRIDE[@]}" \
     --override output_dir="${OUTDIR}" \
     --override start_index=${start} --override end_index=${end}
 echo "PRUNE-REGEN eps=${EPS} DONE start=${start}"; date
