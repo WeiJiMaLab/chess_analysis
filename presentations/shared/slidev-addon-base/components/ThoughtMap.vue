@@ -55,23 +55,23 @@ const TREE = {
                 { id: 'h5', cx:  150, cy: 840, w: 280, h: 104, q: 'Is It the Wrong Cost Shape?',     a: 'No — regret is flat.',             children: [] },
                 { id: 'h6', cx:  470, cy: 840, w: 280, h: 104, q: 'Is Uncertainty Missing?',          a: 'It recovers, but never beats.',    children: [] },
                 { id: 'h7', cx:  790, cy: 840, w: 280, h: 104, q: 'Is It Hindsight Asymmetry?',       a: 'No — the causal halter is ≈ 0.',   children: [] },
+                { id: 'h9', cx: 1110, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?',    a: 'N matters; UCI_Elo is a no-op.',   children: [] },
                 {
-                  id: 'h8', cx: 1110, cy: 840, w: 280, h: 104, star: true,
+                  id: 'h8', cx: 1410, cy: 840, w: 280, h: 104, star: true,
                   q: 'Is It Just a Legal-Moves Proxy?',
                   a: 'Yes — RT is decision difficulty.',
                   children: [
                     {
-                      id: 'finding', cx: 1110, cy: 1000, w: 360, h: 92,
+                      id: 'finding', cx: 1410, cy: 1000, w: 360, h: 92,
                       q: 'So What Is Think-Time, Really?',
                       a: 'Satisficed decision difficulty: size − satisfaction + sharpness.',
                       children: [
-                        { id: 'plan', cx: 1110, cy: 1130, w: 380, h: 78, plan: true,
+                        { id: 'plan', cx: 1410, cy: 1130, w: 380, h: 78, plan: true,
                           q: 'The Plan: A Meta-Rational Reward − Cost Model', a: '', children: [] },
                       ],
                     },
                   ],
                 },
-                { id: 'h9', cx: 1410, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?',    a: 'N matters; UCI_Elo is a no-op.',   children: [] },
               ],
             },
           ],
@@ -106,8 +106,8 @@ const VISITS = [
   { id: 'h5' },
   { id: 'h6' },
   { id: 'h7' },
-  { id: 'h8',     also_resolve: ['qwhy'] },
-  { id: 'h9',     expand: ['finding'] },
+  { id: 'h9' },
+  { id: 'h8',     also_resolve: ['qwhy'], expand: ['finding'] },
   { id: 'finding', expand: ['plan'] },
   { id: 'plan' },
 ]
