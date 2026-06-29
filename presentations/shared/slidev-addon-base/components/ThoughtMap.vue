@@ -164,9 +164,10 @@ function makeSeq(id) {
   if (v.expand2 && next) {
     const vis1 = new Set([...vis0, ...v.expand])
     const vis2 = new Set([...vis1, ...v.expand2])
-    steps.push({ f: id,   v: arr(vis1), r: arr(rAfter) })            // expand first batch
-    steps.push({ f: id,   v: arr(vis2), r: arr(rAfter) })            // expand second batch
-    steps.push({ f: next, v: arr(vis2), r: arr(rAfter), blink: true })
+    const pivot = v.expand[0]  // intermediate node; shift focus here so camera sees its children
+    steps.push({ f: id,    v: arr(vis1), r: arr(rAfter) })           // expand first batch
+    steps.push({ f: pivot, v: arr(vis2), r: arr(rAfter) })           // expand second batch (pivot's children)
+    steps.push({ f: next,  v: arr(vis2), r: arr(rAfter), blink: true })
   } else if (v.expand && next) {
     const vis1 = new Set([...vis0, ...v.expand])
     steps.push({ f: next, v: arr(vis1), r: arr(rAfter), blink: true }) // expand + blink (one beat)
