@@ -36,7 +36,7 @@ treegen:
   command: generate-dataset
   provider: stockfish
   engine_path: /home/hl4291/stockfish/src/stockfish
-  fens: ${scratch_dir}/sf_ladder_roots_50k.txt
+  fens: ${scratch_dir}/sf_ladder_roots_250k.txt
   output_dir: ${scratch_dir}/sf_trees/elo${sf_elo}
   search_budget: 96
   min_nodes: 96

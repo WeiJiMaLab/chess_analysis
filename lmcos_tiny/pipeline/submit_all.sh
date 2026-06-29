@@ -6,7 +6,7 @@ set -euo pipefail
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
 cd "$TINY"
 
-RUNGS=(2000)
+RUNGS=(1350 2000)
 NFILTER=10    # CPU filter array size (few large shards: per-shard work is tiny, array start-up dominates)
 NWORKERS=40   # GPU materialize array size (max 40)
 
