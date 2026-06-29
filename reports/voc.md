@@ -256,7 +256,7 @@ M3 = the strength ladder.
 `regret_by_model` (Step 2) · `rt_headline` (Step 3) · `cost_sweep_rt`, `voc_tau_sweep`,
 `rt_partials` (Step 4) · `good_moves_signflip` (Step 5). All ρ-comparison figures share one visual language
 (horizontal bars, ρ on x, names on y; blue=size, red=satisfaction, grey=value-of-computation, green dashed =
-legal-moves reference), produced by `scratch_halt/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
+legal-moves reference), produced by `lmcos_tiny/analysis/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
 ([[bootstrap-cis-always]]); partials via the rank formula; the metric is pre-committed (human log-RT).
 
 **Data provenance:** [(R-DATA)](reference.md). **Calibration sibling:** [(R-HALT-CALIB)](halt_calibration.md).

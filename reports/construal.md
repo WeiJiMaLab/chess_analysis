@@ -175,5 +175,5 @@ distribution (note the power-law's late mode is truncated by the forced-choice c
 `good_moves_signflip`, `rt_vs_n_concavity` (§2) · `cost_sweep_rt`, `voc_tau_sweep` (§3) · `regret_vs_compute`
 (§4) · `oss_dist_elo2000`, `regret_by_model` (appendix). One visual language (horizontal bars, ρ on x, names on
 y; blue=size, red=satisfaction, grey=value-of-computation, green dashed=legal-moves reference), produced by
-`scratch_halt/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
+`lmcos_tiny/analysis/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
 ([[bootstrap-cis-always]]); partials via the rank formula; metric pre-committed (human log-RT).

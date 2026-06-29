@@ -3,10 +3,10 @@
 # noisy/myopic per-node values), same SF-2000 engine + same 250k roots, into a SEPARATE
 # dir (elo2000_n1) so it does NOT clobber elo2000. Tests H1/H3 (generative-search thesis):
 # does a dumber search's tree-stats recover the +0.31 legal-moves/RT effect?
-#   sbatch --array=0-99 scratch_halt/dumbeval_gen.slurm
+#   sbatch --array=0-99 lmcos_tiny/analysis/slurm/dumbeval_gen.slurm
 #SBATCH --job-name=dumbeval-gen
-#SBATCH --output=/home/hl4291/chess_analysis/scratch_halt/logs/%x_%A_%a.out
-#SBATCH --error=/home/hl4291/chess_analysis/scratch_halt/logs/%x_%A_%a.err
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/analysis/logs/%x_%A_%a.out
+#SBATCH --error=/home/hl4291/chess_analysis/lmcos_tiny/analysis/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
