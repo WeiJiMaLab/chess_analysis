@@ -5,7 +5,7 @@
 > **Status:** 📝 active. Metric reframed to **step\* (optimal stop step) vs human RT** (the regret-vs-RT
 > framing is retired — see *Why step\*, not regret*). Interim findings on filtered elo2000 (n≈13k moves);
 > a definitive ~61k re-run and the SF-1350 weak rung are in progress. Sibling of
-> [(R-CONSTRUAL)](construal.md), which changes the *mechanism*; this report only *calibrates* it.
+> [(R-TREESEARCH)](treesearch.md), which changes the *mechanism*; this report only *calibrates* it.
 
 ## What is the normative "when to think," and what should it be graded against?
 

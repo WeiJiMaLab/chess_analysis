@@ -3,13 +3,13 @@
 **Ref:** `R-VOC` · [Index](reference.md)
 
 > **Status:** 📝 active. The **discovery walk-through** — one claim per step, each backed by a figure — that
-> *motivates* the formal model in [(R-CONSTRUAL)](construal.md). Figures are powered (filtered elo2000,
+> *motivates* the formal model in [(R-TREESEARCH)](treesearch.md). Figures are powered (filtered elo2000,
 > **n≈65k moves**, bootstrap 95% CIs); a few inline numbers are flagged where they're the earlier interim
 > values. Sibling [(R-HALT-CALIB)](halt_calibration.md) holds the step\*↔RT calibration detail.
 
 The question in one line: **can a normative model of *when it is worth thinking* explain *when people actually
 think*?** The answer turned out to be *no, not directly* — and chasing *why* produced a positive model (the
-satisficing-construal account, formalized in [(R-CONSTRUAL)](construal.md)). Read top to bottom.
+satisficing-construal account, formalized in [(R-TREESEARCH)](treesearch.md)). Read top to bottom.
 
 ---
 
@@ -225,7 +225,7 @@ high-satisfaction **flat and low**, low-satisfaction **steep**. That is the sati
 marginal VOC < cost" — made visible, and it's what lifts this above a bare problem-size (Hick's-law) account.
 
 > **Result:** satisfaction reshapes the *curve*, not just its level — the satisficing fingerprint, and the
-> empirical hook for the formal model in [(R-CONSTRUAL)](construal.md).
+> empirical hook for the formal model in [(R-TREESEARCH)](treesearch.md).
 
 ### The flip is also an engine-strength litmus test
 
@@ -240,7 +240,7 @@ the best-matched strength.
 
 VOC, in every form we tried, is a **legal-moves proxy** — it does not explain *when people think*. The dominant
 structure is **decision difficulty** (size − satisfaction + sharpness), and the satisfaction plateau-shift looks
-like **satisficing**. That hands a concrete, positive program to **[(R-CONSTRUAL)](construal.md)**: formalize it
+like **satisficing**. That hands a concrete, positive program to **[(R-TREESEARCH)](treesearch.md)**: formalize it
 as a meta-rational optimization (reward − cost over a *constructed* consideration set) and fit it to human RT.
 
 ---

@@ -34,8 +34,8 @@ Reports come in two formats:
 | Meta-controller — why is tree value ≈0 for stopping, and the minimal forward plan (folds the former R-MC-READOUT/COST/SIGNAL/DELIB proposals) | [(R-MC-PLAN)](../mc_minimal_plan.md) | Plan | LMCOS | 📝 active; P0–P3 |
 | Halt-policy comparison — do learned readouts beat blind stopping on the SF-2000 budgeted oracle? (regret-vs-compute, PG vs MSE surrogate, GNN-z vs tree-stats) | [(R-LMCOS-TINY)](lmcos_tiny.md) | Scientific | LMCOS | ✅ done (elo2000); seeds/rungs open |
 | When ought one think? — calibrating the budgeted-oracle **step\*** against human RT (step\*=0 degeneracy, cost shape/scale, weak-engine rung) | [(R-HALT-CALIB)](halt_calibration.md) | Scientific | LMCOS | 📝 active; step\*↔RT reframe, interim elo2000 |
-| **VOC** — does value-of-computation explain *when people think*? (the discovery walk-through; answer: no — every VOC signal is a legal-moves proxy; RT = satisficed decision difficulty) | [(R-VOC)](voc.md) | Scientific | Deliberation | 📝 active; 63k; hands off to R-CONSTRUAL |
-| **Construal** — a meta-rational account of deliberation time (RT as optimal compute under a cost; reward−cost meta-MDP, ~1–2 params; size − satisfaction + sharpness; fit `c` to RT vs the descriptive ceiling) | [(R-CONSTRUAL)](construal.md) | Scientific | Deliberation | 📝 active; 63k; model + program; fit-to-RT frontier |
+| **VOC** — does value-of-computation explain *when people think*? (the discovery walk-through; answer: no — every VOC signal is a legal-moves proxy; RT = satisficed decision difficulty) | [(R-VOC)](voc.md) | Scientific | Deliberation | 📝 active; 63k; hands off to R-TREESEARCH |
+| **Construal** — a meta-rational account of deliberation time (RT as optimal compute under a cost; reward−cost meta-MDP, ~1–2 params; size − satisfaction + sharpness; fit `c` to RT vs the descriptive ceiling) | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; 63k; model + program; fit-to-RT frontier |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
@@ -50,7 +50,7 @@ The human move-time inquiry now reads as **one arc** — *board → VOC → cons
 2. **VOC** — [(R-VOC)](voc.md): does value-of-computation / engine-search explain *when* people think? No — every
    VOC signal is a legal-moves proxy. The engine-side analysis [(R-MOVETIME-MODEL)](engine.md) (Gain / MQ / GSS /
    action gap, oracle tiers) is **part of this VOC thread** and folds in here.
-3. **construal** — [(R-CONSTRUAL)](construal.md): the positive, meta-rational account — RT as satisficed
+3. **construal** — [(R-TREESEARCH)](treesearch.md): the positive, meta-rational account — RT as satisficed
    decision difficulty (reward−cost over a constructed consideration set). The resource-rational analytics of the
    legal-moves effect [(R-BRANCH)](branching.md) is the **analytics-side of this construal thread** and folds in
    here. [(R-HALT-CALIB)](halt_calibration.md) calibrates the budgeted-oracle step\* (a VOC/construal bridge).

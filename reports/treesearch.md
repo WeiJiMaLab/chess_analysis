@@ -1,6 +1,6 @@
 # When ought one to think? A meta-rational account of chess deliberation time
 
-**Ref:** `R-CONSTRUAL` · [Index](reference.md)
+**Ref:** `R-TREESEARCH` · [Index](reference.md)
 
 > **Status:** 📝 active. The **model paper** — it **picks up where [(R-VOC)](voc.md) leaves off**. R-VOC showed
 > that value-of-computation (in every form) is a legal-moves *proxy* and the real structure is *satisficed
@@ -31,6 +31,50 @@ and ask **how much of the RT structure a 1–2-parameter meta-RL reproduces vs t
 > descriptive ceiling (legal-moves / satisfaction) is **±0.31**. So on the current substrate the rational model
 > explains **about half** — and closing that gap (or proving it can't be closed) is the whole game. §2 is what
 > the model must reproduce; §3 is its parameters; §4 is how we fit it.
+
+## 1b · The architecture, and two questions about it
+
+Three knobs are easy to conflate — keep them separate:
+
+| knob | role | changes the values? |
+|---|---|---|
+| **`UCI_Elo`** | a *play* handicap | **no-op** for us — we read SF's *eval/WDL*, not its played move ([[sf-uci-elo-noop-for-eval]]) |
+| **N = `sf_search_limit_nodes`** | the **leaf evaluator** (each node valued by an N-node SF search; N=1 ≈ static head, N=100 ≈ shallow search) — the **heuristic / "gut"** | **yes** (n1 vs n100 differ per-FEN, ρ≈0.93) |
+| **M = `search_budget` = 96** | the **MCTS/PUCT expansions** built *on* the N-heuristic — the **planning** | the thing whose *trace* we analyze |
+
+The "thinking" we model as human-like is the **M-trace** (1→96 expansions, `oracle_root_q_trace`), bootstrapped
+on the N-heuristic. *(An earlier framing wrongly used n1→n100 as the prior→truth axis — that varies the
+heuristic N, not the planning M.)*
+
+### Q1 — Are we already doing best-first search? (yes — with a UCT selector)
+
+`build_tree` does **no rollouts**: each node is valued by the SF heuristic, and expansions are chosen by
+**PUCT**. With our **uniform priors**, PUCT reduces to **UCB** — exploit `Q` + a visit-count exploration bonus.
+So we are *already* running a **heuristic best-first tree search whose selector is UCT rather than greedy-argmax**,
+and the exploration bonus makes it **breadth-leaning** (it expands many root moves early before deepening). So
+the construal need not be a *new* generator: the existing expansion trace **is** an incremental, heuristic
+best-first inclusion. The real levers are the **selector** (UCT exploration vs optimism/argmax) and a **per-move
+cost + satisficing stop** — not "MCTS vs BeFS" wholesale.
+
+> **Decision:** first read the construal off the *existing* expansion trace (heuristic best-first inclusion
+> under UCT) + impose H1's per-move cost and a satisficing stop, before building a bespoke BeFS.
+
+### Q2 — Does the tree search actually add value? (the missing check)
+
+Planning is worth modelling only if it **changes the prognosis**. We have been varying the *prior* (N, the
+dumb-eval) assuming *it* is the fault while holding the tree-building fixed — but the search itself could be
+adding little, in which case the M-trace is ~flat and there is nothing for any VOC/cost to capture.
+**Provisional probe (n≈3k):** heuristic↔planned root-value rank-corr ≈ **0.33**, and the root argmax keeps
+changing until ~step **78 of 95** — so the search **reorders the policy heavily** (planning seems to add a lot,
+not little). But the probe is artifact-prone (the early trace is nearly *tied* — moves are undifferentiated
+until search separates them), so it needs a **clean 1-ply-heuristic-vs-M-converged measurement**, properly
+aligned, before the magnitudes are trustworthy.
+
+> **Decision:** before more prior/cost tuning, **measure the tree's value-add directly** — the decision-flip
+> rate and value-movement from the 1-ply heuristic to the M-converged policy. Large ⇒ the search is sound and
+> the prior/cost framing holds; small ⇒ the **tree-building is the weak link**, and the lever is the *search*
+> (selector/expansion), not the prior. *(There are two failure modes — a bad **prior** (N) and a weak
+> **search** (M); we have only stress-tested the prior.)*
 
 ## 2 · The targets the model must reproduce
 
