@@ -73,7 +73,8 @@ class BudgetedOracleConfig:
     time_tau: float = 2.5  # offset that softens the singularity as budget → 0 (unused when time_mode="linear")
     time_delta: int = 1  # minimum remaining budget required to still consider continuing
     timeout_value: float = -1.0  # terminal value assigned when the budget is exhausted
-    time_mode: Literal["power_law", "linear"] = "power_law"  # "linear" gives constant cost=time_lambda per step
+    time_mode: Literal["power_law", "linear", "quadratic"] = "power_law"  # "linear"=const cost; "quadratic"=total cost ∝ steps² ⇒ marginal rises linearly
+    time_budget_ref: int = 96  # reference starting budget used by time_mode="quadratic" to locate the step index s = ref - remaining_budget
     budget_buckets: tuple[BudgetBucket, ...] = DEFAULT_BUDGET_BUCKETS  # bucket partition over expansion counts
     samples_per_bucket: int = 2  # number of starting budgets drawn from each bucket per source tree
     seed: int = 0  # base seed mixed into the deterministic bucket sampler
@@ -93,8 +94,10 @@ class BudgetedOracleConfig:
             raise ValueError("time_p must be > 1.")
         if self.time_mode == "power_law" and self.time_tau <= 0.0:
             raise ValueError("time_tau must be positive.")
-        if self.time_mode not in ("power_law", "linear"):
-            raise ValueError(f"time_mode must be 'power_law' or 'linear', got {self.time_mode!r}.")
+        if self.time_mode not in ("power_law", "linear", "quadratic"):
+            raise ValueError(f"time_mode must be 'power_law', 'linear', or 'quadratic', got {self.time_mode!r}.")
+        if self.time_mode == "quadratic" and self.time_budget_ref <= 0:
+            raise ValueError("time_budget_ref must be positive for time_mode='quadratic'.")
         if self.time_delta <= 0:
             raise ValueError("time_delta must be positive.")
         if self.samples_per_bucket <= 0:
@@ -167,15 +170,24 @@ def maintenance_cost(num_nodes: int, config: BudgetedOracleConfig) -> float:
 def time_cost(remaining_budget: int, config: BudgetedOracleConfig) -> float:
     """Per-step time cost of choosing to expand.
 
-    Two modes controlled by ``config.time_mode``:
+    Three modes controlled by ``config.time_mode``:
     - ``"power_law"``: convex cost that grows sharply as remaining budget approaches zero,
       implemented as a finite difference of an offset power-law potential.
     - ``"linear"``: constant cost equal to ``time_lambda`` per step, independent of budget.
+    - ``"quadratic"``: total cost is quadratic in the number of steps taken, so the
+      *marginal* (per-step) cost rises linearly with steps taken. With step index
+      ``s = time_budget_ref - remaining_budget`` and potential ``Φ(s) = time_lambda * s²``,
+      the per-step cost is ``Φ(s+1) - Φ(s) = time_lambda * (2s + 1)`` — constant slope ``2·time_lambda``.
     """
     if remaining_budget <= 0:
         raise ValueError("remaining_budget must be positive.")
     if config.time_mode == "linear":
         return float(config.time_lambda)
+    if config.time_mode == "quadratic":
+        # s = steps already taken when this expansion is chosen. Marginal cost
+        # = Φ(s+1) - Φ(s) with Φ(s) = time_lambda * s² ⇒ time_lambda * (2s + 1).
+        steps_taken = max(0, config.time_budget_ref - remaining_budget)
+        return float(config.time_lambda * (2.0 * steps_taken + 1.0))
     # Two power-law evaluations one step apart; the subtraction is the
     # per-step time cost when integrated as the difference of a potential.
     left = (remaining_budget - config.time_delta + config.time_tau) ** (-(config.time_p - 1.0))
@@ -398,6 +410,7 @@ def budgeted_oracle_metadata(config: BudgetedOracleConfig) -> Dict[str, Any]:
         "time_delta": config.time_delta,
         "timeout_value": config.timeout_value,
         "time_mode": config.time_mode,
+        "time_budget_ref": config.time_budget_ref,
         "samples_per_bucket": config.samples_per_bucket,
         "budget_seed": config.seed,
         "budget_buckets": [
@@ -433,7 +446,24 @@ def budgeted_oracle_config_from_metadata(metadata: Dict[str, Any]) -> BudgetedOr
         time_delta=int(metadata["time_delta"]),
         timeout_value=float(metadata["timeout_value"]),
         time_mode=str(metadata.get("time_mode", "power_law")),
+        time_budget_ref=int(metadata.get("time_budget_ref", 96)),
         budget_buckets=buckets,
         samples_per_bucket=int(metadata["samples_per_bucket"]),
         seed=int(metadata.get("budget_seed", 0)),
     )
+
+
+if __name__ == "__main__":
+    # Unit check: quadratic's marginal (per-step) cost rises linearly with steps
+    # taken while linear's marginal cost is constant. With B=96, step s has
+    # remaining_budget = 96 - s, so we probe consecutive steps and diff the costs.
+    _q = BudgetedOracleConfig(time_mode="quadratic", time_lambda=1.0, time_budget_ref=96)
+    _lin = BudgetedOracleConfig(time_mode="linear", time_lambda=1.0)
+    _q_marg = [time_cost(96 - s, _q) for s in range(5)]            # s = 0..4
+    _q_slope = [_q_marg[i + 1] - _q_marg[i] for i in range(4)]      # second difference
+    _lin_marg = [time_cost(96 - s, _lin) for s in range(5)]
+    assert _q_marg == [1.0, 3.0, 5.0, 7.0, 9.0], _q_marg          # 2s+1, linearly increasing
+    assert all(abs(d - 2.0) < 1e-9 for d in _q_slope), _q_slope    # constant slope 2λ ⇒ linear marginal
+    assert all(c == 1.0 for c in _lin_marg), _lin_marg            # linear: constant marginal
+    print("oracle.py quadratic unit check passed:",
+          "quadratic marginal =", _q_marg, "(slope 2λ);", "linear marginal =", _lin_marg)
