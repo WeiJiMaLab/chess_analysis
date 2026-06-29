@@ -19,28 +19,39 @@ import { useSlideContext } from '@slidev/client'
 const props = defineProps({ seq: { type: String, default: 'build' } })
 const { $clicks } = useSlideContext()
 
-const W = 1500, H = 1200
+const W = 1760, H = 1360
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 750, cy: 70, w: 380, h: 92,
+  id: 'q1', cx: 750, cy: 60, w: 380, h: 92,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'Yes — paced by decision width, not value-of-computation.',
   children: [
     {
       id: 'q1a', cx: 360, cy: 250, w: 360, h: 92,
       q: 'What Is Thinking Worth? (The Normative Model)',
-      a: 'A PUCT search with a budgeted stopping rule.',
+      a: 'A PUCT search with a budgeted, RL-trained stopping rule.',
       children: [
-        { id: 'q2', cx: 150, cy: 446, w: 300, h: 96, q: 'How Do We Model Searching?',    a: 'An AlphaZero-style PUCT tree (no rollouts).', children: [] },
-        { id: 'q3', cx: 470, cy: 446, w: 300, h: 96, q: 'Which Engine Evaluates the Tree?', a: 'lc0 → Stockfish: uniform prior, WDL value.',  children: [] },
-        { id: 'q4', cx: 790, cy: 446, w: 300, h: 96, q: 'When Should the Search Stop?',  a: 'A budgeted oracle + a tree-stats readout.',   children: [] },
+        {
+          id: 'q2', cx: 150, cy: 446, w: 300, h: 96,
+          q: 'How Do We Model Planning?', a: 'An AlphaZero-style PUCT tree (no rollouts).',
+          children: [
+            { id: 'q3', cx: 150, cy: 620, w: 300, h: 92, q: 'Which Engine Do We Use?', a: 'lc0 → Stockfish: uniform prior, WDL value.', children: [] },
+          ],
+        },
+        {
+          id: 'q4', cx: 560, cy: 446, w: 300, h: 96,
+          q: 'When Should the Search Stop?', a: 'A budgeted oracle; an RL-trained readout on advantage.',
+          children: [
+            { id: 'h7', cx: 560, cy: 620, w: 300, h: 92, q: "Does step*'s Hindsight Inflate It?", a: 'No — causal halter ≈ hindsight oracle.', children: [] },
+          ],
+        },
       ],
     },
     {
       id: 'q1b', cx: 1140, cy: 250, w: 360, h: 92,
-      q: 'Do People Behave as the Model Predicts?',
-      a: 'No — so we ask why, and reframe.',
+      q: 'How Do People Spend Their Time Thinking?',
+      a: 'On decision width, not value-of-computation.',
       children: [
         {
           id: 'qmatch', cx: 1140, cy: 446, w: 360, h: 96,
@@ -52,22 +63,21 @@ const TREE = {
               q: 'If Not — Why Not?',
               a: 'Every VOC signal is a legal-moves proxy.',
               children: [
-                { id: 'h5', cx:  150, cy: 840, w: 280, h: 104, q: 'Is It the Wrong Cost Shape?',     a: 'No — regret is flat.',             children: [] },
-                { id: 'h6', cx:  470, cy: 840, w: 280, h: 104, q: 'Is Uncertainty Missing?',          a: 'It recovers, but never beats.',    children: [] },
-                { id: 'h7', cx:  790, cy: 840, w: 280, h: 104, q: 'Is It Hindsight Asymmetry?',       a: 'No — the causal halter is ≈ 0.',   children: [] },
-                { id: 'h9', cx: 1110, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?',    a: 'N matters; UCI_Elo is a no-op.',   children: [] },
+                { id: 'h5', cx:  870, cy: 840, w: 280, h: 104, q: 'Is It the Wrong Cost Shape?',  a: 'No — regret is flat.',           children: [] },
+                { id: 'h6', cx: 1170, cy: 840, w: 280, h: 104, q: 'Is Uncertainty Missing?',      a: 'It recovers, but never beats.',  children: [] },
+                { id: 'h9', cx: 1470, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?', a: 'No — only N matters, not Elo.',   children: [] },
                 {
-                  id: 'h8', cx: 1410, cy: 840, w: 280, h: 104, star: true,
+                  id: 'h8', cx: 1170, cy: 1000, w: 300, h: 104, star: true,
                   q: 'Is It Just a Legal-Moves Proxy?',
                   a: 'Yes — RT is decision difficulty.',
                   children: [
                     {
-                      id: 'finding', cx: 1410, cy: 1000, w: 360, h: 92,
+                      id: 'finding', cx: 1170, cy: 1150, w: 360, h: 88,
                       q: 'So What Is Think-Time, Really?',
-                      a: 'Satisficed decision difficulty: size − satisfaction + sharpness.',
+                      a: 'Satisficed difficulty: size − satisfaction + sharpness.',
                       children: [
-                        { id: 'plan', cx: 1410, cy: 1130, w: 380, h: 78, plan: true,
-                          q: 'The Plan: A Meta-Rational Reward − Cost Model', a: '', children: [] },
+                        { id: 'plan', cx: 1170, cy: 1275, w: 380, h: 76, plan: true,
+                          q: '★ The Umbrella: It Was the Cost of the Leaves', a: '', children: [] },
                       ],
                     },
                   ],
@@ -99,13 +109,13 @@ const ALL  = nodes.map(n => n.id)
 //   expand        nodes revealed on the final blink step (combined with next selection)
 //   expand2       a second expand beat before the blink (gets its own click)
 const VISITS = [
-  { id: 'q2' },
-  { id: 'q3' },
-  { id: 'q4',     also_resolve: ['q1a'], pan_to: 'q1a', expand: ['qmatch'] },
+  { id: 'q2',     expand: ['q3'] },
+  { id: 'q3',     pan_to: 'q2' },
+  { id: 'q4',     expand: ['h7'] },
+  { id: 'h7',     also_resolve: ['q1a'], pan_to: 'q1a', expand: ['qmatch'] },
   { id: 'qmatch', expand: ['qwhy'], expand2: childrenOf['qwhy'] },
   { id: 'h5' },
   { id: 'h6' },
-  { id: 'h7' },
   { id: 'h9' },
   { id: 'h8',     also_resolve: ['qwhy'], expand: ['finding'] },
   { id: 'finding', expand: ['plan'] },
@@ -113,7 +123,7 @@ const VISITS = [
 ]
 
 // Base visible set — established by the 'build' sequence
-const BASE_VIS = new Set(['q1', 'q1a', 'q1b', 'q2', 'q3', 'q4'])
+const BASE_VIS = new Set(['q1', 'q1a', 'q1b', 'q2', 'q4'])
 
 // Cumulative resolved set *before* visiting VISITS[idx]
 function resolvedBefore(idx) {

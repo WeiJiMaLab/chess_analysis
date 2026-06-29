@@ -477,6 +477,18 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
 .mdl-proc { font-size: .82rem; color: var(--mdl-muted); margin: 0 0 .5rem; }
 .mdl-proc strong { color: var(--mdl-text); }
 
+/* "what we expected / how to read it" intuition note — sits between proc and conv */
+.mdl-intuition {
+  font-size: .8rem; line-height: 1.4; color: var(--mdl-text);
+  background: var(--bg-info); border-left: 3px solid var(--color-info);
+  padding: .5rem .75rem; border-radius: .45rem; margin: 0 0 .6rem;
+}
+.mdl-intuition .lbl {
+  font-size: .6rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--color-info-dark); display: block; margin-bottom: .15rem;
+}
+.mdl-intuition strong { color: var(--color-primary); font-weight: 700; }
+
 /* centered figure that fills available height on a normal content slide */
 .mdl-fig { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: .2rem 0; }
 .mdl-fig img { max-width: 100%; max-height: 100%; object-fit: contain; }
