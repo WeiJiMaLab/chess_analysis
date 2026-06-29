@@ -103,11 +103,11 @@ at +0.12.
 | softmax-VOC (τ=0.1, deep-tree) | +0.120 [+0.10, +0.14] | — |
 | *reference:* **legal moves** | **+0.247** [+0.23, +0.26] | — |
 
-Every normative signal sits at ρ≈+0.11–0.12 — under half the legal-moves reference — and collapses to ≈+0.04
-once legal-moves is partialled out. step\* *is* the cost-sensitive one (figure below), but it tops out at the
-same ceiling.
+The per-cost-regime detail (below): **regret is flat** across all 12 cost configs (~+0.10, it's a monotone
+transform of Gain), while **step\* varies** (+0.006 → +0.12) — the cost-sensitive one — but every bar stays
+well under the legal-moves reference (green dashed).
 
-![step\* (optimal stop step) vs RT and vs legal-moves, by cost regime](../figures/lmcos_tiny/oss_rt_costsweep.png)
+![Normative signals (regret, step\*) vs human RT, by cost regime](../figures/lmcos_tiny/cost_sweep_rt.png)
 
 > **Result:** cost calibration is a near-dead-end for regret; step\* is the cost-sensitive object but plateaus
 > at +0.12 (≈ half the legal-moves effect). *(detail in R-HALT-CALIB.)*
@@ -226,8 +226,10 @@ no sampling); benefit of thinking = the sharpening = uncertainty reduction. Supe
 M3 = the strength ladder.
 
 **Figure index** (all `figures/lmcos_tiny/`, interim elo2000): `oss_dist_elo2000` (Step 1) · `regret_vs_compute`,
-`regret_by_model` (Step 2) · `rt_headline` (Step 3) · `voc_rt_costsweep`, `oss_rt_costsweep`, `voc_tau_sweep`,
-`rt_partials` (Step 4) · `good_moves_signflip` (Step 5). Method: Spearman with percentile-bootstrap 95% CIs
+`regret_by_model` (Step 2) · `rt_headline` (Step 3) · `cost_sweep_rt`, `voc_tau_sweep`,
+`rt_partials` (Step 4) · `good_moves_signflip` (Step 5). All ρ-comparison figures share one visual language
+(horizontal bars, ρ on x, names on y; blue=size, red=satisfaction, grey=value-of-computation, green dashed =
+legal-moves reference), produced by `scratch_halt/make_rt_figures.py`. Method: Spearman with percentile-bootstrap 95% CIs
 ([[bootstrap-cis-always]]); partials via the rank formula; the metric is pre-committed (human log-RT).
 
 **Data provenance:** [(R-DATA)](reference.md). **Calibration sibling:** [(R-HALT-CALIB)](halt_calibration.md).

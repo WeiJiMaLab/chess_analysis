@@ -1,9 +1,8 @@
-"""Generate the proof figures for metareasoning.md (interim, filtered elo2000).
-Produces:
-  rt_headline.png        — what predicts human RT (ρ landscape, bootstrap CIs)
-  rt_partials.png        — value/VOC/step* signals: raw↔RT vs ↔RT|legal-moves (proxy proof)
-  good_moves_signflip.png — # all moves (+) vs # good moves (−): the sign flip
-All Spearman with percentile-bootstrap 95% CIs; partials via the rank formula.
+"""Single source for every ρ-vs-RT comparison figure in metareasoning.md, in ONE visual
+language: horizontal bars, ρ on the x-axis, names on the y-axis, shared palette.
+Produces: rt_headline (3), cost_sweep_rt (4a), voc_tau_sweep (4b), rt_partials (4d),
+good_moves_signflip (5), oss_dist_elo2000 (line, no smoothing). Interim filtered elo2000.
+Spearman with percentile-bootstrap 95% CIs; partials via the rank formula.
 """
 import sys, os, random
 sys.path.insert(0, "/home/hl4291/chess_analysis/lmcos_tiny/src")
@@ -11,158 +10,190 @@ import torch, numpy as np, pandas as pd, duckdb
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-VOC = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_signals.parquet"
+VOCPQ = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_signals.parquet"
 TAU = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_tau_sweep.parquet"
 TREES = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000"
 FILT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt"
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 FIG = "/home/hl4291/chess_analysis/figures/lmcos_tiny"
-MAIN, ACC, GRN, GREY = "#2E86C1", "#C0392B", "#27AE60", "#7F8C8D"
+
+# ---- shared palette (semantic; from the Step-3 plot the user liked) ----
+SIZE = "#2E86C1"   # problem size / structural-positive (legal moves, action gap, # all)
+SAT = "#C0392B"    # satisfaction / good-moves (negative term)
+VOC = "#7F8C8D"    # value-of-computation family (gain, regret, step*, softmax-VOC)
+VOC2 = "#34495E"   # second VOC series (step* vs regret) in grouped plots
+HALT = "#BDC3C7"   # causal halter
+REF = "#27AE60"    # reference line (legal-moves)
+CONFIGS = ["power_law_p1.5_x0.25", "power_law_p1.5_x1.0", "power_law_p1.5_x4.0",
+           "power_law_p2.8_x0.25", "power_law_p2.8_x1.0", "power_law_p2.8_x4.0",
+           "linear_x0.25", "linear_x1.0", "linear_x4.0",
+           "quadratic_x0.25", "quadratic_x1.0", "quadratic_x4.0"]
+TAUS = [0.05, 0.1, 0.25, 0.5, 1.0]
 
 
-def _ranks(a):
-    return pd.Series(a).rank().to_numpy()
-
-
+def _ranks(a): return pd.Series(a).rank().to_numpy()
 def _pear(a, b):
     a = a - a.mean(); b = b - b.mean(); d = np.sqrt((a * a).sum() * (b * b).sum())
     return float((a * b).sum() / d) if d > 0 else np.nan
-
-
-def sb(x, y, nb=500, seed=0):
+def sb(x, y, nb=400, seed=0):
     m = np.isfinite(x) & np.isfinite(y); x, y = x[m], y[m]; n = x.size
     if n < 50 or np.std(x) == 0: return (np.nan, np.nan, np.nan, n)
     rx, ry = _ranks(x), _ranks(y); pt = _pear(rx, ry); rng = np.random.default_rng(seed)
     bs = np.array([_pear(rx[i], ry[i]) for i in (rng.integers(0, n, n) for _ in range(nb))])
     return (pt, float(np.nanpercentile(bs, 2.5)), float(np.nanpercentile(bs, 97.5)), n)
-
-
-def pb(x, y, z, nb=400, seed=0):  # partial spearman rho_xy.z + bootstrap CI
+def pb(x, y, z, nb=300, seed=0):
     m = np.isfinite(x) & np.isfinite(y) & np.isfinite(z); x, y, z = x[m], y[m], z[m]; n = x.size
     rx, ry, rz = _ranks(x), _ranks(y), _ranks(z)
     def part(ix):
-        a, b, c = rx[ix], ry[ix], rz[ix]
-        rxy, rxz, ryz = _pear(a, b), _pear(a, c), _pear(b, c)
+        a, b, c = rx[ix], ry[ix], rz[ix]; rxy, rxz, ryz = _pear(a, b), _pear(a, c), _pear(b, c)
         return (rxy - rxz * ryz) / np.sqrt((1 - rxz ** 2) * (1 - ryz ** 2))
     pt = part(np.arange(n)); rng = np.random.default_rng(seed)
     bs = np.array([part(rng.integers(0, n, n)) for _ in range(nb)])
     return (pt, float(np.nanpercentile(bs, 2.5)), float(np.nanpercentile(bs, 97.5)), n)
 
 
-def hbar(ax, labels, pts, los, his, colors, title, xlabel="Spearman ρ vs human log-RT"):
-    y = np.arange(len(labels))
-    ax.barh(y, pts, color=colors, height=0.62)
-    ax.errorbar(pts, y, xerr=[np.array(pts) - np.array(los), np.array(his) - np.array(pts)],
-                fmt="none", ecolor="#222", capsize=3, lw=1)
-    ax.axvline(0, color="#222", lw=0.9)
-    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9); ax.invert_yaxis()
-    ax.set_xlabel(xlabel, fontsize=10); ax.set_title(title, fontsize=12)
+def _style(ax, title, n=None):
+    ax.axvline(0, color="#222", lw=0.9); ax.invert_yaxis()
+    ax.set_xlabel("Spearman ρ vs human log-RT", fontsize=10)
+    ax.set_title(title + (f"  (n={n:,})" if n else ""), fontsize=12)
     ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
     for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
 
 
+def hbar(ax, labels, rs, colors, title, n=None, ref=None):
+    y = np.arange(len(labels)); pts = [r[0] for r in rs]
+    ax.barh(y, pts, color=colors, height=0.66)
+    ax.errorbar(pts, y, xerr=[[r[0] - r[1] for r in rs], [r[2] - r[0] for r in rs]],
+                fmt="none", ecolor="#222", capsize=3, lw=1)
+    if ref is not None:
+        ax.axvline(ref, color=REF, lw=1.6, ls="--", label=f"legal moves ({ref:+.2f})")
+        ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.12), frameon=False)
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9); _style(ax, title, n)
+
+
+def hbar_grouped(ax, labels, A, B, cA, cB, lA, lB, title, n=None, ref=None, hatchB=True):
+    y = np.arange(len(labels))
+    ax.barh(y - 0.2, [r[0] for r in A], height=0.36, color=cA, label=lA)
+    ax.barh(y + 0.2, [r[0] for r in B], height=0.36, color=cB, label=lB,
+            hatch="//" if hatchB else None, edgecolor="white" if hatchB else None)
+    ax.errorbar([r[0] for r in A], y - 0.2, xerr=[[r[0]-r[1] for r in A], [r[2]-r[0] for r in A]], fmt="none", ecolor="#222", capsize=2, lw=1)
+    ax.errorbar([r[0] for r in B], y + 0.2, xerr=[[r[0]-r[1] for r in B], [r[2]-r[0] for r in B]], fmt="none", ecolor="#222", capsize=2, lw=1)
+    if ref is not None:
+        ax.axvline(ref, color=REF, lw=1.6, ls="--", label=f"legal moves ({ref:+.2f})")
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9); _style(ax, title, n)
+    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=3, frameon=False)
+
+
 def main():
-    voc = pd.read_parquet(VOC)
-    tau = pd.read_parquet(TAU)[["fen", "softmax_voc_tau0.1__free"]]
+    voc = pd.read_parquet(VOCPQ)
+    tau = pd.read_parquet(TAU)[["fen"] + [f"softmax_voc_tau{t if t != 1.0 else 1}__free" for t in TAUS]]
     df = voc.merge(tau, on="fen", how="left").drop(columns=[c for c in ["legal_moves"] if c in voc.columns])
     conn = duckdb.connect(DB, read_only=True); conn.register("_s", df[["fen"]])
     mv = conn.execute("""SELECT m.fen, ln(m.move_time) AS log_rt, m.n_possible_moves AS legal_moves
         FROM processed_moves_nonzero m JOIN (SELECT DISTINCT fen FROM _s) f ON m.fen=f.fen
         WHERE m.move_time>0""").df(); conn.close()
     j = mv.merge(df, on="fen", how="inner")
-    rt = j["log_rt"].to_numpy(); lm = j["legal_moves"].to_numpy(float)
-    print(f"parquet join: {len(j):,} moves", flush=True)
+    rt = j["log_rt"].to_numpy(); lm = j["legal_moves"].to_numpy(float); N = len(j)
+    lm_ref = sb(lm, rt)[0]
+    print(f"parquet join: {N:,} moves", flush=True)
 
-    # signal columns in the parquet join
-    P = {"cost-free Gain": "gain_costfree", "regret-alwaysstop": "regret_alwaysstop__power_law_p2.8_x1.0",
-         "step* (best cost)": "oss__quadratic_x0.25", "softmax-VOC (τ0.1)": "softmax_voc_tau0.1__free"}
-
-    # ---- tree subsample for # good / # all / action_gap ----
+    # tree subsample for good-moves / action_gap
     names = [l.strip() for l in open(FILT) if l.strip()]; random.seed(0); random.shuffle(names); names = names[:6000]
     rows = []
     for nm in names:
-        try:
-            p = torch.load(os.path.join(TREES, nm), map_location="cpu", weights_only=False)
-        except Exception:
-            continue
+        try: p = torch.load(os.path.join(TREES, nm), map_location="cpu", weights_only=False)
+        except Exception: continue
         fq = np.asarray(p["oracle_final_root_q_values"], dtype=float).ravel()
         if fq.size < 1: continue
         mx = fq.max()
-        rows.append({"fen": " ".join(p["root_position_spec"].split()[:4]), "n_legal": int(fq.size),
-                     "action_gap": float(mx - np.sort(fq)[-2]) if fq.size >= 2 else np.nan,
-                     "n_good_0.02": int((fq >= mx - 0.02).sum()), "n_good_0.05": int((fq >= mx - 0.05).sum()),
-                     "n_good_0.1": int((fq >= mx - 0.1).sum()), "n_good_0.2": int((fq >= mx - 0.2).sum()),
-                     "n_good_0.5": int((fq >= mx - 0.5).sum())})
+        r = {"fen": " ".join(p["root_position_spec"].split()[:4]), "n_legal": int(fq.size),
+             "action_gap": float(mx - np.sort(fq)[-2]) if fq.size >= 2 else np.nan}
+        for e in (0.02, 0.05, 0.1, 0.2, 0.5): r[f"n_good_{e}"] = int((fq >= mx - e).sum())
+        rows.append(r)
     gd = pd.DataFrame(rows); gd["frac_good_0.05"] = gd["n_good_0.05"] / gd["n_legal"]
-    jg = mv.merge(gd, on="fen", how="inner"); rtg = jg["log_rt"].to_numpy(); lmg = jg["n_legal"].to_numpy(float)
-    print(f"good-moves join: {len(jg):,} moves", flush=True)
+    jg = mv.merge(gd, on="fen", how="inner"); rtg = jg["log_rt"].to_numpy(); lmg = jg["n_legal"].to_numpy(float); Ng = len(jg)
+    print(f"good-moves join: {Ng:,} moves", flush=True)
 
-    # ===== FIG 1: headline RT landscape =====
-    items = [("# legal moves (size)", lm, MAIN),
-             ("action gap (sharpness)", jg["action_gap"].to_numpy(float), MAIN),
-             ("softmax-VOC (τ0.1)", j[P["softmax-VOC (τ0.1)"]].to_numpy(float), GREY),
-             ("step* (best cost)", j[P["step* (best cost)"]].to_numpy(float), GREY),
-             ("regret / cost-free Gain", j["gain_costfree"].to_numpy(float), GREY),
-             ("satisfaction (fraction good)", jg["frac_good_0.05"].to_numpy(float), ACC),
-             ("# good moves (≤0.1)", jg["n_good_0.1"].to_numpy(float), ACC)]
-    L, Pt, Lo, Hi, C = [], [], [], [], []
-    for lab, col, c in items:
-        r = sb(col, rtg if col is jg["action_gap"].to_numpy(float) else rt) if False else sb(col, rtg if len(col) == len(rtg) else rt)
-        L.append(lab); Pt.append(r[0]); Lo.append(r[1]); Hi.append(r[2]); C.append(c)
-    # halter (from the held-out rollout run, n≈2.5k) — hardcoded point
-    L.append("causal halter (stop step)"); Pt.append(0.025); Lo.append(-0.015); Hi.append(0.065); C.append("#BDC3C7")
-    order = np.argsort(Pt)[::-1]
+    # ===== FIG 3: headline =====
+    items = [("# legal moves (size)", sb(lm, rt), SIZE),
+             ("action gap (sharpness)", sb(jg["action_gap"].to_numpy(float), rtg), SIZE),
+             ("softmax-VOC (τ=0.1)", sb(j["softmax_voc_tau0.1__free"].to_numpy(float), rt), VOC),
+             ("step* (best cost)", sb(j["oss__quadratic_x0.25"].to_numpy(float), rt), VOC),
+             ("regret / cost-free Gain", sb(j["gain_costfree"].to_numpy(float), rt), VOC),
+             ("causal halter (stop step)", (0.025, -0.015, 0.065, 0), HALT),
+             ("# good moves (≤0.1)", sb(jg["n_good_0.1"].to_numpy(float), rtg), SAT),
+             ("satisfaction (fraction good)", sb(jg["frac_good_0.05"].to_numpy(float), rtg), SAT)]
+    order = np.argsort([it[1][0] for it in items])[::-1]
     fig, ax = plt.subplots(figsize=(9, 6))
-    hbar(ax, [L[i] for i in order], [Pt[i] for i in order], [Lo[i] for i in order], [Hi[i] for i in order],
-         [C[i] for i in order], "What predicts human response time? (filtered elo2000)")
-    ax.text(0.99, 0.02, "blue=problem size · red=satisfaction · grey=value-of-computation",
+    hbar(ax, [items[i][0] for i in order], [items[i][1] for i in order], [items[i][2] for i in order],
+         "What predicts human response time? (filtered elo2000)", n=N)
+    ax.text(0.99, 0.02, "blue = problem size · red = satisfaction · grey = value-of-computation",
             transform=ax.transAxes, ha="right", fontsize=8, color="#555")
     fig.tight_layout(); [fig.savefig(f"{FIG}/rt_headline.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
 
-    # ===== FIG 2: partials (proxy proof) =====
-    fig, ax = plt.subplots(figsize=(9, 5))
-    labs = list(P.keys()); ybase = np.arange(len(labs))
+    # ===== FIG 4a: cost-function sweep (regret flat, step* varies) =====
+    A = [sb(j[f"regret_alwaysstop__{c}"].to_numpy(float), rt) for c in CONFIGS]
+    B = [sb(j[f"oss__{c}"].to_numpy(float), rt) for c in CONFIGS]
+    fig, ax = plt.subplots(figsize=(9, 8))
+    hbar_grouped(ax, CONFIGS, A, B, VOC, VOC2, "regret-alwaysstop", "step* (OSS)",
+                 "Normative signals vs human RT, by cost regime", n=N, ref=lm_ref, hatchB=False)
+    fig.tight_layout(); [fig.savefig(f"{FIG}/cost_sweep_rt.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
+    plt.close(fig)
+
+    # ===== FIG 4b: softmax-VOC by temperature =====
+    rs = [sb(j[f"softmax_voc_tau{t if t != 1.0 else 1}__free"].to_numpy(float), rt) for t in TAUS]
+    cols = [REF if t == 0.1 else VOC for t in TAUS]
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    hbar(ax, [f"τ = {t}" + ("  (best)" if t == 0.1 else "") for t in TAUS], rs, cols,
+         "Softmax-VOC vs human RT, by temperature (deep-tree supervisor)", n=N, ref=lm_ref)
+    fig.tight_layout(); [fig.savefig(f"{FIG}/voc_tau_sweep.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
+    plt.close(fig)
+
+    # ===== FIG 4d: partials (proxy proof) =====
+    P = {"cost-free Gain": "gain_costfree", "regret-alwaysstop": "regret_alwaysstop__power_law_p2.8_x1.0",
+         "step* (best cost)": "oss__quadratic_x0.25", "softmax-VOC (τ=0.1)": "softmax_voc_tau0.1__free"}
+    labs = list(P.keys())
     raw = [sb(j[P[k]].to_numpy(float), rt) for k in labs]
     par = [pb(j[P[k]].to_numpy(float), rt, lm) for k in labs]
-    ax.barh(ybase - 0.2, [r[0] for r in raw], height=0.38, color=MAIN, label="raw ρ vs RT")
-    ax.barh(ybase + 0.2, [r[0] for r in par], height=0.38, color=ACC, label="ρ vs RT | legal-moves (partial)")
-    ax.errorbar([r[0] for r in raw], ybase - 0.2, xerr=[[r[0]-r[1] for r in raw], [r[2]-r[0] for r in raw]], fmt="none", ecolor="#222", capsize=2, lw=1)
-    ax.errorbar([r[0] for r in par], ybase + 0.2, xerr=[[r[0]-r[1] for r in par], [r[2]-r[0] for r in par]], fmt="none", ecolor="#222", capsize=2, lw=1)
-    ax.axvline(0, color="#222", lw=0.9); ax.set_yticks(ybase); ax.set_yticklabels(labs, fontsize=9); ax.invert_yaxis()
-    ax.set_xlabel("Spearman ρ vs human log-RT")
-    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, frameon=False)
-    ax.set_title("Value-of-computation signals are proxies for legal-moves\n(every one collapses when legal-moves is partialled out)", fontsize=12)
-    ax.grid(True, axis="x", alpha=0.3); ax.set_axisbelow(True)
-    for sp in ("top", "right", "left"): ax.spines[sp].set_visible(False)
-    # reference: legal-moves controlling for the signal stays high
-    lm_par = pb(lm, rt, j[P["regret-alwaysstop"]].to_numpy(float))
-    ax.text(0.99, 0.97, f"by contrast: legal-moves ρ|regret = {lm_par[0]:+.2f} (survives)", transform=ax.transAxes, ha="right", va="top", fontsize=8, color=GRN)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    hbar_grouped(ax, labs, raw, par, VOC, VOC, "raw ρ vs RT", "ρ vs RT | legal-moves",
+                 "Value-of-computation signals are proxies for legal-moves", n=N)
     fig.tight_layout(); [fig.savefig(f"{FIG}/rt_partials.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
 
-    # ===== FIG 3: sign flip (grouped bars, like 4d) =====
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    # ===== FIG 5: sign flip =====
     eps = [0.02, 0.05, 0.1, 0.2, 0.5]
-    raw_all = sb(lmg, rtg)
-    raw_good = [sb(jg[f"n_good_{e}"].to_numpy(float), rtg) for e in eps]
-    par_good = [pb(jg[f"n_good_{e}"].to_numpy(float), rtg, lmg) for e in eps]
-    x = np.arange(len(eps))
-    ax.bar(x - 0.2, [r[0] for r in raw_good], width=0.38, color=ACC, label="# good moves (raw)")
-    ax.bar(x + 0.2, [r[0] for r in par_good], width=0.38, color="#E67E22", label="# good moves | legal-moves (partial)")
-    ax.errorbar(x - 0.2, [r[0] for r in raw_good], yerr=[[r[0]-r[1] for r in raw_good], [r[2]-r[0] for r in raw_good]], fmt="none", ecolor="#222", capsize=2, lw=1)
-    ax.errorbar(x + 0.2, [r[0] for r in par_good], yerr=[[r[0]-r[1] for r in par_good], [r[2]-r[0] for r in par_good]], fmt="none", ecolor="#222", capsize=2, lw=1)
-    ax.axhline(raw_all[0], color=MAIN, lw=2, ls="--", label=f"# ALL legal moves (+{raw_all[0]:.2f})")
-    ax.axhline(0, color="#222", lw=0.9)
-    ax.set_xticks(x); ax.set_xticklabels([f"≤{e}" for e in eps])
-    ax.set_xlabel("'good' threshold ε  (win-prob below best move)"); ax.set_ylabel("Spearman ρ vs human log-RT")
-    ax.set_title("The sign flip: more OPTIONS ⇒ slower, more GOOD options ⇒ faster", fontsize=12)
-    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=3, frameon=False)
-    ax.grid(True, axis="y", alpha=0.3); ax.set_axisbelow(True)
-    for sp in ("top", "right"): ax.spines[sp].set_visible(False)
+    raw_g = [sb(jg[f"n_good_{e}"].to_numpy(float), rtg) for e in eps]
+    par_g = [pb(jg[f"n_good_{e}"].to_numpy(float), rtg, lmg) for e in eps]
+    fig, ax = plt.subplots(figsize=(9, 5))
+    hbar_grouped(ax, [f"# good ≤ {e}" for e in eps], raw_g, par_g, SAT, SAT,
+                 "raw ρ vs RT", "ρ vs RT | legal-moves",
+                 "The sign flip: more OPTIONS slower (blue), more GOOD options faster (red)",
+                 n=Ng, ref=sb(lmg, rtg)[0])
     fig.tight_layout(); [fig.savefig(f"{FIG}/good_moves_signflip.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
     plt.close(fig)
-    print("saved rt_headline, rt_partials, good_moves_signflip (png+pdf)", flush=True)
+
+    # ===== OSS distribution (line, no smoothing) =====
+    sig = voc
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    edges = np.arange(0, 99, 3); ctr = (edges[:-1] + edges[1:]) / 2; maxoss = 0
+    for cfg, c, lab in [("power_law_p2.8_x1.0", "#8E44AD", "power-law"),
+                        ("linear_x1.0", "#16A085", "linear"), ("quadratic_x1.0", "#E67E22", "quadratic")]:
+        v = sig[f"oss__{cfg}"].to_numpy(float); maxoss = max(maxoss, np.nanpercentile(v, 99.5))
+        d, _ = np.histogram(v, bins=edges, density=True)
+        ax.plot(ctr, d, lw=2.2, color=c, label=lab)
+    ax.axvline(maxoss, color="#555", ls="--", lw=1)
+    ax.annotate("forced choice —\nOSS truncated near budget 96", xy=(maxoss, ax.get_ylim()[1] * 0.6),
+                xytext=(maxoss - 38, ax.get_ylim()[1] * 0.8), fontsize=8, color="#555",
+                arrowprops=dict(arrowstyle="->", color="#555", lw=0.8))
+    ax.set_xlabel("oracle stop step (OSS)"); ax.set_ylabel("density")
+    ax.legend(fontsize=9, title="cost shape"); ax.set_title("OSS distribution by cost shape (mult=1, filtered elo2000)", fontsize=12)
+    ax.grid(True, alpha=0.3); ax.set_axisbelow(True)
+    for sp in ("top", "right"): ax.spines[sp].set_visible(False)
+    fig.tight_layout(); [fig.savefig(f"{FIG}/oss_dist_elo2000.{e}", dpi=200, bbox_inches="tight") for e in ("png", "pdf")]
+    plt.close(fig)
+    print("saved: rt_headline, cost_sweep_rt, voc_tau_sweep, rt_partials, good_moves_signflip, oss_dist_elo2000", flush=True)
 
 
 if __name__ == "__main__":
