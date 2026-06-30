@@ -133,27 +133,32 @@ the optimal stop you must change the **cost profile** — which is exactly what 
 implausible leaves, the leaf-cost (hence the cost) falls, and *where* stopping is optimal re-shapes. This is the
 one lever we have not pulled, and it is the subject of a dedicated sub-report **[(R-PRUNING)](pruning.md)**.
 
-Human think-time = the cost of **building the consideration set (the leaves)**, satisficed and pruned:
+Human think-time = the cost of **building the consideration set**, under a resource-rational stop.
 
-- **The floor** — enumerate the root = `n` leaves — gives the +0.31 legal-moves effect *for free* (you pay ∝ `n`
-  just to look). Explained, not mysterious — but note it is a **reframing**, not a new predictor: the leaf-count
-  is 0.857-collinear with legal-moves, so on its own it only *re-describes* decision width.
-- **The model's job** — does **satisficing** (stop enumerating once good-enough) + **value-pruning** (count only
-  the *plausible* leaves, by the prior values) shape the leaf-cost so it carries **satisfaction / sharpness**
-  *beyond* the bare floor? That is the only place "meta-rational" earns its keep, and the only way pruning beats
-  a re-description.
-- **P-FIT:** fit the stop/prune threshold (~1–2 params) to RT; does `size − satisfaction + sharpness` emerge from
-  it, vs the ±0.31 ceiling?
-- **Value-pruning needs regeneration** (pruning changes the tree's *shape* — the freed budget drives deeper, so a
-  post-hoc prune is invalid for the *fit*, though a useful proxy for *choosing* the threshold). Prune by the
-  **prior** (early/n1 values, not hindsight `final_Q`), **relative to best**, sweep the threshold. Plan in
-  [(R-PRUNING)](pruning.md).
+> **The framing correction (the load-bearing one).** Legal-moves is **not a rival hypothesis to beat** — it is a
+> *count*, the **explanandum**. The question is *not* "what signal beats the +0.34 floor / survives partialling
+> it" (that treats a measurement as a model); it is **"is there a resource-rational reason it is *correct* to
+> spend effort ∝ your options?"** A cost-based planner whose predicted think-time **collapses onto legal-moves is
+> the explanation landing on its target**, not a failure. Collinearity with legal-moves is the *goal*. We spent a
+> long stretch scoring "beats the floor"; that was backwards.
 
-> **Root question — the working conclusion (not yet a fitted model):** the *correlational* picture is that RT
-> tracks **decision width**, with a **satisficing signature** (satisfaction reshapes the RT-vs-n curve), and the
-> value-of-computation signals add nothing beyond width. Whether this is genuinely **meta-rational** — a
-> reward−cost optimum a 1–2-parameter model reproduces — is the **open test**, not a settled result. The pruning
-> experiment is the way to earn that claim.
+- **What we've shown (read correctly).** A resource-rational stop with a **per-operation (node) cost** already
+  produces a predicted think-time `n_total(OSS)` that **scales with legal-moves** ([(R-PRUNING)](pruning.md);
+  `oss_nodecost`) — i.e. the cost model *predicts* the size effect. The satisficing (`−satisfaction` sign) is the
+  optimal stop. These are the **normative derivation** of the phenomenon, not nulls.
+- **The model's job (restated).** A 1–2-parameter resource-rational planner (per-operation cost `c`, value =
+  decision quality, stakes term) should **reproduce the curves** — RT-vs-`n_moves`, RT-vs-`fraction_good`,
+  RT-vs-`action_gap` — with *sensible* parameters, *and* have the relative size/satisfaction/sharpness weights
+  **fall out of the cost-benefit** (not be fit one-by-one). That is what makes it an explanation rather than
+  "people enumerate."
+- **Start no-prune.** The unpruned trees already carry the value landscape; there is no threshold to fit, only the
+  cost. Fit `c` (+ stakes) to RT and check the three curves. Pruning is a *later* refinement, not the first step.
+
+> **Root question — the working conclusion:** RT tracks **decision width** with a **satisficing signature**, and
+> this is the **fingerprint of resource-rational option-consideration** — not "people irrationally count moves,"
+> and not a phenomenon waiting for a signal that beats it. The remaining work is the **fit**: does a
+> resource-rational planner *regenerate* `size − satisfaction + sharpness` with reasonable cost parameters?
+> [(R-PRUNING)](pruning.md)
 
 ---
 

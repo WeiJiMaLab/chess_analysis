@@ -58,7 +58,11 @@ leaf-count becomes the cost. Two locked-in design choices (from R-TREESEARCH §9
      the pruned cost moves step\*↔RT past the floor);
    - **(b) the satisficing consideration-set meta-MDP** (include-next-move / stop, reward = value(chosen) −
      c·#included, ~1–2 params) — the publishable model, fit only if (a) moves.
-   - **Success** = recovers the `size − satisfaction + sharpness` signs **and** beats the bare ±0.31 floor.
+   - **Success** = a resource-rational planner (per-operation cost, value = decision quality) **reproduces** the
+     `size − satisfaction + sharpness` curves with *sensible* cost parameters. **Legal-moves is the
+     *explanandum*, not a rival to beat** — collinearity with it is the goal, because the win is *explaining why
+     it is resource-rational to spend effort ∝ your options*, not finding an orthogonal signal. (We spent a long
+     time scoring "beats the +0.34 floor"; that was the wrong target — a bare count is not a normative model.)
 
 ## Scale & feasibility (measured)
 
@@ -83,7 +87,7 @@ leaf-count becomes the cost. Two locked-in design choices (from R-TREESEARCH §9
 | **Regen grid** | **Regen 2–3 ε levels at ~250K first** to validate the proxy + test the shape change, *then* scale the winner to 750K. |
 | **Target count** | **750K generated** (~190K analyzed after the reward-to-planning filter — 3× today's 64K). Keep the filter. |
 | **Normative model** | **Oracle first, then meta-MDP** — step\* with pruned-leaf cost as the go/no-go; the satisficing meta-MDP as the publishable model if the oracle moves. |
-| **Success** | Recovers `size − satisfaction + sharpness` signs **and** beats the bare ±0.31 floor. |
+| **Success** | A resource-rational planner **reproduces** the `size − satisfaction + sharpness` curves with sensible cost params. **NOT** "beats the floor" — legal-moves is the thing being *explained*, not a rival. |
 
 > **Storage note:** the grid (2–3 × ~250K, *pruned* so < 55 GB each) + the 750K winner ≈ **250–330 GB peak** on a
 > `/scratch` with 1.7 TB free — feasible if we **free `elo1350`** (~55 GB) and delete the losing grid levels
@@ -165,6 +169,54 @@ positions hit the depth wall and stopped at <96 expansions instead of thinking d
 > **satisficing STOP** — the oracle step\* / a 1–2-param consideration-set model on the pruned trace (the pruned
 > trees show oss→0: prune to near-best ⇒ nothing to gain ⇒ decide immediately), **not** the leaf-count. That is
 > the live step-4 test, runnable on the existing 250K (no more trees).
+
+## Step 3 — the pruning-rule grid: absolute / rank / extended relative (2026-06-30)
+
+Step 2 tested the *relative* rule. To check whether the null is specific to that rule or general, we regenerated
+two new families + an extended relative range (md36, n=1, ~50K roots each) and re-ran `prune_regen_analyze.py`:
+
+- **absolute** `abs{0.3,0.5,0.7}` — drop a child whose leaf-eval value is below an **absolute** win-prob floor
+  (the rule R-TREESEARCH §9 *rejected* on principle — kept here as a falsification probe);
+- **rank** `rank{2,4,8}` — keep only the top-k children (value-**blind**: rank, not value gap);
+- **extended relative** `rel{0.5,0.75,1.0,1.5}` — the looser end of the original dial.
+
+> **Floor caveat:** the new sets are a different 50K-root sample → legal-floor **ρ(legal,RT)=+0.250** (n=57,087),
+> *not* the +0.341 of the 250K relative sets. Each cost is judged against its **own** floor.
+
+| set (n=57,087, floor +0.250) | rule | med n_total | med max_depth | ρ(n_total,RT) | **partial \| legal** | max_depth partial\|legal |
+|---|---|---|---|---|---|---|
+| rank2 | top-k, value-blind | 223 | 9 | +0.241 | −0.037 | +0.075 |
+| rank4 | top-k, value-blind | 410 | 7 | +0.187 | −0.071 | +0.084 |
+| rank8 | top-k, value-blind | 780 | 6 | +0.116 | −0.072 | +0.089 |
+| rel0.5 | rel-to-best | 1438 | 6 | −0.016 | −0.076 | +0.051 |
+| rel1.0 | rel-to-best | 2017 | 5 | +0.059 | −0.069 | +0.010 |
+| rel1.5 | rel-to-best | 2410 | 5 | +0.069 | −0.094 | +0.010 |
+| **abs0.3** | **absolute floor** | 1192 | 10 | −0.028 | **−0.138** | **+0.106** |
+| abs0.5 | absolute floor | 554 | 15 | +0.017 | −0.023 | +0.061 |
+| abs0.7 | absolute floor | 357 | 25 | +0.059 | +0.049 | −0.032 |
+
+All ρ/partial carry bootstrap 95% CIs (in the job log) tight to ±0.01 — these are stable, not noise.
+
+> **Result — the leaf-count null is rule-general.** Across **every** new mode and level, the raw pruned
+> `n_total` (= `n_frontier`, since `n_expanded` is ≈const) **does not beat its legal-moves floor**. The closest,
+> `rank2` at +0.241, sits *below* its +0.250 floor and has partial\|legal ≈ 0 — it just re-tracks width through a
+> fixed-fan geometry. Rank pruning *cannot* carry satisfaction by construction (it is value-blind), and indeed
+> doesn't. The step-2 conclusion holds for absolute and rank pruning too: **raw node-count is the wrong cost.**
+
+> **The one new signal — `abs0.3`.** Absolute pruning at 0.3 yields the **largest beyond-width partial in the
+> whole experiment**: n_total partial\|legal = **−0.138** [−0.146,−0.129] and max_depth partial = **+0.106**
+> [+0.097,+0.113]. The negative count-partial is a *satisfaction* channel (more moves clearing an absolute bar →
+> decide faster), the positive depth-partial a *sharpness/forcing* channel (narrower ⇒ deeper search ⇒ longer
+> think). **But this is the rule we rejected on principle:** an absolute floor entangles the surviving-count with
+> the position's **absolute evaluation** (winning-ness), a known RT correlate that is *not* the satisficing
+> consideration-set mechanism. The −0.138 is suggestive but **suspect as a construal measure** until the
+> winning-ness confound is partialled out — that check gates any downstream use.
+
+> **The robust new pattern — depth, not count.** `max_depth` / `mean_leaf_depth` partial\|legal is **positive
+> across nearly every mode** (rank4 +0.084, rank8 +0.089, abs0.3 +0.106, abs0.5 +0.061): wherever pruning frees
+> the budget to **go deep on forcing lines**, *how deep it goes* tracks RT beyond width — more consistently than
+> any leaf-count. The project's RT decomposition never used **calculation depth** as a cost; this grid says it
+> may be the better one. *(Carried as a candidate cost for the step-4 oracle, alongside the pruned leaf-cost.)*
 
 ## Stage 2d — the engine-derived (no-refit) analyses, staged
 
