@@ -24,14 +24,20 @@ lmcos_small/
 ├── configs/
 │   ├── core.yaml        SINGLE unified config (pipeline `globals`+stages AND `human_analysis:`)
 │   └── render_stage.py  shell helper to QUERY resolved pipeline values (--get)
-├── src/cts/             the `cts` package (tree gen, encoder, MC oracle, readout, eval)
-├── pipeline/            cts orchestration, one slurm file per pipeline STAGE (helpers/ aside)
-├── analysis/            cts analysis scripts (VOC / OSS / pruning / RT figures) + analysis/slurm/
-├── human/               human-RT analysis (board.py, engine.py, utils/, tests/)
-└── slurm/
-    ├── logs/            cts pipeline job logs
-    └── human/           human-analysis slurm (analysis.sh, preprocess.sh, tree_values.slurm, scripts/)
+├── src/cts/             the `cts` package (tree gen, encoder, MC oracle, readout, eval, stats)
+├── analysis/            cts analysis scripts, pure python (VOC / OSS / pruning / RT figures)
+├── human/               human-RT analysis (board.py, engine.py, utils/, preprocess/, tests/)
+└── slurm/               EVERY batch script, one tree (logs unified under slurm/logs/)
+    ├── pipeline/        cts stage jobs 1a–4 (+ helpers/setup_env.sh, submit_all.sh)
+    ├── analysis/        cts analysis jobs (voc / oss / prune / figures)
+    ├── human/           human jobs (analysis.sh, preprocess.sh, tree_values.slurm)
+    └── logs/            all job logs
 ```
+
+> **Shared library, not duplication.** Both halves import the `cts` package: stats helpers
+> (`spearman` / `partial_spearman` / `bootstrap_ci`) live once in `cts.stats`, and the human OSS
+> readout reuses `cts.data.preprocess_mc`'s budgeted-oracle trajectory. `human/preprocess/` holds
+> the DB-table producers next to the `human/utils/` library they use (no sys.path shims).
 
 ## The single config (`configs/core.yaml`)
 

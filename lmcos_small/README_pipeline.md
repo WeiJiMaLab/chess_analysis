@@ -69,7 +69,7 @@ python -m cts.data.preprocess_mc.pack --config configs/core.yaml --stage mc_pack
 #         └ merged config              └ section   └ pick rung (pre-interp)  └ patch field
 ```
 `configs/render_stage.py` remains as a shell helper for **querying** resolved values
-(`--get globals.materialized_dir`), used by `pipeline/helpers/setup_env.sh` to derive paths.
+(`--get globals.materialized_dir`), used by `slurm/pipeline/helpers/setup_env.sh` to derive paths.
 
 ## Directory layout
 ```
@@ -80,20 +80,24 @@ lmcos_small/
 ├── configs/
 │   ├── core.yaml           merged source-of-truth base config file with path templates
 │   └── render_stage.py     shell helper to QUERY resolved values (--get), used by setup_env.sh
-├── pipeline/               orchestration, one slurm file per STAGE (helpers/ aside)
-│   ├── helpers/
-│   │     setup_env.sh      (Shared helper to load modules, activate venv, and export paths)
-│   ├── submit_all.sh                           (chains every stage for all three rungs)
-│   ├── 1a_gen_trees.slurm                      (CPU array: treegen)
-│   ├── 1b_filter_trees.slurm                   (CPU array: PUCT∩monotone filter shards)
-│   ├── 1c_pack_trees.slurm                     (CPU: merge shards + split + gnn_pack + mc_pack)
-│   ├── 2a_train_encoder.slurm                  (GPU: encoder)
-│   ├── 2b_pack_root.slurm                      (GPU array: materialize cached root reps)
-│   ├── 2c_merge_root.slurm                     (CPU: stitch worker shards → z_t cache)
-│   ├── 3_train_readout.slurm                   (GPU: controller_train)
-│   └── 4_eval.slurm                            (CPU: 4-model eval + ladder plot; afterok all readouts)
-├── slurm/logs/             job logs
-└── src/cts/                the 38-file import closure (byte-identical to ../lmcos)
+├── analysis/               cts analysis scripts (pure python; jobs live in slurm/analysis/)
+├── slurm/                  EVERY batch script in one tree
+│   ├── pipeline/           orchestration, one slurm file per STAGE (helpers/ aside)
+│   │   ├── helpers/
+│   │   │     setup_env.sh  (Shared helper to load modules, activate venv, and export paths)
+│   │   ├── submit_all.sh                       (chains every stage for all three rungs)
+│   │   ├── 1a_gen_trees.slurm                  (CPU array: treegen)
+│   │   ├── 1b_filter_trees.slurm               (CPU array: PUCT∩monotone filter shards)
+│   │   ├── 1c_pack_trees.slurm                 (CPU: merge shards + split + gnn_pack + mc_pack)
+│   │   ├── 2a_train_encoder.slurm              (GPU: encoder)
+│   │   ├── 2b_pack_root.slurm                  (GPU array: materialize cached root reps)
+│   │   ├── 2c_merge_root.slurm                 (CPU: stitch worker shards → z_t cache)
+│   │   ├── 3_train_readout.slurm               (GPU: controller_train)
+│   │   └── 4_eval.slurm                        (CPU: 4-model eval + ladder plot; afterok all readouts)
+│   ├── analysis/           cts analysis jobs (voc / oss / prune / figures)
+│   ├── human/              human-analysis jobs
+│   └── logs/               all job logs
+└── src/cts/                the import closure (byte-identical to ../lmcos)
     ├── _config.py                       YAML→pydantic loader (the `--config FILE` contract)
     ├── core/        tree, schema, tensorizer, kl_buckets, providers/{stockfish,lc0,…}
     ├── data/        build_tree (gen + encoder pretrain)
@@ -110,18 +114,18 @@ lmcos_small/
 source lmcos_small/env.sh        # PYTHONPATH=src (this fork) + venv
 ```
 
-> `bash pipeline/submit_all.sh` chains every stage below for all three rungs. To run a single stage:
+> `bash slurm/pipeline/submit_all.sh` chains every stage below for all three rungs. To run a single stage:
 
 | stage | command (per rung unless noted) | resource | measured time¹ |
 |---|---|---|---|
-| 1a gen-trees | `ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 sbatch --array=0-19 pipeline/1a_gen_trees.slurm` | CPU ×20 | 35 min–1h11 / task |
-| 1b filter | `ELO=1800 sbatch --dependency=afterok:<gen> --array=0-99 pipeline/1b_filter_trees.slurm` | CPU ×100 | ~10 min / task |
-| 1c pack-trees | `ELO=1800 sbatch --dependency=afterok:<filter> pipeline/1c_pack_trees.slurm` | 16 CPU | 18–24 min |
-| 2a train-enc | `ELO=1800 sbatch --dependency=afterok:<pack> pipeline/2a_train_encoder.slurm` | 1 GPU | ~2 min |
-| 2b pack-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<enc> --array=0-39 pipeline/2b_pack_root.slurm` | 40 GPU | ~25–45 min |
-| 2c merge-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<reps> pipeline/2c_merge_root.slurm` | CPU | ~5 min |
-| 3 readout | `ELO=1800 sbatch --dependency=afterok:<merge> pipeline/3_train_readout.slurm` | 1 GPU | ~10–15 min |
-| 4 eval | `RUNGS=2000 sbatch --dependency=afterok:<readouts> pipeline/4_eval.slurm` | CPU / short | < 5 min |
+| 1a gen-trees | `ELO=1800 SHARD_SIZE=2500 BASE_START=0 LANE_END=50000 sbatch --array=0-19 slurm/pipeline/1a_gen_trees.slurm` | CPU ×20 | 35 min–1h11 / task |
+| 1b filter | `ELO=1800 sbatch --dependency=afterok:<gen> --array=0-99 slurm/pipeline/1b_filter_trees.slurm` | CPU ×100 | ~10 min / task |
+| 1c pack-trees | `ELO=1800 sbatch --dependency=afterok:<filter> slurm/pipeline/1c_pack_trees.slurm` | 16 CPU | 18–24 min |
+| 2a train-enc | `ELO=1800 sbatch --dependency=afterok:<pack> slurm/pipeline/2a_train_encoder.slurm` | 1 GPU | ~2 min |
+| 2b pack-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<enc> --array=0-39 slurm/pipeline/2b_pack_root.slurm` | 40 GPU | ~25–45 min |
+| 2c merge-reps | `ELO=1800 NWORKERS=40 sbatch --dependency=afterok:<reps> slurm/pipeline/2c_merge_root.slurm` | CPU | ~5 min |
+| 3 readout | `ELO=1800 sbatch --dependency=afterok:<merge> slurm/pipeline/3_train_readout.slurm` | 1 GPU | ~10–15 min |
+| 4 eval | `RUNGS=2000 sbatch --dependency=afterok:<readouts> slurm/pipeline/4_eval.slurm` | CPU / short | < 5 min |
 
 ¹ Measured on Della from the actual runs (jobs 10323846 / 10324132 / 10368943); phase 3/4 from
 the lc0-prod reference (same code, 12 min train). The long poles are **phase 1 gen-trees** and

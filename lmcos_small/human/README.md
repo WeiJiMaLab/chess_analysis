@@ -22,8 +22,8 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `lmcos_
 | **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python lmcos_small/human/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
 | **Ply vs instant-move probability** | `python lmcos_small/human/ply_premove.py` |
 | **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch lmcos_small/slurm/human/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
-| **Engine eval (positions)** | `python lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py eval --engine stockfish` |
-| **Build selected-moves-with-engine join** | `python lmcos_small/slurm/human/scripts/build_selected_moves_with_engine.py` |
+| **Engine eval (positions)** | `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval --engine stockfish` |
+| **Build selected-moves-with-engine join** | `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_selected_moves_with_engine.py` |
 | **Slidev deck (LMCOS overview)** | `cd lmcos_small/human/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
 The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash lmcos_small/slurm/human/analysis.sh`**. The **generated values** (GSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
@@ -45,24 +45,21 @@ chess_analysis/
     ├── README.md                 # This file
     ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=lmcos_small/human
     ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
-    ├── utils/                    # Library: Analyzer, plots, helpers, selected_db (table names)
-    ├── slurm/
-    │   ├── scripts/              # Pipeline Python CLIs (+ _bootstrap.py)
-    │   ├── *.sh, *.sbatch       # Orchestration (calls scripts/ with repo-root paths)
-    │   └── logs/                 # `ld-moves_*.out/.err`, optional `preprocess_driver.log`, `eval_*`
-    ├── movetime_analysis.py      # FULL: clock / branching / own-material / ply vs MT dashboards
-    ├── move_time_summary.py      # FULL: log(MT) histogram + normal QQ
-    ├── ply_premove.py            # FULL: ply vs instant-move probability
-    ├── engine_analysis.py        # engine VOC/MQ primitives (library)
-    ├── tree_values_analysis.py   # SUBSET: GSS / VOC / Action Gap / MQ from lc0 trees vs RT (cluster)
-    └── ...
+    ├── board.py                  # Act 1: board-feature regressors vs RT (`--all`)
+    ├── engine.py                 # Act 2: engine GSS/VOC/gap/MQ vs RT (from SF trees)
+    ├── utils/                    # Library: Analyzer, plots, helpers, engine_eval, selected_db, tree_loader
+    ├── preprocess/               # DB-table producers: preprocess.py (moves ETL) + build_* engine joins
+    └── tests/                    # board/engine unit tests
+
+# human-analysis SLURM lives under the unified tree, not here:
+#   lmcos_small/slurm/human/{preprocess.sh, analysis.sh, tree_values.slurm, logs/}
 ```
 
 ### Where to put new code
 
 | Location | Put here |
 | :--- | :--- |
-| **`lmcos_small/slurm/human/scripts/`** | New **ETL / engine / join** entry points. Start with `ensure_src()` from `_bootstrap.py` so `import utils` works when run as `python lmcos_small/slurm/human/scripts/...` from repo root. |
+| **`lmcos_small/human/preprocess/`** | New **ETL / engine / join** entry points. Run with `PYTHONPATH=lmcos_small/human` so `import utils` resolves (no sys.path shim); the batch launcher goes in `lmcos_small/slurm/human/`. |
 | **`lmcos_small/human/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` (see `utils/selected_db.py`) and write figures. |
 | **`lmcos_small/human/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
 | **`lmcos_small/human/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
@@ -125,7 +122,7 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 
 ### Engine evaluation
 
-- **Worker / eval:** `lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py eval` → `{stockfish,lc0}_evaluations` in `personal.db`.
+- **Worker / eval:** `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval` → `{stockfish,lc0}_evaluations` in `personal.db`.
 - **Join to moves:** `build_selected_moves_with_engine.py` joins **`processed_moves`** to `{stockfish,lc0}_evaluations` on **`fen`** → **`selected_moves_with_engine`**.
 
 > *(The `engine_eval.sh` / `engine_eval_shard.sbatch` wrappers and `script_engine_eval.py` / `script_merge_evals.py` were removed; `build_pos_with_engine_eval.py` is the current entry point.)*
@@ -133,7 +130,7 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 ### Pipeline vs analysis — ordered workflow
 
 1. `bash lmcos_small/slurm/human/preprocess.sh` (or equivalent `preprocess.py` steps).
-2. **Optional:** `python lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py eval` → `python lmcos_small/slurm/human/scripts/build_selected_moves_with_engine.py`
+2. **Optional:** `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval` → `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_selected_moves_with_engine.py`
 3. **Figures:** `bash lmcos_small/slurm/human/analysis.sh` or individual `lmcos_small/human/*.py` tools in §1.
 
 ---
@@ -146,7 +143,7 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 - **Minimal CLIs:** stable, few flags; document defaults in `--help`.
 - **`preprocess.py`:** one directory per step for DuckDB spill **and** artifacts (`work_dir` / `staging_dir` above); do not add parallel “alternate tmpdir” tunnels via `**kwargs`.
 - **Names:** descriptive columns and variables (`log_clock_ply_residual`), not `x_adj`.
-- **Paths:** `os.path.join` + anchor to `__file__`, or use `_bootstrap.src_root()` / `project_root()` in **`slurm/scripts/`**.
+- **Paths:** `os.path.join` + anchor to `__file__`; for the `preprocess/` CLIs rely on `PYTHONPATH=lmcos_small/human` (set by the launcher) rather than a sys.path shim.
 
 ### Structure
 

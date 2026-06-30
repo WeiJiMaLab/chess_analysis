@@ -10,8 +10,8 @@ This repository is the working root for **Chess Meta-control (CMC)**—research 
 | :--- | :--- |
 | `chess_analysis/` | DuckDB, figures; Slidev decks live under `presentations/` |
 | `chess_analysis/lmcos_small/human/` | **Human analytics** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/lmcos_small/slurm/human/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
-| `chess_analysis/lmcos_small/slurm/human/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
+| `chess_analysis/lmcos_small/human/preprocess/` | **DB-table producer CLIs** (preprocess ETL, engine eval, joins) |
+| `chess_analysis/lmcos_small/slurm/human/` | Shell/Sbatch orchestration that calls `human/preprocess/*.py` |
 | `chess_analysis/labnotebook.md` | Chronological log (Description · Rationale · Status · Reference) |
 | `chess_analysis/reports/` | Stable analysis reports (`R-*` refs) |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`src/`** (`cts` package), **`analysis/`** (`cts.analysis`), **`slurm/`** (stage scripts + **`slurm/configs/`** run YAMLs) |
