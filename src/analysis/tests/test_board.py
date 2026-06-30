@@ -1,5 +1,5 @@
 """
-Tests for board-level and database-level calculations in src/human.
+Tests for board-level and database-level calculations in src/analysis.
 Consolidates board piece counts, side-specific piece counts, and reservoir sampling logic.
 """
 

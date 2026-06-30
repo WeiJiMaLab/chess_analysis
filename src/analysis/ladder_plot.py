@@ -20,7 +20,7 @@ The per-rung JSON schema (written by ``evaluate._maybe_write_results``):
 ``mchalt`` carries ``null`` if that rung's controller was not yet scored
 (pending); such a rung is dropped from the MCHalt line rather than plotted as 0.
 
-    PYTHONPATH=src python -m cts.analysis._budgeted.ladder_plot \
+    PYTHONPATH=src python -m analysis.ladder_plot \
         --rung 1800 elo1800_results.json \
         --rung 2000 elo2000_results.json \
         --rung 2200 elo2200_results.json \

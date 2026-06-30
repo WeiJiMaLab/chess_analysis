@@ -12,7 +12,7 @@ import yaml
 # After the human_analytics + lmcos_tiny merge, the human-analysis keys live in
 # the single unified config at configs/core.yaml, under the
 # top-level `human_analysis:` section. helpers.py sits at
-# src/human/utils/helpers.py, so the config is ../../configs/core.yaml.
+# src/analysis/utils/helpers.py, so the config is ../../configs/core.yaml.
 def _load_shared_config() -> dict:
     config_path = (
         Path(__file__).resolve().parent.parent.parent.parent / "configs" / "core.yaml"
@@ -61,42 +61,8 @@ def apply_poster_style():
     plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
 
 
-def analysis_style() -> None:
-    """Apply standard matplotlib settings for lmcos analysis figures."""
-    plt.rcParams.update({
-        "font.size": 13,
-        "axes.labelsize": 15,
-        "axes.titlesize": 14,
-        "xtick.labelsize": 12,
-        "ytick.labelsize": 12,
-        "legend.fontsize": 12,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.alpha": 0.3,
-    })
-
-def display_fen(fen: str, size: int = 200) -> None:
-    board = chess.Board(fen)
-    display(SVG(chess.svg.board(board=board, size=size)))
-
 import contextlib
 
-def get_db_connection(
-    database: str = ":memory:",
-    *,
-    threads: int = 10,
-    memory_limit: str = "20GB",
-    temp_directory: str = ".",
-    **kwargs,
-):
-    config = {
-        "threads": threads,
-        "memory_limit": memory_limit,
-        "temp_directory": temp_directory,
-        **kwargs,
-    }
-    return duckdb.connect(database=database, config=config)
 
 
 @contextlib.contextmanager

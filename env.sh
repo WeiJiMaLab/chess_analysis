@@ -4,6 +4,6 @@
 # forked copy, overriding the editable-installed `cts` in the venv (verified:
 # a PYTHONPATH entry shadows the editable meta-path finder).
 HERE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-export PYTHONPATH="${HERE}/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="${HERE}/src:${HERE}/src/analysis${PYTHONPATH:+:$PYTHONPATH}"
 [ -f /home/hl4291/venv/bin/activate ] && source /home/hl4291/venv/bin/activate
 echo "lmcos_small env: cts -> ${HERE}/src/cts ; venv active"

@@ -42,7 +42,7 @@ from cts.train.controller_train import (
     _collect_episode_metadata_and_step_count,
     _seed_and_resolve_paths,
 )
-from cts.analysis._budgeted.mchalt_scorer import _load_materialized_cache_unchecked
+from analysis.mchalt_scorer import _load_materialized_cache_unchecked
 
 
 def _episode_feature_chunks(cache, episode_meta, total_steps, device):

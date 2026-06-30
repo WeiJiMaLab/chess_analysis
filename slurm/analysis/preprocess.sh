@@ -2,7 +2,7 @@
 #
 # Orchestrates preprocess.py: get_games → Slurm shard array → merge (parquet → moves) → process_moves (processed_*).
 #
-#   bash slurm/human/preprocess.sh
+#   bash slurm/analysis/preprocess.sh
 #
 # Optional: PREPROCESS_SHARD_POLL_SEC=15  Seconds between shard-array status lines (default 30).
 # Optional: DUCKDB_MERGE_THREADS / DUCKDB_MERGE_MEMORY_LIMIT  For merge + process_moves on the login node (default 64 threads, 200GB).
@@ -13,7 +13,7 @@ set -euo pipefail
 
 # --- paths & layout ---
 PROJECT_DIR="/home/hl4291/chess_analysis"
-LOG_DIR="${PROJECT_DIR}/slurm/human/logs"
+LOG_DIR="${PROJECT_DIR}/slurm/analysis/logs"
 # Keep in sync with preprocess.py main() config["staging_dir"].
 STAGING_DIR="/scratch/gpfs/GRIFFITHS/hl4291/tmp/ld_moves_shard"
 
@@ -42,16 +42,9 @@ shopt -s nullglob
 rm -f "${LOG_DIR}"/ld-moves_*.out "${LOG_DIR}"/ld-moves_*.err
 shopt -u nullglob
 
-activate_venv() {
-  if [[ -f .venv/bin/activate ]]; then
-    # shellcheck source=/dev/null
-    source .venv/bin/activate
-  else
-    echo "Warning: .venv not found; using PATH python." >&2
-  fi
-}
-
-activate_venv
+export ELO=2000
+source slurm/helpers/setup_env.sh
+export PYTHONPATH="${PYTHONPATH}:src/analysis"
 
 # --- fresh staging (parquet shards); not done inside get_games ---
 rm -rf "${STAGING_DIR}"
@@ -60,7 +53,7 @@ mkdir -p "${STAGING_DIR}"
 # --- 1. games table ---
 export DUCKDB_THREADS="${DUCKDB_LOGIN_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_LOGIN_MEM}"
-python3 src/human/preprocess/preprocess.py get_games
+python3 src/analysis/preprocess.py get_games
 
 # --- 2. shard (one Slurm array) ---
 job_script="$(mktemp "${TMPDIR:-/tmp}/preprocess-shard.XXXXXX.sbatch")"
@@ -80,12 +73,9 @@ cat >"${job_script}" <<EOF
 
 set -euo pipefail
 cd "${PROJECT_DIR}"
-if [[ -f .venv/bin/activate ]]; then
-  # shellcheck source=/dev/null
-  source .venv/bin/activate
-else
-  echo "Warning: .venv not found; using PATH python." >&2
-fi
+export ELO=2000
+source slurm/helpers/setup_env.sh
+export PYTHONPATH="\${PYTHONPATH}:src/analysis"
 
 echo "task \${SLURM_ARRAY_TASK_ID:-?} / ${TOTAL_SHARDS} on \$(hostname) at \$(date -Is)"
 
@@ -94,7 +84,7 @@ export DUCKDB_MEMORY_LIMIT="\${DUCKDB_MEMORY_LIMIT:-${DUCKDB_SHARD_MEM}}"
 # Must match array task count (here ${TOTAL_SHARDS}).
 export PREPROCESS_TOTAL_SHARDS=${TOTAL_SHARDS}
 
-python3 src/human/preprocess/preprocess.py shard
+python3 src/analysis/preprocess.py shard
 EOF
 
 # Submit array without --wait so we can print periodic status (squeue does not stream).
@@ -145,7 +135,7 @@ echo "================================================================" >&2
 echo ""
 export DUCKDB_THREADS="${DUCKDB_MERGE_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_MERGE_MEM}"
-python3 src/human/preprocess/preprocess.py merge
+python3 src/analysis/preprocess.py merge
 
 # --- 4. process_moves: moves → processed_moves / processed_moves_nonzero ---
 echo ""
@@ -156,6 +146,6 @@ echo "================================================================" >&2
 echo ""
 export DUCKDB_THREADS="${DUCKDB_MERGE_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_MERGE_MEM}"
-python3 src/human/preprocess/preprocess.py process_moves
+python3 src/analysis/preprocess.py process_moves
 
 echo "Done at $(date -Is)"

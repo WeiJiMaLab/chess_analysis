@@ -1,5 +1,5 @@
 """
-Tests for engine-level analyses in src/human.
+Tests for engine-level analyses in src/analysis.
 Consolidates integration tests on real saved trees and mathematical unit tests on mock trees.
 """
 

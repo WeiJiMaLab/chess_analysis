@@ -19,45 +19,7 @@ except (ImportError, ValueError):
     from helpers import FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, apply_poster_style
 
 
-def plot_raw_trend(
-    ax,
-    df,
-    x_col,
-    y_col,
-    std_col,
-    n_col,
-    x_label=None,
-    y_label=None,
-    color=MAIN_COLOR,
-    label="Mean",
-    min_n=30,
-    show_legend=True,
-    *,
-    ci_legend_label="95% CI",
-):
-    """Mean ``y_col`` vs discrete ``x_col`` with a normal-based CI band (``1.96 * std/sqrt(n)``).
 
-    Rows below ``min_n`` are dropped; used for raw-bin aggregates (e.g. integer ply or clock buckets).
-    """
-    apply_poster_style()
-    df = df[df[n_col] >= min_n].copy()
-    df = df.sort_values(x_col)
-    sem = df[std_col] / np.sqrt(df[n_col])
-    ci_y = 1.96 * sem
-    y_mean = df[y_col]
-    y_lower = y_mean - ci_y
-    y_upper = y_mean + ci_y
-    ax.plot(df[x_col], y_mean, color=color, lw=3, label=label)
-    fb_kwargs = {"color": color, "alpha": 0.2}
-    if ci_legend_label is not None:
-        fb_kwargs["label"] = ci_legend_label
-    ax.fill_between(df[x_col], y_lower, y_upper, **fb_kwargs)
-    if x_label:
-        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
-    if y_label:
-        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
-    if show_legend:
-        ax.legend(fontsize=FONT_SIZE_TICKS)
 
 def plot_qbin_stats(
     ax,
@@ -105,31 +67,7 @@ def plot_qbin_stats(
     if show_legend:
         ax.legend(fontsize=FONT_SIZE_TICKS)
 
-def plot_beta_vs_ply(ax, df, ply_col='move_ply', beta_col='beta', se_col='beta_se', max_ply=150, title=None):
-    """Per-ply OLS slopes (e.g. SQL ``regr_slope``) with ``1.96 * se`` ribbon and a zero reference line."""
-    apply_poster_style()
-    df = df[df[ply_col] <= max_ply].copy()
-    ci_beta = 1.96 * df[se_col]
-    ax.plot(df[ply_col], df[beta_col], color=MAIN_COLOR, lw=3, label=r"Slope ($\beta$)")
-    ax.fill_between(df[ply_col], df[beta_col] - ci_beta, df[beta_col] + ci_beta, color=MAIN_COLOR, alpha=0.2, label="95% CI")
-    ax.axhline(0, color='black', linestyle='--', alpha=0.5)
-    ax.set_xlabel("Move Ply", fontsize=FONT_SIZE_LABEL)
-    ax.set_ylabel(r"Sensitivity ($\beta$)", fontsize=FONT_SIZE_LABEL)
-    if title:
-        ax.set_title(title, fontsize=FONT_SIZE_LABEL)
 
-def plot_subset_scatterplot(ax, df, x_col, y_col, x_label=None, y_label=None, n=10000, color=MAIN_COLOR, alpha=0.1, s=10):
-    """Scatter at most ``n`` rows (deterministic ``random_state=42``) for large DuckDB pulls."""
-    apply_poster_style()
-    if len(df) > n:
-        df_sub = df.sample(n=n, random_state=42)
-    else:
-        df_sub = df
-    ax.scatter(df_sub[x_col], df_sub[y_col], color=color, alpha=alpha, s=s)
-    if x_label:
-        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
-    if y_label:
-        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
 
 def plot_histogram_from_bins(
     ax, df_bins,
@@ -286,10 +224,10 @@ def save_figure(fig, category: str, filename: str) -> str:
     
     base, _ = os.path.splitext(filename)
     
-    # Locate repository root. This file lives at src/human/utils/plots.py,
+    # Locate repository root. This file lives at src/analysis/utils/plots.py,
     # so the repo root (chess_analysis/, which holds figures/) is three dirs up.
-    utils_dir = os.path.dirname(os.path.abspath(__file__))   # .../src/human/utils
-    human_dir = os.path.dirname(utils_dir)                   # .../src/human
+    utils_dir = os.path.dirname(os.path.abspath(__file__))   # .../src/analysis/utils
+    human_dir = os.path.dirname(utils_dir)                   # .../src/analysis
     src_dir = os.path.dirname(human_dir)                     # .../src
     lmcos_dir = os.path.dirname(src_dir)                     # .../lmcos_small
     repo_root = os.path.dirname(lmcos_dir)                   # .../chess_analysis

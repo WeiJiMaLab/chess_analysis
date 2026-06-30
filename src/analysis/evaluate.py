@@ -28,7 +28,7 @@ height / width are NOT stored per-snapshot in the packed shards; they are derive
 from the trajectory ``depth`` array + ``step_node_cutoffs`` (``height = max depth over
 the first n_nodes``, ``width = max nodes at any one depth``). ``n_nodes`` is present.
 
-    python -m cts.analysis._budgeted.evaluate \
+    python -m analysis.evaluate \
         --packed-root /scratch/gpfs/GRIFFITHS/hl4291/sf_mc_packed/elo2000 \
         --controller-checkpoint /scratch/.../sf_mchalt_pg.pt \
         --materialized-validation-cache /scratch/.../validation_cache.pt \
@@ -51,7 +51,7 @@ from cts.data.preprocess_mc.oracle import (
     budgeted_oracle_config_from_metadata,
     return_for_stop_step,
 )
-from cts.analysis._budgeted.baselines import _evaluate_baseline
+from analysis.baselines import _evaluate_baseline
 from cts.stats import bootstrap_mean_ci as _bootstrap_ci
 from cts.models.readout import StatsReadout, stop_step_from_advantages
 
@@ -648,7 +648,7 @@ def main() -> None:
                 "--controller-checkpoint requires --materialized-validation-cache "
                 "(the cache the controller is scored over)."
             )
-        from cts.analysis._budgeted.mchalt_scorer import score_mchalt_checkpoint
+        from analysis.mchalt_scorer import score_mchalt_checkpoint
         mc = score_mchalt_checkpoint(
             checkpoint_path=args.controller_checkpoint,
             validation_manifest=str(packed_root / "validation_manifest.json"),

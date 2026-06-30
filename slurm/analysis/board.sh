@@ -6,19 +6,18 @@
 # the Lc0 tree definition (final_Q loss of the played move), not a Stockfish plot.
 #
 # Usage:
-#   bash slurm/human/analysis.sh
+#   bash slurm/analysis/board.sh
 
 set -euo pipefail
 
 PROJECT_DIR="/home/hl4291/chess_analysis"
 cd "${PROJECT_DIR}"
 
-if [[ -f .venv/bin/activate ]]; then
-  source .venv/bin/activate
-fi
-export PYTHONPATH="${PYTHONPATH:-}:src/human"
+export ELO=2000
+source slurm/helpers/setup_env.sh
+export PYTHONPATH="${PYTHONPATH}:src/analysis"
 
 echo "Running full-dataset board analysis pipeline..."
-python3 src/human/board.py --all
+python3 src/analysis/board.py --all
 
 echo "Analysis complete at $(date)"

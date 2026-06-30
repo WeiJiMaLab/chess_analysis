@@ -40,7 +40,7 @@ for E in "${RUNGS_ARR[@]}"; do
   OUT=$(rung_field "$E" out_dir)
   mkdir -p "$OUT"
   echo "=== eval elo${E} ==="
-  python -m cts.analysis._budgeted.evaluate \
+  python -m analysis.evaluate \
     --packed-root "$PACKED" --out-dir "$OUT" \
     --controller-checkpoint "$CTRL" \
     --materialized-validation-cache "$MATVAL" \

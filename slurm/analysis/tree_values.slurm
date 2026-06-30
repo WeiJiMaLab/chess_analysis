@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=tree-values
-#SBATCH --output=/home/hl4291/chess_analysis/slurm/human/logs/tree_values_%j.out
-#SBATCH --error=/home/hl4291/chess_analysis/slurm/human/logs/tree_values_%j.err
+#SBATCH --output=/home/hl4291/chess_analysis/slurm/analysis/logs/tree_values_%j.out
+#SBATCH --error=/home/hl4291/chess_analysis/slurm/analysis/logs/tree_values_%j.err
 # CPU partition by design: this job runs NO Leela/lc0 inference. The lc0 evals are
 # already baked into the pre-generated .pt trees (value heads + oracle traces); here we
 # only read them (torch.load on CPU), compute stats (greedy stopping step, VOC/MQ/action
@@ -22,7 +22,7 @@
 set -euo pipefail
 PROJECT_DIR="/home/hl4291/chess_analysis"
 cd "${PROJECT_DIR}"
-mkdir -p slurm/human/logs
+mkdir -p slurm/analysis/logs
 
 source /home/hl4291/venv/bin/activate
 
@@ -33,7 +33,7 @@ echo "tree values: n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $
 # REFRESH forces a clean recompute of the per-tree parquet (default off). Needed
 # whenever tree_loader gains columns (e.g. greedy_frac_good / OSS) the cache predates.
 REFRESH_FLAG="${REFRESH:+--refresh}"
-PYTHONPATH=src:src/human python3 src/human/engine.py \
+PYTHONPATH=src:src/analysis python3 src/analysis/engine.py \
     --mode tree_values \
     --n-trees "${N_TREES}" \
     --n-workers "${N_WORKERS}" \

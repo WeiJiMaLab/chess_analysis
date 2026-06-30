@@ -39,7 +39,7 @@ from cts.train.controller_train import (
     _collect_episode_metadata_and_step_count,
 )
 from cts.train.gnn_pretrain import load_encoder_architecture
-from cts.analysis._budgeted.baselines import stop_fit_metrics
+from .baselines import stop_fit_metrics
 
 
 def _load_materialized_cache_unchecked(cache_index_path: Path) -> MaterializedCache:

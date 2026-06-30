@@ -68,7 +68,7 @@ facts and decisions are kept here.
 
 | | |
 |---|---|
-| **What** | Lichess **10+0** games (Oct–Dec 2023), preprocessed via `slurm/human/`, in DuckDB `personal.db`. |
+| **What** | Lichess **10+0** games (Oct–Dec 2023), preprocessed via `slurm/analysis/`, in DuckDB `personal.db`. |
 | **Filters** | Time control 10+0 (600s, no increment); both players Elo **≥ 2000**; excluded: negative `move_time`, berserk, extra-time grants. |
 | **Scale** | **1.97M** games; **135M** non-zero-RT moves. |
 

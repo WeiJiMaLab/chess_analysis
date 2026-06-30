@@ -4,7 +4,7 @@ Main tools:
 
 - ``analyze_budgeted_controller_run`` — the end-of-run dashboard for one
   trained controller: 25+ plots, ``summary.json``, ``report.md``. Body
-  lives in themed sub-modules under ``cts.analysis._budgeted/``.
+  lives in themed sub-modules under ``analysis/``.
 - ``analyze_compute_advantage_training_log`` — parse a training ``.out``
   log into per-epoch metrics.
 - ``analyze_oversearch_preference_evolution`` — track the controller's

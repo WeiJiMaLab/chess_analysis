@@ -203,7 +203,7 @@ train:
   very_large_max_time: 120
 
 # ── Phase 4 ─────────────────────────────────────────────────────────────────
-# stage: eval (4 halt models + per-rung results JSON)  ->  cts.analysis._budgeted.alt_models_eval
+# stage: eval (4 halt models + per-rung results JSON)  ->  analysis.alt_models_eval
 eval:
   packed_root: ${mc_packed_dir}
   materialized_validation_cache: ${materialized_dir}/validation_cache.pt

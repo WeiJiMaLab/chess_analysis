@@ -41,6 +41,9 @@ Reclaimed the narrative: **legal-moves is the *explanandum*, not a floor to beat
 | **Satisficing-search ratio test** | Does RT∝#legal/#good (search length) beat the count? | ❌ ratio ↔RT=+0.33 (< floor +0.34), partial|legal=+0.01 — collapses to legal-moves; gut-order construal proxy also null. | [(R-TREESEARCH)](reports/treesearch.md) |
 | **★ Reframe + normative-curve fit** | A count isn't a model; the win is *explaining why effort ∝ options is resource-rational* | ✅ `normative_curves`: the no-prune node-cost model **reproduces all three signs** — size **+0.45**, satisfaction **−0.43**, sharpness **+0.095** (vs human +0.34/−0.30/+0.11) from ONE param c≈1e-4; sharpness (predicted backwards) comes out right. Success criterion rewritten across report.md/treesearch.md/pruning.md: *reproduce the curves*, not *beat the floor*. | [(R-TREESEARCH)](reports/treesearch.md) |
 | **Cleanup** | Consolidate | Deleted off-track proposals (search_shape/planning_engagement/value_of_information) + older reports (construal/branching/engine/halt_calibration/lmcos_tiny). Rewiring human_analytics engine.py off the deleted lc0/md4 trees onto n1md36. | — |
+| **Workspace Relocation & Refactoring** | Simplify the repo layout by merging folders | ✅ Moved outputs, consolidated `lmcos_small` to root, merged `human/` and `_budgeted/` into the `src/analysis/` package, and aligned PYTHONPATH in `env.sh` / `setup_env.sh` and `pytest.ini`. | — |
+| **Unused Code & Config Pruning** | Clean up obsolete files and unused functions | ✅ Deleted the legacy `pipeline.yaml`, removed `[tool.pytest.ini_options]` duplicate from `pyproject.toml`, and deleted 6 unused plotting/helper functions from `helpers.py` and `plots.py`. 39 tests continue to pass. | — |
+
 
 ## 2026-06-29 {#2026-06-29}
 

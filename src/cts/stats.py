@@ -2,7 +2,7 @@
 
 Before this module these were copy-pasted as ``_spearman`` / ``_partial_spearman`` /
 ``_boot`` across the ``analysis/`` scripts and as a torch ``_bootstrap_ci`` buried in
-``cts.analysis._budgeted.evaluate``. The implementations here are byte-for-byte the
+``analysis.evaluate``. The implementations here are byte-for-byte the
 behaviour of those copies (same RNG stream, same percentile convention), so repointing
 callers does not move any published number. All CIs are **percentile bootstrap**
 ([[bootstrap-cis-always]]).
@@ -50,7 +50,7 @@ def bootstrap_ci(fn, *cols, n_boot: int = 1000, seed: int = 0, alpha: float = 0.
 def bootstrap_mean_ci(values, *, n_boot: int = 2000, seed: int = 0, alpha: float = 0.05):
     """Percentile-bootstrap ``(lo, hi)`` CI on the **mean** of a 1-D list of scalars.
 
-    Torch-based, bit-identical to the former ``cts.analysis._budgeted.evaluate._bootstrap_ci``
+    Torch-based, bit-identical to the former ``analysis.evaluate._bootstrap_ci``
     (used for mean-regret CIs in the controller dashboard).
     """
     import torch

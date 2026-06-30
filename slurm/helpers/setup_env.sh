@@ -14,7 +14,7 @@ VENV_DIR=/home/hl4291/venv
 source "$VENV_DIR/bin/activate"
 set -u
 
-export PYTHONPATH="/home/hl4291/chess_analysis/src"
+export PYTHONPATH="/home/hl4291/chess_analysis/src:/home/hl4291/chess_analysis/src/analysis"
 export PYTHONUNBUFFERED=1
 
 # Validate ELO is set
