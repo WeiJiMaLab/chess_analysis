@@ -43,13 +43,26 @@ def _worker(path):
         if gut is None or gut.shape[0] != len(mv):
             return None
         bmp = mv[bi][:2]                          # best move's from-square (the critical piece)
+        fq = np.asarray(d["oracle_final_root_q_values"], float).ravel()  # full value per move
+        if fq.shape[0] != len(mv):
+            return None
         pv = defaultdict(lambda: -9.0)            # piece -> best gut value of its moves
         for m, g in zip(mv, gut):
             pv[m[:2]] = max(pv[m[:2]], float(g))
-        order = sorted(pv, key=lambda s: -pv[s])
-        s_star = order.index(bmp) + 1             # gut-rank of the winning piece = |S*|
-        return {"fen": fen, "legal_moves": len(mv), "n_pieces": len(pv),
-                "s_star": s_star, "s_star_frac": s_star / len(pv)}
+        order = sorted(pv, key=lambda s: -pv[s])  # gut criticality order
+        s_star = order.index(bmp) + 1             # gut-rank of the winning piece (loose proxy)
+        # value-based reward-cost stop: V_sub(k) = best FULL value reachable using the top-k
+        # gut pieces' moves (monotone ↑ in k); |S*|(c) = argmax_k [V_sub(k) - c*k].
+        piece_idx = {p: j for j, p in enumerate(order)}
+        rank_of = np.array([piece_idx[m[:2]] for m in mv])  # 0-based gut rank of each move's piece
+        Vsub = np.maximum.accumulate(
+            [fq[rank_of <= k].max() for k in range(len(order))])  # V_sub(k=1..n_pieces)
+        kk = np.arange(1, len(Vsub) + 1)
+        row = {"fen": fen, "legal_moves": len(mv), "n_pieces": len(pv),
+               "s_star": s_star, "s_star_frac": s_star / len(pv)}
+        for c in (0.02, 0.05, 0.1, 0.2, 0.4):
+            row[f"sstar_c{c}"] = int(np.argmax(Vsub - c * kk) + 1)
+        return row
     except Exception:  # noqa: BLE001
         return None
 
@@ -99,8 +112,10 @@ def analyze():
     y = m["move_time"].to_numpy(); leg = m["legal_moves"].to_numpy().astype(float)
     print(f"n={len(m):,}  med: legal={int(np.median(leg))} n_pieces={int(m.n_pieces.median())} "
           f"s_star={int(m.s_star.median())}\n", flush=True)
+    cols = ["legal_moves", "n_pieces", "s_star", "s_star_frac"] + \
+           [c for c in ("sstar_c0.02", "sstar_c0.05", "sstar_c0.1", "sstar_c0.2", "sstar_c0.4") if c in m.columns]
     print(f"{'feature':>14} {'ρ(.,RT)':>22} {'partial|legal':>22}", flush=True)
-    for col in ("legal_moves", "n_pieces", "s_star", "s_star_frac"):
+    for col in cols:
         c = m[col].to_numpy().astype(float)
         r, lo, hi = _boot(_spear, c, y)
         if col == "legal_moves":
