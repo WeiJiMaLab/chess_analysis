@@ -1,5 +1,5 @@
 """
-Tests for engine-level analyses in lmcos_small/human.
+Tests for engine-level analyses in lmcos_small/src/human.
 Consolidates integration tests on real saved trees and mathematical unit tests on mock trees.
 """
 

@@ -21,7 +21,7 @@ PARAM="${PARAM:-}"         # the prune knob (ignored for MODE=none)
 N="${N:-1}"                # leaf-eval node budget (1 or 100)
 LANE_END="${LANE_END:-250000}"
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/helpers/setup_env.sh"
 
 PRUNE_OVERRIDE=()
 if [ "$MODE" = "none" ]; then

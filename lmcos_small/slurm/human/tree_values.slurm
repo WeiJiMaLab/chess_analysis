@@ -33,7 +33,7 @@ echo "tree values: n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $
 # REFRESH forces a clean recompute of the per-tree parquet (default off). Needed
 # whenever tree_loader gains columns (e.g. greedy_frac_good / OSS) the cache predates.
 REFRESH_FLAG="${REFRESH:+--refresh}"
-PYTHONPATH=lmcos_small/src:lmcos_small/human python3 lmcos_small/human/engine.py \
+PYTHONPATH=lmcos_small/src:lmcos_small/src/human python3 lmcos_small/src/human/engine.py \
     --mode tree_values \
     --n-trees "${N_TREES}" \
     --n-workers "${N_WORKERS}" \

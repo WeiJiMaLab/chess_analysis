@@ -9,4 +9,4 @@
 
 set -euo pipefail
 cd /home/hl4291/chess_analysis
-/home/hl4291/venv/bin/python lmcos_small/analysis/compute_voc_tau_sweep.py
+/home/hl4291/venv/bin/python lmcos_small/src/analysis/compute_voc_tau_sweep.py

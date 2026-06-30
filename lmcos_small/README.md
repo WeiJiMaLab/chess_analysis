@@ -24,9 +24,10 @@ lmcos_small/
 ├── configs/
 │   ├── core.yaml        SINGLE unified config (pipeline `globals`+stages AND `human_analysis:`)
 │   └── render_stage.py  shell helper to QUERY resolved pipeline values (--get)
-├── src/cts/             the `cts` package (tree gen, encoder, MC oracle, readout, eval, stats)
-├── analysis/            cts analysis scripts, pure python (VOC / OSS / pruning / RT figures)
-├── human/               human-RT analysis (board.py, engine.py, utils/, preprocess/, tests/)
+├── src/
+│   ├── cts/             the `cts` package (tree gen, encoder, MC oracle, readout, eval, stats)
+│   ├── analysis/        cts analysis scripts, pure python (VOC / OSS / pruning / RT figures)
+│   └── human/           human-RT analysis (board.py, engine.py, utils/, preprocess/, tests/)
 └── slurm/               EVERY batch script, one tree (logs unified under slurm/logs/)
     ├── pipeline/        cts stage jobs 1a–4 (+ helpers/setup_env.sh, submit_all.sh)
     ├── analysis/        cts analysis jobs (voc / oss / prune / figures)

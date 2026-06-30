@@ -15,13 +15,13 @@ Usage
 -----
 One-shot (render once and exit)::
 
-    python lmcos_small/human/gnn_kl_dashboard.py \
+    python lmcos_small/src/human/gnn_kl_dashboard.py \
         --jsonl /scratch/gpfs/GRIFFITHS/hl4291/GNN_profile/smoke_bucketed_kl.jsonl \
         --out figures/gnn_kl_dashboard.png
 
 Live (re-render every --interval seconds until the file stops growing)::
 
-    python lmcos_small/human/gnn_kl_dashboard.py --jsonl <path> --watch --interval 15
+    python lmcos_small/src/human/gnn_kl_dashboard.py --jsonl <path> --watch --interval 15
 """
 from __future__ import annotations
 

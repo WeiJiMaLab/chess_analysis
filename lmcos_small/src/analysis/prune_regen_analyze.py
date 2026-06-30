@@ -6,7 +6,7 @@ and legal_moves, join human RT, and report Spearman(cost, RT) + partial|legal â€
 test the loose proxy could NOT do (these trees were BUILT with pruning, budget
 redeployed deeper, causal early values). Bootstrap 95% CIs.
 
-  python lmcos_small/analysis/prune_regen_analyze.py   # (sbatch: DuckDB join needs memory)
+  python lmcos_small/src/analysis/prune_regen_analyze.py   # (sbatch: DuckDB join needs memory)
 """
 from __future__ import annotations
 

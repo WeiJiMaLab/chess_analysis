@@ -69,7 +69,7 @@ python -m cts.data.preprocess_mc.pack --config configs/core.yaml --stage mc_pack
 #         └ merged config              └ section   └ pick rung (pre-interp)  └ patch field
 ```
 `configs/render_stage.py` remains as a shell helper for **querying** resolved values
-(`--get globals.materialized_dir`), used by `slurm/pipeline/helpers/setup_env.sh` to derive paths.
+(`--get globals.materialized_dir`), used by `slurm/helpers/setup_env.sh` to derive paths.
 
 ## Directory layout
 ```
@@ -82,9 +82,9 @@ lmcos_small/
 │   └── render_stage.py     shell helper to QUERY resolved values (--get), used by setup_env.sh
 ├── analysis/               cts analysis scripts (pure python; jobs live in slurm/analysis/)
 ├── slurm/                  EVERY batch script in one tree
-│   ├── pipeline/           orchestration, one slurm file per STAGE (helpers/ aside)
-│   │   ├── helpers/
-│   │   │     setup_env.sh  (Shared helper to load modules, activate venv, and export paths)
+│   ├── helpers/
+│   │     setup_env.sh      (Shared helper to load modules, activate venv, and export paths)
+│   ├── pipeline/           orchestration, one slurm file per STAGE
 │   │   ├── submit_all.sh                       (chains every stage for all three rungs)
 │   │   ├── 1a_gen_trees.slurm                  (CPU array: treegen)
 │   │   ├── 1b_filter_trees.slurm               (CPU array: PUCT∩monotone filter shards)

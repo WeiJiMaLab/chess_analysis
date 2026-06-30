@@ -17,7 +17,7 @@ set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh" gpu
+source "$TINY/slurm/helpers/setup_env.sh" gpu
 
 echo "elo=$ELO host=$(hostname)"; nvidia-smi -L || true; date
 

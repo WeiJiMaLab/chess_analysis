@@ -15,6 +15,6 @@ set -euo pipefail
 export VOC_SET="${VOC_SET:?set VOC_SET}"
 cd /home/hl4291/chess_analysis
 echo "=== make_rt_figures SET=$VOC_SET ($(date)) ==="
-/home/hl4291/venv/bin/python lmcos_small/analysis/make_rt_figures.py
+/home/hl4291/venv/bin/python lmcos_small/src/analysis/make_rt_figures.py
 echo "=== figures done ($(date)) ==="
 ls -1 figures/normative/*.png 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' '

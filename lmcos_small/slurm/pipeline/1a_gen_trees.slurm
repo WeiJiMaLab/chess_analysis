@@ -18,7 +18,7 @@ set -euo pipefail
 : "${SHARD_SIZE:?SHARD_SIZE required}"; : "${BASE_START:?BASE_START required}"; : "${LANE_END:?LANE_END required}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/helpers/setup_env.sh"
 
 start=$(( BASE_START + SLURM_ARRAY_TASK_ID * SHARD_SIZE ))
 end=$(( start + SHARD_SIZE )); (( end > LANE_END )) && end=${LANE_END}

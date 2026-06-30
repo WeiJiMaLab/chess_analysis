@@ -29,7 +29,7 @@ set -euo pipefail
 WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
+source "$TINY/slurm/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
 
 LW=$(( ${SLURM_CPUS_PER_TASK:-4} - 1 ))   # DataLoader background workers
 

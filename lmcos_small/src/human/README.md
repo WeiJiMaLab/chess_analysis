@@ -1,6 +1,6 @@
-# Chess Thinking Dynamics — `lmcos_small/human/` handbook
+# Chess Thinking Dynamics — `lmcos_small/src/human/` handbook
 
-**Audience:** coding agents, research assistants, and human contributors working in `chess_analysis/lmcos_small/human/`.
+**Audience:** coding agents, research assistants, and human contributors working in `chess_analysis/lmcos_small/src/human/`.
 
 This file is the **single** orientation doc for this tree: layout, commands, conventions, and enough scientific context to interpret what the code is doing.
 
@@ -11,18 +11,18 @@ This file is the **single** orientation doc for this tree: layout, commands, con
 
 ## 1. Quick reference — commands
 
-All paths are relative to the **`chess_analysis/`** repo root (parent of `lmcos_small/human/`).
+All paths are relative to the **`chess_analysis/`** repo root (parent of `lmcos_small/src/human/`).
 
 | Task | Command |
 | :--- | :--- |
 | **Activate env** | `source .venv/bin/activate` |
 | **Moves ETL (games → shards → merge → `process_moves`)** | `bash lmcos_small/slurm/human/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
 | **Regenerate standard figures** | `bash lmcos_small/slurm/human/analysis.sh` |
-| **log(MT) histogram + normal QQ** | `python lmcos_small/human/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python lmcos_small/human/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
-| **Ply vs instant-move probability** | `python lmcos_small/human/ply_premove.py` |
+| **log(MT) histogram + normal QQ** | `python lmcos_small/src/human/move_time_summary.py` |
+| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python lmcos_small/src/human/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
+| **Ply vs instant-move probability** | `python lmcos_small/src/human/ply_premove.py` |
 | **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch lmcos_small/slurm/human/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
-| **Slidev deck (LMCOS overview)** | `cd lmcos_small/human/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
+| **Slidev deck (LMCOS overview)** | `cd lmcos_small/src/human/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
 The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash lmcos_small/slurm/human/analysis.sh`**. The **generated values** (GSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
 
@@ -39,9 +39,9 @@ chess_analysis/
 ├── figures/                      # Matplotlib outputs from dashboards (single source of truth)
 │   └── archive/                  # Older / intermediate figure snapshots (e.g. u3_baselines/)
 ├── README.md                     # Workspace / lmcos overview
-└── lmcos_small/human/
+└── lmcos_small/src/human/
     ├── README.md                 # This file
-    ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=lmcos_small/human
+    ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=lmcos_small/src/human
     ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
     ├── board.py                  # Act 1: board-feature regressors vs RT (`--all`)
     ├── engine.py                 # Act 2: engine GSS/VOC/gap/MQ vs RT (from SF trees)
@@ -57,11 +57,11 @@ chess_analysis/
 
 | Location | Put here |
 | :--- | :--- |
-| **`lmcos_small/human/preprocess/`** | New **ETL / engine / join** entry points. Run with `PYTHONPATH=lmcos_small/human` so `import utils` resolves (no sys.path shim); the batch launcher goes in `lmcos_small/slurm/human/`. |
-| **`lmcos_small/human/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` (see `utils/selected_db.py`) and write figures. |
-| **`lmcos_small/human/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
-| **`lmcos_small/human/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
-| **`lmcos_small/human/presentations/`** | Slidev decks (`lmcos-overview/`) and presentation assets only—not Python pipeline code. |
+| **`lmcos_small/src/human/preprocess/`** | New **ETL / engine / join** entry points. Run with `PYTHONPATH=lmcos_small/src/human` so `import utils` resolves (no sys.path shim); the batch launcher goes in `lmcos_small/slurm/human/`. |
+| **`lmcos_small/src/human/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` (see `utils/selected_db.py`) and write figures. |
+| **`lmcos_small/src/human/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
+| **`lmcos_small/src/human/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
+| **`lmcos_small/src/human/presentations/`** | Slidev decks (`lmcos-overview/`) and presentation assets only—not Python pipeline code. |
 
 ---
 
@@ -131,7 +131,7 @@ There is **no live-UCI evaluation** on the human side: the former `engine_eval.p
 ### Pipeline vs analysis — ordered workflow
 
 1. `bash lmcos_small/slurm/human/preprocess.sh` (or equivalent `preprocess.py` steps) → `processed_moves[_nonzero]`.
-2. **Figures:** `bash lmcos_small/slurm/human/analysis.sh` or individual `lmcos_small/human/*.py` tools in §1.
+2. **Figures:** `bash lmcos_small/slurm/human/analysis.sh` or individual `lmcos_small/src/human/*.py` tools in §1.
 
 ---
 
@@ -143,7 +143,7 @@ There is **no live-UCI evaluation** on the human side: the former `engine_eval.p
 - **Minimal CLIs:** stable, few flags; document defaults in `--help`.
 - **`preprocess.py`:** one directory per step for DuckDB spill **and** artifacts (`work_dir` / `staging_dir` above); do not add parallel “alternate tmpdir” tunnels via `**kwargs`.
 - **Names:** descriptive columns and variables (`log_clock_ply_residual`), not `x_adj`.
-- **Paths:** `os.path.join` + anchor to `__file__`; for the `preprocess/` CLIs rely on `PYTHONPATH=lmcos_small/human` (set by the launcher) rather than a sys.path shim.
+- **Paths:** `os.path.join` + anchor to `__file__`; for the `preprocess/` CLIs rely on `PYTHONPATH=lmcos_small/src/human` (set by the launcher) rather than a sys.path shim.
 
 ### Structure
 

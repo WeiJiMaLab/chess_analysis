@@ -1,5 +1,5 @@
 """
-Tests for board-level and database-level calculations in lmcos_small/human.
+Tests for board-level and database-level calculations in lmcos_small/src/human.
 Consolidates board piece counts, side-specific piece counts, and reservoir sampling logic.
 """
 

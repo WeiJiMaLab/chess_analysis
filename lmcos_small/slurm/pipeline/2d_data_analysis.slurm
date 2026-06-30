@@ -32,7 +32,7 @@ PY=/home/hl4291/venv/bin/python
 
 echo "=== 2d_data_analysis SET=$SET FILTERED=$VOC_FILTERED ($(date)) ==="
 echo "--- per-tree budgeted-oracle VOC signals ---"
-$PY lmcos_small/analysis/compute_voc_signals.py
+$PY lmcos_small/src/analysis/compute_voc_signals.py
 echo "--- softmax-VOC(policy) tau sweep ---"
-$PY lmcos_small/analysis/compute_voc_tau_sweep.py
+$PY lmcos_small/src/analysis/compute_voc_tau_sweep.py
 echo "=== 2d done: sf_analysis/$SET/{voc_signals,voc_tau_sweep}.parquet ($(date)) ==="

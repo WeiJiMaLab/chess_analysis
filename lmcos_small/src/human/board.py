@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Align imports with the lmcos_small/human package structure
+# Align imports with the lmcos_small/src/human package structure
 from utils import Variable, Analyzer
 from utils.helpers import (
     apply_poster_style,

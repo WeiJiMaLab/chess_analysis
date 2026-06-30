@@ -23,7 +23,7 @@ WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}
 NSHARDS=${SLURM_ARRAY_TASK_COUNT:?array count unavailable}
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/helpers/setup_env.sh"
 
 echo "elo=$ELO shard=$WID/$NSHARDS host=$(hostname)"; date
 

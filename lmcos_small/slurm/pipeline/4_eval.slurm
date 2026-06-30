@@ -24,7 +24,7 @@ IFS=',' read -ra RUNGS_ARR <<< "${RUNGS:-1800,2000,2200}"
 # setup_env needs ELO (loads modules + venv + PYTHONPATH); eval is multi-rung and
 # renders paths itself, so any rung works — use the first.
 export ELO=${ELO:-${RUNGS_ARR[0]}}
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/helpers/setup_env.sh"
 
 rung_field() {  # rung_field <ELO> <key>
   python "$TINY/configs/render_stage.py" "$TINY/configs/core.yaml" --set globals.sf_elo="$1" --get "eval.$2"

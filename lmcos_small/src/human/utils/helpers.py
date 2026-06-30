@@ -12,10 +12,10 @@ import yaml
 # After the human_analytics + lmcos_tiny merge, the human-analysis keys live in
 # the single unified config at lmcos_small/configs/core.yaml, under the
 # top-level `human_analysis:` section. helpers.py sits at
-# lmcos_small/human/utils/helpers.py, so the config is ../../configs/core.yaml.
+# lmcos_small/src/human/utils/helpers.py, so the config is ../../configs/core.yaml.
 def _load_shared_config() -> dict:
     config_path = (
-        Path(__file__).resolve().parent.parent.parent / "configs" / "core.yaml"
+        Path(__file__).resolve().parent.parent.parent.parent / "configs" / "core.yaml"
     )
     if not config_path.exists():
         raise FileNotFoundError(f"Shared config not found at {config_path}")

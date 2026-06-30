@@ -286,11 +286,12 @@ def save_figure(fig, category: str, filename: str) -> str:
     
     base, _ = os.path.splitext(filename)
     
-    # Locate repository root. This file lives at lmcos_small/human/utils/plots.py,
+    # Locate repository root. This file lives at lmcos_small/src/human/utils/plots.py,
     # so the repo root (chess_analysis/, which holds figures/) is three dirs up.
-    utils_dir = os.path.dirname(os.path.abspath(__file__))   # .../lmcos_small/human/utils
-    human_dir = os.path.dirname(utils_dir)                   # .../lmcos_small/human
-    lmcos_dir = os.path.dirname(human_dir)                   # .../lmcos_small
+    utils_dir = os.path.dirname(os.path.abspath(__file__))   # .../lmcos_small/src/human/utils
+    human_dir = os.path.dirname(utils_dir)                   # .../lmcos_small/src/human
+    src_dir = os.path.dirname(human_dir)                     # .../lmcos_small/src
+    lmcos_dir = os.path.dirname(src_dir)                     # .../lmcos_small
     repo_root = os.path.dirname(lmcos_dir)                   # .../chess_analysis
     
     out_dir = os.path.join(repo_root, "figures", category)

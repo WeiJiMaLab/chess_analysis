@@ -20,7 +20,7 @@ set -euo pipefail
 : "${NWORKERS:?NWORKERS required (must match the worker array size)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/slurm/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/helpers/setup_env.sh"
 
 echo "elo=$ELO merge NWORKERS=$NWORKERS host=$(hostname)"; date
 

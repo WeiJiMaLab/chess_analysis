@@ -16,9 +16,9 @@ cd "${PROJECT_DIR}"
 if [[ -f .venv/bin/activate ]]; then
   source .venv/bin/activate
 fi
-export PYTHONPATH="${PYTHONPATH:-}:lmcos_small/human"
+export PYTHONPATH="${PYTHONPATH:-}:lmcos_small/src/human"
 
 echo "Running full-dataset board analysis pipeline..."
-python3 lmcos_small/human/board.py --all
+python3 lmcos_small/src/human/board.py --all
 
 echo "Analysis complete at $(date)"

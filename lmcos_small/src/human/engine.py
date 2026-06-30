@@ -18,7 +18,7 @@ import duckdb
 import pandas as pd
 import numpy as np
 
-# Align imports with the lmcos_small/human package structure
+# Align imports with the lmcos_small/src/human package structure
 from utils import Variable, Analyzer
 from utils.helpers import (
     apply_poster_style,
@@ -216,11 +216,12 @@ def run_tree_values_pipeline(
 
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
-    # Locate output directory. This file is lmcos_small/human/engine.py, so the repo
+    # Locate output directory. This file is lmcos_small/src/human/engine.py, so the repo
     # root (chess_analysis/, which holds figures/) is THREE dirs up: human -> lmcos_small
     # -> chess_analysis. (Matches utils.plots.save_figure used by board.py.)
-    human_dir = os.path.dirname(os.path.abspath(__file__))   # lmcos_small/human
-    lmcos_dir = os.path.dirname(human_dir)                   # lmcos_small
+    human_dir = os.path.dirname(os.path.abspath(__file__))   # lmcos_small/src/human
+    src_dir = os.path.dirname(human_dir)                     # lmcos_small/src
+    lmcos_dir = os.path.dirname(src_dir)                     # lmcos_small
     repo_root = os.path.dirname(lmcos_dir)                   # chess_analysis
     out_dir = os.path.join(repo_root, "figures", "engine")
     os.makedirs(out_dir, exist_ok=True)

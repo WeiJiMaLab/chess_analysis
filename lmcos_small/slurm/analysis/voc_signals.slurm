@@ -22,4 +22,4 @@ if ls "${FDIR}"/shards/clean_trees_shard_0.txt >/dev/null 2>&1; then
   echo "merged shards 0-9 -> ${FDIR}/clean_trees.txt ($(wc -l < ${FDIR}/clean_trees.txt) trees)"
 fi
 
-/home/hl4291/venv/bin/python lmcos_small/analysis/compute_voc_signals.py
+/home/hl4291/venv/bin/python lmcos_small/src/analysis/compute_voc_signals.py
