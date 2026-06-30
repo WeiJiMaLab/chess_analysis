@@ -31,11 +31,11 @@ Reports come in two formats:
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
 | Human move time — does a normative engine model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, SF-2000 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done (SF-2000); residualized MQ open |
 | Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
-| Meta-controller — why is tree value ≈0 for stopping, and the minimal forward plan (folds the former R-MC-READOUT/COST/SIGNAL/DELIB proposals) | [(R-MC-PLAN)](../mc_minimal_plan.md) | Plan | LMCOS | 📝 active; P0–P3 |
 | Halt-policy comparison — do learned readouts beat blind stopping on the SF-2000 budgeted oracle? (regret-vs-compute, PG vs MSE surrogate, GNN-z vs tree-stats) | [(R-LMCOS-TINY)](lmcos_tiny.md) | Scientific | LMCOS | ✅ done (elo2000); seeds/rungs open |
 | When ought one think? — calibrating the budgeted-oracle **step\*** against human RT (step\*=0 degeneracy, cost shape/scale, weak-engine rung) | [(R-HALT-CALIB)](halt_calibration.md) | Scientific | LMCOS | 📝 active; step\*↔RT reframe, interim elo2000 |
 | **Tree search & deliberation** — the single linear story (mermaid map): when/do people search like an engine? → VOC fails (every signal a legal-moves proxy) → RT = satisficed decision difficulty (size − satisfaction + sharpness) → a meta-rational reward−cost model + the fit-`c`-to-RT program | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; 63k; the single deliberation report (folds in the former R-VOC) |
-| **Value-pruning** — changing the **cost profile** (the only live lever once trees are filtered for reward-to-planning) via ε-pruning of implausible leaves; staged plan + feasibility (750K @ n=1) | [(R-PRUNING)](pruning.md) | Plan | Deliberation | 📝 proposal; ε-grid + regen + normative fit |
+| **Value-pruning** — changing the **cost profile** (the only live lever once trees are filtered for reward-to-planning) via ε-pruning of implausible leaves; staged plan + feasibility (750K @ n=1) | [(R-PRUNING)](pruning.md) | Plan | Deliberation | ❌ negative — pruned node-count washes out at md36; the win (if any) is the satisficing stop, not the count |
+| **Construal** — effort as the **complexity of the simplified game** you build (attended pieces), not tree size; freeze-not-remove with holistic leaf eval; RT ∝ construal size \|S\*\| | [(R-CONSTRUAL)](construal.md) | Plan | Deliberation | 📝 proposal; the alternative that can *dissociate* from legal-moves |
 | Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
@@ -118,7 +118,7 @@ facts and decisions are kept here.
   on CPU. It sets `UCI_ShowWDL` and returns a WDL per node, so it **does** produce child-WDL targets
   (the `edge_wdl_targets` backup loop is provider-agnostic). Differences vs lc0: WDL from Stockfish's
   internal eval→WDL model (not a trained value head); **uniform priors** (no policy head). See
-  `mc_minimal_plan.md` P2/P3. *(Supersedes the earlier "α-β cannot make child-WDL" note.)*
+  `mc_pipeline.md` P2/P3. *(Supersedes the earlier "α-β cannot make child-WDL" note.)*
 - **JAX / `mctx`** (batched MCTS): deferred to v2 — our trees are ragged/dynamically grown, so a
   fixed-size padded-array port is a substantial parity risk; not justified unless CPU-side
   bookkeeping becomes the bottleneck.
