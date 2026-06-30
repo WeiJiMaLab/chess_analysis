@@ -4,7 +4,7 @@
 # leaf-eval value). Same SF-2000 engine, n=1 leaf eval, same 250k roots. EPS=none = the
 # unpruned md36 baseline (regenerated because md36 != md4 for some positions). Per-eps dir.
 #   for E in none 0.05 0.1 0.3; do
-#     sbatch --array=0-99 --export=ALL,EPS=$E lmcos_tiny/analysis/slurm/prune_regen.slurm   # full 250k
+#     sbatch --array=0-19 --export=ALL,MODE=absolute,PARAM=0.5,LANE_END=50000 lmcos_tiny/analysis/slurm/prune_regen.slurm
 #   done
 #SBATCH --job-name=prune-regen
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_tiny/analysis/logs/%x_%A_%a.out
@@ -16,18 +16,20 @@
 
 set -euo pipefail
 export ELO=2000
-EPS="${EPS:?set EPS=none|0.05|0.1|0.3 via --export=ALL,EPS=...}"
-N="${N:-1}"          # leaf-eval node budget (1 or 100)
+MODE="${MODE:-relative}"   # none | relative (eps) | absolute (win-prob floor) | rank (top-k)
+PARAM="${PARAM:-}"         # the prune knob (ignored for MODE=none)
+N="${N:-1}"                # leaf-eval node budget (1 or 100)
 LANE_END="${LANE_END:-250000}"
 TINY=/home/hl4291/chess_analysis/lmcos_tiny
 source "$TINY/pipeline/helpers/setup_env.sh"
 
 PRUNE_OVERRIDE=()
-if [ "$EPS" = "none" ]; then
+if [ "$MODE" = "none" ]; then
   OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36"
 else
-  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36_eps${EPS}"
-  PRUNE_OVERRIDE=(--override prune_epsilon=${EPS})
+  case "$MODE" in relative) TAG=eps;; absolute) TAG=abs;; rank) TAG=rank;; *) echo "bad MODE"; exit 1;; esac
+  OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36_${TAG}${PARAM}"
+  PRUNE_OVERRIDE=(--override prune_mode=${MODE} --override prune_epsilon=${PARAM})
 fi
 
 SHARD_SIZE=2500; BASE_START=0
@@ -36,9 +38,9 @@ end=$(( start + SHARD_SIZE )); (( end > LANE_END )) && end=${LANE_END}
 if (( start >= LANE_END )); then echo "no-op: start=${start} >= LANE_END"; exit 0; fi
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"
 
-echo "PRUNE-REGEN N=${N} eps=${EPS} md=36 task=${SLURM_ARRAY_TASK_ID} start=${start} end=${end} out=${OUTDIR} host=$(hostname)"; date
+echo "PRUNE-REGEN N=${N} MODE=${MODE} PARAM=${PARAM} md=36 task=${SLURM_ARRAY_TASK_ID} start=${start} end=${end} out=${OUTDIR} host=$(hostname)"; date
 python -m cts.data.build_tree --config "$CONFIG" --stage treegen --set globals.sf_elo=2000 \
     --override sf_search_limit_nodes=${N} --override max_depth=36 "${PRUNE_OVERRIDE[@]}" \
     --override output_dir="${OUTDIR}" \
     --override start_index=${start} --override end_index=${end}
-echo "PRUNE-REGEN eps=${EPS} DONE start=${start}"; date
+echo "PRUNE-REGEN MODE=${MODE} PARAM=${PARAM} DONE start=${start}"; date

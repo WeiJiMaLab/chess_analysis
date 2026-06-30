@@ -20,11 +20,15 @@ import torch
 
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 BASE = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees"
-LEVELS = ["none", "0.05", "0.1", "0.3"]  # all regenerated at max_depth=36, full 250k roots
+# baseline + the pruning-rule grid (all md36, n1). Missing dirs are skipped.
+LEVELS = ["n1md36",
+          "n1md36_abs0.3", "n1md36_abs0.5", "n1md36_abs0.7",
+          "n1md36_rank2", "n1md36_rank4", "n1md36_rank8",
+          "n1md36_eps0.05", "n1md36_eps0.1", "n1md36_eps0.3"]
 
 
-def _dir(e: str) -> str:
-    return f"{BASE}/n1md36" if e == "none" else f"{BASE}/n1md36_eps{e}"
+def _dir(s: str) -> str:
+    return f"{BASE}/{s}"
 
 
 def _counts(path: str):

@@ -65,7 +65,8 @@ class TeacherSearchConfig:
     value_feature: str = "value"  # name of the per-node scalar value feature backed up at leaves
     target_normalization_version: str = "v1"  # stamped into metadata so consumers can detect format drift
     search_config_id: str = "default"  # short label identifying this config in metadata
-    prune_epsilon: Optional[float] = None  # value-prune: at depth>=1 drop a child whose value is >eps below its best sibling (negamax: best=min value). None = no prune.
+    prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); meaning set by prune_mode. None = no prune.
+    prune_mode: Optional[str] = None       # None/"relative" (eps) | "absolute" (win-prob floor) | "rank" (top-k)
 
     def __post_init__(self) -> None:
         if self.max_depth < 0:
@@ -76,6 +77,8 @@ class TeacherSearchConfig:
             raise ValueError("c_puct must be non-negative.")
         if self.prune_epsilon is not None and self.prune_epsilon < 0.0:
             raise ValueError("prune_epsilon must be non-negative.")
+        if self.prune_mode not in (None, "relative", "absolute", "rank"):
+            raise ValueError(f"unknown prune_mode {self.prune_mode!r}")
 
 
 @dataclass(frozen=True)
@@ -1132,26 +1135,39 @@ def normalize_prior_scores(scores: Sequence[float]) -> List[float]:
     return [score / exp_sum for score in exp_scores]
 
 
-def _prune_children_by_value(
+def _prune_children(
     children: Sequence[ExpansionChild],
     value_feature: str,
-    prune_epsilon: Optional[float],
+    mode: Optional[str],
+    param: Optional[float],
 ) -> List[ExpansionChild]:
-    """Value-prune a node's children relative to its best sibling.
+    """Value-prune a node's children during the build (depth>=1).
 
-    NEGAMAX convention: a child's value is from the child's (mover's) perspective, so
-    the parent prefers the MIN-value child. We keep a child iff its value is within
-    ``prune_epsilon`` of the best (min) sibling, and ALWAYS keep at least the best so a
-    node never becomes a childless dead-end. ``prune_epsilon=None`` is a no-op. Pruned
-    children are never attached, so the freed expansion budget redeploys deeper on the
-    survivors (R-PRUNING step 2).
+    NEGAMAX: a child's value is from the child's (mover's) perspective, so the parent
+    prefers the MIN-value child; the best (min) child is ALWAYS kept so a node never
+    becomes a childless dead-end. Pruned children are never attached, so the freed budget
+    redeploys deeper on the survivors. Modes (``param`` is the single knob):
+      ``relative``: keep value <= min + param          (within ``param`` of the best; eps)
+      ``absolute``: keep value <= 1 - 2*param           (mover win-prob >= ``param``)
+      ``rank``    : keep the ``param`` best (lowest-value) children
+    ``mode=None`` is a no-op.
     """
     kids = list(children)
-    if prune_epsilon is None or len(kids) <= 1:
+    if not mode or param is None or len(kids) <= 1:
         return kids
     vals = [float(c.scalar_features.get(value_feature, 0.0)) for c in kids]
     best = min(vals)  # negamax: best child for the parent = lowest value
-    kept = [c for c, v in zip(kids, vals) if v <= best + prune_epsilon]
+    if mode == "relative":
+        kept = [c for c, v in zip(kids, vals) if v <= best + param]
+    elif mode == "absolute":
+        ceil = 1.0 - 2.0 * param           # param = mover win-prob floor; lower value = better
+        kept = [c for c, v in zip(kids, vals) if v <= ceil]
+    elif mode == "rank":
+        k = max(1, int(round(param)))
+        keep_idx = set(sorted(range(len(vals)), key=lambda i: vals[i])[:k])
+        kept = [c for i, c in enumerate(kids) if i in keep_idx]
+    else:
+        raise ValueError(f"unknown prune_mode {mode!r}")
     return kept if kept else [kids[vals.index(best)]]
 
 
@@ -1451,8 +1467,9 @@ def generate_partial_tree_from_provider(
         # Value-prune the look-ahead (depth>=1) so the freed budget drives deeper on the
         # plausible lines; the root keeps all legal moves (the decision-width floor).
         if node.depth >= 1:
-            raw_children = _prune_children_by_value(
-                raw_children, config.value_feature, config.prune_epsilon
+            _mode = config.prune_mode or ("relative" if config.prune_epsilon is not None else None)
+            raw_children = _prune_children(
+                raw_children, config.value_feature, _mode, config.prune_epsilon
             )
         children = _prepare_children(
             raw_children,

@@ -86,7 +86,8 @@ class BuildTreeConfig(BaseModel):
     c_puct: float = 1.0
     min_nodes: int = 16
     max_nodes: int = 128
-    prune_epsilon: Optional[float] = None  # value-prune the look-ahead (depth>=1); None = no prune. See R-PRUNING.
+    prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); None = no prune. See R-PRUNING.
+    prune_mode: Optional[str] = None       # None/"relative" | "absolute" (win-prob floor) | "rank" (top-k)
     seed: int = 0
     start_index: int = 0
     end_index: Optional[int] = None
@@ -186,6 +187,7 @@ def _build_quality_config(
         target_normalization_version=target_normalization_version,
         search_config_id=search_config_id,
         prune_epsilon=config.prune_epsilon,
+        prune_mode=config.prune_mode,
     )
 
 
