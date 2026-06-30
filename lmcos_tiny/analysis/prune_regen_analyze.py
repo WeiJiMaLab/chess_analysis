@@ -62,7 +62,10 @@ def _partial_spearman(y, x, z):
 def _boot(fn, *cols, B=500, seed=0):
     rng = np.random.default_rng(seed)
     n = len(cols[0])
-    vals = np.array([fn(*[c[rng.integers(0, n, n)] for c in cols]) for _ in range(B)])
+    vals = np.empty(B)
+    for b in range(B):
+        idx = rng.integers(0, n, n)              # one paired resample shared across columns
+        vals[b] = fn(*[c[idx] for c in cols])
     return float(fn(*cols)), float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
 
 

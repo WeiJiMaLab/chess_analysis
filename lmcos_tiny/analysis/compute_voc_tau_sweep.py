@@ -37,9 +37,12 @@ from cts.data.preprocess_mc.oracle import (  # noqa: E402
 )
 from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload  # noqa: E402
 
-TREES_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000"
-FILTER_TXT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt"
-OUT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_tau_sweep.parquet"
+SET = os.environ.get("VOC_SET", "n1md36")
+FILTERED = os.environ.get("VOC_FILTERED", "0") == "1"
+TREES_DIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/{SET}"
+OUTDIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}"
+FILTER_TXT = f"{OUTDIR}/clean_trees.txt"
+OUT = f"{OUTDIR}/voc_tau_sweep.parquet"
 STARTING_BUDGET = 96
 
 TAUS = [0.001, 0.01, 0.05, 0.1, 0.2]
@@ -112,11 +115,16 @@ def _worker(path: str):
 
 
 def main():
-    with open(FILTER_TXT) as fh:
-        names = [ln.strip() for ln in fh if ln.strip()]
-    paths = [os.path.join(TREES_DIR, n) for n in names]
-    paths = [p for p in paths if os.path.exists(p)]
-    print(f"filtered trees: {len(names)}; existing: {len(paths)}", flush=True)
+    os.makedirs(OUTDIR, exist_ok=True)
+    if FILTERED and os.path.exists(FILTER_TXT):
+        with open(FILTER_TXT) as fh:
+            names = [ln.strip() for ln in fh if ln.strip()]
+        paths = [os.path.join(TREES_DIR, n) for n in names if os.path.exists(os.path.join(TREES_DIR, n))]
+        print(f"SET={SET} FILTERED: {len(paths)} trees", flush=True)
+    else:
+        import glob as _glob
+        paths = sorted(_glob.glob(os.path.join(TREES_DIR, "*.pt")))
+        print(f"SET={SET} UNFILTERED: {len(paths)} trees", flush=True)
 
     n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 8))
     print(f"workers={n_workers}; taus={TAUS}; costs={list(COSTS)}", flush=True)

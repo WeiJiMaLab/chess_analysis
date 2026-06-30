@@ -27,10 +27,14 @@ from cts.data.preprocess_mc.oracle import (  # noqa: E402
 )
 from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload  # noqa: E402
 
-_ELO = os.environ.get("VOC_ELO", "2000")
-TREES_DIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo{_ELO}"
-FILTER_TXT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo{_ELO}/clean_trees.txt"
-OUT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo{_ELO}/voc_signals.parquet"
+# Tree set + filtered/unfiltered are env-driven so the 2d_data_analysis stage can run
+# this on any set (e.g. n1md36, n100md36) over the full unfiltered population by default.
+SET = os.environ.get("VOC_SET", "n1md36")          # dir under sf_trees/
+FILTERED = os.environ.get("VOC_FILTERED", "0") == "1"  # default: unfiltered (all trees)
+TREES_DIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/{SET}"
+OUTDIR = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}"
+FILTER_TXT = f"{OUTDIR}/clean_trees.txt"           # only consulted when FILTERED=1
+OUT = f"{OUTDIR}/voc_signals.parquet"
 STARTING_BUDGET = 96
 BASE_LAMBDA = 18.537
 
@@ -171,11 +175,17 @@ def _worker(path: str):
 
 
 def main():
-    with open(FILTER_TXT) as fh:
-        names = [ln.strip() for ln in fh if ln.strip()]
-    paths = [os.path.join(TREES_DIR, n) for n in names]
-    paths = [p for p in paths if os.path.exists(p)]
-    print(f"filtered trees: {len(names)}; existing: {len(paths)}", flush=True)
+    os.makedirs(OUTDIR, exist_ok=True)
+    if FILTERED and os.path.exists(FILTER_TXT):
+        with open(FILTER_TXT) as fh:
+            names = [ln.strip() for ln in fh if ln.strip()]
+        paths = [os.path.join(TREES_DIR, n) for n in names]
+        paths = [p for p in paths if os.path.exists(p)]
+        print(f"SET={SET} FILTERED: {len(names)} listed; existing: {len(paths)}", flush=True)
+    else:
+        import glob as _glob
+        paths = sorted(_glob.glob(os.path.join(TREES_DIR, "*.pt")))
+        print(f"SET={SET} UNFILTERED: {len(paths)} trees", flush=True)
 
     n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 8))
     print(f"workers={n_workers}", flush=True)
