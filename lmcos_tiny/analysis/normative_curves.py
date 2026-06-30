@@ -15,7 +15,7 @@ VOC = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}/voc_signals.parquet"
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 CGRID = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3]
 oss = pd.read_parquet(OSS)
-voc = pd.read_parquet(VOC)[["fen", "legal_moves", "action_gap", "n_good_0.1"]]
+voc = pd.read_parquet(VOC)[["fen", "action_gap", "n_good_0.1"]]
 df = oss.merge(voc, on="fen")
 con = duckdb.connect(DB, read_only=True); con.register("t", df)
 m = con.execute("SELECT t.*, x.move_time FROM t JOIN processed_moves_nonzero x "
