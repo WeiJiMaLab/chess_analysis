@@ -5,7 +5,6 @@ Value of Computation (Gain), Action Gap, Prior Entropy H(π), and Root MQ.
 """
 
 import os
-import sys
 import random
 import multiprocessing as mp
 import numpy as np
@@ -19,19 +18,12 @@ FRAC_GOOD_EPS = 0.1
 # Node cost for the budgeted-oracle Optimal Stopping Step (the value we settled on).
 OSS_NODE_COST = 1e-4
 
-# build_compact_trajectory_from_payload lives in the pipeline source tree (cts).
-# Make it importable when this module is run with the standard human PYTHONPATH.
-# This file is at lmcos_small/human/utils/tree_loader.py, so lmcos_small/src is
-# three dirnames up (utils -> human -> lmcos_small) + "src".
-_SRC = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "src",
-)
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
+# The budgeted-oracle trajectory builder is the one piece the human OSS readout shares
+# with the cts pipeline. cts is a normal import here — every entry point that loads this
+# module puts lmcos_small/src on PYTHONPATH (env.sh / the human slurm launchers).
 try:
     from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload
-except Exception:  # noqa: BLE001 — keep loader importable even if cts is unavailable
+except ImportError:  # keep the loader importable for the cts-free board-only analysis
     build_compact_trajectory_from_payload = None
 
 
