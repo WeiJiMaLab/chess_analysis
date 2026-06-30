@@ -77,7 +77,7 @@ The legal-moves effect is suggestive but *structural* — it says nothing about 
 *worth it*. The resource-rational hypothesis is sharper: people should think longer where an engine
 would *gain* more from searching. To test it we read value quantities off a **Stockfish search tree**
 on the same position — now the canonical `n1md36` set (SF, n=1 leaf eval, depth-36, no pruning; 250K
-trees, ~104K human moves matched). The analysis lives in `human_analytics/engine.py`.
+trees, ~104K human moves matched). The analysis lives in `lmcos_small/human/engine.py`.
 
 The three engine signals, in the user's terms:
 
@@ -144,7 +144,7 @@ evaluation (SF-1350 ≡ SF-2000, bit-identical; only the leaf-eval node budget N
 Correlate every signal the objective produces — step\*, regret, and the value-of-computation
 signals — against human log-RT. **No.** The drivers are structural; every value signal is faint.
 
-![What predicts human RT](figures/lmcos_tiny/rt_headline.png)
+![What predicts human RT](figures/normative/rt_headline.png)
 
 We did not stop there. The objective has knobs, and a mis-specified knob could hide a real value
 signal. So we ran the value account down through **five hypotheses**, each a way the objective might
@@ -166,8 +166,8 @@ be wrong rather than the theory:
   RT correlations are near-identical (legal +0.30/+0.31, Gain +0.16/+0.16); the per-position values
   differ (ρ≈0.93) but the RT story does not move. *(`sf_n1_vs_n100`)*
 
-![cost-shape sweep](figures/lmcos_tiny/cost_sweep_rt.png)
-![legal-moves partials](figures/lmcos_tiny/rt_partials.png)
+![cost-shape sweep](figures/normative/cost_sweep_rt.png)
+![legal-moves partials](figures/normative/rt_partials.png)
 
 > **Result:** No value-of-computation or stopping-time signal tracks RT beyond ≈ +0.04 once the
 > legal-move count is controlled. The value-of-thinking signal was a **decision-width proxy** all
@@ -184,8 +184,8 @@ between the best moves speeds you up too. And satisfaction does not just shift t
 **reshapes the whole RT-vs-options curve**: high-satisfaction positions plateau low (stop once
 good-enough), low-satisfaction ones stay steep. That concavity is the **satisficing signature**.
 
-![good-move sign flip](figures/lmcos_tiny/good_moves_signflip.png)
-![RT-vs-n concavity / plateau shift](figures/lmcos_tiny/rt_vs_n_concavity.png)
+![good-move sign flip](figures/normative/good_moves_signflip.png)
+![RT-vs-n concavity / plateau shift](figures/normative/rt_vs_n_concavity.png)
 
 ### The umbrella: it was the cost of the *leaves* all along
 
@@ -245,8 +245,8 @@ work lives in `lmcos/` and the lab notebook's legacy section, not a standalone r
 | Readout(GNN-z, PG) | 0.154 [0.151, 0.158] | 22.8 |
 | Never-Stop | 1.379 [1.370, 1.387] | 30.1 |
 
-![regret vs compute](figures/lmcos_tiny/regret_vs_compute.png)
-![regret by model](figures/lmcos_tiny/regret_by_model.png)
+![regret vs compute](figures/normative/regret_vs_compute.png)
+![regret by model](figures/normative/regret_by_model.png)
 
 > **Result:** A learned readout clearly beats the blind baselines, and — notably — a **hand-crafted
 > tree-stats readout** `[height, width, n_nodes]` **beats the learned GNN embedding** (0.104 vs
@@ -341,7 +341,7 @@ This paper is a synthesis; each act's full methods, data lineage, and caveats li
 
 - **Act 1** — [(R-MOVETIME-BOARD)](reports/board.md): board regressors, the log-normal RT, the width axis.
 - **Act 2** — engine value signals (Gain / MQ / GSS / action gap) on the `n1md36` trees, computed by
-  `human_analytics/engine.py` (figures in `figures/engine/`); the former standalone engine report is folded
+  `lmcos_small/human/engine.py` (figures in `figures/engine/`); the former standalone engine report is folded
   in here.
 - **Act 3** — [(R-TREESEARCH)](reports/treesearch.md): the search model, the VOC hypotheses, the
   satisficing decomposition, and **the reclaimed result — a resource-rational stop reproduces the curves**.

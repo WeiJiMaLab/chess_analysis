@@ -47,7 +47,7 @@ The human move-time inquiry now reads as **one arc** — *board → tree-search/
    collapses to the move count) ⇒ RT = satisficed decision difficulty ⇒ **the reclaimed result: a
    resource-rational per-operation-cost stop *reproduces* `size − satisfaction + sharpness` (legal-moves is the
    explanandum, not a floor to beat).** The engine value signals (Gain / MQ / GSS / action gap, in
-   `human_analytics/engine.py`, `figures/engine/`), the resource-rational width analytics, and the step\*
+   `lmcos_small/human/engine.py`, `figures/engine/`), the resource-rational width analytics, and the step\*
    calibration are **all folded into this report** (the former standalone engine / branching / halt-calibration
    reports were removed).
 3. **value-pruning** — [(R-PRUNING)](pruning.md): pruning as a *later refinement* of the resource-rational fit.
@@ -68,7 +68,7 @@ facts and decisions are kept here.
 
 | | |
 |---|---|
-| **What** | Lichess **10+0** games (Oct–Dec 2023), preprocessed via `human_analytics/slurm/`, in DuckDB `personal.db`. |
+| **What** | Lichess **10+0** games (Oct–Dec 2023), preprocessed via `lmcos_small/slurm/human/`, in DuckDB `personal.db`. |
 | **Filters** | Time control 10+0 (600s, no increment); both players Elo **≥ 2000**; excluded: negative `move_time`, berserk, extra-time grants. |
 | **Scale** | **1.97M** games; **135M** non-zero-RT moves. |
 

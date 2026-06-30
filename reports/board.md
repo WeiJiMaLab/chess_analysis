@@ -67,7 +67,7 @@ one. See the policy-entropy test in [the engine report](engine.md).
 - **Dataset:** Lichess 10+0 (60+0), Elo ≥ 2000, no berserk; 1.97M games → 135M
   non-zero-`move_time` moves in `processed_moves_nonzero` (4-field FEN, board counts, ply
   tertiles). Dataset details: the human-data reference in the index.
-- **Per-feature dashboards:** `human_analytics/movetime_analysis.py` (`clock`,
+- **Per-feature dashboards:** `lmcos_small/human/movetime_analysis.py` (`clock`,
   `legal_moves`, `own_material`, `ply`) — the canonical `Analyzer` 1×2 (global + a-priori ply
   tertiles), K=10 tie-safe quantile bins with per-bin SEM throughout. Distribution: `move_time_summary.py`.
 - **Board-feature matrix:** `movetime_analysis.py boardcorr` — Spearman ρ over Ply,

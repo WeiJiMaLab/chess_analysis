@@ -7,7 +7,7 @@ import chess.engine
 # Set up workspace paths
 repo_path = Path("/home/hl4291/chess_analysis")
 sys.path.insert(0, str(repo_path))
-sys.path.insert(0, str(repo_path / "human_analytics"))
+sys.path.insert(0, str(repo_path / "lmcos_small" / "human"))
 
 from utils.helpers import get_engine
 from cts.core.providers.base import TreeExpansionProvider

@@ -51,7 +51,7 @@ every deck resolves them identically:
 | `@/shared/slidev-addon-base` (frontmatter addon) | `src/shared` → `../shared` |
 | auto-loaded custom components | `shared/slidev-addon-base/components/*.vue` |
 | `css: ./style.css` | `src/style.css` → `../style.css` |
-| `/figures/...` (absolute image `src`) | `src/public` → `../public`, then `public/figures` → `../../human_analytics/figures` |
+| `/figures/...` (absolute image `src`) | `src/public` → `../public`, then `public/figures` → `../../lmcos_small/human/figures` |
 
 The shared addon `shared/slidev-addon-base/` provides:
 
@@ -61,7 +61,7 @@ The shared addon `shared/slidev-addon-base/` provides:
   `<GnnPretrainDiagram />`, `<ChildWdlDiagram />`, `<PolicyPretrainDiagram />`.
 - **`global-bottom.vue`** — page-number footer shown on every slide.
 - **`vite.config.ts`** — widens `server.fs.allow` so the dev server can serve
-  the `human_analytics/figures` directory (outside `src/`).
+  the `lmcos_small/human/figures` directory (outside `src/`).
 
 So components, styling (`style.css`), and figures are edited in one place and
 used by all decks.
@@ -88,9 +88,9 @@ layout: two-cols
 
 ## Figures & data integration
 
-Figures are served from the core `chess_analysis/human_analytics/figures`
+Figures are served from the core `chess_analysis/lmcos_small/human/figures`
 directory via the symlink chain `src/public/figures → ../public/figures →
-../../human_analytics/figures`. Decks reference them with absolute `/figures/...`
+../../lmcos_small/human/figures`. Decks reference them with absolute `/figures/...`
 URLs (e.g. `/figures/log_movetime_histogram.png`).
 
 To update the figures, run the analysis scripts from the repository root after
@@ -100,8 +100,8 @@ To update the figures, run the analysis scripts from the repository root after
 **Move-time histograms** (both variants): deliberation-only vs including premoves:
 
 ```bash
-python human_analytics/move_time_summary.py
-python human_analytics/move_time_summary.py --include_zeroT
+python lmcos_small/human/move_time_summary.py
+python lmcos_small/human/move_time_summary.py --include_zeroT
 ```
 
 **Dashboards** (`movetime_analysis.py`; default table `processed_moves_nonzero` → one PNG per analysis):

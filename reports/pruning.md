@@ -220,7 +220,7 @@ All ρ/partial carry bootstrap 95% CIs (in the job log) tight to ±0.01 — thes
 
 ## Stage 2d — the engine-derived (no-refit) analyses, staged
 
-`lmcos_tiny/pipeline/2d_data_analysis.slurm` runs the param-free chain (budgeted-oracle VOC signals +
+`lmcos_small/pipeline/2d_data_analysis.slurm` runs the param-free chain (budgeted-oracle VOC signals +
 softmax-VOC τ sweep) on a tree SET over the **unfiltered** population → `sf_analysis/<SET>/`; `2d_figures.slurm`
 makes the plots. Launched on all 5 md36 sets; figures regenerate on `n1md36`. The halt-policy zoo + hindsight
 halter stay in `3_train`/`4_eval` (they need training).

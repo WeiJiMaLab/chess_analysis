@@ -1,6 +1,6 @@
 # Chess Meta-control (CMC): workspace overview
 
-This repository is the working root for **Chess Meta-control (CMC)**—research that combines **large-scale human chess analytics** in `human_analytics/` with a neural **meta-controller** in **`lmcos/`** (learned metacontrol over search) and its lightweight, self-contained sibling **`lmcos_tiny/`**. The chronological experiment log is [`labnotebook.md`](labnotebook.md); stable analysis write-ups live under [`reports/`](reports/). This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
+This repository is the working root for **Chess Meta-control (CMC)**—research that combines **large-scale human chess analytics** in `lmcos_small/human/` with a neural **meta-controller** in **`lmcos/`** (learned metacontrol over search) and its lightweight, self-contained sibling **`lmcos_small/`**. The chronological experiment log is [`labnotebook.md`](labnotebook.md); stable analysis write-ups live under [`reports/`](reports/). This README is written so that a reader (or an AI agent doing literature search) can recover **intent, formal objectives, training protocols, and connections to prior work** without re-deriving them from the code alone.
 
 **Objective (control layer).** Build a **meta-controller** that manages the trade-off between **thinking** (expanding a Leela/lc0 search tree) and **acting** (playing a move). At the control layer this is an **optimal stopping** problem: is the move-quality we might discover worth the compute we are about to spend? The `lmcos` stack implements this as **representation learning first** (GNN over search trees), then **offline fitted-Q / advantage regression** on teacher traces—not yet full self-play PPO at production scale.
 
@@ -9,18 +9,18 @@ This repository is the working root for **Chess Meta-control (CMC)**—research 
 | Path | Role |
 | :--- | :--- |
 | `chess_analysis/` | DuckDB, figures; Slidev decks live under `presentations/` |
-| `chess_analysis/human_analytics/` | **Human analytics** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
-| `chess_analysis/human_analytics/slurm/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
-| `chess_analysis/human_analytics/slurm/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
+| `chess_analysis/lmcos_small/human/` | **Human analytics** entry points (`movetime_analysis.py`, …) and **`utils/`** library |
+| `chess_analysis/lmcos_small/slurm/human/scripts/` | **Pipeline CLIs** (preprocess, engine eval, joins) |
+| `chess_analysis/lmcos_small/slurm/human/` | Shell/Sbatch orchestration that calls `slurm/scripts/*.py` |
 | `chess_analysis/labnotebook.md` | Chronological log (Description · Rationale · Status · Reference) |
 | `chess_analysis/reports/` | Stable analysis reports (`R-*` refs) |
 | `chess_analysis/lmcos/` | Tree encoder, offline controller training; **`src/`** (`cts` package), **`analysis/`** (`cts.analysis`), **`slurm/`** (stage scripts + **`slurm/configs/`** run YAMLs) |
-| `chess_analysis/lmcos_tiny/` | **Stockfish mini-GNN / mini-MC pipeline**; self-contained extract/fork for Stockfish strength ladder profiling (`NeverHalt`, `AlwaysHalt`, `FractionHalt`, `MCHalt`) |
+| `chess_analysis/lmcos_small/` | **Stockfish mini-GNN / mini-MC pipeline**; self-contained extract/fork for Stockfish strength ladder profiling (`NeverHalt`, `AlwaysHalt`, `FractionHalt`, `MCHalt`) |
 | `chess_analysis/presentations/` | Slidev decks: motivation, method, human validation, model comparison |
 
-For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/human_analytics/README.md`. The latter documents **code layout** (`human_analytics/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
+For environment setup, Stockfish paths, and notebook entry points, see this file and `chess_analysis/lmcos_small/human/README.md`. The latter documents **code layout** (`lmcos_small/human/` vs `slurm/scripts/`), the behavioral pipeline, and figure conventions.
 
-**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/human_analytics/README.md` §4.
+**Pipeline / DuckDB (`preprocess.py`):** DuckDB spill and staged parquet files follow **one directory per step** (`work_dir` for `get_games` and `process_moves`, `staging_dir` for shard extract **and** `merge` into `moves`). After parquets land, **`merge`** only builds **`moves`**; **`process_moves`** builds **`processed_moves`** / **`processed_moves_nonzero`**. **`preprocess.sh`** runs both. Defaults live in **`preprocess.py` `main()` `config`**, not `**kwargs` plumbing—see `chess_analysis/lmcos_small/human/README.md` §4.
 
 ---
 
@@ -46,7 +46,7 @@ A future layer is a **full planning head** (which node to expand, etc.) on the s
 
 ## 2. Human behavioral track (context for “broad implications”)
 
-Work under `chess_analysis/human_analytics/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `presentations/` (the `main` deck) connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
+Work under `chess_analysis/lmcos_small/human/` treats chess as a natural experiment in **resource allocation**: move time is heavy-tailed; **remaining clock** and **position complexity** both predict thinking time, with a stable **VOC** effect (prospective engine gain vs shallow eval) and characteristic **ply-stage** “arc” of deliberation. Slides in `presentations/` (the `main` deck) connect this to **resource-rational** meta-control: humans adapt budgets to time pressure and to estimated benefit of search.
 
 The `lmcos` line asks the complementary question: if we **teach a network** the statistics of a search tree, can it **approximate the stopping rule** implied by a formal cost–benefit model? That links behavioral VOC curves to **machine metareasoning** on trees.
 
@@ -229,7 +229,7 @@ The project sits at the intersection of several named research areas. Useful **q
 - **Tests:** `lmcos/tests/` cover plumbing, oracles, fitted-Q, probes; run `pytest tests/` from `lmcos/` with `PYTHONPATH` set.
 - **Sync:** When copying to clusters, the lab notes using **`rsync -avR`** to avoid sparse directory mistakes.
 
-For day-to-day commands: **`human_analytics/README.md`** (DuckDB ETL, figures); **`lmcos/slurm/README.md`** (pipeline Slurm); **`lmcos_tiny/README.md`** (mini Stockfish pipeline); **`labnotebook.md`** (experiments).
+For day-to-day commands: **`lmcos_small/human/README.md`** (DuckDB ETL, figures); **`lmcos/slurm/README.md`** (pipeline Slurm); **`lmcos_small/README.md`** (mini Stockfish pipeline); **`labnotebook.md`** (experiments).
 
 ---
 
@@ -262,7 +262,7 @@ Current production focus is **stage 3–4** on ysagiv read-only caches (hl4291 d
 | Fitted-Q controller train + metrics plots | `cts.train.controller_train` |
 | Slurm stage wrappers + run YAMLs | `lmcos/slurm/`, `lmcos/slurm/configs/` |
 | Post-hoc budgeted-run analysis | `cts.analysis.analyze_budgeted_controller_run` |
-| Human analytics pipeline & figures | `human_analytics/` (see `human_analytics/README.md`) |
+| Human analytics pipeline & figures | `lmcos_small/human/` (see `lmcos_small/human/README.md`) |
 
 ---
 

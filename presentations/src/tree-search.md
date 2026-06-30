@@ -22,7 +22,7 @@ math: katex
 Map beats are CLICK-driven (one persistent <ThoughtMap seq=.../> per slide): the camera PANS, children REVEAL,
 questions RESOLVE, the next one BLINKS — all on click. map↔content slide changes use the zoom-in/zoom-out
 transitions (style.css). Content slides are normal. Set `clicks:` = (sequence length − 1). Sequences live in
-ThoughtMap.vue. Source: reports/treesearch.md, engine.md, lmcos_tiny.md.
+ThoughtMap.vue. Source: reports/treesearch.md, engine.md, lmcos_small.md.
 
 Each content slide has THREE parts:
   (a) .mdl-proc      — what we did (procedure line)
@@ -116,7 +116,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">We expected</span> A learned readout to beat three <strong>blind baselines</strong>: <strong>always-stop</strong> (step 0), <strong>never-stop</strong> (full budget), and <strong>fraction-θ*</strong> (a fixed fraction of the budget). If structure carries any signal, the readout should stop later only when advantage stays positive.</div>
       <div class="mdl-conv"><span class="lbl">Answer</span> Yes — a <strong>tree-stats readout</strong> [height, width, n_nodes] wins on regret at less compute. A learned stopping rule beats the blind rules — the stopping problem is solvable.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/regret_vs_compute.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/regret_vs_compute.png" /></div>
   </div>
 </div>
 
@@ -134,7 +134,7 @@ transition: fade
       <div class="mdl-intuition"><span class="lbl">The models</span> <strong>always</strong> = stop at step 0 · <strong>never</strong> = run the full M=96 budget · <strong>fraction-θ*</strong> = a fixed fraction of the budget · <strong>GNN-z</strong> = a learned graph-embedding of the tree · <strong>tree-stats</strong> = the raw triple [height, width, n_nodes]. All RL-trained readouts decide on the <strong>advantage</strong>.</div>
       <div class="mdl-conv"><span class="lbl">Answer</span> <strong>tree-stats ≻ GNN-z ≻ fraction ≻ always/never.</strong> Raw structure beats the learned embedding. But low regret is <em>self-consistency</em> with the oracle — not yet a match to people.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/regret_by_model.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/regret_by_model.png" /></div>
   </div>
 </div>
 
@@ -163,7 +163,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">We expected</span> If "knowing the future" inflated step*, the <em>hindsight oracle</em> would sit far above the <em>causal halter</em>. So this is part of the <strong>stopping/oracle</strong> story, not a peer hypothesis — it validates the oracle before we lean on it.</div>
       <div class="mdl-conv"><span class="lbl">No inflation</span> The <strong>causal halter ≈ the hindsight oracle</strong> — and <strong>both ≪ legal-moves</strong>. Hindsight is not buying step* anything; the oracle is safe to use, and the gap to people is real, not an artifact.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/hindsight_halter.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/hindsight_halter.png" /></div>
   </div>
 </div>
 
@@ -192,7 +192,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">We expected</span> If people meta-control like the model, the <strong>value-of-computation</strong> signals should lead. Read the bars as: which feature best predicts how long a person actually thought?</div>
       <div class="mdl-conv warn"><span class="lbl">Answer — NO</span> The drivers are <strong>structural</strong>: # legal moves <strong>+0.31</strong>, good-move fraction <strong>−0.31</strong>. Every VOC signal is only +0.12…+0.16. Not "people are irrational" — <strong>our measure is mis-specified</strong>.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/rt_headline.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/rt_headline.png" /></div>
   </div>
 </div>
 
@@ -221,7 +221,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">Why we expected this to matter</span> A different cost <em>shape</em> ⇒ a different optimal stop ⇒ a different step*. If RT tracks a particular shape, the right curve should pop the correlation up. Read each point as one (shape × scale) config.</div>
       <div class="mdl-conv warn"><span class="lbl">No</span> Regret is flat (a monotone transform of cost-free Gain, ρ=0.98). step* responds to cost shape, but tops out at <strong>+0.12</strong> — half the legal-moves effect.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/cost_sweep_rt.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/cost_sweep_rt.png" /></div>
   </div>
 </div>
 
@@ -250,7 +250,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">Why a softmax</span> The policy is a <strong>distribution</strong> over root moves, not the argmax. Softmaxing the root values gives that distribution; as search proceeds the softmax <strong>sharpens</strong>, and that sharpening = uncertainty reduction = a candidate "value of thinking." Read it as: does grading the <em>distribution</em> instead of the best move recover a missing signal?</div>
       <div class="mdl-conv warn"><span class="lbl">No</span> At calibrated τ it <strong>recovers</strong> the argmax value (~+0.16) — but never <em>exceeds</em> it. Uncertainty-reduction is real, but not the missing driver.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/voc_tau_sweep.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/voc_tau_sweep.png" /></div>
   </div>
 </div>
 
@@ -279,7 +279,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">We expected</span> A weaker, noisier "gut" (fewer leaf-eval nodes) might think more like a person. Read it as: does a 1-node eval (SF-1) shift the RT correlation versus a 100-node eval (SF-100)?</div>
       <div class="mdl-conv warn"><span class="lbl">No — the evaluator isn't it</span> <strong>SF-1 ≈ SF-100 on every RT-correlation</strong> (legal +0.30/+0.31, gain +0.16/+0.16). The per-position values <em>do</em> differ (ρ≈0.93), but the RT story doesn't move — and UCI_Elo changes nothing. Evaluator strength is not the missing driver.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/sf_n1_vs_n100.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/sf_n1_vs_n100.png" /></div>
   </div>
 </div>
 
@@ -308,7 +308,7 @@ transition: zoom-in
       <div class="mdl-intuition"><span class="lbl">Read it as</span> If a signal is "real," it survives controlling for # legal moves. If it's a <strong>decision-width proxy</strong>, it collapses to ≈0 while legal-moves survives. Each bar pair = a signal before/after partialling.</div>
       <div class="mdl-conv"><span class="lbl">YES — this is the one</span> Every VOC signal collapses to <strong>≈ +0.04</strong>; legal-moves <em>survives</em> the reverse control at +0.22. The "value of thinking" signal was a <strong>decision-width</strong> proxy all along.</div>
     </div>
-    <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/rt_partials.png" /></div>
+    <div class="mdl-figbox"><img src="../public/figures/normative/rt_partials.png" /></div>
   </div>
 </div>
 
@@ -338,8 +338,8 @@ transition: zoom-in
       <div class="mdl-conv"><span class="lbl">The satisficing signature</span> Satisfaction <strong>reshapes the whole RT-vs-n curve</strong>: high-satisfaction positions plateau low (stop once good-enough); low stay steep. Stop-when-good-enough — not bare problem size.</div>
     </div>
     <div style="display:grid; grid-template-rows:1fr 1fr; gap:1rem; min-height:0">
-      <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/good_moves_signflip.png" /></div>
-      <div class="mdl-figbox"><img src="../public/figures/lmcos_tiny/rt_vs_n_concavity.png" /></div>
+      <div class="mdl-figbox"><img src="../public/figures/normative/good_moves_signflip.png" /></div>
+      <div class="mdl-figbox"><img src="../public/figures/normative/rt_vs_n_concavity.png" /></div>
     </div>
   </div>
 </div>

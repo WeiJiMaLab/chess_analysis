@@ -6,8 +6,8 @@ a **current reflection of what the code does**, kept in sync with the code. Hist
 resolved bugs belong in the **labnotebook** (archival), never here. If a number can't be traced to a
 stage below, that's a bug in this doc — fix it here.
 
-**The instance this describes:** `controller_filtered.pt`. Forward work / live experiments:
-`mc_minimal_plan.md`.
+**The instance this describes:** `controller_filtered.pt`. The synthesis of the whole arc (and the
+forward program) is now [`report.md`](report.md) + [`reports/treesearch.md`](reports/treesearch.md).
 
 ---
 
@@ -172,7 +172,8 @@ candidates of non-monotone final Q).
 - **Baselines:** Always-Stop (stop@0), Never-Stop (full budget), Fraction-of-Budget `f*` (stop iff
   `N_t ≥ f·B`, `f` fit on **train** regret, evaluated on **val**).
 - **Result (filtered val):** Fraction `f*=0.17` regret **0.077**; Always 0.467; Never 1.388;
-  GNN/MC **0.209** (selected). Forward work and the live experiment status: `mc_minimal_plan.md`.
+  GNN/MC **0.209** (selected). The current halt-policy comparison and forward program:
+  [`reports/lmcos_small.md`](reports/lmcos_small.md), [`report.md`](report.md).
 
 ## 10. Reproduce (exact commands)
 ```bash

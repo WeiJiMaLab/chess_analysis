@@ -57,16 +57,16 @@ planning) · **`UCI_Elo`** (a play handicap — *no-op* for the eval; SF-1350 �
 A budgeted-oracle DP gives **step\*** = argmax<sub>s</sub>[V(s) − cost(s)]; **regret = reward − cost**. A learned
 readout should beat the blind rules (always-stop / never-stop / fraction-θ):
 
-![Regret vs compute](../figures/lmcos_tiny/regret_vs_compute.png) ![Regret by model](../figures/lmcos_tiny/regret_by_model.png)
+![Regret vs compute](../figures/normative/regret_vs_compute.png) ![Regret by model](../figures/normative/regret_by_model.png)
 
 > **Answer:** solvable — a **tree-stats** readout `[height, width, n_nodes]` ≻ GNN-z ≻ fraction
-> ([(R-LMCOS-TINY)](lmcos_tiny.md)). But low regret is *self-consistency*, not a match to people.
+> ([(R-LMCOS-TINY)](lmcos_small.md)). But low regret is *self-consistency*, not a match to people.
 
 ## 5 · The pivot — do the signals match human RT?
 
 Correlate every signal with human log-RT:
 
-![What predicts human RT](../figures/lmcos_tiny/rt_headline.png)
+![What predicts human RT](../figures/normative/rt_headline.png)
 
 > **Answer — NO.** The drivers are **structural**: # legal moves **+0.31**, fraction-good **−0.31**; every
 > value-of-computation signal is only +0.12…+0.16; the causal halter ≈ 0. Not "people are irrational" — **our
@@ -90,7 +90,7 @@ Correlate every signal with human log-RT:
 
 ## 7 · The finding — RT is satisficed decision difficulty
 
-![sign flip](../figures/lmcos_tiny/good_moves_signflip.png) ![plateau shift](../figures/lmcos_tiny/rt_vs_n_concavity.png)
+![sign flip](../figures/normative/good_moves_signflip.png) ![plateau shift](../figures/normative/rt_vs_n_concavity.png)
 
 `RT ≈ size(+0.31) − satisfaction(−0.31) + sharpness(+0.24)` — more options slow you down, more *good* options
 speed you up. And **satisfaction reshapes the whole RT-vs-n curve** (high-satisfaction → plateau low; low →
@@ -170,5 +170,5 @@ Human think-time = the cost of **building the consideration set**, under a resou
 - **n_expanded / n_total / n_leaf**: internal (= n_steps) / all incl. enumerated leaves / frontier leaves.
 - **softmax-VOC** = Σ<sub>c</sub> softmax(q<sub>s,c</sub>/τ)·V<sub>deep</sub>(c); benefit of thinking = the sharpening.
 - **size / satisfaction / sharpness** = # legal moves / fraction within ε of best / top-1 − top-2 action gap.
-- Figures: `lmcos_tiny/analysis/make_rt_figures.py`; ρ = Spearman + percentile-bootstrap 95% CIs
+- Figures: `lmcos_small/analysis/make_rt_figures.py`; ρ = Spearman + percentile-bootstrap 95% CIs
   ([[bootstrap-cis-always]]). Deck: `presentations/src/tree-search.md`.
