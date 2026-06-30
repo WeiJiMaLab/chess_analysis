@@ -27,7 +27,7 @@ PRUNE_OVERRIDE=()
 if [ "$MODE" = "none" ]; then
   OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36"
 else
-  case "$MODE" in relative) TAG=eps;; absolute) TAG=abs;; rank) TAG=rank;; *) echo "bad MODE"; exit 1;; esac
+  case "$MODE" in relative) TAG=rel;; absolute) TAG=abs;; rank) TAG=rank;; *) echo "bad MODE"; exit 1;; esac
   OUTDIR="/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n${N}md36_${TAG}${PARAM}"
   PRUNE_OVERRIDE=(--override prune_mode=${MODE} --override prune_epsilon=${PARAM})
 fi

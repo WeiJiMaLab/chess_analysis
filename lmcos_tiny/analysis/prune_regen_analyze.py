@@ -22,9 +22,10 @@ DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 BASE = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees"
 # baseline + the pruning-rule grid (all md36, n1). Missing dirs are skipped.
 LEVELS = ["n1md36",
+          "n1md36_rel0.05", "n1md36_rel0.1", "n1md36_rel0.3",
+          "n1md36_rel0.5", "n1md36_rel0.75", "n1md36_rel1.0", "n1md36_rel1.5",
           "n1md36_abs0.3", "n1md36_abs0.5", "n1md36_abs0.7",
-          "n1md36_rank2", "n1md36_rank4", "n1md36_rank8",
-          "n1md36_eps0.05", "n1md36_eps0.1", "n1md36_eps0.3"]
+          "n1md36_rank2", "n1md36_rank4", "n1md36_rank8"]
 
 
 def _dir(s: str) -> str:
