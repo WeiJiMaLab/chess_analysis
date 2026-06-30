@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared environment setup script for lmcos_small SLURM jobs.
-# Usage: source pipeline/helpers/setup_env.sh [gpu]
+# Usage: source slurm/pipeline/helpers/setup_env.sh [gpu]
 
 set +u
 module --force purge >/dev/null 2>&1 || true

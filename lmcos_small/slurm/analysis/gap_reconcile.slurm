@@ -7,6 +7,6 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=96G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/gap_reconcile_%j.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/gap_reconcile_%j.out
 cd /home/hl4291/chess_analysis
 /home/hl4291/venv/bin/python lmcos_small/analysis/gap_reconcile.py

@@ -10,9 +10,9 @@
 # overlaps the CPU prefix-rebuild with the CPU encode.
 #
 #   ELO=2000 NWORKERS=40 sbatch --array=0-39 --dependency=afterok:<encoder_jobid> \
-#       pipeline/2b_pack_root.slurm
+#       slurm/pipeline/2b_pack_root.slurm
 #   ELO=2000 NWORKERS=40 sbatch --dependency=afterok:<this_array_jobid> \
-#       pipeline/2c_merge_root.slurm
+#       slurm/pipeline/2c_merge_root.slurm
 #
 #SBATCH --job-name=tiny-rootreps
 #SBATCH --output=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%A_%a.out
@@ -29,7 +29,7 @@ set -euo pipefail
 WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
 
 LW=$(( ${SLURM_CPUS_PER_TASK:-4} - 1 ))   # DataLoader background workers
 

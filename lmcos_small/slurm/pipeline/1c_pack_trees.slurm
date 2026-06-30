@@ -9,7 +9,7 @@
 #   mc_pack  -> cts.data.preprocess_mc.pack     (budgeted-DP oracle episodes)
 #
 #   ELO=2000 sbatch --dependency=afterok:<filter_array_jobid> \
-#       pipeline/1c_pack_trees.slurm
+#       slurm/pipeline/1c_pack_trees.slurm
 #
 #SBATCH --job-name=tiny-mergepack
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%j.out
@@ -24,7 +24,7 @@ set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 NW=${SLURM_CPUS_PER_TASK:-16}
 
 FILTERED=$($RENDER --get globals.filtered_dir)

@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=96G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/prune_regen_an.%j.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/prune_regen_an.%j.out
 cd /home/hl4291/chess_analysis
 set -euo pipefail
 export PYTHONPATH=/home/hl4291/chess_analysis/lmcos_small/src${PYTHONPATH:+:$PYTHONPATH}

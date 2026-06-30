@@ -5,7 +5,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/voc_tau_sweep_%j.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/voc_tau_sweep_%j.out
 
 set -euo pipefail
 cd /home/hl4291/chess_analysis

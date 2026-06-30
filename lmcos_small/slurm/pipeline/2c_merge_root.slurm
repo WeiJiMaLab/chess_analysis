@@ -4,7 +4,7 @@
 # writes <split>_cache.pt). Submit afterok on the 2b_pack_root worker array.
 #
 #   ELO=2000 NWORKERS=40 sbatch --dependency=afterok:<rootreps_array_jobid> \
-#       pipeline/2c_merge_root.slurm
+#       slurm/pipeline/2c_merge_root.slurm
 #
 #SBATCH --job-name=tiny-rootreps-merge
 #SBATCH --output=/scratch/gpfs/GRIFFITHS/hl4291/sf_pack_logs/%x_%j.out
@@ -20,7 +20,7 @@ set -euo pipefail
 : "${NWORKERS:?NWORKERS required (must match the worker array size)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 
 echo "elo=$ELO merge NWORKERS=$NWORKERS host=$(hostname)"; date
 

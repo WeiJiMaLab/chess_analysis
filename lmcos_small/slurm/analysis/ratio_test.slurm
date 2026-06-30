@@ -7,6 +7,6 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/ratio_test_%j.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/ratio_test_%j.out
 cd /home/hl4291/chess_analysis
 /home/hl4291/venv/bin/python lmcos_small/analysis/ratio_test.py

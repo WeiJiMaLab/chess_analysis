@@ -6,7 +6,7 @@
 # canonical clean_trees.txt and runs split/gnn_pack/mc_pack.
 #
 #   ELO=2000 sbatch --array=0-9 --dependency=afterok:<gentrees_jobid> \
-#       pipeline/1b_filter_trees.slurm
+#       slurm/pipeline/1b_filter_trees.slurm
 #
 #SBATCH --job-name=tiny-filter
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%A_%a.out
@@ -23,7 +23,7 @@ WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}
 NSHARDS=${SLURM_ARRAY_TASK_COUNT:?array count unavailable}
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 
 echo "elo=$ELO shard=$WID/$NSHARDS host=$(hostname)"; date
 

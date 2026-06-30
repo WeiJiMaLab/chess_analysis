@@ -10,7 +10,7 @@
 # regret_by_model) and the hindsight halter stay in 3_train/4_eval — they require training.
 #
 #   for S in n1md36 n100md36 n1md36_eps0.05 n1md36_eps0.1 n1md36_eps0.3; do
-#     sbatch --export=ALL,VOC_SET=$S lmcos_small/pipeline/2d_data_analysis.slurm
+#     sbatch --export=ALL,VOC_SET=$S lmcos_small/slurm/pipeline/2d_data_analysis.slurm
 #   done
 #
 #SBATCH --job-name=2d_data_analysis
@@ -21,7 +21,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=96G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/2d_%x_%j_%a.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/2d_%x_%j_%a.out
 
 set -euo pipefail
 SET="${VOC_SET:?set VOC_SET=n1md36|n100md36|n1md36_eps0.1|...}"

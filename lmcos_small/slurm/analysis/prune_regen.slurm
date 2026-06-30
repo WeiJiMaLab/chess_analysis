@@ -4,11 +4,11 @@
 # leaf-eval value). Same SF-2000 engine, n=1 leaf eval, same 250k roots. EPS=none = the
 # unpruned md36 baseline (regenerated because md36 != md4 for some positions). Per-eps dir.
 #   for E in none 0.05 0.1 0.3; do
-#     sbatch --array=0-19 --export=ALL,MODE=absolute,PARAM=0.5,LANE_END=50000 lmcos_small/analysis/slurm/prune_regen.slurm
+#     sbatch --array=0-19 --export=ALL,MODE=absolute,PARAM=0.5,LANE_END=50000 lmcos_small/slurm/analysis/prune_regen.slurm
 #   done
 #SBATCH --job-name=prune-regen
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/%x_%A_%a.out
-#SBATCH --error=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/%x_%A_%a.err
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%A_%a.out
+#SBATCH --error=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
@@ -21,7 +21,7 @@ PARAM="${PARAM:-}"         # the prune knob (ignored for MODE=none)
 N="${N:-1}"                # leaf-eval node budget (1 or 100)
 LANE_END="${LANE_END:-250000}"
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 
 PRUNE_OVERRIDE=()
 if [ "$MODE" = "none" ]; then

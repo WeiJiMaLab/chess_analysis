@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/prune_proxy.%j.out
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/prune_proxy.%j.out
 
 cd /home/hl4291/chess_analysis
 set -euo pipefail

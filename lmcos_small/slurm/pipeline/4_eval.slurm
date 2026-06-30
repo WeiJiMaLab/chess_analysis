@@ -5,8 +5,8 @@
 # selects which rungs to eval; it MUST match the rungs whose controllers were
 # trained this session.
 #
-#   RUNGS=2000 sbatch --dependency=afterok:<readout_jobid> pipeline/4_eval.slurm
-#   RUNGS=1800,2000,2200 sbatch --dependency=afterok:<id1>:<id2>:<id3> pipeline/4_eval.slurm
+#   RUNGS=2000 sbatch --dependency=afterok:<readout_jobid> slurm/pipeline/4_eval.slurm
+#   RUNGS=1800,2000,2200 sbatch --dependency=afterok:<id1>:<id2>:<id3> slurm/pipeline/4_eval.slurm
 #
 #SBATCH --job-name=tiny-eval
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%j.out
@@ -24,7 +24,7 @@ IFS=',' read -ra RUNGS_ARR <<< "${RUNGS:-1800,2000,2200}"
 # setup_env needs ELO (loads modules + venv + PYTHONPATH); eval is multi-rung and
 # renders paths itself, so any rung works — use the first.
 export ELO=${ELO:-${RUNGS_ARR[0]}}
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 
 rung_field() {  # rung_field <ELO> <key>
   python "$TINY/configs/render_stage.py" "$TINY/configs/core.yaml" --set globals.sf_elo="$1" --get "eval.$2"

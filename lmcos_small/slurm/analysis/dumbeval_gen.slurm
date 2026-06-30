@@ -3,10 +3,10 @@
 # noisy/myopic per-node values), same SF-2000 engine + same 250k roots, into a SEPARATE
 # dir (elo2000_n1) so it does NOT clobber elo2000. Tests H1/H3 (generative-search thesis):
 # does a dumber search's tree-stats recover the +0.31 legal-moves/RT effect?
-#   sbatch --array=0-99 lmcos_small/analysis/slurm/dumbeval_gen.slurm
+#   sbatch --array=0-99 lmcos_small/slurm/analysis/dumbeval_gen.slurm
 #SBATCH --job-name=dumbeval-gen
-#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/%x_%A_%a.out
-#SBATCH --error=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/%x_%A_%a.err
+#SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%A_%a.out
+#SBATCH --error=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
@@ -15,7 +15,7 @@
 set -euo pipefail
 export ELO=2000
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"
 
 SHARD_SIZE=2500; BASE_START=0; LANE_END=250000
 start=$(( BASE_START + SLURM_ARRAY_TASK_ID * SHARD_SIZE ))

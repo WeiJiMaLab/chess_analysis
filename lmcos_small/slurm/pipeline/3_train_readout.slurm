@@ -7,7 +7,7 @@
 # whole A100 for a 30-second job.
 #
 #   ELO=1800 sbatch --dependency=afterok:<merge_rootreps_jobid> \
-#     pipeline/3_train_readout.slurm
+#     slurm/pipeline/3_train_readout.slurm
 #SBATCH --job-name=tiny-readout
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/lmcos_small/slurm/logs/%x_%j.err
@@ -21,7 +21,7 @@ set -euo pipefail
 : "${ELO:?ELO required (1800|2000|2200)}"
 
 TINY=/home/hl4291/chess_analysis/lmcos_small
-source "$TINY/pipeline/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
+source "$TINY/slurm/pipeline/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
 
 echo "elo=$ELO host=$(hostname) device=cpu"; date
 # controller_train reads the `train` section of core.yaml directly.
