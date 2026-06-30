@@ -142,18 +142,20 @@ def save_mq_dashboard(analyzer: Analyzer, gss_analyzer: Analyzer, out_dir: str) 
 def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) -> None:
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
-               p.n_possible_moves AS legal_moves, t.h_pi,
-               p.n_self_pieces_exc_pawns AS own_material,
-               m.mq, t.action_gap, t.voc, t.gss
+               p.n_possible_moves AS legal_moves, p.player_clock_time AS player_clock,
+               m.mq, t.voc, t.action_gap, t.gss, t.greedy_frac_good, t.oss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
         JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0
     """).df()
     labels = {
-        "log_T": "log(RT)", "ply": "Ply", "legal_moves": "Legal moves", "h_pi": "H(π)",
-        "own_material": "Own Material", "mq": "MQ", "action_gap": "Action Gap",
-        "voc": "Gain", "gss": "GSS",
+        "log_T": "log(RT)",
+        # board features
+        "ply": "Ply", "legal_moves": "Legal moves", "player_clock": "Clock left",
+        # engine signals (all myopic/greedy)
+        "mq": "MQ", "voc": "Gain", "action_gap": "Action Gap", "gss": "GSS",
+        "greedy_frac_good": "Greedy frac-good", "oss": "OSS",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
@@ -199,8 +201,10 @@ def run_tree_values_pipeline(
     if use_cache:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
-        if "h_pi" not in vals.columns:
-            print("  cached values predate H(π); recomputing from the trees …")
+        _required = ("h_pi", "greedy_frac_good", "oss")
+        _missing = [c for c in _required if c not in vals.columns]
+        if _missing:
+            print(f"  cached values predate columns {_missing}; recomputing from the trees …")
             use_cache = False
             
     if not use_cache:
@@ -213,9 +217,12 @@ def run_tree_values_pipeline(
 
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
-    # Locate output directory
-    ha_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(ha_dir)
+    # Locate output directory. This file is lmcos_small/human/engine.py, so the repo
+    # root (chess_analysis/, which holds figures/) is THREE dirs up: human -> lmcos_small
+    # -> chess_analysis. (Matches utils.plots.save_figure used by board.py.)
+    human_dir = os.path.dirname(os.path.abspath(__file__))   # lmcos_small/human
+    lmcos_dir = os.path.dirname(human_dir)                   # lmcos_small
+    repo_root = os.path.dirname(lmcos_dir)                   # chess_analysis
     out_dir = os.path.join(repo_root, "figures", "engine")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -224,7 +231,8 @@ def run_tree_values_pipeline(
         conn.register("_root_moves", root_moves)
         conn.execute("""
             CREATE OR REPLACE TEMP TABLE tree_rt AS
-            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.fen, m.gid, m.move_ply, m.move_time
+            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good, v.oss,
+                   v.fen, m.gid, m.move_ply, m.move_time
             FROM _vals v
             JOIN processed_moves_nonzero m ON m.fen = v.fen
             WHERE m.move_time > 0
@@ -232,8 +240,8 @@ def run_tree_values_pipeline(
         n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
         n_fen = conn.execute("SELECT count(DISTINCT fen) FROM tree_rt").fetchone()[0]
         print(f"  joined {n_rows:,} human moves across {n_fen:,} FENs.")
-        
-        for col in ("gss", "voc", "action_gap", "h_pi"):
+
+        for col in ("gss", "voc", "action_gap", "h_pi", "greedy_frac_good", "oss"):
             r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt WHERE {col} IS NOT NULL").fetchone()[0]
             print(f"  r({col}, log RT) = {r:+.4f}")
 
@@ -303,6 +311,24 @@ def run_tree_values_pipeline(
                 "tie_safe": True,
                 "zero_inflated": True,
                 "zero_threshold": 0.05,
+            },
+            "frac_good": {
+                "table": "tree_rt",
+                "column": "greedy_frac_good",
+                "name": "Greedy frac-good (SF-1)",
+                "filename": "frac_good.pdf",
+                "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL",
+                "min_bin_count": 100,
+                "tie_safe": True,
+            },
+            "oss": {
+                "table": "tree_rt",
+                "column": "oss",
+                "name": "Optimal stop step (SF-1)",
+                "filename": "oss.pdf",
+                "filter_query": "move_time > 0 AND oss IS NOT NULL",
+                "min_bin_count": 100,
+                "tie_safe": True,
             },
             "mq": lambda conn, out_dir: save_mq_dashboard(
                 Analyzer(

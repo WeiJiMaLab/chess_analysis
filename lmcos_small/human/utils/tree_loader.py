@@ -5,12 +5,74 @@ Value of Computation (Gain), Action Gap, Prior Entropy H(π), and Root MQ.
 """
 
 import os
+import sys
 import random
 import multiprocessing as mp
 import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+
+# Greedy fraction-good tolerance: a root move "looks good at a glance" if its
+# myopic (mover-perspective leaf-eval) value is within this of the best myopic value.
+FRAC_GOOD_EPS = 0.1
+# Node cost for the budgeted-oracle Optimal Stopping Step (the value we settled on).
+OSS_NODE_COST = 1e-4
+
+# build_compact_trajectory_from_payload lives in the pipeline source tree (cts).
+# Make it importable when this module is run with the standard human PYTHONPATH.
+# This file is at lmcos_small/human/utils/tree_loader.py, so lmcos_small/src is
+# three dirnames up (utils -> human -> lmcos_small) + "src".
+_SRC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "src",
+)
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+try:
+    from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload
+except Exception:  # noqa: BLE001 — keep loader importable even if cts is unavailable
+    build_compact_trajectory_from_payload = None
+
+
+def _tree_frac_good(payload) -> float:
+    """Greedy fraction-good: fraction of root moves whose MYOPIC value is within
+    FRAC_GOOD_EPS of the best myopic value. Myopic value = mover-perspective root-child
+    leaf-eval = -node_features[root_children, "value"]. This is the greedy / pre-search
+    analog of satisfaction ("how many moves look good at a glance"); it deliberately
+    uses the myopic leaf evals, NOT the deep oracle_final_root_q_values."""
+    feature_names = list(payload["feature_names"])
+    nf = payload["node_features"].numpy()
+    par = payload["parent_index"].numpy()
+    vi = feature_names.index("value")
+    roots = np.where(par < 0)[0]
+    if not roots.size:
+        return float("nan")
+    kids = np.where(par == int(roots[0]))[0]
+    if kids.size < 1:
+        return float("nan")
+    myo = -nf[kids, vi].astype(float)
+    if not np.isfinite(myo).all():
+        return float("nan")
+    return float(np.mean(myo >= myo.max() - FRAC_GOOD_EPS))
+
+
+def _tree_oss(payload, source_path: str, node_cost: float = OSS_NODE_COST) -> float:
+    """Optimal Stopping Step (OSS): the budgeted-oracle dynamic stop on the compact
+    trajectory. OSS = argmax_t [ halt_reward(t) - node_cost * n_total(t) ], with a
+    per-NODE cost (cost grows with cumulative tree size). Mirrors the settled logic in
+    lmcos_small/analysis/oss_nodecost.py (node-cost c=1e-4)."""
+    if build_compact_trajectory_from_payload is None:
+        return float("nan")
+    traj = build_compact_trajectory_from_payload(payload, source_path=source_path)
+    if traj is None or traj.get("num_steps", 0) <= 0:
+        return float("nan")
+    hr = np.asarray(traj["halt_rewards"], dtype=float)
+    ts = np.asarray(traj["tree_sizes"], dtype=float)
+    if hr.size < 2:
+        return float("nan")
+    return float(np.argmax(hr - node_cost * ts))
+
 
 def _tree_voc_and_gap(payload) -> tuple[float, float]:
     """Extract Gain and Action Gap from tree payload."""
@@ -90,9 +152,11 @@ def _worker(path: str):
             return None
         voc_val, gap = _tree_voc_and_gap(t)
         hpi = _tree_hpi(t)
+        frac_good = _tree_frac_good(t)
+        oss = _tree_oss(t, path)
         ucis, mqs = _tree_root_mq(t)
         fen = " ".join(t["root_position_spec"].split()[:4])
-        return (fen, gss, voc_val, gap, hpi, ucis, mqs)
+        return (fen, gss, voc_val, gap, hpi, frac_good, oss, ucis, mqs)
     except Exception:
         return None
 
@@ -106,8 +170,9 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> t
         for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
-            fen, gss, voc_val, gap, hpi, ucis, mqs = r
-            tree_rows.append({"fen": fen, "gss": gss, "voc": voc_val, "action_gap": gap, "h_pi": hpi})
+            fen, gss, voc_val, gap, hpi, frac_good, oss, ucis, mqs = r
+            tree_rows.append({"fen": fen, "gss": gss, "voc": voc_val, "action_gap": gap,
+                              "h_pi": hpi, "greedy_frac_good": frac_good, "oss": oss})
             for u, q in zip(ucis, mqs):
                 move_rows.append({"fen": fen, "move_uci": u, "mq": q})
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)

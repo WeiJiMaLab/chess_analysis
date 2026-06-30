@@ -30,8 +30,12 @@ N_TREES="${N_TREES:-100000}"
 N_WORKERS="${N_WORKERS:-${SLURM_CPUS_PER_TASK:-40}}"
 
 echo "tree values: n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $(date)"
-PYTHONPATH=lmcos_small/human python3 lmcos_small/human/engine.py \
+# REFRESH forces a clean recompute of the per-tree parquet (default off). Needed
+# whenever tree_loader gains columns (e.g. greedy_frac_good / OSS) the cache predates.
+REFRESH_FLAG="${REFRESH:+--refresh}"
+PYTHONPATH=lmcos_small/src:lmcos_small/human python3 lmcos_small/human/engine.py \
     --mode tree_values \
     --n-trees "${N_TREES}" \
-    --n-workers "${N_WORKERS}"
+    --n-workers "${N_WORKERS}" \
+    ${REFRESH_FLAG}
 echo "Finished at $(date)"
