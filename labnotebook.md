@@ -47,6 +47,8 @@ Converged the deliberation thread on a single umbrella — **think-time is the c
 
 | **Value-pruning step 2: PUCT prune + depth-36 fix** | Regenerate trees WITH pruning; the freed budget must be able to go deep | ✅ `prune_epsilon` in the PUCT loop (depth≥1, relative-to-best by leaf-eval value, negamax best=min; root intact). Smoke test exposed **max_depth=4 capped the freed budget** → fixed to **36** (treegen + mc_pack). Effect is **only on pruned trees** (uniform-prior PUCT is breadth-leaning): md36+ε0.1 drives deep on forcing lines (tree depth 4→**19**, full 96 exp) vs md4 truncating at 77. Regenerating baseline + 3 ε at md36, full 250K, n=1. | [(R-PRUNING)](reports/pruning.md) |
 
+| **Value-pruning step-2 result + 2d stage** | Test the regenerated pruned cost vs RT; stage the param-free analyses | ✅ md36 regen (262K moves): pruned `n_total` ↔ RT = **−0.05..−0.01** across ε (all ≪ +0.34 legal floor) — depth-36 budget redeploys deep so pruned trees aren't small; the proxy's −0.15 was a **depth-4 truncation artifact**. Raw node-count isn't the matching cost; the win (if any) is the satisficing **stop**. Staged `2d_data_analysis` (engine-derived, no-refit; unfiltered) on all 5 md36 sets + `2d_figures`. | [(R-PRUNING)](reports/pruning.md) |
+
 ## 2026-06-26 {#2026-06-26}
 
 Refactored the engine and configuration architecture, consolidated the test suite, mitigated bivariate pipeline vulnerabilities, and profiled MCTS tree rollout generation.

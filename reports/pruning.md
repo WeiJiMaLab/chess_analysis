@@ -141,6 +141,34 @@ positions hit the depth wall and stopped at <96 expansions instead of thinking d
 > 1: depth **19**, avg expand depth 7.9, full 96 expansions) — the faithful model of human deep calculation.
 > Unpruned md36 ≠ md4 for some positions, so the **baseline is regenerated too**.
 
-**Running (full 250K each, n=1, md36):** `n1md36` (baseline) + `n1md36_eps{0.05,0.1,0.3}` via `prune_regen.slurm`.
-Readout: `prune_regen_analyze.py` → ρ(pruned cost, RT) + partial|legal per ε vs the +0.34 floor — the test the
-proxy cannot do (causal values + redeployed budget). Then step 4: oracle step\* / meta-MDP on the locked ε.
+**Ran (full 250K each, n=1, md36):** `n1md36` (baseline) + `n1md36_eps{0.05,0.1,0.3}` via `prune_regen.slurm`.
+
+## Step 2 result — raw pruned node-count does NOT beat the floor
+
+`prune_regen_analyze.py`, 262,286 human moves, all md36:
+
+| set | med n_total | ρ(n_total, RT) | partial \| legal |
+|---|---|---|---|
+| *floor: legal moves* | — | **+0.341** | — |
+| none (unpruned) | 2858 | +0.319 | +0.099 |
+| ε=0.05 | 776 | −0.045 | −0.038 |
+| ε=0.1 | 866 | −0.053 | −0.048 |
+| ε=0.3 | 1171 | −0.008 | −0.058 |
+
+> **Result:** with the depth-36 budget free to **redeploy deep**, an aggressively-pruned position no longer yields
+> a *small* tree (≈800 deep-narrow nodes, not the proxy's tiny sets), so the pruned `n_total` **washes out to
+> ≈0** and is nowhere near the +0.34 floor. The proxy's satisfaction signal (−0.15) was a **depth-4 truncation
+> artifact** (pruned ⇒ small tree); with proper depth it disappears. Stable at 262K moves — a clean null, not
+> noise; **more trees will not move it.**
+
+> **Implication:** raw node-count is *not* the cost that matches RT. The value-add, if any, must come from the
+> **satisficing STOP** — the oracle step\* / a 1–2-param consideration-set model on the pruned trace (the pruned
+> trees show oss→0: prune to near-best ⇒ nothing to gain ⇒ decide immediately), **not** the leaf-count. That is
+> the live step-4 test, runnable on the existing 250K (no more trees).
+
+## Stage 2d — the engine-derived (no-refit) analyses, staged
+
+`lmcos_tiny/pipeline/2d_data_analysis.slurm` runs the param-free chain (budgeted-oracle VOC signals +
+softmax-VOC τ sweep) on a tree SET over the **unfiltered** population → `sf_analysis/<SET>/`; `2d_figures.slurm`
+makes the plots. Launched on all 5 md36 sets; figures regenerate on `n1md36`. The halt-policy zoo + hindsight
+halter stay in `3_train`/`4_eval` (they need training).
