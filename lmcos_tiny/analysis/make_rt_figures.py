@@ -10,10 +10,11 @@ import torch, numpy as np, pandas as pd, duckdb
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-VOCPQ = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_signals.parquet"
-TAU = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/voc_tau_sweep.parquet"
-TREES = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000"
-FILT = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000/clean_trees.txt"
+SET = os.environ.get("VOC_SET", "n1md36")
+VOCPQ = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}/voc_signals.parquet"
+TAU = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}/voc_tau_sweep.parquet"
+TREES = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/{SET}"
+FILT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}/clean_trees.txt"  # may be absent (unfiltered)
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 FIG = "/home/hl4291/chess_analysis/figures/lmcos_tiny"
 
@@ -105,7 +106,10 @@ def main():
         cols = ["fen", "legal_moves", "action_gap"] + [f"n_good_{e}" for e in (0.02, 0.05, 0.1, 0.2, 0.5)]
         gd = voc[cols].rename(columns={"legal_moves": "n_legal"}).copy()
     else:
-        names = [l.strip() for l in open(FILT) if l.strip()]; random.seed(0); random.shuffle(names); names = names[:6000]
+        import glob as _glob
+        names = ([l.strip() for l in open(FILT) if l.strip()] if os.path.exists(FILT)
+                 else [os.path.basename(p) for p in _glob.glob(os.path.join(TREES, "*.pt"))])
+        random.seed(0); random.shuffle(names); names = names[:6000]
         rows = []
         for nm in names:
             try: p = torch.load(os.path.join(TREES, nm), map_location="cpu", weights_only=False)
