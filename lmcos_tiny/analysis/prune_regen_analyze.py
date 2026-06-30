@@ -34,12 +34,15 @@ def _counts(path: str):
         fen = " ".join(d["root_position_spec"].split()[:4])
         pi = np.asarray(d["parent_index"])
         ie = np.asarray(d["is_expanded"]).astype(bool)
+        dep = np.asarray(d["depth"])
         return {
             "fen": fen,
             "legal_moves": int((pi == 0).sum()),
             "n_total": int(pi.shape[0]),
             "n_expanded": int(ie.sum()),
-            "n_leaf": int((~ie).sum()),
+            "n_frontier": int((~ie).sum()),   # unexpanded leaves = the active frontier / consideration set
+            "max_depth": int(dep.max()),
+            "mean_leaf_depth": float(dep[~ie].mean()) if (~ie).any() else 0.0,
         }
     except Exception:  # noqa: BLE001
         return None
@@ -94,13 +97,16 @@ def main():
         con.unregister("t")
         y = m["move_time"].to_numpy()
         leg = m["legal_moves"].to_numpy()
-        nt = m["n_total"].to_numpy().astype(float)
-        r_nt, lo_nt, hi_nt = _boot(_spearman, nt, y)
-        p_nt, plo, phi = _boot(_partial_spearman, y, nt, leg)
         r_leg = _spearman(leg, y)
-        print(f"{e:>6} {len(m):>7} {int(np.median(df.n_total)):>9} {int(np.median(df.n_expanded)):>9} "
-              f"{r_nt:>+8.3f}[{lo_nt:+.3f},{hi_nt:+.3f}] {p_nt:>+8.3f}[{plo:+.3f},{phi:+.3f}] {r_leg:>+8.3f}",
-              flush=True)
+        print(f"\n[{e}]  n={len(m):,}  legal-floor ρ(legal,RT)={r_leg:+.3f}  "
+              f"med: n_total={int(df.n_total.median())} n_frontier={int(df.n_frontier.median())} "
+              f"max_depth={int(df.max_depth.median())}", flush=True)
+        print(f"   {'cost':>16} {'ρ(cost,RT)':>22} {'partial|legal':>22}", flush=True)
+        for col in ("n_total", "n_frontier", "max_depth", "mean_leaf_depth"):
+            c = m[col].to_numpy().astype(float)
+            r, lo, hi = _boot(_spearman, c, y)
+            pr, plo, phi = _boot(_partial_spearman, y, c, leg)
+            print(f"   {col:>16} {r:>+8.3f}[{lo:+.3f},{hi:+.3f}] {pr:>+8.3f}[{plo:+.3f},{phi:+.3f}]", flush=True)
     con.close()
 
 
