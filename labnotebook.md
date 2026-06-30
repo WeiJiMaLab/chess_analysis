@@ -31,6 +31,17 @@ Older lmcos work (Apr–May 2026) lives in the [§ Legacy lmcos lab notebook](#l
 - **Tree spec (verified):** `max_depth=10`, value = **raw value-head** (win−loss), budget = **96 expansions** (total nodes ≈ 96 × branching).
 - **Open:** the resource-rational branching account ([R-BRANCH](reports/branching.md) P1–P5: policy-entropy ≈ branching; width-gated stop vs value-convergence); difficulty-residualized MQ; strength-matched SF-2000 oracle.
 
+## 2026-06-30 {#2026-06-30}
+
+Reclaimed the narrative: **legal-moves is the *explanandum*, not a floor to beat** — and a no-prune, per-operation-cost resource-rational stop **reproduces the whole decomposition**.
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **OSS with node cost (dynamic stop)** | The cost we always zeroed (∝ nodes) is the correct unit | ✅ `oss_nodecost`: OSS=argmax_t[V_deep(t)−c·n_total(t)] on n1md36 (no regen). n_total(OSS)↔RT=+0.19 (beats OSS-in-steps +0.12 → nodes is the right unit); partial|legal ≈ **+0.05**, ~same for node- vs step-cost. | [(R-TREESEARCH)](reports/treesearch.md) |
+| **Satisficing-search ratio test** | Does RT∝#legal/#good (search length) beat the count? | ❌ ratio ↔RT=+0.33 (< floor +0.34), partial|legal=+0.01 — collapses to legal-moves; gut-order construal proxy also null. | [(R-TREESEARCH)](reports/treesearch.md) |
+| **★ Reframe + normative-curve fit** | A count isn't a model; the win is *explaining why effort ∝ options is resource-rational* | ✅ `normative_curves`: the no-prune node-cost model **reproduces all three signs** — size **+0.45**, satisfaction **−0.43**, sharpness **+0.095** (vs human +0.34/−0.30/+0.11) from ONE param c≈1e-4; sharpness (predicted backwards) comes out right. Success criterion rewritten across report.md/treesearch.md/pruning.md: *reproduce the curves*, not *beat the floor*. | [(R-TREESEARCH)](reports/treesearch.md) |
+| **Cleanup** | Consolidate | Deleted off-track proposals (search_shape/planning_engagement/value_of_information) + older reports (construal/branching/engine/halt_calibration/lmcos_tiny). Rewiring human_analytics engine.py off the deleted lc0/md4 trees onto n1md36. | — |
+
 ## 2026-06-29 {#2026-06-29}
 
 Converged the deliberation thread on a single umbrella — **think-time is the cost of the *leaves* (the consideration set), which the oracle never charged for** — restyled the deck/graph around it, and scoped a cost-profile (value-pruning) experiment as the next sub-report.

@@ -9,9 +9,9 @@
 # lc0 reproducibility: pass --trees-dir /scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees
 #   --key human_trees_200000_7  (or temporarily revert the two values below).
 # =============================================================================
-trees_default: "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000"
+trees_default: "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/n1md36"
 cache_default: "/scratch/gpfs/GRIFFITHS/hl4291/tree_values_cache"
-key_default: "elo2000_100000_7"   # = basename(trees_default)_<n_trees default>_<seed default>; what tree_values writes
+key_default: "n1md36_100000_7"   # basename(trees_default)_<n_trees default>_<seed default>; what tree_values writes
 
 # =============================================================================
 # Response Time (RT) Plotting & Analysis Configurations

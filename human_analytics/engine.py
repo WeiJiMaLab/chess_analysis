@@ -175,7 +175,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) 
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label("Spearman ρ", fontsize=18)
     cbar.ax.tick_params(labelsize=16)
-    ax.set_title(f"Spearman correlation — lc0 metrics (n = {len(df):,})", fontsize=20, pad=12)
+    ax.set_title(f"Spearman correlation — SF-1 (n1·d36) metrics (n = {len(df):,})", fontsize=20, pad=12)
     plt.tight_layout()
     
     base, _ = os.path.splitext(out_path)
@@ -285,7 +285,7 @@ def run_tree_values_pipeline(
             "gain": {
                 "table": "tree_rt",
                 "column": "voc",
-                "name": "Gain (lc0 tree)",
+                "name": "Gain (SF-1)",
                 "filename": "gain.pdf",
                 "filter_query": "move_time > 0",
                 "min_bin_count": 100,
@@ -296,7 +296,7 @@ def run_tree_values_pipeline(
             "action_gap": {
                 "table": "tree_rt",
                 "column": "action_gap",
-                "name": "Action Gap (lc0 tree)",
+                "name": "Action Gap (SF-1)",
                 "filename": "action_gap.pdf",
                 "filter_query": "move_time > 0",
                 "min_bin_count": 100,
@@ -309,9 +309,9 @@ def run_tree_values_pipeline(
                     conn,
                     "mq_rt",
                     x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
-                    y_var=Variable(column="mq", is_log=False, name="MQ (lc0 tree)"),
+                    y_var=Variable(column="mq", is_log=False, name="MQ (SF-1)"),
                     filter_query="move_time > 0",
-                    title="MQ (lc0 tree) vs. log(RT)",
+                    title="MQ (SF-1) vs. log(RT)",
                     min_bin_count=100,
                     n_bins=10,
                 ),
@@ -319,9 +319,9 @@ def run_tree_values_pipeline(
                     conn,
                     "mq_rt",
                     x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
-                    y_var=Variable(column="mq", is_log=False, name="MQ (lc0 tree)"),
+                    y_var=Variable(column="mq", is_log=False, name="MQ (SF-1)"),
                     filter_query="move_time > 0",
-                    title="MQ (lc0 tree) vs. log(RT)",
+                    title="MQ (SF-1) vs. log(RT)",
                     min_bin_count=100,
                     n_bins=10,
                     segment_column="gss",

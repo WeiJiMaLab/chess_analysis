@@ -75,9 +75,9 @@ the raw count (partial ρ ≈ +0.05).
 
 The legal-moves effect is suggestive but *structural* — it says nothing about whether thinking is
 *worth it*. The resource-rational hypothesis is sharper: people should think longer where an engine
-would *gain* more from searching. To test it we read three value quantities off a **Stockfish
-(Elo-2000) search tree** on the same position (50K trees; 57,087 human moves matched across 50K
-FENs). Full inquiry: [(R-MOVETIME-MODEL)](reports/engine.md).
+would *gain* more from searching. To test it we read value quantities off a **Stockfish search tree**
+on the same position — now the canonical `n1md36` set (SF, n=1 leaf eval, depth-36, no pruning; 250K
+trees, ~104K human moves matched). The analysis lives in `human_analytics/engine.py`.
 
 The three engine signals, in the user's terms:
 
@@ -93,17 +93,20 @@ The three engine signals, in the user's terms:
 ![MQ vs RT, global / by ply / by difficulty](figures/engine/mq.png)
 ![action gap vs RT](figures/engine/action_gap.png)
 
-| Metric (SF Elo-2000 tree) | ρ with log RT | Direction |
+| Metric (SF `n1md36` tree) | r with log RT | Direction |
 |---|---|---|
-| **Gain** (value of computation) | **+0.104** | as predicted — more to gain, longer think |
-| **GSS** (greedy stop step: when the search locks onto its best move) | +0.078 | as predicted |
-| **Action gap** (decisiveness) | −0.056 | as predicted — decided → faster |
-| **MQ** (played-move quality) | −0.197 | longer thinks land on *worse* moves |
+| **Gain** (value of computation) | **+0.136** | as predicted — more to gain, longer think |
+| **GSS** (greedy stop step: when the search locks onto its best move) | +0.053 | as predicted |
+| **Action gap** (decisiveness) | −0.067 | as predicted — decided → faster |
+| **MQ** (played-move quality) | −0.166 | longer thinks land on *worse* moves |
+| **H(π)** (policy-entropy "decision uncertainty") | +0.307 | — but **= log(legal moves)**: SF's prior is uniform, so this is the legal-moves effect in disguise (raw ρ +0.33, partial \| legal **+0.002**) |
 
 Every direction is the one a value-of-computation account predicts — but every magnitude is faint
-(|ρ| ≲ 0.20). And the model and humans **emphasize different features**: on the oracle's own stop
-step the value-landscape features dominate (gain +0.23, action gap −0.29) while the legal-move count
-is ignored (+0.01); for human RT it is exactly reversed (legal moves +0.20, Gain +0.10).
+(|r| ≲ 0.17), and the numbers are **stable** from the old SF-2000/md4 run (Gain +0.10→+0.14, MQ
+−0.20→−0.17, action-gap −0.06→−0.07) — the engine value signals don't move with depth or eval budget.
+The one apparently-strong engine quantity, **H(π), is degenerate**: a uniform prior makes policy
+entropy *identically* log(#legal moves), so its +0.31 is decision width relabeled (it dies completely,
++0.002, partialled on legal-moves). For human RT the dominant driver is the **move count**, not value.
 
 ![Spearman matrix — engine metrics, board structure, RT](figures/engine/correlation_matrix.png)
 
@@ -231,8 +234,8 @@ questions: does it solve the *stopping* problem, and does it match *human RT*?
 ### The stopping problem: solved
 
 On the SF-2000 budgeted oracle we compared five halt policies, all reduced to one decision rule
-(stop at the first step with advantage ≤ 0) so the comparison isolates the *signal*. Full inquiry:
-[(R-LMCOS-TINY)](reports/lmcos_tiny.md).
+(stop at the first step with advantage ≤ 0) so the comparison isolates the *signal*. (This halt-policy-zoo
+work lives in `lmcos/` and the lab notebook's legacy section, not a standalone report.)
 
 | model | mean regret (95% CI) | mean expansions |
 |---|---|---|
@@ -336,17 +339,18 @@ story can be *won* rather than merely *re-described*:
 This paper is a synthesis; each act's full methods, data lineage, and caveats live in its report
 (cross-references are collected in the [index](reports/reference.md), not duplicated here):
 
-- **Act 1** — [(R-MOVETIME-BOARD)](reports/board.md): board regressors, the log-normal RT, the
-  width axis.
-- **Act 2** — [(R-MOVETIME-MODEL)](reports/engine.md): Gain / MQ / GSS / action gap on SF-2000
-  trees; the oracle-vs-human feature emphasis; the MQ difficulty audit.
-- **Act 3** — [(R-TREESEARCH)](reports/treesearch.md): the budgeted oracle, the five hypotheses, the
-  leaf-cost umbrella, the satisficing decomposition. Resource-rational analytics of the width effect:
-  [(R-BRANCH)](reports/branching.md); step\* calibration: [(R-HALT-CALIB)](reports/halt_calibration.md).
-- **Act 4** — [(R-LMCOS-TINY)](reports/lmcos_tiny.md): the halt-policy zoo and PG training; the open
-  cost-profile experiment: [(R-PRUNING)](reports/pruning.md).
-- **Data** — [(R-DATA)](reports/reference.md#data-reference-r-data): the human Lichess dataset and
-  the search-tree dataset.
+- **Act 1** — [(R-MOVETIME-BOARD)](reports/board.md): board regressors, the log-normal RT, the width axis.
+- **Act 2** — engine value signals (Gain / MQ / GSS / action gap) on the `n1md36` trees, computed by
+  `human_analytics/engine.py` (figures in `figures/engine/`); the former standalone engine report is folded
+  in here.
+- **Act 3** — [(R-TREESEARCH)](reports/treesearch.md): the search model, the VOC hypotheses, the
+  satisficing decomposition, and **the reclaimed result — a resource-rational stop reproduces the curves**.
+  The former branching / halt-calibration threads are folded in.
+- **Act 4** — [(R-PRUNING)](reports/pruning.md): the cost-profile (pruning) refinement of the
+  resource-rational fit. The halt-policy-zoo / PG-training work lives in `lmcos/` + the lab notebook's legacy
+  section, not as a standalone report.
+- **Data** — [(R-DATA)](reports/reference.md#data-reference-r-data): the human Lichess dataset and the
+  search-tree dataset.
 
 All correlations are Spearman ρ with **percentile-bootstrap 95% CIs**; RT is always log(move time);
 the click-driven walkthrough is [`presentations/src/tree-search.md`](presentations/src/tree-search.md).

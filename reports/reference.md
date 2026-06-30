@@ -29,14 +29,9 @@ Reports come in two formats:
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
 | Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
-| Human move time — does a normative engine model match it? (Gain / MQ / GSS / action gap, oracle-stop tiers, SF-2000 correlations) | [(R-MOVETIME-MODEL)](engine.md) | Scientific | Human | ✅ done (SF-2000); residualized MQ open |
-| Legal moves & resource-rational deliberation (why decision width drives RT; mechanisms + predictions) | [(R-BRANCH)](branching.md) | Scientific (draft) | Human | 📝 proposal; P1–P5 open |
-| Halt-policy comparison — do learned readouts beat blind stopping on the SF-2000 budgeted oracle? (regret-vs-compute, PG vs MSE surrogate, GNN-z vs tree-stats) | [(R-LMCOS-TINY)](lmcos_tiny.md) | Scientific | LMCOS | ✅ done (elo2000); seeds/rungs open |
-| When ought one think? — calibrating the budgeted-oracle **step\*** against human RT (step\*=0 degeneracy, cost shape/scale, weak-engine rung) | [(R-HALT-CALIB)](halt_calibration.md) | Scientific | LMCOS | 📝 active; step\*↔RT reframe, interim elo2000 |
-| **Tree search & deliberation** — the single linear story (mermaid map): when/do people search like an engine? → VOC fails (every signal a legal-moves proxy) → RT = satisficed decision difficulty (size − satisfaction + sharpness) → a meta-rational reward−cost model + the fit-`c`-to-RT program | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; 63k; the single deliberation report (folds in the former R-VOC) |
-| **Value-pruning** — changing the **cost profile** (the only live lever once trees are filtered for reward-to-planning) via ε-pruning of implausible leaves; staged plan + feasibility (750K @ n=1) | [(R-PRUNING)](pruning.md) | Plan | Deliberation | ❌ negative — pruned node-count washes out at md36; the win (if any) is the satisficing stop, not the count |
-| **Construal** — effort as the **complexity of the simplified game** you build (attended pieces), not tree size; freeze-not-remove with holistic leaf eval; RT ∝ construal size \|S\*\| | [(R-CONSTRUAL)](construal.md) | Plan | Deliberation | ❌ subgame ruled out — proxy |S*|↔RT adds ≤+0.027 over legal; collapses to s_star; do not build |
-| Data reference — human Lichess dataset + lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
+| **Tree search & deliberation** — the single linear story: does VOC/engine-search explain *when* people think? No → RT = satisficed decision difficulty (size − satisfaction + sharpness) → **the reclaimed result: a resource-rational per-operation-cost stop *reproduces* the decomposition** (legal-moves is the explanandum, not a floor). Folds in the former engine / branching / halt-calibration / VOC threads. | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; `normative_curves` reproduces +size/−satisfaction/+sharpness |
+| **Value-pruning** — the cost-profile lever via ε-pruning; staged plan + the (negative) regen result; pruning is a *later refinement* of the resource-rational fit, not the first step | [(R-PRUNING)](pruning.md) | Plan | Deliberation | ❌ pruned node-count washes out at md36; success reframed to *reproduce the curves* |
+| Data reference — human Lichess dataset + SF/lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the
 lab notebook's [§ Legacy section](../labnotebook.md#legacy) (the former archive, merged in).
@@ -48,20 +43,18 @@ The human move-time inquiry now reads as **one arc** — *board → tree-search/
 
 1. **board** — [(R-MOVETIME-BOARD)](board.md): what board features predict think time (legal moves dominate).
 2. **tree search & deliberation** — [(R-TREESEARCH)](treesearch.md): the single linear story — does
-   value-of-computation / engine-search explain *when* people think? No (every signal a legal-moves proxy) ⇒ RT
-   = satisficed decision difficulty ⇒ a meta-rational reward−cost model + the fit-`c`-to-RT program. The
-   engine-side analysis [(R-MOVETIME-MODEL)](engine.md) (Gain / MQ / GSS / action gap, oracle tiers) and the
-   resource-rational analytics of the legal-moves effect [(R-BRANCH)](branching.md) are the engine- and
-   analytics-side of this thread and fold in here; [(R-HALT-CALIB)](halt_calibration.md) calibrates the
-   budgeted-oracle step\*.
+   value-of-computation / engine-search explain *when* people think? No (every value signal is faint and
+   collapses to the move count) ⇒ RT = satisficed decision difficulty ⇒ **the reclaimed result: a
+   resource-rational per-operation-cost stop *reproduces* `size − satisfaction + sharpness` (legal-moves is the
+   explanandum, not a floor to beat).** The engine value signals (Gain / MQ / GSS / action gap, in
+   `human_analytics/engine.py`, `figures/engine/`), the resource-rational width analytics, and the step\*
+   calibration are **all folded into this report** (the former standalone engine / branching / halt-calibration
+   reports were removed).
+3. **value-pruning** — [(R-PRUNING)](pruning.md): pruning as a *later refinement* of the resource-rational fit.
 
-> **Planned consolidation:** physically merge **engine → VOC** and **branching → construal** (they are the
-> engine- and analytics-side of those threads); for now they are grouped here and cross-linked. The
-> **LMCOS model-training thread** (GNN pretraining, meta-controller, the fitted-RL baselines) is not tracked as
-> standalone reports — record in the lab notebook's [§ Legacy section](../labnotebook.md#legacy), `lmcos/`, and
-> `lmcos/slurm/README.md`.
-
-**Cite:** `[(R-MOVETIME-MODEL)](engine.md)` from this folder; `[(R-MOVETIME-MODEL)](reports/engine.md)` from the notebook.
+> The **LMCOS model-training thread** (GNN pretraining, meta-controller, PG halt-policy zoo) is not tracked as a
+> standalone report — it lives in `lmcos/`, `lmcos/slurm/README.md`, and the lab notebook's
+> [§ Legacy section](../labnotebook.md#legacy).
 
 ## Data reference (R-DATA)
 
@@ -97,7 +90,7 @@ facts and decisions are kept here.
   `edge_wdl_targets` included (the GNN child-WDL target).
 - **Canonical set:** ysagiv `human_trees` — lc0 search on **2023 human-game root FENs** (4-field).
   *Use this set* (an earlier 150K `lc0_trees` lexicographic slice of the full FEN universe was
-  non-representative and has been deleted — see the move-time model report / `branching.md`).
+  non-representative and has been deleted — see the lab notebook).
 - Trees are `.pt` payloads (`format=cts_raw_pretrain_example_v5`): `root_position_spec`,
   `oracle_root_moves`, `oracle_final_root_q_values`, `oracle_best_move_index`, `oracle_root_q_trace`,
   `node_features`/`feature_names` (`value,wdl_*,prior`), `parent_index`, `is_expanded`, `depth`.
