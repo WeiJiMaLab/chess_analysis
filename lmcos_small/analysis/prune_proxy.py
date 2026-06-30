@@ -24,6 +24,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from cts.stats import spearman, partial_spearman, bootstrap_ci
+
 TREES_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/elo2000_n1"
 OUTDIR = "/scratch/gpfs/GRIFFITHS/hl4291/sf_filtered/elo2000_n1"
 OUT = f"{OUTDIR}/prune_proxy.parquet"
@@ -101,34 +103,6 @@ def compute():
     print(f"wrote {OUT}  rows={len(df)}  errs={errs}", flush=True)
 
 
-def _spearman(a, b):
-    from scipy.stats import rankdata
-    ra, rb = rankdata(a), rankdata(b)
-    return float(np.corrcoef(ra, rb)[0, 1])
-
-
-def _partial_spearman(y, x, z):
-    """Spearman partial of x on y controlling z (residualize ranks linearly)."""
-    from scipy.stats import rankdata
-    ry, rx, rz = rankdata(y), rankdata(x), rankdata(z)
-    rz1 = np.c_[np.ones_like(rz), rz]
-    bx = np.linalg.lstsq(rz1, rx, rcond=None)[0]
-    by = np.linalg.lstsq(rz1, ry, rcond=None)[0]
-    ex, ey = rx - rz1 @ bx, ry - rz1 @ by
-    return float(np.corrcoef(ex, ey)[0, 1])
-
-
-def _boot(fn, *cols, B=1000, seed=0):
-    rng = np.random.default_rng(seed)
-    n = len(cols[0])
-    vals = np.empty(B)
-    for b in range(B):
-        idx = rng.integers(0, n, n)
-        vals[b] = fn(*[c[idx] for c in cols])
-    lo, hi = np.percentile(vals, [2.5, 97.5])
-    return float(fn(*cols)), float(lo), float(hi)
-
-
 def analyze():
     import duckdb
     df = pd.read_parquet(OUT)
@@ -145,17 +119,17 @@ def analyze():
     y = m["move_time"].to_numpy()  # Spearman is rank-based; log is monotone, so raw RT is fine
     leg = m["legal_moves"].to_numpy()
 
-    r, lo, hi = _boot(_spearman, leg, y)
+    r, lo, hi = bootstrap_ci(spearman, leg, y, n_boot=1000)
     print(f"{'legal_moves (floor)':<26} rho={r:+.3f}  [{lo:+.3f},{hi:+.3f}]")
-    r, lo, hi = _boot(_spearman, m['n_total'].to_numpy(), y)
+    r, lo, hi = bootstrap_ci(spearman, m['n_total'].to_numpy(), y, n_boot=1000)
     print(f"{'n_total (unpruned)':<26} rho={r:+.3f}  [{lo:+.3f},{hi:+.3f}]")
     print()
     print(f"{'eps':>5} {'pruned/legal':>13} {'rho(pruned,RT)':>22} {'partial|legal':>22}")
     for eps in EPS_GRID:
         p = m[f"pruned_{eps}"].to_numpy().astype(float)
         ratio = float(np.median(p / np.maximum(leg, 1)))
-        r, lo, hi = _boot(_spearman, p, y)
-        pr, plo, phi = _boot(_partial_spearman, y, p, leg)
+        r, lo, hi = bootstrap_ci(spearman, p, y, n_boot=1000)
+        pr, plo, phi = bootstrap_ci(partial_spearman, y, p, leg, n_boot=1000)
         print(f"{eps:>5} {ratio:>13.2f} {r:>+8.3f} [{lo:+.3f},{hi:+.3f}] {pr:>+8.3f} [{plo:+.3f},{phi:+.3f}]")
 
 

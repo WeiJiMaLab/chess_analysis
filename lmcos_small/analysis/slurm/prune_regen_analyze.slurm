@@ -10,4 +10,5 @@
 #SBATCH --output=/home/hl4291/chess_analysis/lmcos_small/analysis/logs/prune_regen_an.%j.out
 cd /home/hl4291/chess_analysis
 set -euo pipefail
+export PYTHONPATH=/home/hl4291/chess_analysis/lmcos_small/src${PYTHONPATH:+:$PYTHONPATH}
 /home/hl4291/venv/bin/python lmcos_small/analysis/prune_regen_analyze.py

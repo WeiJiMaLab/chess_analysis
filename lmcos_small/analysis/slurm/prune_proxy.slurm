@@ -11,4 +11,5 @@
 
 cd /home/hl4291/chess_analysis
 set -euo pipefail
+export PYTHONPATH=/home/hl4291/chess_analysis/lmcos_small/src${PYTHONPATH:+:$PYTHONPATH}
 /home/hl4291/venv/bin/python lmcos_small/analysis/prune_proxy.py

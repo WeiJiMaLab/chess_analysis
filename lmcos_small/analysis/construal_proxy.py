@@ -18,6 +18,8 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np, pandas as pd, torch
 
+from cts.stats import spearman, partial_spearman, bootstrap_ci
+
 SET = os.environ.get("VOC_SET", "n1md36")
 TREES = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_trees/{SET}"
 OUT = f"/scratch/gpfs/GRIFFITHS/hl4291/sf_analysis/{SET}/construal_proxy.parquet"
@@ -81,27 +83,6 @@ def compute():
     print(f"wrote {OUT}  rows={len(rows)}", flush=True)
 
 
-def _spear(a, b):
-    from scipy.stats import rankdata
-    return float(np.corrcoef(rankdata(a), rankdata(b))[0, 1])
-
-
-def _partial(y, x, z):
-    from scipy.stats import rankdata
-    ry, rx, rz = rankdata(y), rankdata(x), rankdata(z)
-    Z = np.c_[np.ones_like(rz), rz]
-    ex = rx - Z @ np.linalg.lstsq(Z, rx, rcond=None)[0]
-    ey = ry - Z @ np.linalg.lstsq(Z, ry, rcond=None)[0]
-    return float(np.corrcoef(ex, ey)[0, 1])
-
-
-def _boot(fn, *c, B=400, seed=0):
-    rng = np.random.default_rng(seed); n = len(c[0]); v = np.empty(B)
-    for b in range(B):
-        i = rng.integers(0, n, n); v[b] = fn(*[a[i] for a in c])
-    return float(fn(*c)), float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))
-
-
 def analyze():
     import duckdb
     df = pd.read_parquet(OUT)
@@ -117,11 +98,11 @@ def analyze():
     print(f"{'feature':>14} {'ρ(.,RT)':>22} {'partial|legal':>22}", flush=True)
     for col in cols:
         c = m[col].to_numpy().astype(float)
-        r, lo, hi = _boot(_spear, c, y)
+        r, lo, hi = bootstrap_ci(spearman, c, y, n_boot=400)
         if col == "legal_moves":
             print(f"{col:>14} {r:>+8.3f}[{lo:+.3f},{hi:+.3f}] {'(floor)':>22}", flush=True)
         else:
-            pr, plo, phi = _boot(_partial, y, c, leg)
+            pr, plo, phi = bootstrap_ci(partial_spearman, y, c, leg, n_boot=400)
             print(f"{col:>14} {r:>+8.3f}[{lo:+.3f},{hi:+.3f}] {pr:>+8.3f}[{plo:+.3f},{phi:+.3f}]", flush=True)
 
 

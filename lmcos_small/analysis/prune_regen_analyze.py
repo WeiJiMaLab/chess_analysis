@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from cts.stats import spearman, partial_spearman, bootstrap_ci
+
 DB = "/scratch/gpfs/GRIFFITHS/hl4291/personal.db"
 BASE = "/scratch/gpfs/GRIFFITHS/hl4291/sf_trees"
 # baseline + the pruning-rule grid (all md36, n1). Missing dirs are skipped.
@@ -53,30 +55,6 @@ def _counts(path: str):
         return None
 
 
-def _spearman(a, b):
-    from scipy.stats import rankdata
-    return float(np.corrcoef(rankdata(a), rankdata(b))[0, 1])
-
-
-def _partial_spearman(y, x, z):
-    from scipy.stats import rankdata
-    ry, rx, rz = rankdata(y), rankdata(x), rankdata(z)
-    rz1 = np.c_[np.ones_like(rz), rz]
-    ex = rx - rz1 @ np.linalg.lstsq(rz1, rx, rcond=None)[0]
-    ey = ry - rz1 @ np.linalg.lstsq(rz1, ry, rcond=None)[0]
-    return float(np.corrcoef(ex, ey)[0, 1])
-
-
-def _boot(fn, *cols, B=500, seed=0):
-    rng = np.random.default_rng(seed)
-    n = len(cols[0])
-    vals = np.empty(B)
-    for b in range(B):
-        idx = rng.integers(0, n, n)              # one paired resample shared across columns
-        vals[b] = fn(*[c[idx] for c in cols])
-    return float(fn(*cols)), float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
-
-
 def main():
     import duckdb
     nproc = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 8))
@@ -102,15 +80,15 @@ def main():
         con.unregister("t")
         y = m["move_time"].to_numpy()
         leg = m["legal_moves"].to_numpy()
-        r_leg = _spearman(leg, y)
+        r_leg = spearman(leg, y)
         print(f"\n[{e}]  n={len(m):,}  legal-floor ρ(legal,RT)={r_leg:+.3f}  "
               f"med: n_total={int(df.n_total.median())} n_frontier={int(df.n_frontier.median())} "
               f"max_depth={int(df.max_depth.median())}", flush=True)
         print(f"   {'cost':>16} {'ρ(cost,RT)':>22} {'partial|legal':>22}", flush=True)
         for col in ("n_total", "n_frontier", "max_depth", "mean_leaf_depth"):
             c = m[col].to_numpy().astype(float)
-            r, lo, hi = _boot(_spearman, c, y)
-            pr, plo, phi = _boot(_partial_spearman, y, c, leg)
+            r, lo, hi = bootstrap_ci(spearman, c, y, n_boot=500)
+            pr, plo, phi = bootstrap_ci(partial_spearman, y, c, leg, n_boot=500)
             print(f"   {col:>16} {r:>+8.3f}[{lo:+.3f},{hi:+.3f}] {pr:>+8.3f}[{plo:+.3f},{phi:+.3f}]", flush=True)
     con.close()
 

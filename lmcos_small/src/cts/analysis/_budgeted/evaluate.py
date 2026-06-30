@@ -52,6 +52,7 @@ from cts.data.preprocess_mc.oracle import (
     return_for_stop_step,
 )
 from cts.analysis._budgeted.baselines import _evaluate_baseline
+from cts.stats import bootstrap_mean_ci as _bootstrap_ci
 from cts.models.readout import StatsReadout, stop_step_from_advantages
 
 
@@ -565,23 +566,6 @@ def _plot_regret_decomposition(labels: list[str], metric_dicts: list[dict[str, A
     _style_ax(ax)
     fig.tight_layout()
     _save_fig(fig, out_path)
-
-
-def _bootstrap_ci(values: list[float], *, n_boot: int = 2000, seed: int = 0,
-                  alpha: float = 0.05) -> tuple[float, float]:
-    """Percentile bootstrap (n_boot resamples) 95% CI on the MEAN of per-episode regrets."""
-    if not values:
-        return (float("nan"), float("nan"))
-    t = torch.tensor(values, dtype=torch.float64)
-    n = t.numel()
-    gen = torch.Generator().manual_seed(seed)
-    boot, done = [], 0
-    while done < n_boot:
-        b = min(256, n_boot - done)
-        boot.append(t[torch.randint(0, n, (b, n), generator=gen)].mean(dim=1))
-        done += b
-    boot = torch.cat(boot)
-    return (float(torch.quantile(boot, alpha / 2)), float(torch.quantile(boot, 1 - alpha / 2)))
 
 
 def main() -> None:
