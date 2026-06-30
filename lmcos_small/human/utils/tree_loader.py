@@ -52,8 +52,7 @@ def _tree_frac_good(payload) -> float:
 def _tree_oss(payload, source_path: str, node_cost: float = OSS_NODE_COST) -> float:
     """Optimal Stopping Step (OSS): the budgeted-oracle dynamic stop on the compact
     trajectory. OSS = argmax_t [ halt_reward(t) - node_cost * n_total(t) ], with a
-    per-NODE cost (cost grows with cumulative tree size). Mirrors the settled logic in
-    lmcos_small/analysis/oss_nodecost.py (node-cost c=1e-4)."""
+    per-NODE cost (cost grows with cumulative tree size; settled node-cost c=1e-4)."""
     if build_compact_trajectory_from_payload is None:
         return float("nan")
     traj = build_compact_trajectory_from_payload(payload, source_path=source_path)
