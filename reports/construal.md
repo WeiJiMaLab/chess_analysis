@@ -2,7 +2,17 @@
 
 **Ref:** `R-CONSTRUAL` · [Index](reference.md) · parents [(R-TREESEARCH)](treesearch.md) / [(R-PRUNING)](pruning.md)
 
-> **Status:** 📝 proposal. The framing that survives the **tree-readout paradox**: effort is not searching a tree
+> **Verdict (2026-06-30): ❌ the subgame collapses to the null.** The construal-rank proxy on 259K moves: `|S*|`
+> (gut-rank of the winning piece) ↔ RT = **+0.095, partial|legal +0.025**; the value-based reward−cost stop
+> `|S*|(c)`, swept c∈{0.02..0.4}, tops out at **partial|legal +0.027**. *Why it was forced:* with both sides frozen,
+> the restricted search can't generate refutations by frozen pieces, so `regret(S) → 0` exactly when the best
+> move's piece enters S — i.e. `|S*| ≡ s_star`. The expensive symmetric build would only **reproduce the proxy**;
+> do not build it. This is the third generative "effort" account to collapse to decision-width (after VOC and
+> pruning), which triangulates the real result: **effort is the breadth of the root decision, not the look-ahead.**
+> Next: consolidate the satisficed-decision-difficulty finding, or pivot to a *perceptual/representational* cost
+> (chunking; de Groot / Chase-Simon / Gobet) — not another search variant. See [[construal-framing]].
+
+> **Status:** ❌ ruled out (proxy null). The framing that survives the **tree-readout paradox**: effort is not searching a tree
 > you have already built — it is choosing **how much of the board to represent** *before* you search. Human
 > think-time = the **complexity of the simplified game (construal)** you build to find a good-enough move. This is
 > **value-guided construal** (Ho, Griffiths, and colleagues: people plan over deliberately simplified task
