@@ -22,8 +22,6 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `lmcos_
 | **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python lmcos_small/human/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
 | **Ply vs instant-move probability** | `python lmcos_small/human/ply_premove.py` |
 | **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch lmcos_small/slurm/human/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
-| **Engine eval (positions)** | `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval --engine stockfish` |
-| **Build selected-moves-with-engine join** | `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_selected_moves_with_engine.py` |
 | **Slidev deck (LMCOS overview)** | `cd lmcos_small/human/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
 
 The **full-dataset** plots (`move_time_summary`, `movetime_analysis`, `ply_premove`) are wired from **`bash lmcos_small/slurm/human/analysis.sh`**. The **generated values** (GSS / VOC / Action Gap / **MQ**, derived from the lc0 search trees) are computed on the **subset of positions that have a tree** via `tree_values_analysis.py` and run separately on the cluster. **MQ moved from FULL to SUBSET**: it is now the Lc0 definition — the post-search root-value loss of the human's played move, `final_Q(played) − final_Q(best) ≤ 0` — not the former Stockfish `pos_with_engine_eval.mq` (`e_win_taken − e_win_best`), which has been retired.
@@ -47,8 +45,8 @@ chess_analysis/
     ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
     ├── board.py                  # Act 1: board-feature regressors vs RT (`--all`)
     ├── engine.py                 # Act 2: engine GSS/VOC/gap/MQ vs RT (from SF trees)
-    ├── utils/                    # Library: Analyzer, plots, helpers, engine_eval, selected_db, tree_loader
-    ├── preprocess/               # DB-table producers: preprocess.py (moves ETL) + build_* engine joins
+    ├── utils/                    # Library: Analyzer, plots, helpers, selected_db, tree_loader (all cts-native)
+    ├── preprocess/               # preprocess.py — the moves ETL (processed_moves[_nonzero])
     └── tests/                    # board/engine unit tests
 
 # human-analysis SLURM lives under the unified tree, not here:
@@ -120,18 +118,20 @@ Typical filters: see **`preprocess.py` `main()` `config`** (date window, initial
 
 **Hygiene:** clear **`staging_dir`** before a new shard run (`preprocess.sh` does this); stale `selected_moves_*.parquet` would pollute the merge glob.
 
-### Engine evaluation
+### Engine signals are cts-native (no live engine)
 
-- **Worker / eval:** `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval` → `{stockfish,lc0}_evaluations` in `personal.db`.
-- **Join to moves:** `build_selected_moves_with_engine.py` joins **`processed_moves`** to `{stockfish,lc0}_evaluations` on **`fen`** → **`selected_moves_with_engine`**.
-
-> *(The `engine_eval.sh` / `engine_eval_shard.sbatch` wrappers and `script_engine_eval.py` / `script_merge_evals.py` were removed; `build_pos_with_engine_eval.py` is the current entry point.)*
+All engine-derived quantities (GSS / Gain / Action Gap / **MQ** / OSS / frac-good) are read off the
+**Stockfish search trees** via `utils.tree_loader`, using the cts `"value"` feature
+(**value = p_win − p_loss**) and the oracle Q-values — the same convention as the `cts` pipeline.
+There is **no live-UCI evaluation** on the human side: the former `engine_eval.py` (a
+`p_win + 0.5·p_draw` win-prob evaluator) and its retired DB-table producers
+(`build_pos_with_engine_eval`, `build_selected_moves_with_engine` → `*_evaluations` /
+`pos_with_engine_eval` / `selected_moves_with_engine`, all unread) were removed.
 
 ### Pipeline vs analysis — ordered workflow
 
-1. `bash lmcos_small/slurm/human/preprocess.sh` (or equivalent `preprocess.py` steps).
-2. **Optional:** `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval` → `PYTHONPATH=lmcos_small/human python lmcos_small/human/preprocess/build_selected_moves_with_engine.py`
-3. **Figures:** `bash lmcos_small/slurm/human/analysis.sh` or individual `lmcos_small/human/*.py` tools in §1.
+1. `bash lmcos_small/slurm/human/preprocess.sh` (or equivalent `preprocess.py` steps) → `processed_moves[_nonzero]`.
+2. **Figures:** `bash lmcos_small/slurm/human/analysis.sh` or individual `lmcos_small/human/*.py` tools in §1.
 
 ---
 

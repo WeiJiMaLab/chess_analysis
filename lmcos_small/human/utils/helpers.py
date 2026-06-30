@@ -33,7 +33,6 @@ def _load_shared_config() -> dict:
 CONFIG = _load_shared_config()
 
 import chess
-import chess.engine
 import chess.svg
 import duckdb
 import matplotlib.pyplot as plt
@@ -76,57 +75,6 @@ def analysis_style() -> None:
         "axes.grid": True,
         "grid.alpha": 0.3,
     })
-
-def get_engine(
-    kind: str = "stockfish",
-    *,
-    path: str | None = None,
-    cwd: str | None = None,
-    weights_path: str | None = None,
-    threads: int = 1,
-    hash_mb: int = 128,
-    backend: str | None = None,
-) -> chess.engine.SimpleEngine:
-    """Get a chess engine instance (Stockfish 14 or Leela Chess Zero)."""
-    kind = kind.lower()
-    if kind == "stockfish":
-        if path is None:
-            stockfish_home = os.path.expanduser("~/stockfish")
-            work_dir = os.path.join(stockfish_home, "src")
-            engine_path = os.path.join(work_dir, "stockfish")
-        else:
-            engine_path = path
-            work_dir = cwd or os.path.dirname(path)
-
-        if not os.path.exists(engine_path):
-            raise FileNotFoundError(f"Stockfish binary not found at {engine_path}")
-
-        engine = chess.engine.SimpleEngine.popen_uci(engine_path, cwd=work_dir)
-        engine.configure({"Threads": threads, "Hash": hash_mb})
-        return engine
-
-    elif kind == "lc0":
-        engine_path = path or "/scratch/gpfs/GRIFFITHS/ysagiv/tools/lc0/build/release/lc0"
-        w_path = weights_path or "/scratch/gpfs/GRIFFITHS/ysagiv/chess/weights/t1-256x10-distilled-swa-2432500.pb.gz"
-        
-        if not os.path.exists(engine_path):
-            raise FileNotFoundError(f"lc0 binary not found at {engine_path}")
-        if not os.path.exists(w_path):
-            raise FileNotFoundError(f"lc0 weights not found at {w_path}")
-
-        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-        options = {
-            "Threads": threads,
-            "WeightsFile": w_path,
-            "UCI_ShowWDL": "true",
-        }
-        if backend:
-            options["Backend"] = backend
-        engine.configure(options)
-        return engine
-
-    else:
-        raise ValueError(f"Unsupported engine kind: {kind}")
 
 def display_fen(fen: str, size: int = 200) -> None:
     board = chess.Board(fen)

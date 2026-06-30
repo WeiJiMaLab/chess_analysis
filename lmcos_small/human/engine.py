@@ -39,7 +39,6 @@ from utils.selected_db import (
 
 # Imported from newly extracted modular utilities
 from utils.tree_loader import compute_values, _tree_voc_and_gap
-from utils.engine_eval import move_quality, voc
 import matplotlib.pyplot as plt
 
 
