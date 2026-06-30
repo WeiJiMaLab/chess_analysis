@@ -17,18 +17,21 @@ Subcommands:
     eval   — evaluate one SLURM shard, or run a local smoke test
     merge  — combine output parquets → personal.db table pos_with_engine_eval
 
-Examples (from chess_analysis/):
+Examples (from chess_analysis/, with the human pkg on the path):
 
     # Smoke test (10K positions, 10 workers):
-    python lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py eval \\
+    PYTHONPATH=lmcos_small/human \
+        python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval \\
         --n-total 10000 --n-workers 10
 
     # SLURM array job (one task per shard):
-    python lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py eval \\
+    PYTHONPATH=lmcos_small/human \
+        python lmcos_small/human/preprocess/build_pos_with_engine_eval.py eval \\
         --shard-id $SLURM_ARRAY_TASK_ID --total-shards 100
 
     # Merge all shards:
-    python lmcos_small/slurm/human/scripts/build_pos_with_engine_eval.py merge
+    PYTHONPATH=lmcos_small/human \
+        python lmcos_small/human/preprocess/build_pos_with_engine_eval.py merge
 """
 
 from __future__ import annotations
@@ -44,11 +47,7 @@ import chess.engine
 import duckdb
 from tqdm import tqdm
 
-from _bootstrap import ensure_src
-
-ensure_src()
-
-from engine_analysis import PositionEval, evaluate_position
+from utils.engine_eval import PositionEval, evaluate_position
 from utils.helpers import get_engine
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES_NONZERO
 

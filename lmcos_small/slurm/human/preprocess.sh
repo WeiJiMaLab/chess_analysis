@@ -60,7 +60,7 @@ mkdir -p "${STAGING_DIR}"
 # --- 1. games table ---
 export DUCKDB_THREADS="${DUCKDB_LOGIN_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_LOGIN_MEM}"
-python3 lmcos_small/slurm/human/scripts/preprocess.py get_games
+python3 lmcos_small/human/preprocess/preprocess.py get_games
 
 # --- 2. shard (one Slurm array) ---
 job_script="$(mktemp "${TMPDIR:-/tmp}/preprocess-shard.XXXXXX.sbatch")"
@@ -94,7 +94,7 @@ export DUCKDB_MEMORY_LIMIT="\${DUCKDB_MEMORY_LIMIT:-${DUCKDB_SHARD_MEM}}"
 # Must match array task count (here ${TOTAL_SHARDS}).
 export PREPROCESS_TOTAL_SHARDS=${TOTAL_SHARDS}
 
-python3 lmcos_small/slurm/human/scripts/preprocess.py shard
+python3 lmcos_small/human/preprocess/preprocess.py shard
 EOF
 
 # Submit array without --wait so we can print periodic status (squeue does not stream).
@@ -145,7 +145,7 @@ echo "================================================================" >&2
 echo ""
 export DUCKDB_THREADS="${DUCKDB_MERGE_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_MERGE_MEM}"
-python3 lmcos_small/slurm/human/scripts/preprocess.py merge
+python3 lmcos_small/human/preprocess/preprocess.py merge
 
 # --- 4. process_moves: moves → processed_moves / processed_moves_nonzero ---
 echo ""
@@ -156,6 +156,6 @@ echo "================================================================" >&2
 echo ""
 export DUCKDB_THREADS="${DUCKDB_MERGE_THREADS}"
 export DUCKDB_MEMORY_LIMIT="${DUCKDB_MERGE_MEM}"
-python3 lmcos_small/slurm/human/scripts/preprocess.py process_moves
+python3 lmcos_small/human/preprocess/preprocess.py process_moves
 
 echo "Done at $(date -Is)"

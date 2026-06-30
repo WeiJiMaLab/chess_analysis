@@ -23,10 +23,6 @@ from datetime import datetime
 import duckdb
 from tqdm import tqdm
 
-from _bootstrap import ensure_src
-
-ensure_src()
-
 
 def duckdb_connect_config(work_dir: str, threads: int, memory_limit: str) -> dict:
     """DuckDB ``connect`` config: spill/sort temp files live in ``work_dir``."""

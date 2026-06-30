@@ -1,14 +1,14 @@
 """
 Build move-level table with engine WDL columns joined from *_evaluations on fen.
+
+Run from chess_analysis/ with the human pkg on the path:
+    PYTHONPATH=lmcos_small/human \
+        python lmcos_small/human/preprocess/build_selected_moves_with_engine.py
 """
 
 import argparse
 
 import duckdb
-
-from _bootstrap import ensure_src
-
-ensure_src()
 
 from utils.selected_db import SELECTED_DB_DEFAULT, TABLE_PROCESSED_MOVES
 
