@@ -1,6 +1,6 @@
 """DuckDB workspace defaults for human move analysis (see ``preprocess.py`` ``merge`` + ``process_moves``)."""
 
-from utils.helpers import CONFIG
+from analysis.utils.helpers import CONFIG
 
 SELECTED_DB_DEFAULT = CONFIG["selected_db_default"]
 

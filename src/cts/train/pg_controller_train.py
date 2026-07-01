@@ -21,7 +21,7 @@ rule. Checkpoints are still SELECTED on the HARD greedy val regret, so the resul
 directly comparable to the MSE-trained controller and the baseline tiers. Only the MLP head
 trains (encoder frozen; z_t read from the materialized cache), so it is CPU-cheap.
 
-    python -m cts.train.pg_controller_train --config configs/core.yaml --stage train \
+    python -m cts.train.pg_controller_train --config config.yaml --stage train \
         --set globals.sf_elo=2000 --set device=cpu \
         --set output_checkpoint=/scratch/.../sf_mchalt_pg.pt --set epochs=20
 """

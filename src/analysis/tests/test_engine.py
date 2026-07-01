@@ -6,20 +6,14 @@ Consolidates integration tests on real saved trees and mathematical unit tests o
 from __future__ import annotations
 
 import os
-import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
 import torch
 import pytest
 
-_HA = Path(__file__).resolve().parent.parent
-if str(_HA) not in sys.path:
-    sys.path.insert(0, str(_HA))
-
-from utils.helpers import CONFIG
-from utils.tree_loader import _tree_voc_and_gap, _tree_root_mq, _tree_gss, _tree_hpi
+from analysis.utils.helpers import CONFIG
+from analysis.utils.tree_loader import _tree_voc_and_gap, _tree_root_mq, _tree_gss, _tree_hpi
 
 # Check if the saved trees directory exists and contains any .pt files
 TREES_DIR = CONFIG["trees_default"]

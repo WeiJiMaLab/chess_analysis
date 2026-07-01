@@ -1,17 +1,18 @@
 """
-Unified engine-level and stopping analyses (DuckDB and tree evaluation).
-Consolidates engine metrics, timing benchmarks, difficulty confound stats,
-and the large-scale tree-values join from reports/engine.md.
+Unified engine-level (no-normative) RT analyses (DuckDB + SF-1 tree evaluation).
+Derives the SF-1 (n1md36) tree signals — Gain, MQ, greedy action gap, greedy
+stop step (GSS), greedy frac-good, optimal stop step (OSS) — joins them to human
+RTs, and emits the per-signal RT dashboards plus a Spearman correlation matrix
+over all engine signals AND the board features (ply / legal moves / clock).
 
-All generated plots are saved in PDF and PNG formats under figures/engine/.
+Trees are read from human_analysis.trees_default in config.yaml (the SF-1
+n1md36 set). All plots are saved (PDF + PNG) under <figures_dir>/engine/.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
-import time
 from pathlib import Path
 
 import duckdb
@@ -19,8 +20,8 @@ import pandas as pd
 import numpy as np
 
 # Align imports with the src/analysis package structure
-from utils import Variable, Analyzer
-from utils.helpers import (
+from analysis.utils import Variable, Analyzer
+from analysis.utils.helpers import (
     apply_poster_style,
     db_connection,
     FONT_SIZE_LABEL,
@@ -28,17 +29,17 @@ from utils.helpers import (
     partial_spearman,
     CONFIG,
 )
-from utils.plots import (
+from analysis.utils.plots import (
     highlight_corr_row,
     save_figure,
 )
-from utils.selected_db import (
+from analysis.utils.selected_db import (
     SELECTED_DB_DEFAULT,
     TABLE_PROCESSED_MOVES_NONZERO,
 )
 
 # Imported from newly extracted modular utilities
-from utils.tree_loader import compute_values, _tree_voc_and_gap
+from analysis.utils.tree_loader import compute_values, _tree_voc_and_gap
 import matplotlib.pyplot as plt
 
 
@@ -216,14 +217,9 @@ def run_tree_values_pipeline(
 
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
-    # Locate output directory. This file is src/analysis/engine.py, so the repo
-    # root (chess_analysis/, which holds figures/) is THREE dirs up: human -> lmcos_small
-    # -> chess_analysis. (Matches utils.plots.save_figure used by board.py.)
-    human_dir = os.path.dirname(os.path.abspath(__file__))   # src/analysis
-    src_dir = os.path.dirname(human_dir)                     # src
-    lmcos_dir = os.path.dirname(src_dir)                     # lmcos_small
-    repo_root = os.path.dirname(lmcos_dir)                   # chess_analysis
-    out_dir = os.path.join(repo_root, "outputs", "figures", "engine")
+    # Output dir is wired from config (human_analysis.figures_dir); engine figures
+    # live in the "engine" subdir. (Matches utils.plots.save_figure used by board.py.)
+    out_dir = os.path.join(CONFIG["figures_dir"], "engine")
     os.makedirs(out_dir, exist_ok=True)
 
     with db_connection(db_path, read_only=True) as conn:

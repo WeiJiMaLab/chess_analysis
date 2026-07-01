@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 #
-# Orchestrates preprocess.py: get_games → Slurm shard array → merge (parquet → moves) → process_moves (processed_*).
+# Analysis pipeline step 0 — build the move DB (personal.db). This is a login-node
+# ORCHESTRATOR (run with `bash`, not `sbatch`): it submits its own Slurm shard
+# array internally and waits. Stages of preprocess.py:
+#   get_games → Slurm shard array → merge (parquet → moves) → process_moves (processed_*).
+# Output is the DuckDB at config human_analysis.selected_db_default (personal.db);
+# steps 1a (board) and 2 (engine) read its processed_moves tables.
 #
-#   bash slurm/analysis/preprocess.sh
+#   bash slurm/pipeline/preprocess.slurm
 #
 # Optional: PREPROCESS_SHARD_POLL_SEC=15  Seconds between shard-array status lines (default 30).
 # Optional: DUCKDB_MERGE_THREADS / DUCKDB_MERGE_MEMORY_LIMIT  For merge + process_moves on the login node (default 64 threads, 200GB).
@@ -13,7 +18,7 @@ set -euo pipefail
 
 # --- paths & layout ---
 PROJECT_DIR="/home/hl4291/chess_analysis"
-LOG_DIR="${PROJECT_DIR}/slurm/analysis/logs"
+LOG_DIR="${PROJECT_DIR}/slurm/logs"
 # Keep in sync with preprocess.py main() config["staging_dir"].
 STAGING_DIR="/scratch/gpfs/GRIFFITHS/hl4291/tmp/ld_moves_shard"
 
@@ -44,7 +49,6 @@ shopt -u nullglob
 
 export ELO=2000
 source slurm/helpers/setup_env.sh
-export PYTHONPATH="${PYTHONPATH}:src/analysis"
 
 # --- fresh staging (parquet shards); not done inside get_games ---
 rm -rf "${STAGING_DIR}"
@@ -75,7 +79,6 @@ set -euo pipefail
 cd "${PROJECT_DIR}"
 export ELO=2000
 source slurm/helpers/setup_env.sh
-export PYTHONPATH="\${PYTHONPATH}:src/analysis"
 
 echo "task \${SLURM_ARRAY_TASK_ID:-?} / ${TOTAL_SHARDS} on \$(hostname) at \$(date -Is)"
 

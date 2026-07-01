@@ -4,9 +4,10 @@
     render_stage.py CONFIG STAGE --out OUT [--set KEY=VALUE ...]
     render_stage.py CONFIG --get KEY
 
-CONFIG  a merged per-rung config (configs/elo{ELO}.yaml) containing a `globals`
+CONFIG  the merged config (repo-root config.yaml) containing a `globals`
         section and one section per stage (treegen, split, gnn_pack, mc_pack,
-        encoder, materialize, train, eval).
+        encoder, materialize, train, eval). Per-rung selection is done with
+        `--set globals.sf_elo=<ELO>`, not separate per-rung files.
 STAGE   which top-level section to emit as flat YAML.
 --out   where to write the flat YAML.
 --get   query and print a single resolved value (e.g., globals.scratch_dir).

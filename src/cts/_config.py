@@ -27,7 +27,7 @@ Two CLI shapes are supported:
    against ``globals`` first. ``--set key=value`` patches a *global* before
    interpolation when dotted (e.g. ``--set globals.sf_elo=1800``) or the selected
    *section* when bare (e.g. ``--set num_workers=32``). This lets every entry
-   point read one shared ``core.yaml`` directly — no intermediary rendered YAML.
+   point read one shared ``config.yaml`` directly — no intermediary rendered YAML.
 
 Pydantic validates the result and rejects unknown fields, so a typo in a YAML
 file or a CLI flag is caught at load time.

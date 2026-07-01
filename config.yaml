@@ -1,0 +1,166 @@
+globals:
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  search_budget: 64
+  fens_pool: ${scratch_dir}/fens.txt
+  trees_dir: ${scratch_dir}/trees
+  split_dir: ${scratch_dir}/split
+  packed_dir: ${scratch_dir}/packed
+  mc_packed_dir: ${scratch_dir}/mc_packed
+  materialized_dir: ${scratch_dir}/materialized
+  config_dir: ${scratch_dir}/pack_configs
+  log_dir: ${scratch_dir}/pack_logs
+  figures_dir: ${outputs_dir}/normative
+
+human_analysis:
+  figures_dir: ${outputs_dir}
+  trees_default: ${trees_dir}/n1md36
+  cache_default: ${scratch_dir}/tree_values_cache
+  key_default: n1md36_100000_7
+  response_time_histogram_bins: 50
+  qq_plot_quantile_probes: 200
+  selected_db_default: ${scratch_dir}/personal.db
+  table_moves: moves
+  table_processed_moves: processed_moves
+  table_processed_moves_nonzero: processed_moves_nonzero
+
+treegen:
+  command: generate-dataset
+  provider: stockfish
+  engine_path: /home/hl4291/stockfish/src/stockfish
+  fens: ${scratch_dir}/fens_250k.txt
+  output_dir: ${trees_dir}/n1md36
+  search_budget: ${search_budget}
+  min_nodes: 96
+  max_nodes: 96
+  max_depth: 36
+  sf_search_limit_nodes: 1
+  seed: 42
+  resume: true
+  log_interval: 50
+
+split:
+  source_root: ${trees_dir}/n1md36
+  include_list: null
+  split_root: ${split_dir}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+gnn_pack:
+  split_root: ${split_dir}
+  output_root: ${packed_dir}
+  shard_size: 2000
+  clear: true
+
+mc_pack:
+  split_root: ${split_dir}
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 32
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: power_law
+  samples_per_bucket: 2
+  seed: 0
+  clear: true
+
+encoder:
+  command: pretrain-child-wdl-encoder
+  train_dir: ${packed_dir}/train_manifest.json
+  validation_dir: ${packed_dir}/validation_manifest.json
+  output_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  k: 1
+  d_embed: 32
+  d_message: 32
+  node_embed_hidden: 32
+  n_heads: 2
+  d_att: 16
+  decoder_hidden: 32
+  batch_size: 256
+  learning_rate: 1.0e-3
+  epochs: 6
+  loss_type: huber
+  huber_delta: 1.0
+  loss_weight_by_subtree_size: true
+  num_workers: 0
+  log_interval: 20
+
+materialize:
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 256
+  hidden_layers: 3
+
+train:
+  metrics_run_name: mchalt
+  packed_train_data: ${mc_packed_dir}/train_manifest.json
+  packed_validation_data: ${mc_packed_dir}/validation_manifest.json
+  materialized_train_cache: ${materialized_dir}/train_cache.pt
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  output_checkpoint: ${packed_dir}/mchalt_controller.pt
+  device: cuda
+  controller_inputs: ['z_t', 'T_t']
+  k: 1
+  node_embed_hidden: 32
+  d_embed: 32
+  d_message: 32
+  n_heads: 2
+  d_att: 16
+  hidden_dim: 256
+  hidden_layers: 3
+  unfreeze_encoder: false
+  separate_sign_head: false
+  batch_size: 18000
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  sign_loss_weight: 0.1
+  sign_pos_weight: 1.0
+  nontrivial_loss_weight: 1.0
+  inverse_freq_weights: false
+  epochs: 3
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  metrics_log_interval: 20
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.1
+  time_lambda: 18.537
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  seed: 0
+  scramble_min_time: 1
+  scramble_max_time: 3
+  medium_small_min_time: 4
+  medium_small_max_time: 10
+  medium_large_min_time: 11
+  medium_large_max_time: 25
+  large_min_time: 26
+  large_max_time: 60
+  very_large_min_time: 61
+  very_large_max_time: 120
+
+eval:
+  packed_root: ${mc_packed_dir}
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  controller_checkpoint: ${packed_dir}/mchalt_controller.pt
+  results_json: ${figures_dir}/results.json
+  out_dir: ${figures_dir}

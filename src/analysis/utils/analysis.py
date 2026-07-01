@@ -19,14 +19,14 @@ def _seconds_from_log(axis) -> None:
     """Relabel a log-valued axis to show ``round(exp(v), 1)`` — i.e. seconds."""
     axis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{np.round(np.exp(v), 1)}"))
 
-from .helpers import (
+from analysis.utils.helpers import (
     apply_poster_style,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     MAIN_COLOR,
     PHASE_COLORS,
 )
-from .plots import (
+from analysis.utils.plots import (
     get_isoluminant_cmap,
     plot_heatmap_with_alpha,
     plot_qbin_stats,
@@ -564,7 +564,7 @@ class Analyzer:
         """LOWESS fit of (transformed) Y on X + curve-level bootstrap band, with value
         point-masses in ``mass_values`` isolated (always excluded from the fit; drawn as
         their own SEM point when ``show_mass``)."""
-        from .jaggedness import lowess_bootstrap
+        from analysis.utils.jaggedness import lowess_bootstrap
         color = color or MAIN_COLOR
         x, y = self._fetch_xy(tertile=tertile)
         if x.size == 0:

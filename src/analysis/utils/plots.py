@@ -13,10 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-try:
-    from .helpers import FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, apply_poster_style
-except (ImportError, ValueError):
-    from helpers import FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, apply_poster_style
+from analysis.utils.helpers import CONFIG, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, apply_poster_style
 
 
 
@@ -221,18 +218,12 @@ def save_figure(fig, category: str, filename: str) -> str:
     """
     if category not in ("board", "engine"):
         raise ValueError(f"Invalid figure category: {category}. Must be 'board' or 'engine'.")
-    
+
     base, _ = os.path.splitext(filename)
-    
-    # Locate repository root. This file lives at src/analysis/utils/plots.py,
-    # so the repo root (chess_analysis/, which holds figures/) is three dirs up.
-    utils_dir = os.path.dirname(os.path.abspath(__file__))   # .../src/analysis/utils
-    human_dir = os.path.dirname(utils_dir)                   # .../src/analysis
-    src_dir = os.path.dirname(human_dir)                     # .../src
-    lmcos_dir = os.path.dirname(src_dir)                     # .../lmcos_small
-    repo_root = os.path.dirname(lmcos_dir)                   # .../chess_analysis
-    
-    out_dir = os.path.join(repo_root, "outputs", "figures", category)
+
+    # Output dir is wired from config (human_analysis.figures_dir); the category
+    # (board / engine) is the subdirectory.
+    out_dir = os.path.join(CONFIG["figures_dir"], category)
     os.makedirs(out_dir, exist_ok=True)
     
     out_path_pdf = os.path.join(out_dir, f"{base}.pdf")

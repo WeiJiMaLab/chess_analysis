@@ -5,17 +5,37 @@ Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engin
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 import yaml
 
+
+def _interpolate(value, variables):
+    """Recursively substitute ${key} / ${globals.key} placeholders in value.
+
+    Mirrors render_stage.py so the human_analysis section can reference the
+    shared `globals` dirs (e.g. ${scratch_dir}, ${trees_dir})."""
+    if isinstance(value, str):
+        def repl(match):
+            name = match.group(1).removeprefix("globals.")
+            return str(variables[name]) if name in variables else match.group(0)
+        return re.sub(r"\$\{([^}]+)\}", repl, value)
+    if isinstance(value, dict):
+        return {k: _interpolate(v, variables) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate(v, variables) for v in value]
+    return value
+
+
 # Load the shared configuration.
-# After the human_analytics + lmcos_tiny merge, the human-analysis keys live in
-# the single unified config at configs/core.yaml, under the
-# top-level `human_analysis:` section. helpers.py sits at
-# src/analysis/utils/helpers.py, so the config is ../../configs/core.yaml.
+# The human-analysis keys live in the single unified config at the repo-root
+# config.yaml, under the top-level `human_analysis:` section. helpers.py sits at
+# src/analysis/utils/helpers.py, so the repo root is three dirs up. ${...}
+# placeholders in human_analysis are resolved against `globals` (same contract
+# as render_stage.py / cts._config), so analysis shares the pipeline's dirs.
 def _load_shared_config() -> dict:
     config_path = (
-        Path(__file__).resolve().parent.parent.parent.parent / "configs" / "core.yaml"
+        Path(__file__).resolve().parent.parent.parent.parent / "config.yaml"
     )
     if not config_path.exists():
         raise FileNotFoundError(f"Shared config not found at {config_path}")
@@ -23,12 +43,13 @@ def _load_shared_config() -> dict:
         data = yaml.safe_load(f) or {}
     section = data.get("human_analysis")
     if not isinstance(section, dict):
-        raise KeyError(
-            f"'human_analysis' section missing from {config_path}; "
-            "the human-RT analysis keys were folded there during the "
-            "human_analytics->lmcos_small merge."
-        )
-    return section
+        raise KeyError(f"'human_analysis' section missing from {config_path}.")
+
+    # Resolve globals (which may reference each other), then the section.
+    variables = dict(data.get("globals", {}))
+    for _ in range(5):
+        variables = {k: _interpolate(v, variables) for k, v in variables.items()}
+    return _interpolate(section, variables)
 
 CONFIG = _load_shared_config()
 

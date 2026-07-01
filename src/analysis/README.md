@@ -41,7 +41,7 @@ chess_analysis/
 ├── README.md                     # Workspace / lmcos overview
 └── src/analysis/
     ├── README.md                 # This file
-    ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=src/analysis
+    ├── exploratory/              # Ad hoc analyses (heatmaps, smoke tests, quantify_early_ply); PYTHONPATH=src
     ├── presentations/             # Slidev deck (`lmcos-overview/`) + shared SVG assets
     ├── board.py                  # Act 1: board-feature regressors vs RT (`--all`)
     ├── engine.py                 # Act 2: engine GSS/VOC/gap/MQ vs RT (from SF trees)
@@ -57,7 +57,7 @@ chess_analysis/
 
 | Location | Put here |
 | :--- | :--- |
-| **`src/analysis/`** | New **ETL / engine / join** entry points. Run with `PYTHONPATH=src/analysis` so `import utils` resolves (no sys.path shim); the batch launcher goes in `slurm/analysis/`. |
+| **`src/analysis/`** | New **ETL / engine / join** entry points. Run with `PYTHONPATH=src` so `import analysis.utils` resolves (no sys.path shim); the batch launcher goes in `slurm/analysis/`. |
 | **`src/analysis/`** (top-level `.py`) | New **dashboards, reports, thin CLIs** that read `personal.db` (see `utils/selected_db.py`) and write figures. |
 | **`src/analysis/utils/`** | **Reusable** plotting, SQL aggregation patterns, `Analyzer`/`Variable`—**not** one-shot pipeline drivers. |
 | **`src/analysis/exploratory/`** | Experiments and one-off plots; follow existing `sys.path` patterns. |
@@ -143,7 +143,7 @@ There is **no live-UCI evaluation** on the human side: the former `engine_eval.p
 - **Minimal CLIs:** stable, few flags; document defaults in `--help`.
 - **`preprocess.py`:** one directory per step for DuckDB spill **and** artifacts (`work_dir` / `staging_dir` above); do not add parallel “alternate tmpdir” tunnels via `**kwargs`.
 - **Names:** descriptive columns and variables (`log_clock_ply_residual`), not `x_adj`.
-- **Paths:** `os.path.join` + anchor to `__file__`; for `preprocess.py` CLIs rely on `PYTHONPATH=src/analysis` (set by the launcher) rather than a sys.path shim.
+- **Paths:** `os.path.join` + anchor to `__file__`; for `preprocess.py` CLIs rely on `PYTHONPATH=src` (set by the launcher) rather than a sys.path shim.
 
 ### Structure
 

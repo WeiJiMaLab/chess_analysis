@@ -230,7 +230,7 @@ if __name__ == "__main__":
 
 
 # --- Skeptical Robustness Tests for the Analyzer Pipeline ---
-from utils.analysis import Analyzer, Variable
+from analysis.utils.analysis import Analyzer, Variable
 
 class TestAnalyzerCorrectness(unittest.TestCase):
     """Rigorous tests designed to verify math, row conservation, tie-safety, and SQL security in Analyzer."""

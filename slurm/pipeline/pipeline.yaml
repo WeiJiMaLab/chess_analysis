@@ -1,0 +1,49 @@
+# Pipeline DAG (single source of truth for step order + dependencies).
+# `preprocess` is run on its own (`bash slurm/pipeline/preprocess.slurm`, builds
+# personal.db) and is NOT submitted by submit_all.sh — steps that list it as a
+# dependency just start immediately. submit_all.sh submits everything below in
+# order, wiring `after` -> Slurm afterok on the parents' job ids.
+#
+#   preprocess ── board_analysis
+#              └─ filter_trees ── gen_trees ── engine_analysis
+#                                           └─ pack_trees ── train_encoder ──
+#                                              pack_root ── train_readout_pg ── eval
+steps:
+  - name: board_analysis
+    script: board_analysis.slurm
+    after: [preprocess]
+
+  - name: filter_trees
+    script: filter_trees.slurm
+    after: [preprocess]
+
+  - name: gen_trees
+    script: gen_trees.slurm
+    after: [filter_trees]
+    array: 0-99            # 100 tasks x 2500 FENs = full 250k -> n1md36
+
+  - name: engine_analysis
+    script: engine_analysis.slurm
+    after: [gen_trees]
+
+  - name: pack_trees
+    script: pack_trees.slurm
+    after: [gen_trees]
+
+  - name: train_encoder
+    script: train_encoder.slurm
+    after: [pack_trees]
+
+  - name: pack_root
+    script: pack_root.slurm        # materialize worker (array)
+    merge: pack_root_merge.slurm   # afterok the array; downstream depends on THIS
+    after: [train_encoder]
+    array: 0-39                    # 40 materialize workers
+
+  - name: train_readout_pg
+    script: train_readout_pg.slurm
+    after: [pack_root]
+
+  - name: eval
+    script: eval.slurm
+    after: [train_readout_pg]

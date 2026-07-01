@@ -4,8 +4,7 @@ Produces: rt_headline (3), cost_sweep_rt (4a), voc_tau_sweep (4b), rt_partials (
 good_moves_signflip (5), oss_dist_elo2000 (line, no smoothing). Interim filtered elo2000.
 Spearman with percentile-bootstrap 95% CIs; partials via the rank formula.
 """
-import sys, os, random
-sys.path.insert(0, "/home/hl4291/chess_analysis/src")
+import os, random
 import torch, numpy as np, pandas as pd, duckdb
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt

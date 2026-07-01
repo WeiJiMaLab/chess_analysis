@@ -14,15 +14,12 @@ VENV_DIR=/home/hl4291/venv
 source "$VENV_DIR/bin/activate"
 set -u
 
-export PYTHONPATH="/home/hl4291/chess_analysis/src:/home/hl4291/chess_analysis/src/analysis"
+export PYTHONPATH="/home/hl4291/chess_analysis/src"
 export PYTHONUNBUFFERED=1
 
-# Validate ELO is set
-: "${ELO:?ELO required (1800|2000|2200)}"
-
 export TINY=/home/hl4291/chess_analysis
-export CONFIG=$TINY/configs/core.yaml
-export RENDER="python $TINY/configs/render_stage.py $CONFIG --set globals.sf_elo=${ELO}"
+export CONFIG=$TINY/config.yaml
+export RENDER="python $TINY/render_stage.py $CONFIG"
 export WORK=$($RENDER --get globals.config_dir)
 export MCP=$($RENDER --get globals.mc_packed_dir)
 export MAT=$($RENDER --get globals.materialized_dir)
