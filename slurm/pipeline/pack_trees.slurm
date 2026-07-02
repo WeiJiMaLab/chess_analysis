@@ -26,7 +26,7 @@ echo "=== split (train/val partition; all trees) ==="
 python -m cts.data.preprocess_gnn.split --config "$CONFIG" --stage split
 
 echo "=== gnn_pack (encoder examples) ==="
-python -m cts.data.preprocess_gnn.pack --config "$CONFIG" --stage gnn_pack
+python -m cts.data.preprocess_gnn.pack --config "$CONFIG" --stage gnn_pack --set num_workers="$NW"
 
 echo "=== mc_pack (oracle episodes) ==="
 python -m cts.data.preprocess_mc.pack --config "$CONFIG" --stage mc_pack --set num_workers="$NW"

@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
 
 import torch
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from cts.core.schema import (
     NodeFeatureSchema,
@@ -36,18 +36,9 @@ class PackPretrainConfig(BaseModel):
     log_interval: int = 1
     single_shard: bool = False
     clear: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_deprecated_yaml(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        if "num_workers" in data:
-            raise ValueError(
-                "Pack configs no longer accept `num_workers`; packing runs serially in-process. "
-                "Remove `num_workers` from your YAML."
-            )
-        return data
+    # Per-tree tensorization is embarrassingly parallel; >0 spreads it over a
+    # ProcessPoolExecutor (shard assembly/save stays serial). 0 = serial.
+    num_workers: int = 0
 
 
 def read_manifest(path: Path) -> list[Path]:
@@ -89,6 +80,20 @@ def tensorize_example_for_pack(
     return record.to_tensorized_tree_example(schema)
 
 
+def _log_shard_progress(completed_in_shard, shard_paths, split_name, shard_index, total_shards,
+                        total_examples_before_shard, total_examples_in_split, start_time, log_interval):
+    if completed_in_shard % log_interval == 0 or completed_in_shard == len(shard_paths):
+        elapsed = time.time() - start_time
+        completed_total = total_examples_before_shard + completed_in_shard
+        print(
+            f"split={split_name} shard={shard_index + 1}/{total_shards} "
+            f"shard_examples={completed_in_shard}/{len(shard_paths)} "
+            f"packed_examples={completed_total}/{total_examples_in_split} "
+            f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
+            flush=True,
+        )
+
+
 def tensorize_paths_for_shard(
     shard_paths: list[Path],
     schema: NodeFeatureSchema,
@@ -100,21 +105,30 @@ def tensorize_paths_for_shard(
     total_examples_in_split: int,
     start_time: float,
     log_interval: int,
+    num_workers: int = 0,
 ) -> list[TensorizedTreeExample]:
-    results: list[TensorizedTreeExample] = []
-    for completed_in_shard, path in enumerate(shard_paths, start=1):
-        results.append(tensorize_example_for_pack(path, schema))
-        if completed_in_shard % log_interval == 0 or completed_in_shard == len(shard_paths):
-            elapsed = time.time() - start_time
-            completed_total = total_examples_before_shard + completed_in_shard
-            print(
-                f"split={split_name} shard={shard_index + 1}/{total_shards} "
-                f"shard_examples={completed_in_shard}/{len(shard_paths)} "
-                f"packed_examples={completed_total}/{total_examples_in_split} "
-                f"elapsed_s={elapsed:.1f} base_examples_per_s={completed_total / max(elapsed, 1e-6):.2f}",
-                flush=True,
-            )
-    return results
+    """Tensorize this shard's per-tree examples, in input order. ``num_workers`` > 0
+    spreads the (independent) per-tree work over a process pool; results are written
+    back into the input slot so the output order is preserved regardless of finish order."""
+    args = dict(split_name=split_name, shard_index=shard_index, total_shards=total_shards,
+                total_examples_before_shard=total_examples_before_shard,
+                total_examples_in_split=total_examples_in_split, start_time=start_time,
+                log_interval=log_interval)
+    if num_workers <= 0:
+        results: list[TensorizedTreeExample] = []
+        for completed_in_shard, path in enumerate(shard_paths, start=1):
+            results.append(tensorize_example_for_pack(path, schema))
+            _log_shard_progress(completed_in_shard, shard_paths, **args)
+        return results
+
+    slots: list[TensorizedTreeExample | None] = [None] * len(shard_paths)
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(tensorize_example_for_pack, path, schema): i
+                   for i, path in enumerate(shard_paths)}
+        for completed_in_shard, future in enumerate(as_completed(futures), start=1):
+            slots[futures[future]] = future.result()
+            _log_shard_progress(completed_in_shard, shard_paths, **args)
+    return slots
 
 
 def pack_train_or_val_split_to_shards(
@@ -124,6 +138,7 @@ def pack_train_or_val_split_to_shards(
     log_interval: int,
     *,
     schema: NodeFeatureSchema,
+    num_workers: int = 0,
 ) -> tuple[Path, int]:
     """Writes ``shard_*.pt`` under ``output_root/<split>/`` plus ``<split>_manifest.json``.
 
@@ -153,6 +168,7 @@ def pack_train_or_val_split_to_shards(
             total_examples_in_split=len(example_paths),
             start_time=start_time,
             log_interval=log_interval,
+            num_workers=num_workers,
         )
         shard_path = split_output_dir / f"shard_{shard_index:05d}.pt"
         # node_ptr/edge_ptr are CSR-style offsets: example i's nodes live in
@@ -271,6 +287,7 @@ def main(config: PackPretrainConfig) -> None:
         shard_size,
         config.log_interval,
         schema=schema,
+        num_workers=config.num_workers,
     )
     validation_packed_manifest, validation_count = pack_train_or_val_split_to_shards(
         validation_manifest,
@@ -278,6 +295,7 @@ def main(config: PackPretrainConfig) -> None:
         shard_size,
         config.log_interval,
         schema=schema,
+        num_workers=config.num_workers,
     )
 
     print(f"train_manifest={train_packed_manifest}")
