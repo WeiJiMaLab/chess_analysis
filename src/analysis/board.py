@@ -147,19 +147,30 @@ def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_q
     save_figure(fig, "board", filename)
 
 
-def run_board_corr(conn, n_sample=1_000_000, seed=42):
+def run_board_corr(conn, n_sample=1_000_000, seed=42, resid_col=None,
+                   filename="board_feature_corr.pdf", title="Spearman correlation — board features"):
     """Spearman correlation over board structural features + log(RT).
-    Collapsed from movetime_analysis.py.
+
+    If ``resid_col`` is given (e.g. ``"move_ply"``), RT is first **residualized**
+    on it — ``log(RT) − mean(log(RT) | resid_col)`` — so the correlations reflect
+    the part of think-time NOT explained by that covariate (e.g. game stage). The
+    conditional mean is taken over the sampled rows via a partitioned window.
     """
+    if resid_col:
+        rt_sql = f"ln(move_time) - avg(ln(move_time)) OVER (PARTITION BY {resid_col})"
+        rt_label = f"log(RT) ⟂ {resid_col}"
+    else:
+        rt_sql = "ln(move_time)"
+        rt_label = "log(RT)"
     df = conn.execute(f"""
         SELECT move_ply AS ply, n_possible_moves AS legal_moves,
-               player_clock_time AS player_clock, ln(move_time) AS log_T,
+               player_clock_time AS player_clock, {rt_sql} AS log_T,
                move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction
         FROM {WIN_PROCESSED_MOVES_NONZERO}
         USING SAMPLE {n_sample} ROWS (reservoir, {seed})
     """).df()
     labels = {
-        "log_T": "log(RT)", "ply": "Ply", "legal_moves": "Legal moves",
+        "log_T": rt_label, "ply": "Ply", "legal_moves": "Legal moves",
         "player_clock": "Player clock", "game_fraction": "Game fraction",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
@@ -182,9 +193,9 @@ def run_board_corr(conn, n_sample=1_000_000, seed=42):
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label("Spearman ρ", fontsize=16)
     cbar.ax.tick_params(labelsize=14)
-    ax.set_title(f"Spearman correlation — board features (n = {len(df):,})", fontsize=18, pad=12)
+    ax.set_title(f"{title} (n = {len(df):,})", fontsize=18, pad=12)
     plt.tight_layout()
-    save_figure(fig, "board", "board_feature_corr.pdf")
+    save_figure(fig, "board", filename)
 
 
 def main(argv=None):
@@ -226,6 +237,11 @@ def main(argv=None):
             "ply_tertile_source": "pmnz_gf",
         },
         "boardcorr": run_board_corr,
+        "boardcorr_resid_ply": lambda conn: run_board_corr(
+            conn, resid_col="move_ply",
+            filename="board_feature_corr_resid_ply.pdf",
+            title="Spearman correlation — board features (RT residualized on ply)",
+        ),
     }
 
     with db_connection(args.db, read_only=True) as conn:
