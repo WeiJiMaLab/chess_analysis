@@ -237,15 +237,22 @@ def run_tree_values_pipeline(
     os.makedirs(out_dir, exist_ok=True)
 
     with db_connection(db_path, read_only=True) as conn:
-        create_ply_windowed_views(conn)   # ply filter on arrival; tree_rt/mq_rt build off pmnz_win
+        create_ply_windowed_views(conn)   # ply filter on arrival; tree_rt/mq_rt build off pmnz_gf
+        # game_fraction = move_ply / total plies in game (max over the FULL windowed
+        # game, not the tree-matched subset), so the dashboards can segment by it.
+        conn.execute(
+            "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
+            "SELECT *, move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction "
+            "FROM pmnz_win"
+        )
         conn.register("_vals", vals)
         conn.register("_root_moves", root_moves)
         conn.execute("""
             CREATE OR REPLACE TEMP TABLE tree_rt AS
             SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good, v.oss,
-                   v.fen, m.gid, m.move_ply, m.move_time
+                   v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction
             FROM _vals v
-            JOIN pmnz_win m ON m.fen = v.fen
+            JOIN pmnz_gf m ON m.fen = v.fen
             WHERE m.move_time > 0
         """)
         n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
