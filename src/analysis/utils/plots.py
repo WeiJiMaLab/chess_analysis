@@ -52,7 +52,10 @@ def plot_qbin_stats(
             x_label = "Quantile Rank"
     else:
         x_vals = df[x_col]
-    ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=12, label=label)
+    # Shrink markers when there are many points (e.g. per-integer binning) so the
+    # line doesn't read as a string of big dots; keep them bold on sparse plots.
+    _ms = 12 if len(x_vals) <= 15 else (7 if len(x_vals) <= 30 else 5)
+    ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=_ms, label=label)
     fb_kwargs = {"color": color, "alpha": 0.2}
     if ci_legend_label is not None:
         fb_kwargs["label"] = ci_legend_label

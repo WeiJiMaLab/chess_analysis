@@ -307,8 +307,11 @@ def run_tree_values_pipeline(
 
         # Per-signal tree dashboards. Each renders a 1x3 (overall / by ply / by game
         # fraction) via two Analyzers over tree_rt that differ only in segment column.
+        # gss/oss are integers → bin per-integer (ntile over a discrete right-skewed
+        # variable manufactures fake non-monotonicity); tail above the cut is merged.
         tree_signals = {
-            "gss": {"column": "gss", "name": "Greedy stop step", "filter_query": "move_time > 0"},
+            "gss": {"column": "gss", "name": "Greedy stop step", "filter_query": "move_time > 0",
+                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
             "gain": {"column": "voc", "name": "Gain (SF-1)", "filter_query": "move_time > 0",
                      "zero_inflated": True, "zero_threshold": 0.0},
             "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)", "filter_query": "move_time > 0",
@@ -316,7 +319,8 @@ def run_tree_values_pipeline(
             "frac_good": {"column": "greedy_frac_good", "name": "Greedy frac-good (SF-1)",
                           "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL"},
             "oss": {"column": "oss", "name": "Optimal stop step (SF-1)",
-                    "filter_query": "move_time > 0 AND oss IS NOT NULL"},
+                    "filter_query": "move_time > 0 AND oss IS NOT NULL",
+                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
         }
 
         def _seg_pair(table, x_var, y_var, title, **opts):
@@ -336,9 +340,12 @@ def run_tree_values_pipeline(
                 Variable(column=cfg["column"], is_log=False, name=cfg["name"]),
                 Variable(column="move_time", is_log=True, name="RT"),
                 f"{cfg['name']} vs. log(RT)",
-                filter_query=cfg["filter_query"], min_bin_count=100, tie_safe=True,
+                filter_query=cfg["filter_query"], min_bin_count=300, tie_safe=True,
                 zero_inflated=cfg.get("zero_inflated", False),
                 zero_threshold=cfg.get("zero_threshold", 0.0),
+                bin_mode=cfg.get("bin_mode", "ntile"),
+                integer_bin_width=cfg.get("integer_bin_width", 1),
+                integer_tail_cut=cfg.get("integer_tail_cut"),
             )
             save_tree_dashboard(a_ply, a_gf, out_dir, name)
 
@@ -348,7 +355,7 @@ def run_tree_values_pipeline(
             Variable(column="move_time", is_log=True, name="RT (s)"),
             Variable(column="mq", is_log=False, name="MQ (SF-1)"),
             "MQ (SF-1) vs. log(RT)",
-            filter_query="move_time > 0", min_bin_count=100, n_bins=10,
+            filter_query="move_time > 0", min_bin_count=300, n_bins=10,
         )
         save_tree_dashboard(mq_ply, mq_gf, out_dir, "mq")
 
