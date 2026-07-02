@@ -235,7 +235,6 @@ def main(argv=None):
             "name": "Ply",
             "filename": "ply.pdf",
             "filter_query": "move_ply <= 150",
-            "reverse_x": True,   # count down from ply
         },
         "legal_moves": {
             "column": "n_possible_moves",
