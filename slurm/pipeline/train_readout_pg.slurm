@@ -10,8 +10,11 @@
 #SBATCH --partition=cpu
 #SBATCH --qos=short
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=128G
 #SBATCH --time=02:00:00
+# --mem 8G->128G: the PG trainer loads the frozen-encoder z_t root cache
+# (mc_packed, ~32G on disk) eagerly into RAM — same eager-load pattern that
+# OOM'd train_encoder at 8G. 128G matches that precedent's headroom.
 
 set -euo pipefail
 TINY=/home/hl4291/chess_analysis
