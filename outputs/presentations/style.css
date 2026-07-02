@@ -35,18 +35,13 @@
   --border-subtle: #e2e8f0;
 }
 
-/* ── Slide transitions: zoom INTO a node (enter) / zoom OUT to the tree (back) ──
- * Fire on real navigation (not pre-render), so they're glitch-free. Set per-slide
- * via `transition: zoom-in` (visiting a node) or `transition: zoom-out` (returning). */
-:root { --slidev-transition-duration: 600ms; }
-.zoom-in-enter-active, .zoom-in-leave-active,
-.zoom-out-enter-active, .zoom-out-leave-active {
-  transition: opacity var(--slidev-transition-duration) ease, transform var(--slidev-transition-duration) cubic-bezier(0.4, 0, 0.2, 1);
+/* ── Slide transitions: a quick fade between every slide (map ↔ content). ──
+ * Keep it short so stepping through the deck feels snappy, not cinematic. */
+:root { --slidev-transition-duration: 180ms; }
+.fade-enter-active, .fade-leave-active {
+  transition: opacity var(--slidev-transition-duration) ease;
 }
-.zoom-in-enter-from { opacity: 0; transform: scale(0.78); }
-.zoom-in-leave-to  { opacity: 0; transform: scale(1.28); }
-.zoom-out-enter-from { opacity: 0; transform: scale(1.28); }
-.zoom-out-leave-to   { opacity: 0; transform: scale(0.78); }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 /* Global Styles */
 html,
