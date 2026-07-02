@@ -19,55 +19,63 @@ import { useSlideContext } from '@slidev/client'
 const props = defineProps({ seq: { type: String, default: 'build' } })
 const { $clicks } = useSlideContext()
 
-const W = 3800, H = 1500
+const W = 3960, H = 1240
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 1880, cy: 90, w: 460, h: 96,
+  id: 'q1', cx: 1930, cy: 120, w: 460, h: 96,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
-    // ── PART 1 — model-free board analysis (left column) ──────────────────────
-    // Four feature leaves fan out as SIBLINGS under p1 (not a vertical chain).
+    // ── PART 1 — How do people actually think? (two sub-branches) ─────────────
     {
-      id: 'p1', cx: 710, cy: 380, w: 380, h: 96,
+      id: 'p1', cx: 980, cy: 460, w: 380, h: 96,
       q: 'How Do People Actually Think?',
-      a: 'Decision width (legal moves, +0.20) wins — not reducible to game stage.',
+      a: 'Decision width (legal moves) dominates; engine value adds little.',
       children: [
-        { id: 'b_legal',    cx: 200,  cy: 640, w: 280, h: 88, q: 'Legal Moves?',      a: '+0.20 — strongest.', children: [] },
-        { id: 'b_gain',     cx: 540,  cy: 640, w: 280, h: 88, q: 'Gain (ΔUC, d5)?',   a: '+0.10.',             children: [] },
-        { id: 'b_material', cx: 880,  cy: 640, w: 280, h: 88, q: 'Own Material?',     a: '+0.04.',             children: [] },
-        { id: 'b_gap',      cx: 1220, cy: 640, w: 280, h: 88, q: 'Action Gap?',       a: '−0.06.',             children: [] },
+        // 1a · model-free board features
+        {
+          id: 'feats', cx: 470, cy: 760, w: 300, h: 92,
+          q: 'Game / Board Features', a: 'Width (legal moves) is the strongest tie.',
+          children: [
+            { id: 'ply',   cx: 200, cy: 1060, w: 250, h: 88, q: 'Ply (Game Stage)?', a: '+0.08 — near-null.',       children: [] },
+            { id: 'legal', cx: 470, cy: 1060, w: 250, h: 88, q: 'Legal Moves?',       a: '+0.26 — strongest.',      children: [] },
+            { id: 'clock', cx: 740, cy: 1060, w: 250, h: 88, q: 'Clock Left?',        a: '−0.16 — falls late-game.', children: [] },
+          ],
+        },
+        // 1b · planning-model-derived features
+        {
+          id: 'plan', cx: 1485, cy: 760, w: 340, h: 92,
+          q: 'How Do We Model Planning?', a: 'A PUCT search tree; value read off the leaves.',
+          children: [
+            { id: 'engine',   cx: 1080, cy: 1060, w: 250, h: 88, q: 'Which Engine?',  a: 'lc0 → Stockfish (WDL).',        children: [] },
+            { id: 'gain',     cx: 1350, cy: 1060, w: 250, h: 88, q: 'Gain (ΔUC)?',     a: '+0.08 — more to gain, longer.', children: [] },
+            { id: 'agap',     cx: 1620, cy: 1060, w: 250, h: 88, q: 'Action Gap?',     a: '+0.01 — null.',                children: [] },
+            { id: 'fracgood', cx: 1890, cy: 1060, w: 250, h: 88, q: 'Frac-Good?',      a: '−0.10 — more good → faster.',   children: [] },
+          ],
+        },
       ],
     },
-    // ── PART 2 — the normative model (center column) ──────────────────────────
+    // ── PART 2 — What is thinking worth? (the normative model) ────────────────
     {
-      id: 'q1a', cx: 1800, cy: 380, w: 380, h: 96,
+      id: 'q1a', cx: 2650, cy: 460, w: 360, h: 96,
       q: 'What Is Thinking Worth? (The Normative Model)',
-      a: 'A PUCT search with a budgeted, RL-trained stopping rule.',
+      a: 'A budgeted oracle + an RL-trained stopping rule.',
       children: [
+        { id: 'q4',  cx: 2300, cy: 760, w: 300, h: 92, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
         {
-          id: 'q2', cx: 1620, cy: 640, w: 300, h: 96,
-          q: 'How Do We Model Planning?', a: 'An AlphaZero-style PUCT tree (no rollouts).',
+          id: 'oss', cx: 2650, cy: 760, w: 300, h: 92,
+          q: 'Optimal Stopping Step', a: 'OSS / GSS track RT only weakly.',
           children: [
-            { id: 'q3', cx: 1620, cy: 840, w: 300, h: 92, q: 'Which Engine Do We Use?', a: 'lc0 → Stockfish: uniform prior, WDL value.', children: [] },
+            { id: 'ossgss', cx: 2650, cy: 1010, w: 290, h: 92, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
           ],
         },
-        {
-          id: 'q4', cx: 1980, cy: 640, w: 300, h: 96,
-          q: 'When Should the Search Stop?', a: 'A budgeted oracle; an RL-trained readout on advantage.',
-          children: [
-            { id: 'h7', cx: 1980, cy: 840, w: 300, h: 92, q: "Does step*'s Hindsight Inflate It?", a: 'No — causal halter ≈ hindsight oracle.', children: [] },
-          ],
-        },
+        { id: 'meta', cx: 3010, cy: 760, w: 320, h: 92, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
       ],
     },
-    // ── PART 3 — human vs normative model (right column) ──────────────────────
-    // NOTE: the hindsight subtree (qwhy → h5/h6/h9/h8 → finding → plan) is
-    // temporarily CUT. Its coords/VISITS entries are removed below; restore
-    // together from git when the hindsight section comes back.
+    // ── PART 3 — Do human & normative model agree? (empty for now) ────────────
     {
-      id: 'qmatch', cx: 2990, cy: 380, w: 400, h: 96,
+      id: 'qmatch', cx: 3620, cy: 460, w: 380, h: 96,
       q: 'Do the Human and Normative Model Agree?',
       a: 'No — the drivers are structural, not VOC.',
       children: [],
@@ -93,23 +101,27 @@ const ALL  = nodes.map(n => n.id)
 //   expand        nodes revealed on the final blink step (combined with next selection)
 //   expand2       a second expand beat before the blink (gets its own click)
 const VISITS = [
-  // PART 1 — four board-feature leaves are siblings (fanned out at build),
-  // walked one by one; the last resolves p1 (the correlation summary).
-  { id: 'b_legal' },
-  { id: 'b_gain' },
-  { id: 'b_material' },
-  { id: 'b_gap',      also_resolve: ['p1'], pan_to: 'p1', expand: ['q2', 'q4'] },
-  // PART 2 — the normative model
-  { id: 'q2',     expand: ['q3'] },
-  { id: 'q3',     pan_to: 'q2' },
-  { id: 'q4',     expand: ['h7'] },
-  { id: 'h7',     also_resolve: ['q1a'], pan_to: 'q1a' },
-  // PART 3 — human vs normative model (last node; hindsight subtree cut)
+  // PART 1a — board features (fanned out under feats at build), walked in turn
+  { id: 'ply' },
+  { id: 'legal' },
+  { id: 'clock',    also_resolve: ['feats'], pan_to: 'feats' },
+  // PART 1b — how do we model planning (header, then 4 engine-derived features)
+  { id: 'plan',     expand: ['engine', 'gain', 'agap', 'fracgood'] },
+  { id: 'engine' },
+  { id: 'gain' },
+  { id: 'agap' },
+  { id: 'fracgood', also_resolve: ['p1'], pan_to: 'p1', expand: ['q4', 'oss', 'meta'] },
+  // PART 2 — what is thinking worth
+  { id: 'q4' },
+  { id: 'oss',      expand: ['ossgss'] },
+  { id: 'ossgss' },
+  { id: 'meta',     also_resolve: ['q1a'], pan_to: 'q1a' },
+  // PART 3 — pivot (empty for now; last node)
   { id: 'qmatch' },
 ]
 
 // Base visible set — established by the 'build' sequence
-const BASE_VIS = new Set(['q1', 'p1', 'q1a', 'qmatch', 'b_legal', 'b_gain', 'b_material', 'b_gap'])
+const BASE_VIS = new Set(['q1', 'p1', 'q1a', 'qmatch', 'feats', 'plan', 'ply', 'legal', 'clock'])
 
 // Cumulative resolved set *before* visiting VISITS[idx]
 function resolvedBefore(idx) {
@@ -177,12 +189,12 @@ function makeSeq(id) {
 // ── Sequences ─────────────────────────────────────────────────────────────────
 const seqs = {
   build: [
-    { f: 'all', v: ALL,         r: [] },
-    { f: 'q1',  v: ['q1'],      r: [] },
-    { f: 'q1',  v: ['q1','p1','q1a','qmatch'], r: [] },
-    { f: 'p1',  v: ['q1','p1','q1a','qmatch'], r: [] },
-    { f: 'p1',  v: arr(BASE_VIS), r: [] },                       // fan the 4 leaves out of p1
-    { f: 'b_legal', v: arr(BASE_VIS), r: [], blink: true },
+    { f: 'all',   v: ALL,         r: [] },
+    { f: 'q1',    v: ['q1'],      r: [] },
+    { f: 'q1',    v: ['q1','p1','q1a','qmatch'], r: [] },              // three parts
+    { f: 'p1',    v: ['q1','p1','q1a','qmatch','feats','plan'], r: [] }, // p1's two sub-branches
+    { f: 'feats', v: arr(BASE_VIS), r: [] },                         // fan feats' 3 leaves
+    { f: 'ply',   v: arr(BASE_VIS), r: [], blink: true },
   ],
 }
 VISITS.forEach(v => { seqs[v.id] = makeSeq(v.id) })

@@ -40,7 +40,7 @@ window is a no-op); the analysis set is all non-instant moves.
 |---|---|---:|---:|
 | Parsed half-moves | 10+0, both Elo ≥ 2000, date-windowed; berserk / negative-clock / time-grant games dropped | 145,142,731 | ⟨REFRESH⟩ |
 | **Analysis set** | **`move_time > 0`** (drop premoves / 0-s moves) | **135,482,903** | 1,921,082 |
-| Engine subset | analysis-set moves matched to an SF-1 `n1md36` tree (distinct FENs, 250k sampled by `filter_trees.py`) | ⟨REFRESH: engine join⟩ | — |
+| Engine subset | analysis-set moves matched to an SF-1 `n1md36` tree (distinct FENs, 250k sampled by `filter_trees.py`) | 109,434 | — |
 
 - Distinct root FENs available for tree generation: **⟨REFRESH: filter_trees log⟩** (250k sampled).
 - Engine analysis matches an analysis-set move to a generated tree by FEN.
@@ -71,14 +71,14 @@ K=10 tie-safe quantile bins with per-bin SEM):
 ![game fraction vs move time](../figures/allply/board/game_fraction.png)
 <!-- ⟨REFRESH⟩ game_fraction.png pending: new board covariate (move_ply / game length). -->
 
-*Numbers below are **⟨REFRESH⟩** from this run; values shown are provisional (earlier full-data run).*
+*Numbers below are from this run — board-feature Spearman matrix (n = 1,000,000).*
 
 | Feature (from the position) | ρ with log(RT) | Reading |
 |---|---|---|
-| **legal moves** | **+0.343** *(prov.)* | more candidate moves → more to weigh |
-| ply | **−0.248** *(prov.)* | later in the game → faster (fewer pieces, more forced) |
-| clock (time left) | **+0.122** *(prov.)* | more time on the clock → more willing to spend it |
-| game fraction (ply / game length) | **⟨REFRESH⟩** | new covariate — how far through the game |
+| **legal moves** | **+0.26** | more candidate moves → more to weigh |
+| ply | **+0.08** | near-null once the rest of the structure is present |
+| clock (time left) | **−0.16** | clock falls as the game runs on |
+| game fraction (ply / game length) | **+0.11** | how far through the game — weak positive |
 
 ![Spearman correlation — board features](../figures/allply/board/board_feature_corr.png)
 
@@ -97,7 +97,7 @@ The legal-moves effect is suggestive but *structural* — it says nothing about 
 *worth it*. The resource-rational hypothesis is sharper: people should think longer where an engine
 would *gain* more from searching. To test it we read value quantities off a **Stockfish search tree**
 on the same position — the canonical **SF1** set (`n1md36`: Stockfish, n=1 leaf eval, depth-36, no
-pruning; **n = ⟨REFRESH: matched moves⟩** analysis-set moves matched). The analysis lives inline in
+pruning; **n = 109,434** analysis-set moves matched). The analysis lives inline in
 `src/analysis/engine.py`.
 
 The signals, in the user's terms:
@@ -115,16 +115,16 @@ The signals, in the user's terms:
 ![greedy frac-good vs RT](../figures/allply/engine/frac_good.png)
 ![OSS vs RT](../figures/allply/engine/oss.png)
 
-*Numbers below are **⟨REFRESH⟩** from this run; values shown are provisional (earlier full-data run).*
+*Numbers below are from this run — SF1 `n1md36` engine matrix (n = 109,434).*
 
 | Metric (SF1 `n1md36` tree) | ρ with log RT | Direction |
 |---|---|---|
-| **Gain** (value of computation) | **+0.140** *(prov.)* | as predicted — more to gain, longer think |
-| **MQ** (played-move quality) | **−0.172** *(prov.)* | longer thinks land on *worse* moves |
-| greedy action-gap (decisiveness) | **+0.061** *(prov.)* | small/near-null |
-| GSS (greedy stop step) | **+0.096** *(prov.)* | as predicted |
-| greedy frac-good (≤ 0.1 of best, myopic) | **−0.166** *(prov.)* | more good moves → faster (satisficing) |
-| OSS (optimal stop step) | **+0.120** *(prov.)* | as predicted |
+| **Gain** (value of computation) | **+0.08** | as predicted — more to gain, longer think |
+| **MQ** (played-move quality) | **−0.17** | longer thinks land on *worse* moves |
+| greedy action-gap (decisiveness) | **+0.01** | null |
+| GSS (greedy stop step) | **+0.05** | as predicted, faint |
+| greedy frac-good (≤ 0.1 of best, myopic) | **−0.10** | more good moves → faster (satisficing) |
+| OSS (optimal stop step) | **+0.06** | as predicted, faint |
 
 **Why these are all myopic (pre-search) signals.** The *deep* (post-search) action gap is a
 post-search **outcome** confounded with think-time — a tree that searched longer has, by
@@ -193,8 +193,8 @@ satisficing concavity: high-satisfaction positions plateau low, low-satisfaction
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Human think-time is log-normal; decision **width** (legal moves) is its strongest single predictor | **Settled** | board regressors; survives ply / clock — **⟨REFRESH ρ⟩** |
-| Engine value-of-computation tracks RT only weakly, and every signal collapses toward the move count | **Settled** | SF1 `n1md36` — **⟨REFRESH ρ table⟩** |
+| Human think-time is log-normal; decision **width** (legal moves) is its strongest single predictor | **Settled** | board regressors; legal moves ρ = +0.26, above ply / clock |
+| Engine value-of-computation tracks RT only weakly, and every signal collapses toward the move count | **Settled** | SF1 `n1md36`; every engine \|ρ\| ≲ 0.17 |
 | H(π) is **not** a real engine signal (uniform SF prior ⇒ H(π) ≡ log #legal-moves) | **Settled** | partial \| legal ≈ 0 |
 | Sharpness is dropped — the deep action-gap was a post-search artifact; the myopic gap is ~null | **Settled** | engine plots use pre-search myopic values |
 | Searching for a signal that **beats** legal-moves | **Retired (wrong target)** | a count is the *explanandum*, not a rival model; everything correctly collapses onto it |

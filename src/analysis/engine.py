@@ -175,9 +175,9 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) 
         "log_T": "log(RT)",
         # board features
         "ply": "Ply", "legal_moves": "Legal moves", "player_clock": "Clock left",
-        # engine signals (all myopic/greedy)
-        "mq": "MQ", "voc": "Gain", "action_gap": "Action Gap", "gss": "GSS",
-        "greedy_frac_good": "Greedy frac-good", "oss": "OSS",
+        # engine signals (all myopic/greedy) — order: Gain, MQ, ActionGap, FracGood, GSS, OSS
+        "voc": "Gain", "mq": "MQ", "action_gap": "Action Gap",
+        "greedy_frac_good": "Greedy frac-good", "gss": "GSS", "oss": "OSS",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
