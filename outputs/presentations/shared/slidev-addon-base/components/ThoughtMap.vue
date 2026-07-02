@@ -23,63 +23,70 @@ const W = 1760, H = 1360
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 750, cy: 60, w: 380, h: 92,
+  id: 'q1', cx: 880, cy: 56, w: 400, h: 92,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
+    // ── PART 1 — model-free board analysis (left column) ──────────────────────
     {
-      id: 'q1a', cx: 360, cy: 250, w: 360, h: 92,
+      id: 'p1', cx: 300, cy: 250, w: 360, h: 96,
+      q: 'How Do People Actually Think?',
+      a: 'Decision width (legal moves, +0.20) wins — not reducible to game stage.',
+      children: [
+        { id: 'b_legal',    cx: 300, cy: 470,  w: 300, h: 92, q: 'Legal Moves (Decision Width)?', a: '+0.20 — strongest.',        children: [] },
+        { id: 'b_gain',     cx: 300, cy: 620,  w: 300, h: 84, q: 'Gain (ΔUC, depth 5)?',          a: '+0.10.',                    children: [] },
+        { id: 'b_material', cx: 300, cy: 758,  w: 300, h: 84, q: 'Own Material?',                 a: '+0.04.',                    children: [] },
+        { id: 'b_gap',      cx: 300, cy: 896,  w: 300, h: 84, q: 'Action Gap (Top-Two)?',         a: '−0.06.',                    children: [] },
+      ],
+    },
+    // ── PART 2 — the normative model (center column) ──────────────────────────
+    {
+      id: 'q1a', cx: 880, cy: 250, w: 360, h: 96,
       q: 'What Is Thinking Worth? (The Normative Model)',
       a: 'A PUCT search with a budgeted, RL-trained stopping rule.',
       children: [
         {
-          id: 'q2', cx: 150, cy: 446, w: 300, h: 96,
+          id: 'q2', cx: 700, cy: 470, w: 300, h: 96,
           q: 'How Do We Model Planning?', a: 'An AlphaZero-style PUCT tree (no rollouts).',
           children: [
-            { id: 'q3', cx: 150, cy: 620, w: 300, h: 92, q: 'Which Engine Do We Use?', a: 'lc0 → Stockfish: uniform prior, WDL value.', children: [] },
+            { id: 'q3', cx: 700, cy: 640, w: 300, h: 92, q: 'Which Engine Do We Use?', a: 'lc0 → Stockfish: uniform prior, WDL value.', children: [] },
           ],
         },
         {
-          id: 'q4', cx: 560, cy: 446, w: 300, h: 96,
+          id: 'q4', cx: 1050, cy: 470, w: 300, h: 96,
           q: 'When Should the Search Stop?', a: 'A budgeted oracle; an RL-trained readout on advantage.',
           children: [
-            { id: 'h7', cx: 560, cy: 620, w: 300, h: 92, q: "Does step*'s Hindsight Inflate It?", a: 'No — causal halter ≈ hindsight oracle.', children: [] },
+            { id: 'h7', cx: 1050, cy: 640, w: 300, h: 92, q: "Does step*'s Hindsight Inflate It?", a: 'No — causal halter ≈ hindsight oracle.', children: [] },
           ],
         },
       ],
     },
+    // ── PART 3 — human vs normative model (right column) + hindsight below ─────
     {
-      id: 'q1b', cx: 1140, cy: 250, w: 360, h: 92,
-      q: 'How Do People Spend Their Time Thinking?',
-      a: 'On decision width, not value-of-computation.',
+      id: 'qmatch', cx: 1460, cy: 250, w: 380, h: 96,
+      q: 'Do the Human and Normative Model Agree?',
+      a: 'No — the drivers are structural, not VOC.',
       children: [
         {
-          id: 'qmatch', cx: 1140, cy: 446, w: 360, h: 96,
-          q: "Do the Model's Signals Match Human Think-Time?",
-          a: 'No — the drivers are structural, not VOC.',
+          id: 'qwhy', cx: 1460, cy: 470, w: 380, h: 90,
+          q: 'In Hindsight — Why the Mismatch?',
+          a: 'Every VOC signal is a legal-moves proxy.',
           children: [
+            { id: 'h5', cx: 1170, cy: 690, w: 300, h: 108, q: 'Wrong Cost Shape?',                a: 'No — regret is flat.',                children: [] },
+            { id: 'h6', cx: 1480, cy: 690, w: 300, h: 108, q: 'Uncertainty Missing?',             a: 'It recovers, but never beats.',       children: [] },
+            { id: 'h9', cx: 1500, cy: 830, w: 300, h: 108, q: 'Evaluator Too Strong? (lc0 vs SF-N1)', a: 'No — SF-1 ≈ SF-100 on every RT-corr.', children: [] },
             {
-              id: 'qwhy', cx: 1140, cy: 636, w: 360, h: 86,
-              q: 'If Not — Why Not?',
-              a: 'Every VOC signal is a legal-moves proxy.',
+              id: 'h8', cx: 1170, cy: 960, w: 320, h: 108, star: true,
+              q: 'Just a Legal-Moves Proxy? (Cost Type)',
+              a: 'Yes — RT is decision difficulty.',
               children: [
-                { id: 'h5', cx:  870, cy: 840, w: 280, h: 104, q: 'Is It the Wrong Cost Shape?',  a: 'No — regret is flat.',           children: [] },
-                { id: 'h6', cx: 1170, cy: 840, w: 280, h: 104, q: 'Is Uncertainty Missing?',      a: 'It recovers, but never beats.',  children: [] },
-                { id: 'h9', cx: 1470, cy: 840, w: 280, h: 104, q: 'Is the Evaluator Too Strong?', a: 'No — SF-1 ≈ SF-100 on every RT-corr.',   children: [] },
                 {
-                  id: 'h8', cx: 1170, cy: 1000, w: 300, h: 104, star: true,
-                  q: 'Is It Just a Legal-Moves Proxy?',
-                  a: 'Yes — RT is decision difficulty.',
+                  id: 'finding', cx: 1330, cy: 1130, w: 380, h: 92,
+                  q: 'So What Is Think-Time, Really?',
+                  a: 'Satisficed difficulty: size − satisfaction + sharpness.',
                   children: [
-                    {
-                      id: 'finding', cx: 1170, cy: 1150, w: 360, h: 88,
-                      q: 'So What Is Think-Time, Really?',
-                      a: 'Satisficed difficulty: size − satisfaction + sharpness.',
-                      children: [
-                        { id: 'plan', cx: 1170, cy: 1275, w: 380, h: 76, plan: true,
-                          q: '★ The Umbrella: It Was the Cost of the Leaves', a: '', children: [] },
-                      ],
-                    },
+                    { id: 'plan', cx: 1330, cy: 1270, w: 400, h: 78, plan: true,
+                      q: '★ The Umbrella: It Was the Cost of the Leaves', a: '', children: [] },
                   ],
                 },
               ],
@@ -109,11 +116,19 @@ const ALL  = nodes.map(n => n.id)
 //   expand        nodes revealed on the final blink step (combined with next selection)
 //   expand2       a second expand beat before the blink (gets its own click)
 const VISITS = [
+  // PART 1 — board feature leaves, then back up to p1 (correlation summary)
+  { id: 'b_legal',    expand: ['b_gain'] },
+  { id: 'b_gain',     expand: ['b_material'] },
+  { id: 'b_material', expand: ['b_gap'] },
+  { id: 'b_gap',      also_resolve: ['p1'], pan_to: 'p1', expand: ['q2', 'q4'] },
+  // PART 2 — the normative model
   { id: 'q2',     expand: ['q3'] },
   { id: 'q3',     pan_to: 'q2' },
   { id: 'q4',     expand: ['h7'] },
-  { id: 'h7',     also_resolve: ['q1a'], pan_to: 'q1a', expand: ['qmatch'] },
+  { id: 'h7',     also_resolve: ['q1a'], pan_to: 'q1a' },
+  // PART 3 — human vs normative model
   { id: 'qmatch', expand: ['qwhy'], expand2: childrenOf['qwhy'] },
+  // HINDSIGHT — why the mismatch
   { id: 'h5' },
   { id: 'h6' },
   { id: 'h9' },
@@ -123,7 +138,7 @@ const VISITS = [
 ]
 
 // Base visible set — established by the 'build' sequence
-const BASE_VIS = new Set(['q1', 'q1a', 'q1b', 'q2', 'q4'])
+const BASE_VIS = new Set(['q1', 'p1', 'q1a', 'qmatch', 'b_legal'])
 
 // Cumulative resolved set *before* visiting VISITS[idx]
 function resolvedBefore(idx) {
@@ -193,10 +208,10 @@ const seqs = {
   build: [
     { f: 'all', v: ALL,         r: [] },
     { f: 'q1',  v: ['q1'],      r: [] },
-    { f: 'q1',  v: ['q1','q1a','q1b'], r: [] },
-    { f: 'q1a', v: ['q1','q1a','q1b'], r: [] },
-    { f: 'q1a', v: arr(BASE_VIS), r: [] },
-    { f: 'q2',  v: arr(BASE_VIS), r: [], blink: true },
+    { f: 'q1',  v: ['q1','p1','q1a','qmatch'], r: [] },
+    { f: 'p1',  v: ['q1','p1','q1a','qmatch'], r: [] },
+    { f: 'p1',  v: arr(BASE_VIS), r: [] },
+    { f: 'b_legal', v: arr(BASE_VIS), r: [], blink: true },
   ],
 }
 VISITS.forEach(v => { seqs[v.id] = makeSeq(v.id) })
