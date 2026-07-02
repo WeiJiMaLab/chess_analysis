@@ -134,19 +134,25 @@ def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) ->
     print(f"  partial ρ(H(π), {y} | all)        = {rho_all:+.4f}")
 
 
-def save_mq_dashboard(analyzer: Analyzer, gss_analyzer: Analyzer, out_dir: str) -> None:
+def save_tree_dashboard(analyzer_ply: Analyzer, analyzer_gf: Analyzer, out_dir: str, base_name: str) -> None:
+    """1x3 engine dashboard: overall, by ply tertile, by game-fraction tertile.
+
+    ``analyzer_ply`` supplies the base panel + ply segmentation; ``analyzer_gf`` is
+    the same analysis segmented by game_fraction (identical x/y/options)."""
     apply_poster_style()
     fig, axes = plt.subplots(1, 3, figsize=(45, 13.72))
-    analyzer.plot_quantile_bins(axes[0])
-    analyzer.plot_quantile_bins_tertile_segmented(axes[1])
-    gss_analyzer.plot_quantile_bins_tertile_segmented(axes[2])
+    analyzer_ply.plot_quantile_bins(axes[0])                    # overall
+    analyzer_ply.plot_quantile_bins_tertile_segmented(axes[1])  # color: ply
+    analyzer_gf.plot_quantile_bins_tertile_segmented(axes[2])   # color: game fraction
+    for ax, t in zip(axes, ("overall", "by ply", "by game fraction")):
+        ax.set_title(t, fontsize=FONT_SIZE_TICKS)
     fig.subplots_adjust(top=0.80)
-    suptitle = fig.suptitle(f"{analyzer.title} — quantile bins\nn = {analyzer.n_moves:,} moves",
+    suptitle = fig.suptitle(f"{analyzer_ply.title}\nn = {analyzer_ply.n_moves:,} moves",
                             fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
-    
-    out_path_pdf = os.path.join(out_dir, "mq.pdf")
-    out_path_png = os.path.join(out_dir, "mq.png")
+
+    out_path_pdf = os.path.join(out_dir, f"{base_name}.pdf")
+    out_path_png = os.path.join(out_dir, f"{base_name}.png")
     fig.savefig(out_path_pdf, dpi=300, bbox_inches="tight", bbox_extra_artists=extra, pad_inches=0.3)
     fig.savefig(out_path_png, dpi=300, bbox_inches="tight", bbox_extra_artists=extra, pad_inches=0.3)
     plt.close()
@@ -275,12 +281,12 @@ def run_tree_values_pipeline(
         conn.execute("""
             CREATE OR REPLACE TEMP TABLE mq_rt AS
             WITH human AS (
-                SELECT m.fen, m.gid, m.move_ply, m.move_time, mv.move_uci
+                SELECT m.fen, m.gid, m.move_ply, m.move_time, m.game_fraction, mv.move_uci
                 FROM (SELECT DISTINCT fen FROM _root_moves) f
-                JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
+                JOIN pmnz_gf m ON m.fen = f.fen AND m.move_time > 0
                 JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
             )
-            SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time, v.gss
+            SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time, h.game_fraction, v.gss
             FROM human h
             JOIN _root_moves rm ON rm.fen = h.fen AND rm.move_uci = h.move_uci
             JOIN _vals v ON v.fen = h.fen
@@ -297,111 +303,54 @@ def run_tree_values_pipeline(
               f"({100.0 * n_mq / max(n_human, 1):.1f}%).")
         print(f"  r(mq, log RT) = {r_mq:+.4f}")
 
-        # Define tree values analyses using a clean, unified dictionary structure
-        analyses = {
-            "gss": {
-                "table": "tree_rt",
-                "column": "gss",
-                "name": "Greedy stop step",
-                "filename": "gss.pdf",
-                "filter_query": "move_time > 0",
-                "min_bin_count": 100,
-                "tie_safe": True,
-            },
-            "gain": {
-                "table": "tree_rt",
-                "column": "voc",
-                "name": "Gain (SF-1)",
-                "filename": "gain.pdf",
-                "filter_query": "move_time > 0",
-                "min_bin_count": 100,
-                "tie_safe": True,
-                "zero_inflated": True,
-                "zero_threshold": 0.0,
-            },
-            "action_gap": {
-                "table": "tree_rt",
-                "column": "action_gap",
-                "name": "Action Gap (SF-1)",
-                "filename": "action_gap.pdf",
-                "filter_query": "move_time > 0",
-                "min_bin_count": 100,
-                "tie_safe": True,
-                "zero_inflated": True,
-                "zero_threshold": 0.05,
-            },
-            "frac_good": {
-                "table": "tree_rt",
-                "column": "greedy_frac_good",
-                "name": "Greedy frac-good (SF-1)",
-                "filename": "frac_good.pdf",
-                "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL",
-                "min_bin_count": 100,
-                "tie_safe": True,
-            },
-            "oss": {
-                "table": "tree_rt",
-                "column": "oss",
-                "name": "Optimal stop step (SF-1)",
-                "filename": "oss.pdf",
-                "filter_query": "move_time > 0 AND oss IS NOT NULL",
-                "min_bin_count": 100,
-                "tie_safe": True,
-            },
-            "mq": lambda conn, out_dir: save_mq_dashboard(
-                Analyzer(
-                    conn,
-                    "mq_rt",
-                    x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
-                    y_var=Variable(column="mq", is_log=False, name="MQ (SF-1)"),
-                    filter_query="move_time > 0",
-                    title="MQ (SF-1) vs. log(RT)",
-                    min_bin_count=100,
-                    n_bins=10,
-                    ply_tertile_source="mq_rt",   # windowed; ply tertiles off the analyzed set
-                ),
-                Analyzer(
-                    conn,
-                    "mq_rt",
-                    x_var=Variable(column="move_time", is_log=True, name="RT (s)"),
-                    y_var=Variable(column="mq", is_log=False, name="MQ (SF-1)"),
-                    filter_query="move_time > 0",
-                    title="MQ (SF-1) vs. log(RT)",
-                    min_bin_count=100,
-                    n_bins=10,
-                    segment_column="gss",
-                    segment_source="mq_rt",
-                    segment_label="GSS",
-                ),
-                out_dir,
-            ),
-            "correlation_matrix": lambda conn, out_dir: plot_lc0_correlation_matrix(
-                conn, os.path.join(out_dir, "correlation_matrix.pdf")
-            ),
+        # Per-signal tree dashboards. Each renders a 1x3 (overall / by ply / by game
+        # fraction) via two Analyzers over tree_rt that differ only in segment column.
+        tree_signals = {
+            "gss": {"column": "gss", "name": "Greedy stop step", "filter_query": "move_time > 0"},
+            "gain": {"column": "voc", "name": "Gain (SF-1)", "filter_query": "move_time > 0",
+                     "zero_inflated": True, "zero_threshold": 0.0},
+            "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)", "filter_query": "move_time > 0",
+                           "zero_inflated": True, "zero_threshold": 0.05},
+            "frac_good": {"column": "greedy_frac_good", "name": "Greedy frac-good (SF-1)",
+                          "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL"},
+            "oss": {"column": "oss", "name": "Optimal stop step (SF-1)",
+                    "filter_query": "move_time > 0 AND oss IS NOT NULL"},
         }
 
-        for name, config in analyses.items():
+        def _seg_pair(table, x_var, y_var, title, **opts):
+            """Two Analyzers (ply- and game-fraction-segmented) sharing x/y/options."""
+            common = dict(x_var=x_var, y_var=y_var, title=title, ply_tertile_source=table, **opts)
+            a_ply = Analyzer(conn, table, segment_column="move_ply",
+                             segment_source=table, segment_label="Ply", **common)
+            a_gf = Analyzer(conn, table, segment_column="game_fraction",
+                            segment_source=table, segment_label="Game fraction", **common)
+            return a_ply, a_gf
+
+        for name, cfg in tree_signals.items():
             print(f"Executing engine tree analysis: {name}...")
-            if callable(config):
-                config(conn, out_dir)
-            else:
-                analyzer = Analyzer(
-                    db_conn=conn,
-                    table_name=config["table"],
-                    x_var=Variable(column=config["column"], is_log=False, name=config["name"]),
-                    y_var=Variable(column="move_time", is_log=True, name="RT"),
-                    title=f"{config['name']} vs. log(RT)",
-                    filter_query=config.get("filter_query"),
-                    min_bin_count=config.get("min_bin_count", 100),
-                    tie_safe=config.get("tie_safe", True),
-                    zero_inflated=config.get("zero_inflated", False),
-                    zero_threshold=config.get("zero_threshold", 0.0),
-                    # ply tertiles off the (windowed) analyzed table, not the whole DB.
-                    ply_tertile_source=config["table"],
-                )
-                base, _ = os.path.splitext(config["filename"])
-                analyzer.save_dashboard(os.path.join(out_dir, f"{base}.pdf"))
-                analyzer.save_dashboard(os.path.join(out_dir, f"{base}.png"))
+            a_ply, a_gf = _seg_pair(
+                "tree_rt",
+                Variable(column=cfg["column"], is_log=False, name=cfg["name"]),
+                Variable(column="move_time", is_log=True, name="RT"),
+                f"{cfg['name']} vs. log(RT)",
+                filter_query=cfg["filter_query"], min_bin_count=100, tie_safe=True,
+                zero_inflated=cfg.get("zero_inflated", False),
+                zero_threshold=cfg.get("zero_threshold", 0.0),
+            )
+            save_tree_dashboard(a_ply, a_gf, out_dir, name)
+
+        print("Executing engine tree analysis: mq...")
+        mq_ply, mq_gf = _seg_pair(
+            "mq_rt",
+            Variable(column="move_time", is_log=True, name="RT (s)"),
+            Variable(column="mq", is_log=False, name="MQ (SF-1)"),
+            "MQ (SF-1) vs. log(RT)",
+            filter_query="move_time > 0", min_bin_count=100, n_bins=10,
+        )
+        save_tree_dashboard(mq_ply, mq_gf, out_dir, "mq")
+
+        print("Executing engine tree analysis: correlation_matrix...")
+        plot_lc0_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"))
 
 
 # =============================================================================
