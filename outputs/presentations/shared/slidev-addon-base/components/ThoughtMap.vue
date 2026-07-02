@@ -23,59 +23,59 @@ const W = 3960, H = 1240
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 1930, cy: 120, w: 460, h: 96,
+  id: 'q1', cx: 1930, cy: 120, w: 276, h: 104,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
     // ── PART 1 — How do people actually think? (two sub-branches) ─────────────
     {
-      id: 'p1', cx: 980, cy: 460, w: 380, h: 96,
+      id: 'p1', cx: 980, cy: 460, w: 228, h: 108,
       q: 'How Do People Actually Think?',
       a: 'Decision width (legal moves) dominates; engine value adds little.',
       children: [
         // 1a · model-free board features
         {
-          id: 'feats', cx: 470, cy: 760, w: 300, h: 92,
+          id: 'feats', cx: 470, cy: 760, w: 180, h: 104,
           q: 'Game / Board Features', a: 'Width (legal moves) is the strongest tie.',
           children: [
-            { id: 'ply',   cx: 200, cy: 1060, w: 250, h: 88, q: 'Ply (Game Stage)?', a: '+0.08 — near-null.',       children: [] },
-            { id: 'legal', cx: 470, cy: 1060, w: 250, h: 88, q: 'Legal Moves?',       a: '+0.26 — strongest.',      children: [] },
-            { id: 'clock', cx: 740, cy: 1060, w: 250, h: 88, q: 'Clock Left?',        a: '−0.16 — falls late-game.', children: [] },
+            { id: 'ply',   cx: 200, cy: 1060, w: 150, h: 92, q: 'Ply (Game Stage)?', a: '+0.08 — near-null.',       children: [] },
+            { id: 'legal', cx: 470, cy: 1060, w: 150, h: 92, q: 'Legal Moves?',       a: '+0.26 — strongest.',      children: [] },
+            { id: 'clock', cx: 740, cy: 1060, w: 150, h: 92, q: 'Clock Left?',        a: '−0.16 — falls late-game.', children: [] },
           ],
         },
         // 1b · planning-model-derived features
         {
-          id: 'plan', cx: 1485, cy: 760, w: 340, h: 92,
+          id: 'plan', cx: 1485, cy: 760, w: 204, h: 108,
           q: 'How Do We Model Planning?', a: 'A PUCT search tree; value read off the leaves.',
           children: [
-            { id: 'engine',   cx: 1080, cy: 1060, w: 250, h: 88, q: 'Which Engine?',  a: 'lc0 → Stockfish (WDL).',        children: [] },
-            { id: 'gain',     cx: 1350, cy: 1060, w: 250, h: 88, q: 'Gain (ΔUC)?',     a: '+0.08 — more to gain, longer.', children: [] },
-            { id: 'agap',     cx: 1620, cy: 1060, w: 250, h: 88, q: 'Action Gap?',     a: '+0.01 — null.',                children: [] },
-            { id: 'fracgood', cx: 1890, cy: 1060, w: 250, h: 88, q: 'Frac-Good?',      a: '−0.10 — more good → faster.',   children: [] },
+            { id: 'engine',   cx: 1080, cy: 1060, w: 150, h: 92, q: 'Which Engine?',  a: 'lc0 → Stockfish (WDL).',        children: [] },
+            { id: 'gain',     cx: 1350, cy: 1060, w: 150, h: 92, q: 'Gain (ΔUC)?',     a: '+0.08 — more to gain, longer.', children: [] },
+            { id: 'agap',     cx: 1620, cy: 1060, w: 150, h: 92, q: 'Action Gap?',     a: '+0.01 — null.',                children: [] },
+            { id: 'fracgood', cx: 1890, cy: 1060, w: 150, h: 92, q: 'Frac-Good?',      a: '−0.10 — more good → faster.',   children: [] },
           ],
         },
       ],
     },
     // ── PART 2 — What is thinking worth? (the normative model) ────────────────
     {
-      id: 'q1a', cx: 2650, cy: 460, w: 360, h: 96,
+      id: 'q1a', cx: 2650, cy: 460, w: 216, h: 112,
       q: 'What Is Thinking Worth? (The Normative Model)',
       a: 'A budgeted oracle + an RL-trained stopping rule.',
       children: [
-        { id: 'q4',  cx: 2300, cy: 760, w: 300, h: 92, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
+        { id: 'q4',  cx: 2300, cy: 760, w: 180, h: 104, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
         {
-          id: 'oss', cx: 2650, cy: 760, w: 300, h: 92,
+          id: 'oss', cx: 2650, cy: 760, w: 180, h: 104,
           q: 'Optimal Stopping Step', a: 'OSS / GSS track RT only weakly.',
           children: [
-            { id: 'ossgss', cx: 2650, cy: 1010, w: 290, h: 92, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
+            { id: 'ossgss', cx: 2650, cy: 1010, w: 174, h: 96, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
           ],
         },
-        { id: 'meta', cx: 3010, cy: 760, w: 320, h: 92, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
+        { id: 'meta', cx: 3010, cy: 760, w: 192, h: 108, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
       ],
     },
     // ── PART 3 — Do human & normative model agree? (empty for now) ────────────
     {
-      id: 'qmatch', cx: 3620, cy: 460, w: 380, h: 96,
+      id: 'qmatch', cx: 3620, cy: 460, w: 228, h: 112,
       q: 'Do the Human and Normative Model Agree?',
       a: 'No — the drivers are structural, not VOC.',
       children: [],
@@ -101,21 +101,23 @@ const ALL  = nodes.map(n => n.id)
 //   expand        nodes revealed on the final blink step (combined with next selection)
 //   expand2       a second expand beat before the blink (gets its own click)
 const VISITS = [
-  // PART 1a — board features (fanned out under feats at build), walked in turn
+  // PART 1a — board features (fanned out under feats at build), then feats' matrix
   { id: 'ply' },
   { id: 'legal' },
-  { id: 'clock',    also_resolve: ['feats'], pan_to: 'feats' },
+  { id: 'clock' },
+  { id: 'feats',    pan_to: 'feats' },   // back up to the branch root: board-feature matrix
   // PART 1b — how do we model planning (header, then 4 engine-derived features)
   { id: 'plan',     expand: ['engine', 'gain', 'agap', 'fracgood'] },
   { id: 'engine' },
   { id: 'gain' },
   { id: 'agap' },
   { id: 'fracgood', also_resolve: ['p1'], pan_to: 'p1', expand: ['q4', 'oss', 'meta'] },
-  // PART 2 — what is thinking worth
+  // PART 2 — what is thinking worth (stop / OSS / meta-controller), then q1a's matrix
   { id: 'q4' },
   { id: 'oss',      expand: ['ossgss'] },
   { id: 'ossgss' },
-  { id: 'meta',     also_resolve: ['q1a'], pan_to: 'q1a' },
+  { id: 'meta' },
+  { id: 'q1a',      pan_to: 'q1a' },      // back up to the branch root: engine-signal matrix
   // PART 3 — pivot (empty for now; last node)
   { id: 'qmatch' },
 ]
@@ -304,12 +306,13 @@ const drawn = computed(() => edges
 .tm-edge.lit { stroke: #818cf8; stroke-width: 3.5; }
 
 .tm-node {
-  box-sizing: border-box; width: 100%; height: 100%; border-radius: 14px; padding: 10px 16px;
+  box-sizing: border-box; width: 100%; height: 100%; border-radius: 14px; padding: 8px 11px;
   display: flex; flex-direction: column; justify-content: center; border: 2.5px solid; background: #fff;
   position: relative; overflow: hidden; transition: background .5s, border-color .5s;
+  overflow-wrap: break-word; word-break: break-word; hyphens: auto;
 }
-.tm-q { font-size: 19px; font-weight: 700; line-height: 1.18; letter-spacing: -0.02em; transition: color .5s; }
-.tm-a { font-size: 15px; line-height: 1.25; margin-top: 6px; font-weight: 600; }
+.tm-q { font-size: 15px; font-weight: 700; line-height: 1.16; letter-spacing: -0.02em; transition: color .5s; overflow-wrap: break-word; }
+.tm-a { font-size: 12px; line-height: 1.2; margin-top: 5px; font-weight: 600; overflow-wrap: break-word; }
 
 .tm-node.is-pending  { border-color: #cbd5e1; }
 .tm-node.is-pending .tm-q  { color: #64748b; font-weight: 600; }
@@ -317,7 +320,7 @@ const drawn = computed(() => edges
 .tm-node.is-active .tm-q   { color: #0f172a; }
 .tm-node.is-active .tm-a   { color: #0f766e; }
 .tm-node.is-resolved { border-color: #5eead4; background: #f0fdfa; }
-.tm-node.is-resolved .tm-q { color: #475569; font-weight: 600; font-size: 17px; }
+.tm-node.is-resolved .tm-q { color: #475569; font-weight: 600; font-size: 14px; }
 .tm-node.is-resolved .tm-a { color: #0f766e; }
 .tm-node.star.is-active, .tm-node.star.is-resolved { border-color: #0d9488; background: #f0fdfa; }
 .tm-badge { position: absolute; top: 8px; right: 10px; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #0f766e; background: #ccfbf1; padding: 2px 7px; border-radius: 99px; }

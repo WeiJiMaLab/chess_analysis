@@ -146,6 +146,35 @@ transition: fade
 <div class="mdl-content">
   <div class="mdl-titlefig">
     <div class="mdl-tf-left">
+      <div class="mdl-title"><span class="mdl-kicker">Part 1 · Game / board features</span>How the board features relate</div>
+      <div class="mdl-proc"><strong>Spearman matrix</strong> over the board features and log(RT), n = 1M.</div>
+      <div class="mdl-intuition"><span class="lbl">Key parts</span> <strong>Legal moves +0.26</strong> is the top row's strongest RT tie; ply / clock / game-fraction move together (the game-stage complex) and each is weaker.</div>
+      <div class="mdl-conv"><span class="lbl">Width wins</span> Decision width is not reducible to the game-stage complex — no board feature beats the raw legal-move count.</div>
+    </div>
+    <div class="mdl-figbox"><img src="../public/figures/allply/board/board_feature_corr.png" /></div>
+  </div>
+</div>
+
+---
+layout: default
+class: mdl-slide
+transition: fade
+clicks: 2
+---
+
+<div class="mdl-content mdl-content--top">
+  <div class="mdl-map"><ThoughtMap seq="feats" /></div>
+</div>
+
+---
+layout: default
+class: mdl-slide
+transition: fade
+---
+
+<div class="mdl-content">
+  <div class="mdl-titlefig">
+    <div class="mdl-tf-left">
       <div class="mdl-title"><span class="mdl-kicker">Part 1 · How do we model planning?</span>Model planning as a search tree</div>
       <div class="mdl-proc"><strong>AlphaZero-style PUCT tree</strong>, no rollouts: a heuristic values nodes, a selector expands. Value features are read off the tree.</div>
       <div class="mdl-intuition"><span class="lbl">Read it as</span> Prior weights <em>which</em> child; value is backed up from leaves. Best-first → narrow &amp; deep; UCB → broad.</div>
@@ -399,6 +428,35 @@ clicks: 2
 
 <div class="mdl-content mdl-content--top">
   <div class="mdl-map"><ThoughtMap seq="meta" /></div>
+</div>
+
+---
+layout: default
+class: mdl-slide
+transition: fade
+---
+
+<div class="mdl-content">
+  <div class="mdl-titlefig">
+    <div class="mdl-tf-left">
+      <div class="mdl-title"><span class="mdl-kicker">Part 2 · What is thinking worth?</span>The engine signals, all at once</div>
+      <div class="mdl-proc"><strong>Spearman matrix</strong> — engine value / stop signals, board structure, RT (SF-1 n1md36, n = 109k).</div>
+      <div class="mdl-intuition"><span class="lbl">Key parts</span> The top row (vs RT) is uniformly faint — every engine signal <strong>|ρ| ≲ 0.17</strong>. GSS↔OSS <strong>+0.91</strong> (near-identical), and each signal ties to <strong>legal moves</strong> more than to RT.</div>
+      <div class="mdl-conv warn"><span class="lbl">Thinking's value is faint</span> No value-of-computation signal approaches the +0.26 width effect — they collapse toward the move count.</div>
+    </div>
+    <div class="mdl-figbox"><img src="../public/figures/allply/engine/correlation_matrix.png" /></div>
+  </div>
+</div>
+
+---
+layout: default
+class: mdl-slide
+transition: fade
+clicks: 2
+---
+
+<div class="mdl-content mdl-content--top">
+  <div class="mdl-map"><ThoughtMap seq="q1a" /></div>
 </div>
 
 ---

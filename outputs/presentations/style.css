@@ -446,7 +446,7 @@ h1, h2, h3, h4, .font-header, .slidev-layout h1, .slidev-layout h2, .slidev-layo
 .mdl-resolve .step.rn .k { color: #be123c; }
 .mdl-resolve .step strong { color: var(--color-primary); }
 /* "Why we're convinced" conviction callout. */
-.mdl-conv { font-size: .82rem; line-height: 1.45; color: var(--mdl-text); background: var(--bg-success); border-left: 3px solid var(--color-success); padding: .55rem .8rem; border-radius: .45rem; margin-top: auto; }
+.mdl-conv { font-size: .82rem; line-height: 1.45; color: var(--mdl-text); background: var(--bg-success); border-left: 3px solid var(--color-success); padding: .55rem .8rem; border-radius: .45rem; margin-top: .6rem; }
 .mdl-conv.warn { background: var(--bg-danger); border-left-color: var(--color-danger); }
 .mdl-conv .lbl { font-size: .6rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--color-success); display: block; margin-bottom: .15rem; }
 .mdl-conv.warn .lbl { color: var(--color-danger); }
