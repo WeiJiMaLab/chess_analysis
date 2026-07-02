@@ -19,63 +19,63 @@ import { useSlideContext } from '@slidev/client'
 const props = defineProps({ seq: { type: String, default: 'build' } })
 const { $clicks } = useSlideContext()
 
-const W = 3960, H = 1240
+const W = 2376, H = 1240
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 1930, cy: 120, w: 276, h: 104,
+  id: 'q1', cx: 1158, cy: 120, w: 276, h: 104,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
     // ── PART 1 — How do people actually think? (two sub-branches) ─────────────
     {
-      id: 'p1', cx: 980, cy: 460, w: 228, h: 108,
+      id: 'p1', cx: 588, cy: 460, w: 228, h: 108,
       q: 'How Do People Actually Think?',
       a: 'Decision width (legal moves) dominates; engine value adds little.',
       children: [
         // 1a · model-free board features
         {
-          id: 'feats', cx: 470, cy: 760, w: 180, h: 104,
+          id: 'feats', cx: 282, cy: 760, w: 180, h: 104,
           q: 'Game / Board Features', a: 'Width (legal moves) is the strongest tie.',
           children: [
-            { id: 'ply',   cx: 200, cy: 1060, w: 150, h: 92, q: 'Ply (Game Stage)?', a: '+0.08 — near-null.',       children: [] },
-            { id: 'legal', cx: 470, cy: 1060, w: 150, h: 92, q: 'Legal Moves?',       a: '+0.26 — strongest.',      children: [] },
-            { id: 'clock', cx: 740, cy: 1060, w: 150, h: 92, q: 'Clock Left?',        a: '−0.16 — falls late-game.', children: [] },
+            { id: 'ply',   cx: 120, cy: 1060, w: 150, h: 92, q: 'Ply (Game Stage)?', a: '+0.08 — near-null.',       children: [] },
+            { id: 'legal', cx: 282, cy: 1060, w: 150, h: 92, q: 'Legal Moves?',       a: '+0.26 — strongest.',      children: [] },
+            { id: 'clock', cx: 444, cy: 1060, w: 150, h: 92, q: 'Clock Left?',        a: '−0.16 — falls late-game.', children: [] },
           ],
         },
         // 1b · planning-model-derived features
         {
-          id: 'plan', cx: 1485, cy: 760, w: 204, h: 108,
+          id: 'plan', cx: 891, cy: 760, w: 204, h: 108,
           q: 'How Do We Model Planning?', a: 'A PUCT search tree; value read off the leaves.',
           children: [
-            { id: 'engine',   cx: 1080, cy: 1060, w: 150, h: 92, q: 'Which Engine?',  a: 'lc0 → Stockfish (WDL).',        children: [] },
-            { id: 'gain',     cx: 1350, cy: 1060, w: 150, h: 92, q: 'Gain (ΔUC)?',     a: '+0.08 — more to gain, longer.', children: [] },
-            { id: 'agap',     cx: 1620, cy: 1060, w: 150, h: 92, q: 'Action Gap?',     a: '+0.01 — null.',                children: [] },
-            { id: 'fracgood', cx: 1890, cy: 1060, w: 150, h: 92, q: 'Frac-Good?',      a: '−0.10 — more good → faster.',   children: [] },
+            { id: 'engine',   cx: 648,  cy: 1060, w: 150, h: 92, q: 'Which Engine?',  a: 'lc0 → Stockfish (WDL).',        children: [] },
+            { id: 'gain',     cx: 810,  cy: 1060, w: 150, h: 92, q: 'Gain (ΔUC)?',     a: '+0.08 — more to gain, longer.', children: [] },
+            { id: 'agap',     cx: 972,  cy: 1060, w: 150, h: 92, q: 'Action Gap?',     a: '+0.01 — null.',                children: [] },
+            { id: 'fracgood', cx: 1134, cy: 1060, w: 150, h: 92, q: 'Frac-Good?',      a: '−0.10 — more good → faster.',   children: [] },
           ],
         },
       ],
     },
     // ── PART 2 — What is thinking worth? (the normative model) ────────────────
     {
-      id: 'q1a', cx: 2650, cy: 460, w: 216, h: 112,
+      id: 'q1a', cx: 1590, cy: 460, w: 216, h: 112,
       q: 'What Is Thinking Worth? (The Normative Model)',
       a: 'A budgeted oracle + an RL-trained stopping rule.',
       children: [
-        { id: 'q4',  cx: 2300, cy: 760, w: 180, h: 104, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
+        { id: 'q4',  cx: 1380, cy: 760, w: 180, h: 104, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
         {
-          id: 'oss', cx: 2650, cy: 760, w: 180, h: 104,
+          id: 'oss', cx: 1590, cy: 760, w: 180, h: 104,
           q: 'Optimal Stopping Step', a: 'OSS / GSS track RT only weakly.',
           children: [
-            { id: 'ossgss', cx: 2650, cy: 1010, w: 174, h: 96, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
+            { id: 'ossgss', cx: 1590, cy: 1010, w: 174, h: 96, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
           ],
         },
-        { id: 'meta', cx: 3010, cy: 760, w: 192, h: 108, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
+        { id: 'meta', cx: 1806, cy: 760, w: 192, h: 108, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
       ],
     },
     // ── PART 3 — Do human & normative model agree? (empty for now) ────────────
     {
-      id: 'qmatch', cx: 3620, cy: 460, w: 228, h: 112,
+      id: 'qmatch', cx: 2172, cy: 460, w: 228, h: 112,
       q: 'Do the Human and Normative Model Agree?',
       a: 'No — the drivers are structural, not VOC.',
       children: [],
