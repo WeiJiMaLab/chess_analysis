@@ -38,6 +38,8 @@ from analysis.utils.helpers import (
     db_connection,
     create_ply_windowed_views,
     WIN_PROCESSED_MOVES_NONZERO,
+    GAME_FRAC_CUTS,
+    GAME_FRAC_LABELS,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     partial_spearman,
@@ -140,7 +142,7 @@ def save_tree_dashboard(analyzer_ply: Analyzer, analyzer_gf: Analyzer, out_dir: 
     ``analyzer_ply`` supplies the base panel + ply segmentation; ``analyzer_gf`` is
     the same analysis segmented by game_fraction (identical x/y/options)."""
     apply_poster_style()
-    fig, axes = plt.subplots(1, 3, figsize=(45, 13.72))
+    fig, axes = plt.subplots(1, 3, figsize=(36, 13.72))
     analyzer_ply.plot_quantile_bins(axes[0])                    # overall
     analyzer_ply.plot_quantile_bins_tertile_segmented(axes[1])  # color: ply
     analyzer_gf.plot_quantile_bins_tertile_segmented(axes[2])   # color: game fraction
@@ -323,7 +325,8 @@ def run_tree_values_pipeline(
             a_ply = Analyzer(conn, table, segment_column="move_ply",
                              segment_source=table, segment_label="Ply", **common)
             a_gf = Analyzer(conn, table, segment_column="game_fraction",
-                            segment_source=table, segment_label="Game fraction", **common)
+                            segment_source=table, segment_label="Game fraction",
+                            segment_cuts=GAME_FRAC_CUTS, segment_range_labels=GAME_FRAC_LABELS, **common)
             return a_ply, a_gf
 
         for name, cfg in tree_signals.items():

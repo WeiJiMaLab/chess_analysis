@@ -34,6 +34,8 @@ from analysis.utils.helpers import (
     db_connection,
     create_ply_windowed_views,
     WIN_PROCESSED_MOVES_NONZERO,
+    GAME_FRAC_CUTS,
+    GAME_FRAC_LABELS,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     MAIN_COLOR,
@@ -127,7 +129,7 @@ def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_q
                            reverse_x: bool = False):
     """RT-vs-covariate 1x3 dashboard: overall, colored by ply tertile, colored by
     game-fraction tertile. Reads ``pmnz_gf`` (windowed view + game_fraction)."""
-    def _analyzer(segment_column, segment_label):
+    def _analyzer(segment_column, segment_label, **extra):
         return Analyzer(
             db_conn=conn,
             table_name=table,
@@ -143,11 +145,13 @@ def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_q
             segment_column=segment_column,
             segment_source=table,
             segment_label=segment_label,
+            **extra,
         )
     a_ply = _analyzer("move_ply", "Ply")
-    a_gf = _analyzer("game_fraction", "Game fraction")
+    a_gf = _analyzer("game_fraction", "Game fraction",
+                     segment_cuts=GAME_FRAC_CUTS, segment_range_labels=GAME_FRAC_LABELS)
 
-    fig = plt.figure(figsize=(45, 13.72))
+    fig = plt.figure(figsize=(36, 13.72))
     ax1, ax2, ax3 = (fig.add_subplot(131), fig.add_subplot(132), fig.add_subplot(133))
     a_ply.plot_quantile_bins(ax1)                     # overall
     a_ply.plot_quantile_bins_tertile_segmented(ax2)   # color: ply
@@ -178,16 +182,18 @@ def run_board_corr(conn, n_sample=1_000_000, seed=42, resid_col=None,
     else:
         rt_sql = "ln(move_time)"
         rt_label = "log(RT)"
+    # Read game_fraction from pmnz_gf (windowed over the FULL game); computing it
+    # over a row-sample would degenerate to ~1.0 (each game keeps ~1 sampled move).
     df = conn.execute(f"""
         SELECT move_ply AS ply, n_possible_moves AS legal_moves,
-               player_clock_time AS player_clock, {rt_sql} AS log_T,
-               move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction
-        FROM {WIN_PROCESSED_MOVES_NONZERO}
+               player_clock_time AS player_clock, {rt_sql} AS log_T, game_fraction
+        FROM pmnz_gf
         USING SAMPLE {n_sample} ROWS (reservoir, {seed})
     """).df()
+    # Order: RT, Ply, Fraction, Player clock, Legal moves.
     labels = {
-        "log_T": rt_label, "ply": "Ply", "legal_moves": "Legal moves",
-        "player_clock": "Player clock", "game_fraction": "Game fraction",
+        "log_T": rt_label, "ply": "Ply", "game_fraction": "Fraction",
+        "player_clock": "Player clock", "legal_moves": "Legal moves",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)

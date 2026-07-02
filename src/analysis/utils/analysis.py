@@ -128,6 +128,8 @@ class Analyzer:
         segment_column: str = "move_ply",
         segment_source: str | None = None,
         segment_label: str = "ply",
+        segment_cuts: tuple[float, float] | None = None,
+        segment_range_labels: dict[int, str] | None = None,
         bin_mode: str = "ntile",
         integer_tail_cut: float | None = None,
         integer_bin_width: int = 1,
@@ -181,6 +183,10 @@ class Analyzer:
         self.segment_column = _validate_sql_identifier(segment_column)
         self.segment_source = _validate_sql_identifier(segment_source or ply_tertile_source)
         self.segment_label = segment_label
+        # Optional fixed cutpoints (bypass the empirical quantiles) + explicit legend
+        # labels — e.g. game fraction split at fixed thirds 1/3, 2/3 with "< 1/3" labels.
+        self.segment_cuts = segment_cuts
+        self.segment_range_labels = segment_range_labels
         self.ply_cuts: tuple[int, int] | None = None
         # When the x distribution has a large mass near 0 (e.g. VOC: ~⅔ of moves
         # are 0), plain ``ntile`` wastes most bins on that mass. ``zero_inflated``
@@ -342,7 +348,10 @@ class Analyzer:
         # 0. Settle ply tertile cutpoints from the WHOLE source dataset (a priori),
         # then assign each row's tertile by those fixed boundaries (no ntile over
         # the filtered subset). Tertile = 1 + #cutpoints exceeded (avoids CASE).
-        c1, c2 = _infer_tertile_cuts(self.conn, self.segment_source, self.segment_column)
+        if self.segment_cuts is not None:
+            c1, c2 = self.segment_cuts
+        else:
+            c1, c2 = _infer_tertile_cuts(self.conn, self.segment_source, self.segment_column)
         self.ply_cuts = (c1, c2)
         tertile_expr = f"(1 + ({self.segment_column} > {c1})::INT + ({self.segment_column} > {c2})::INT)"
 
@@ -429,6 +438,8 @@ class Analyzer:
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
         """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints, prefixed
         with ``segment_label`` (e.g. 'ply < 28' for ply, 'GSS 2–31' for a GSS segmentation)."""
+        if self.segment_range_labels is not None:  # caller-supplied explicit labels
+            return self.segment_range_labels.get(tertile_id, f"{self.segment_label} tertile {tertile_id}")
         c1, c2 = self.ply_cuts
         lab = self.segment_label
         if isinstance(c1, int):  # integer segment (e.g. ply): clean "< n" boundaries

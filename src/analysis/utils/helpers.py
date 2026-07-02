@@ -79,6 +79,11 @@ PHASE_COLORS = {
     3: "#08519C",  # Dark blue (Late)
 }
 
+# Game-fraction tertiles use FIXED thirds of the game (not empirical quantiles),
+# so the split reads as "early / mid / late third" with clean labels.
+GAME_FRAC_CUTS = (1.0 / 3.0, 2.0 / 3.0)
+GAME_FRAC_LABELS = {1: "< 1/3", 2: "1/3–2/3", 3: "> 2/3"}
+
 def apply_poster_style():
     """Apply global matplotlib settings for Poster Style."""
     plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
