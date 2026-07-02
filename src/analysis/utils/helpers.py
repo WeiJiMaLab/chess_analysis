@@ -71,11 +71,12 @@ MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
 FONT_SIZE_LABEL = 52
 FONT_SIZE_TICKS = 42
 
-# Standard palette for ply tertiles 1–3 (segmented dashboards; matches preprocess ntile)
+# Standard palette for progress tertiles 1–3 (segmented dashboards).
+# Early = light, late = dark (so deeper into the game reads darker).
 PHASE_COLORS = {
-    1: "#08519C",  # Dark blue (Early)
+    1: "#9ECAE1",  # Light blue (Early)
     2: "#3182BD",  # Medium blue (Mid)
-    3: "#9ECAE1",  # Light blue (End)
+    3: "#08519C",  # Dark blue (Late)
 }
 
 def apply_poster_style():

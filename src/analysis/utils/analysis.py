@@ -55,7 +55,11 @@ def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[in
         ).fetchone()
         if c1 is None or c2 is None:
             c1, c2 = 0, 0
-        _TERTILE_CUTS_CACHE[key] = (int(c1), int(c2))
+        # Integer columns (move_ply) -> int cutpoints (clean "< n" labels); float
+        # columns (e.g. game_fraction) keep their float cutpoints.
+        if isinstance(c1, int) or (isinstance(c1, float) and c1.is_integer() and float(c2).is_integer()):
+            c1, c2 = int(c1), int(c2)
+        _TERTILE_CUTS_CACHE[key] = (c1, c2)
     return _TERTILE_CUTS_CACHE[key]
 
 
@@ -427,9 +431,11 @@ class Analyzer:
         with ``segment_label`` (e.g. 'ply < 28' for ply, 'GSS 2–31' for a GSS segmentation)."""
         c1, c2 = self.ply_cuts
         lab = self.segment_label
-        return {1: f"{lab} < {c1 + 1}", 2: f"{lab} {c1 + 1}–{c2}", 3: f"{lab} > {c2}"}.get(
-            tertile_id, f"{lab} tertile {tertile_id}"
-        )
+        if isinstance(c1, int):  # integer segment (e.g. ply): clean "< n" boundaries
+            ranges = {1: f"{lab} < {c1 + 1}", 2: f"{lab} {c1 + 1}–{c2}", 3: f"{lab} > {c2}"}
+        else:                    # float segment (e.g. game fraction)
+            ranges = {1: f"{lab} ≤ {c1:.2f}", 2: f"{lab} {c1:.2f}–{c2:.2f}", 3: f"{lab} > {c2:.2f}"}
+        return ranges.get(tertile_id, f"{lab} tertile {tertile_id}")
 
     @property
     def _x_axis_label(self) -> str:

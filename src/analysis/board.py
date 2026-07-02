@@ -122,27 +122,43 @@ def run_move_time_summary(conn):
     save_figure(fig, "board", "rt_distribution.pdf")
 
 
-def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_query: str | None = None, n_bins: int = 10, tie_safe: bool = True, table: str = WIN_PROCESSED_MOVES_NONZERO, ply_tertile_source: str = WIN_PROCESSED_MOVES_NONZERO):
-    """A generic bivariate analyzer running quantile-bin dashboards for arbitrary fields."""
-    analyzer = Analyzer(
-        db_conn=conn,
-        table_name=table,
-        x_var=Variable(column=column, is_log=False, name=name),
-        y_var=Variable(column="move_time", is_log=True, name="RT"),
-        filter_query=filter_query,
-        title=name,
-        n_bins=n_bins,
-        tie_safe=tie_safe,
-        min_bin_count=100 if tie_safe else 0,
-        # Ply tertiles conditioned on the windowed subset (not the whole dataset).
-        ply_tertile_source=ply_tertile_source,
-    )
-    fig = plt.figure(figsize=(30, 13.72))
-    ax1 = fig.add_subplot(121)
-    ax2 = fig.add_subplot(122)
-    analyzer.plot_quantile_bins(ax1)
-    analyzer.plot_quantile_bins_tertile_segmented(ax2)
-    fig.suptitle(f"{analyzer.title}\nn = {analyzer.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
+def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_query: str | None = None,
+                           n_bins: int = 10, tie_safe: bool = True, table: str = "pmnz_gf",
+                           reverse_x: bool = False):
+    """RT-vs-covariate 1x3 dashboard: overall, colored by ply tertile, colored by
+    game-fraction tertile. Reads ``pmnz_gf`` (windowed view + game_fraction)."""
+    def _analyzer(segment_column, segment_label):
+        return Analyzer(
+            db_conn=conn,
+            table_name=table,
+            x_var=Variable(column=column, is_log=False, name=name),
+            y_var=Variable(column="move_time", is_log=True, name="RT"),
+            filter_query=filter_query,
+            title=name,
+            n_bins=n_bins,
+            tie_safe=tie_safe,
+            min_bin_count=100 if tie_safe else 0,
+            # Tertiles conditioned on the (windowed) analysis table, not the whole dataset.
+            ply_tertile_source=table,
+            segment_column=segment_column,
+            segment_source=table,
+            segment_label=segment_label,
+        )
+    a_ply = _analyzer("move_ply", "Ply")
+    a_gf = _analyzer("game_fraction", "Game fraction")
+
+    fig = plt.figure(figsize=(45, 13.72))
+    ax1, ax2, ax3 = (fig.add_subplot(131), fig.add_subplot(132), fig.add_subplot(133))
+    a_ply.plot_quantile_bins(ax1)                     # overall
+    a_ply.plot_quantile_bins_tertile_segmented(ax2)   # color: ply
+    a_gf.plot_quantile_bins_tertile_segmented(ax3)    # color: game fraction
+    ax1.set_title("overall", fontsize=FONT_SIZE_TICKS)
+    ax2.set_title("by ply", fontsize=FONT_SIZE_TICKS)
+    ax3.set_title("by game fraction", fontsize=FONT_SIZE_TICKS)
+    if reverse_x:
+        for ax in (ax1, ax2, ax3):
+            ax.invert_xaxis()
+    fig.suptitle(f"{a_ply.title}\nn = {a_ply.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     fig.subplots_adjust(top=0.80)
     save_figure(fig, "board", filename)
 
@@ -210,9 +226,10 @@ def main(argv=None):
         "summary": run_move_time_summary,
         "ply": {
             "column": "move_ply",
-            "name": "Game Stage",
+            "name": "Ply",
             "filename": "ply.pdf",
             "filter_query": "move_ply <= 150",
+            "reverse_x": True,   # count down from ply
         },
         "legal_moves": {
             "column": "n_possible_moves",
@@ -232,16 +249,8 @@ def main(argv=None):
             "name": "Game Fraction",
             "filename": "game_fraction.pdf",
             "tie_safe": True,
-            # game_fraction lives on pmnz_gf (built on top of the ply window).
-            "table": "pmnz_gf",
-            "ply_tertile_source": "pmnz_gf",
         },
         "boardcorr": run_board_corr,
-        "boardcorr_resid_ply": lambda conn: run_board_corr(
-            conn, resid_col="move_ply",
-            filename="board_feature_corr_resid_ply.pdf",
-            title="Spearman correlation — board features (RT residualized on ply)",
-        ),
     }
 
     with db_connection(args.db, read_only=True) as conn:
@@ -266,8 +275,7 @@ def main(argv=None):
                     filename=config["filename"],
                     filter_query=config.get("filter_query"),
                     tie_safe=config.get("tie_safe", True),
-                    table=config.get("table", WIN_PROCESSED_MOVES_NONZERO),
-                    ply_tertile_source=config.get("ply_tertile_source", WIN_PROCESSED_MOVES_NONZERO),
+                    reverse_x=config.get("reverse_x", False),
                 )
 
 
