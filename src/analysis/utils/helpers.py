@@ -34,7 +34,7 @@ def _interpolate(value, variables):
 # (same contract as render_stage.py / cts._config) so analysis shares the
 # pipeline's per-run dirs.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_DEFAULT_CONFIG = _REPO_ROOT / "config_minply15_maxply75.yaml"
+_DEFAULT_CONFIG = _REPO_ROOT / "config_allply.yaml"
 
 
 def _config_path() -> Path:

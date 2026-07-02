@@ -122,11 +122,11 @@ def run_move_time_summary(conn):
     save_figure(fig, "board", "rt_distribution.pdf")
 
 
-def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_query: str | None = None, n_bins: int = 10, tie_safe: bool = True):
+def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_query: str | None = None, n_bins: int = 10, tie_safe: bool = True, table: str = WIN_PROCESSED_MOVES_NONZERO, ply_tertile_source: str = WIN_PROCESSED_MOVES_NONZERO):
     """A generic bivariate analyzer running quantile-bin dashboards for arbitrary fields."""
     analyzer = Analyzer(
         db_conn=conn,
-        table_name=WIN_PROCESSED_MOVES_NONZERO,
+        table_name=table,
         x_var=Variable(column=column, is_log=False, name=name),
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         filter_query=filter_query,
@@ -135,7 +135,7 @@ def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_q
         tie_safe=tie_safe,
         min_bin_count=100 if tie_safe else 0,
         # Ply tertiles conditioned on the windowed subset (not the whole dataset).
-        ply_tertile_source=WIN_PROCESSED_MOVES_NONZERO,
+        ply_tertile_source=ply_tertile_source,
     )
     fig = plt.figure(figsize=(30, 13.72))
     ax1 = fig.add_subplot(121)
@@ -153,13 +153,14 @@ def run_board_corr(conn, n_sample=1_000_000, seed=42):
     """
     df = conn.execute(f"""
         SELECT move_ply AS ply, n_possible_moves AS legal_moves,
-               player_clock_time AS player_clock, ln(move_time) AS log_T
+               player_clock_time AS player_clock, ln(move_time) AS log_T,
+               move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction
         FROM {WIN_PROCESSED_MOVES_NONZERO}
         USING SAMPLE {n_sample} ROWS (reservoir, {seed})
     """).df()
     labels = {
         "log_T": "log(RT)", "ply": "Ply", "legal_moves": "Legal moves",
-        "player_clock": "Player clock",
+        "player_clock": "Player clock", "game_fraction": "Game fraction",
     }
     corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
     n = len(corr)
@@ -215,12 +216,28 @@ def main(argv=None):
             "filter_query": "player_clock_time < 600",
             "tie_safe": False,
         },
+        "game_fraction": {
+            "column": "game_fraction",
+            "name": "Game Fraction",
+            "filename": "game_fraction.pdf",
+            "tie_safe": True,
+            # game_fraction lives on pmnz_gf (built on top of the ply window).
+            "table": "pmnz_gf",
+            "ply_tertile_source": "pmnz_gf",
+        },
         "boardcorr": run_board_corr,
     }
 
     with db_connection(args.db, read_only=True) as conn:
         # Apply the ply window ON ARRIVAL: every analysis reads these views.
         create_ply_windowed_views(conn)
+        # game_fraction is computed on top of the windowed view so the ply
+        # window still applies; max(move_ply) per game gives the total plies.
+        conn.execute(
+            "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
+            "SELECT *, move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction "
+            f"FROM {WIN_PROCESSED_MOVES_NONZERO}"
+        )
         for name, config in analyses.items():
             print(f"Executing board analysis: {name}...")
             if callable(config):
@@ -233,6 +250,8 @@ def main(argv=None):
                     filename=config["filename"],
                     filter_query=config.get("filter_query"),
                     tie_safe=config.get("tie_safe", True),
+                    table=config.get("table", WIN_PROCESSED_MOVES_NONZERO),
+                    ply_tertile_source=config.get("ply_tertile_source", WIN_PROCESSED_MOVES_NONZERO),
                 )
 
 
