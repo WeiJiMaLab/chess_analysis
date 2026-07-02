@@ -14,11 +14,13 @@
 #SBATCH --qos=short
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=6G
-#SBATCH --time=01:05:00
+#SBATCH --time=03:00:00
 
 set -euo pipefail
 WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}
-NW=${SLURM_ARRAY_TASK_COUNT:?array count unavailable}
+# num_workers defaults to the array size, but can be overridden (NWORKERS=) so a
+# subset re-run of stragglers keeps the SAME slicing as the original full array.
+NW=${NWORKERS:-${SLURM_ARRAY_TASK_COUNT:?array count unavailable}}
 
 TINY=/home/hl4291/chess_analysis
 source "$TINY/slurm/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
