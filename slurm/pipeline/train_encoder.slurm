@@ -6,8 +6,8 @@
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err
 #SBATCH --qos=gpu-short
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=128G
 #SBATCH --time=01:15:00
 #SBATCH --gres=gpu:1
 
