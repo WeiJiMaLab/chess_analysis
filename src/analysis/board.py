@@ -245,10 +245,11 @@ def main(argv=None):
         },
         "clock": {
             "column": "player_clock_time",
-            "name": "Player Clock Pressure",
+            "name": "Player Clock",
             "filename": "clock.pdf",
             "filter_query": "player_clock_time < 600",
             "tie_safe": False,
+            "reverse_x": True,   # count down (less time -> right)
         },
         "game_fraction": {
             "column": "game_fraction",
