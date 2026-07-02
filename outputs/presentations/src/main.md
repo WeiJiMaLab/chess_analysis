@@ -323,35 +323,6 @@ transition: fade
 <div class="mdl-content">
   <div class="mdl-titlefig">
     <div class="mdl-tf-left">
-      <div class="mdl-title"><span class="mdl-kicker">Part 2 · What is thinking worth?</span>When should the search stop?</div>
-      <div class="mdl-proc"><strong>step* = argmax<sub>s</sub>(V(s) − cost(s))</strong> from a budgeted-oracle DP over the search trace.</div>
-      <div class="mdl-intuition"><span class="lbl">Intuition</span> Stop when the marginal value of more search stops beating its cost.</div>
-      <div class="mdl-conv"><span class="lbl">A well-posed target</span> The oracle gives the ideal stop step — the normative benchmark for "how long to think."</div>
-    </div>
-    <div class="mdl-figbox"><img src="../archived_plots/regret_vs_compute.png" /></div>
-  </div>
-</div>
-
----
-layout: default
-class: mdl-slide
-transition: fade
-clicks: 2
----
-
-<div class="mdl-content mdl-content--top">
-  <div class="mdl-map"><ThoughtMap seq="q4" /></div>
-</div>
-
----
-layout: default
-class: mdl-slide
-transition: fade
----
-
-<div class="mdl-content">
-  <div class="mdl-titlefig">
-    <div class="mdl-tf-left">
       <div class="mdl-title"><span class="mdl-kicker">Part 2 · Optimal stopping step</span>Does the stop step track think-time?</div>
       <div class="mdl-proc"><strong>OSS</strong> (optimal stop step) vs human RT.</div>
       <div class="mdl-intuition"><span class="lbl">Expected</span> If people meta-control, they think longer when the oracle stops later.</div>
@@ -370,35 +341,6 @@ clicks: 2
 
 <div class="mdl-content mdl-content--top">
   <div class="mdl-map"><ThoughtMap seq="oss" /></div>
-</div>
-
----
-layout: default
-class: mdl-slide
-transition: fade
----
-
-<div class="mdl-content">
-  <div class="mdl-titlefig">
-    <div class="mdl-tf-left">
-      <div class="mdl-title"><span class="mdl-kicker">Part 2 · Optimal stopping step</span>OSS vs GSS — greedy or optimal?</div>
-      <div class="mdl-proc"><strong>GSS</strong> (greedy stop step) and <strong>OSS</strong> (cost-optimal stop step), both vs RT.</div>
-      <div class="mdl-intuition"><span class="lbl">Read it as</span> Greedy locks on early; optimal waits for cost-justified gain.</div>
-      <div class="mdl-conv"><span class="lbl">Both weak</span> GSS <strong>+0.05</strong> · OSS <strong>+0.06</strong> — neither approaches the +0.26 width effect.</div>
-    </div>
-    <div class="mdl-figbox"><img src="../public/figures/allply/engine/gss.png" /></div>
-  </div>
-</div>
-
----
-layout: default
-class: mdl-slide
-transition: fade
-clicks: 2
----
-
-<div class="mdl-content mdl-content--top">
-  <div class="mdl-map"><ThoughtMap seq="ossgss" /></div>
 </div>
 
 ---

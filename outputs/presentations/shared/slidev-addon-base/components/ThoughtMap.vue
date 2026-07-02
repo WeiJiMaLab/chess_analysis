@@ -19,11 +19,11 @@ import { useSlideContext } from '@slidev/client'
 const props = defineProps({ seq: { type: String, default: 'build' } })
 const { $clicks } = useSlideContext()
 
-const W = 2376, H = 1240
+const W = 2150, H = 1240
 
 // ── Tree (single source of truth) ─────────────────────────────────────────────
 const TREE = {
-  id: 'q1', cx: 1158, cy: 120, w: 276, h: 104,
+  id: 'q1', cx: 1260, cy: 120, w: 276, h: 104,
   q: 'Do People Meta-Control Their Thinking in Chess?',
   a: 'RT tracks decision width (not VOC); the meta-rational fit is the open test.',
   children: [
@@ -58,24 +58,17 @@ const TREE = {
     },
     // ── PART 2 — What is thinking worth? (the normative model) ────────────────
     {
-      id: 'q1a', cx: 1590, cy: 460, w: 216, h: 112,
+      id: 'q1a', cx: 1510, cy: 460, w: 216, h: 112,
       q: 'What Is Thinking Worth? (The Normative Model)',
       a: 'A budgeted oracle + an RL-trained stopping rule.',
       children: [
-        { id: 'q4',  cx: 1380, cy: 760, w: 180, h: 104, q: 'When Should Search Stop?', a: 'At step* = argmax(V − cost).', children: [] },
-        {
-          id: 'oss', cx: 1590, cy: 760, w: 180, h: 104,
-          q: 'Optimal Stopping Step', a: 'OSS / GSS track RT only weakly.',
-          children: [
-            { id: 'ossgss', cx: 1590, cy: 1010, w: 174, h: 96, q: 'OSS / GSS vs RT?', a: 'OSS +0.06 · GSS +0.05.', children: [] },
-          ],
-        },
-        { id: 'meta', cx: 1806, cy: 760, w: 192, h: 108, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
+        { id: 'oss',  cx: 1399, cy: 760, w: 180, h: 104, q: 'Optimal Stopping Step',          a: 'OSS tracks RT only weakly (+0.06).',       children: [] },
+        { id: 'meta', cx: 1621, cy: 760, w: 192, h: 108, q: 'How to Train a Meta-Controller?', a: 'RL readout on advantage; tree-stats wins.', children: [] },
       ],
     },
     // ── PART 3 — Do human & normative model agree? (empty for now) ────────────
     {
-      id: 'qmatch', cx: 2172, cy: 460, w: 228, h: 112,
+      id: 'qmatch', cx: 1931, cy: 460, w: 228, h: 112,
       q: 'Do the Human and Normative Model Agree?',
       a: 'No — the drivers are structural, not VOC.',
       children: [],
@@ -111,11 +104,9 @@ const VISITS = [
   { id: 'engine' },
   { id: 'gain' },
   { id: 'agap' },
-  { id: 'fracgood', also_resolve: ['p1'], pan_to: 'p1', expand: ['q4', 'oss', 'meta'] },
-  // PART 2 — what is thinking worth (stop / OSS / meta-controller), then q1a's matrix
-  { id: 'q4' },
-  { id: 'oss',      expand: ['ossgss'] },
-  { id: 'ossgss' },
+  { id: 'fracgood', also_resolve: ['p1'], pan_to: 'p1', expand: ['oss', 'meta'] },
+  // PART 2 — what is thinking worth (optimal stopping / meta-controller), then q1a's matrix
+  { id: 'oss' },
   { id: 'meta' },
   { id: 'q1a',      pan_to: 'q1a' },      // back up to the branch root: engine-signal matrix
   // PART 3 — pivot (empty for now; last node)
