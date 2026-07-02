@@ -5,14 +5,26 @@ stop step (GSS), greedy frac-good, optimal stop step (OSS) — joins them to hum
 RTs, and emits the per-signal RT dashboards plus a Spearman correlation matrix
 over all engine signals AND the board features (ply / legal moves / clock).
 
-Trees are read from human_analysis.trees_default in config.yaml (the SF-1
-n1md36 set). All plots are saved (PDF + PNG) under <figures_dir>/engine/.
+Trees are read from human_analysis.trees_default in the active config (the SF-1
+n1md36 set). All processed-move reads — including the backwards tree->move join —
+go through a ply-windowed view (move_ply in [min_ply, max_ply]) so the ply filter
+is applied consistently on arrival and on the way back. All plots are saved
+(PDF + PNG) under <figures_dir>/engine/ (namespaced by run_name).
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+
+# Resolve --config BEFORE importing analysis.utils so helpers loads the right
+# config file (its CONFIG global is built at import from the CONFIG env var).
+_pre = argparse.ArgumentParser(add_help=False)
+_pre.add_argument("--config")
+_cfg, _ = _pre.parse_known_args()
+if _cfg.config:
+    os.environ["CONFIG"] = _cfg.config
+
 from pathlib import Path
 
 import duckdb
@@ -24,6 +36,8 @@ from analysis.utils import Variable, Analyzer
 from analysis.utils.helpers import (
     apply_poster_style,
     db_connection,
+    create_ply_windowed_views,
+    WIN_PROCESSED_MOVES_NONZERO,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     partial_spearman,
@@ -35,7 +49,6 @@ from analysis.utils.plots import (
 )
 from analysis.utils.selected_db import (
     SELECTED_DB_DEFAULT,
-    TABLE_PROCESSED_MOVES_NONZERO,
 )
 
 # Imported from newly extracted modular utilities
@@ -56,6 +69,7 @@ def load_played_moves(cache_dir: Path, key: str, db_path: str) -> pd.DataFrame:
     root_moves = pd.read_parquet(cache_dir / f"rootmoves_{key}.parquet")[["fen", "move_uci", "mq"]]
 
     conn = duckdb.connect(db_path, read_only=True)
+    create_ply_windowed_views(conn)   # ply filter applied on arrival (pmnz_win)
     conn.register("_vals", vals)
     conn.register("_root_moves", root_moves)
     df = conn.execute("""
@@ -63,7 +77,7 @@ def load_played_moves(cache_dir: Path, key: str, db_path: str) -> pd.DataFrame:
             SELECT m.fen, m.gid, m.move_ply, m.move_time,
                    m.n_possible_moves AS legal_moves, mv.move_uci
             FROM (SELECT DISTINCT fen FROM _root_moves) f
-            JOIN processed_moves_nonzero m ON m.fen = f.fen AND m.move_time > 0
+            JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
             JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
         )
         SELECT rm.mq, ln(h.move_time) AS log_rt, v.gss, h.legal_moves
@@ -146,7 +160,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) 
                m.mq, t.voc, t.action_gap, t.gss, t.greedy_frac_good, t.oss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
-        JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0
     """).df()
     labels = {
@@ -223,6 +237,7 @@ def run_tree_values_pipeline(
     os.makedirs(out_dir, exist_ok=True)
 
     with db_connection(db_path, read_only=True) as conn:
+        create_ply_windowed_views(conn)   # ply filter on arrival; tree_rt/mq_rt build off pmnz_win
         conn.register("_vals", vals)
         conn.register("_root_moves", root_moves)
         conn.execute("""
@@ -230,7 +245,7 @@ def run_tree_values_pipeline(
             SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good, v.oss,
                    v.fen, m.gid, m.move_ply, m.move_time
             FROM _vals v
-            JOIN processed_moves_nonzero m ON m.fen = v.fen
+            JOIN pmnz_win m ON m.fen = v.fen
             WHERE m.move_time > 0
         """)
         n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
@@ -245,7 +260,7 @@ def run_tree_values_pipeline(
             SELECT ln(t.move_time) AS log_T, t.h_pi,
                    p.n_possible_moves AS legal_moves, t.voc, t.gss
             FROM tree_rt t
-            JOIN processed_moves_nonzero p ON p.gid = t.gid AND p.move_ply = t.move_ply
+            JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
             WHERE t.move_time > 0 AND t.h_pi IS NOT NULL
         """).df()
         _spearman_partials(p1, "h_pi", "log_T", ["legal_moves", "voc", "gss"])
@@ -255,7 +270,7 @@ def run_tree_values_pipeline(
             WITH human AS (
                 SELECT m.fen, m.gid, m.move_ply, m.move_time, mv.move_uci
                 FROM (SELECT DISTINCT fen FROM _root_moves) f
-                JOIN processed_moves_nonzero m ON m.fen = f.fen AND m.move_time > 0
+                JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
                 JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
             )
             SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time, v.gss
@@ -267,7 +282,7 @@ def run_tree_values_pipeline(
         
         n_human = conn.execute("""
             SELECT count(*) FROM (SELECT DISTINCT fen FROM _root_moves) f
-            JOIN processed_moves_nonzero m ON m.fen = f.fen AND m.move_time > 0
+            JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
         """).fetchone()[0]
         n_mq = conn.execute("SELECT count(*) FROM mq_rt").fetchone()[0]
         r_mq = conn.execute("SELECT corr(mq, ln(move_time)) FROM mq_rt").fetchone()[0]
@@ -336,6 +351,7 @@ def run_tree_values_pipeline(
                     title="MQ (SF-1) vs. log(RT)",
                     min_bin_count=100,
                     n_bins=10,
+                    ply_tertile_source="mq_rt",   # windowed; ply tertiles off the analyzed set
                 ),
                 Analyzer(
                     conn,
@@ -373,6 +389,8 @@ def run_tree_values_pipeline(
                     tie_safe=config.get("tie_safe", True),
                     zero_inflated=config.get("zero_inflated", False),
                     zero_threshold=config.get("zero_threshold", 0.0),
+                    # ply tertiles off the (windowed) analyzed table, not the whole DB.
+                    ply_tertile_source=config["table"],
                 )
                 base, _ = os.path.splitext(config["filename"])
                 analyzer.save_dashboard(os.path.join(out_dir, f"{base}.pdf"))
@@ -390,8 +408,9 @@ def main(argv=None):
         help="Execution mode: all (default), difficulty confound stats, or full tree-values pipeline."
     )
     parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
+    parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     parser.add_argument("--seed", type=int, default=7)
-    
+
     # Tree values args
     parser.add_argument("--trees-dir", default=CONFIG["trees_default"])
     parser.add_argument("--n-trees", type=int, default=100000)

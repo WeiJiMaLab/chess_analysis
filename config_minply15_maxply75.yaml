@@ -1,25 +1,34 @@
 globals:
-  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  # --- run identity + shared (config-independent) inputs ---
+  run_name: minply15_maxply75          # THE key: every output root is namespaced by this
+  min_ply: 15                          # analysis/gen ply window (Russek et al. 15-75)
+  max_ply: 75
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos   # shared root
   outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  fens_pool: ${scratch_dir}/fens.txt                  # shared raw FEN pool (all plies)
   search_budget: 64
-  fens_pool: ${scratch_dir}/fens.txt
-  trees_dir: ${scratch_dir}/trees
-  split_dir: ${scratch_dir}/split
-  packed_dir: ${scratch_dir}/packed
-  mc_packed_dir: ${scratch_dir}/mc_packed
-  materialized_dir: ${scratch_dir}/materialized
-  config_dir: ${scratch_dir}/pack_configs
-  log_dir: ${scratch_dir}/pack_logs
-  figures_dir: ${outputs_dir}/normative
+  # --- per-run scratch tree (isolated; a new run_name never clobbers another) ---
+  run_dir: ${scratch_dir}/${run_name}
+  fens_sample: ${run_dir}/fens_sample.txt             # filter_trees output (in-window FENs)
+  trees_dir: ${run_dir}/trees
+  split_dir: ${run_dir}/split
+  packed_dir: ${run_dir}/packed
+  mc_packed_dir: ${run_dir}/mc_packed
+  materialized_dir: ${run_dir}/materialized
+  config_dir: ${run_dir}/pack_configs
+  log_dir: ${run_dir}/pack_logs
+  figures_dir: ${outputs_dir}/${run_name}/normative
 
 human_analysis:
-  figures_dir: ${outputs_dir}
+  figures_dir: ${outputs_dir}/${run_name}
+  min_ply: ${min_ply}
+  max_ply: ${max_ply}
   trees_default: ${trees_dir}/n1md36
-  cache_default: ${scratch_dir}/tree_values_cache
+  cache_default: ${run_dir}/tree_values_cache
   key_default: n1md36_100000_7
   response_time_histogram_bins: 50
   qq_plot_quantile_probes: 200
-  selected_db_default: ${scratch_dir}/personal.db
+  selected_db_default: ${scratch_dir}/personal.db     # shared, preprocessed once
   table_moves: moves
   table_processed_moves: processed_moves
   table_processed_moves_nonzero: processed_moves_nonzero
@@ -28,7 +37,7 @@ treegen:
   command: generate-dataset
   provider: stockfish
   engine_path: /home/hl4291/stockfish/src/stockfish
-  fens: ${scratch_dir}/fens_250k.txt
+  fens: ${fens_sample}
   output_dir: ${trees_dir}/n1md36
   search_budget: ${search_budget}
   min_nodes: 96
@@ -92,8 +101,6 @@ encoder:
   batch_size: 256
   learning_rate: 1.0e-3
   epochs: 6
-  loss_type: huber
-  huber_delta: 1.0
   loss_weight_by_subtree_size: true
   num_workers: 0
   log_interval: 20

@@ -27,16 +27,23 @@ def _interpolate(value, variables):
     return value
 
 
-# Load the shared configuration.
-# The human-analysis keys live in the single unified config at the repo-root
-# config.yaml, under the top-level `human_analysis:` section. helpers.py sits at
-# src/analysis/utils/helpers.py, so the repo root is three dirs up. ${...}
-# placeholders in human_analysis are resolved against `globals` (same contract
-# as render_stage.py / cts._config), so analysis shares the pipeline's dirs.
+# Load the shared configuration. Path-aware: the active config file is chosen by
+# the ``CONFIG`` env var (which slurm/helpers/setup_env.sh exports, and board.py /
+# engine.py set from their ``--config`` flag); it falls back to the repo default
+# below. ${...} placeholders in ``human_analysis`` are resolved against ``globals``
+# (same contract as render_stage.py / cts._config) so analysis shares the
+# pipeline's per-run dirs.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_CONFIG = _REPO_ROOT / "config_minply15_maxply75.yaml"
+
+
+def _config_path() -> Path:
+    env = os.environ.get("CONFIG")
+    return Path(env) if env else _DEFAULT_CONFIG
+
+
 def _load_shared_config() -> dict:
-    config_path = (
-        Path(__file__).resolve().parent.parent.parent.parent / "config.yaml"
-    )
+    config_path = _config_path()
     if not config_path.exists():
         raise FileNotFoundError(f"Shared config not found at {config_path}")
     with open(config_path, "r") as f:
@@ -94,6 +101,34 @@ def db_connection(database: str = CONFIG["selected_db_default"], read_only: bool
         yield conn
     finally:
         conn.close()
+
+
+# Ply window (Russek et al.-style): all board/engine analyses filter to
+# move_ply in [min_ply, max_ply] "on arrival". These are the names of the
+# windowed views create_ply_windowed_views() installs; downstream SQL references
+# ONLY these so the filter (and the derived ply tertiles) are consistent
+# everywhere, including on the backwards tree->move join.
+WIN_PROCESSED_MOVES = "pm_win"
+WIN_PROCESSED_MOVES_NONZERO = "pmnz_win"
+
+
+def create_ply_windowed_views(conn) -> tuple[str, str]:
+    """Install temp views of the processed-move tables filtered to the config ply
+    window (move_ply BETWEEN min_ply AND max_ply). Returns (pm_view, pmnz_view).
+
+    Every board/engine query reads these instead of the raw tables, so the ply
+    filter is applied once, on arrival, and ply tertiles computed off these views
+    are conditioned on the window (not the whole dataset)."""
+    lo, hi = int(CONFIG["min_ply"]), int(CONFIG["max_ply"])
+    for view, base in (
+        (WIN_PROCESSED_MOVES, CONFIG["table_processed_moves"]),
+        (WIN_PROCESSED_MOVES_NONZERO, CONFIG["table_processed_moves_nonzero"]),
+    ):
+        conn.execute(
+            f"CREATE OR REPLACE TEMP VIEW {view} AS "
+            f"SELECT * FROM {base} WHERE move_ply BETWEEN {lo} AND {hi}"
+        )
+    return WIN_PROCESSED_MOVES, WIN_PROCESSED_MOVES_NONZERO
 
 
 def partial_spearman(df, x: str, y: str, controls: list[str]) -> float:

@@ -1,9 +1,10 @@
 #!/bin/bash
-# Pipeline step — filter_trees. Select the root FENs to generate trees from.
-# In this version that is simply a uniform random subsample of the ground-truth
-# FEN pool (globals.fens_pool) down to N_FENS roots, written to treegen.fens
-# (the file gen_trees reads). In future this is where richer position filtering
-# would live. Depends on preprocess (the FEN pool comes from the move data).
+# Pipeline step — filter_trees. Select the in-window root FENs to generate trees
+# from: the distinct FENs whose move_ply is in [min_ply, max_ply] (from the run
+# config), uniformly subsampled to N_FENS, written to treegen.fens. DB-sourced
+# (ply lives only in the preprocessed DB — the raw fens_pool is truncated).
+# Depends on preprocess (the move DB). Everything downstream applies the SAME
+# window on read, so the population stays consistent.
 #   N_FENS=250000 sbatch slurm/pipeline/filter_trees.slurm
 #SBATCH --job-name=filter-trees
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
@@ -11,8 +12,8 @@
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --time=00:30:00
 
 set -euo pipefail
@@ -21,9 +22,13 @@ cd "${TINY}"
 source "${TINY}/slurm/helpers/setup_env.sh"
 
 N_FENS="${N_FENS:-250000}"
-SRC=$($RENDER --get globals.fens_pool)
-DST=$($RENDER --get treegen.fens)
+DB=$($RENDER --get human_analysis.selected_db_default)
+OUT=$($RENDER --get treegen.fens)
+MINPLY=$($RENDER --get globals.min_ply)
+MAXPLY=$($RENDER --get globals.max_ply)
 
-echo "filter_trees: subsample ${N_FENS} of $(wc -l < "$SRC") FENs from $SRC -> $DST on $(hostname) at $(date)"
-shuf -n "${N_FENS}" "$SRC" > "$DST"
-echo "wrote $(wc -l < "$DST") FENs to $DST at $(date)"
+echo "filter_trees: db=$DB out=$OUT ply=[$MINPLY,$MAXPLY] n=$N_FENS on $(hostname) at $(date)"
+python -m analysis.filter_trees \
+    --db "$DB" --out "$OUT" \
+    --min-ply "$MINPLY" --max-ply "$MAXPLY" --n "$N_FENS"
+echo "Finished at $(date)"
