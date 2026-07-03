@@ -16,5 +16,5 @@ TINY=/home/hl4291/chess_analysis
 source "$TINY/slurm/helpers/setup_env.sh"
 export DUCKDB_THREADS="${SLURM_CPUS_PER_TASK:-16}" DUCKDB_MEMORY_LIMIT=100GB
 echo "merge_position_features host=$(hostname) config=$CONFIG"; date
-python -m analysis.preprocess merge_position_features --config "$CONFIG"
+python -m analysis.preprocess merge_position_features
 echo "MERGE_POSITION_FEATURES DONE"; date

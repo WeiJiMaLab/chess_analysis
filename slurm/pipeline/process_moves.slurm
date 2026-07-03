@@ -19,5 +19,5 @@ TINY=/home/hl4291/chess_analysis
 source "$TINY/slurm/helpers/setup_env.sh"
 export DUCKDB_THREADS="${SLURM_CPUS_PER_TASK:-16}" DUCKDB_MEMORY_LIMIT=100GB
 echo "process_moves host=$(hostname) config=$CONFIG"; date
-python -m analysis.preprocess process_moves --config "$CONFIG"
+python -m analysis.preprocess process_moves
 echo "PROCESS_MOVES DONE"; date

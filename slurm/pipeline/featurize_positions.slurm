@@ -17,5 +17,5 @@ set -euo pipefail
 TINY=/home/hl4291/chess_analysis
 source "$TINY/slurm/helpers/setup_env.sh"
 echo "featurize_positions task=${SLURM_ARRAY_TASK_ID}/${SLURM_ARRAY_TASK_COUNT} host=$(hostname) cpus=${SLURM_CPUS_PER_TASK}"; date
-python -m analysis.preprocess featurize_positions --config "$CONFIG"
+python -m analysis.preprocess featurize_positions
 echo "FEATURIZE_POSITIONS TASK ${SLURM_ARRAY_TASK_ID} DONE"; date
