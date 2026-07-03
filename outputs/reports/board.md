@@ -77,3 +77,40 @@ one. See the policy-entropy test in [the engine report](engine.md).
 > **Decision:** Work in **log(RT)** (response time is log-normal) and use **Spearman** for the
 > board matrix — the structural features are skewed/bounded, so rank correlation is the
 > honest screen.
+
+### How is the data built? (pipeline & timing)
+
+Board features are **first-class columns of `processed_moves`, computed in preprocess** (not in
+the analysis step), so `board.py` just reads them — one `FEATURES` registry drives the figures,
+the per-feature partials, and the correlation matrix alike (only the RT histogram and `ply` are
+special-cased). Two kinds of feature:
+
+- **SQL, no engine** — weighted material (`P/N/B/R/Q = 1/3/3/5/9`, incl pawns; verified 0/2014
+  mismatches vs python-chess), `material_imbalance`, `in_check` (from the parser's
+  `player_in_check`), `prev_move_was_capture` (per-game piece-count lag). Computed inside
+  `process_moves`.
+- **python-chess (legal-move enumeration)** — `n_captures_avail`, `n_checks_avail`. Featurized
+  over **distinct** FENs (lossless — a pure function of the FEN), **massively parallel across a
+  Slurm array**, then joined back to every move-instance.
+
+Preprocess params (paths, date window, Elo/clock filters, DuckDB threads/mem) live in the config
+`preprocess:` section; `personal_db` is unified with `human_analysis.selected_db_default`.
+
+| SLURM step | what | rough wall time |
+|---|---|---:|
+| `process_moves` | rebuild `processed_moves[_nonzero]` with the SQL features; dump ~84M distinct FENs → parquet | **~5–10 min** |
+| `featurize_positions` `[0–31]` | captures/checks over 84M distinct FENs, 32 tasks × 16 cores = **512 cores**, round-robin over parquet row groups → shards | **~2–3 min** |
+| `merge_position_features` | join captures/checks shards into `processed_moves[_nonzero]` (single DB writer) | **~3–5 min** |
+| `board_analysis` | in-DB game-level sample (60k games ≈ 1.5M instances); histograms/lowess/scatter, both-unit partials + bootstrap CIs, correlation matrix, ∩-shape test | **~20–30 min** |
+
+Outputs are split by type under `figures/<run>/board/{pdf,png,csv}/`. The featurize array replaces
+a ~10-min single-node pass; the whole feature build + board analysis is **≈ 35–45 min** end-to-end.
+
+> **Decision:** Featurize **distinct FENs once** and join back to all instances — computationally
+> lossless (features depend only on the FEN) and **not** a statistical dedup: the analysis stays
+> per-instance and still reports both per-instance and per-FEN. Whole-corpus featurization is
+> unnecessary — `in_check` is a parser column and `prev_move_was_capture` is pure SQL.
+
+*(Downstream, off the same `personal.db`: engine tree-signal analysis `engine_analysis_{pwin,cp}`
+≈ **1–1.5 h** each; the normative model tail `pack_trees → train_encoder → pack_root[] →
+train_readout_pg → eval` ≈ **3–4 h**.)*
