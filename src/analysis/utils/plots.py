@@ -214,28 +214,42 @@ def highlight_corr_row(ax, n_cols, idx=0):
             ax.texts[k].set_fontweight("bold")
 
 
+def _typed_path(base_dir: str, kind: str, filename: str) -> str:
+    """``base_dir/<kind>/<filename>``, creating the ``<kind>`` (pdf/png/csv) subdir."""
+    d = os.path.join(base_dir, kind)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, filename)
+
+
+def save_pdf_png(fig, base_dir: str, base: str, *, dpi: int = 300, **savefig_kwargs) -> str:
+    """Write ``base.pdf`` -> ``base_dir/pdf/`` and ``base.png`` -> ``base_dir/png/``.
+
+    PDF and PNG live in separate type subfolders (pdf/ png/); CSV tables go to
+    csv/ via ``save_table``. Extra kwargs (``bbox_extra_artists``, ``pad_inches``,
+    …) are forwarded to ``fig.savefig``. Returns the PDF path."""
+    pdf = _typed_path(base_dir, "pdf", f"{base}.pdf")
+    png = _typed_path(base_dir, "png", f"{base}.png")
+    fig.savefig(pdf, dpi=dpi, bbox_inches="tight", **savefig_kwargs)
+    fig.savefig(png, dpi=dpi, bbox_inches="tight", **savefig_kwargs)
+    plt.close(fig)
+    print(f"Saved figures: {pdf} and {png}")
+    return pdf
+
+
+def save_table(df, base_dir: str, filename: str, **to_csv_kwargs) -> str:
+    """Write a CSV table to ``base_dir/csv/<filename>`` (sibling of pdf/ and png/)."""
+    path = _typed_path(base_dir, "csv", filename)
+    df.to_csv(path, **to_csv_kwargs)
+    print(f"Saved table: {path}")
+    return path
+
+
 def save_figure(fig, category: str, filename: str) -> str:
-    """Save a matplotlib figure under figures/<category>/<filename> as both PDF and PNG.
-    
-    Creates the subdirectory if it doesn't exist.
-    """
+    """Save a figure under figures/<category>/{pdf,png}/<name> — PDF and PNG in
+    separate type subfolders. Creates the subdirectories if needed."""
     if category not in ("board", "engine"):
         raise ValueError(f"Invalid figure category: {category}. Must be 'board' or 'engine'.")
-
     base, _ = os.path.splitext(filename)
-
-    # Output dir is wired from config (human_analysis.figures_dir); the category
-    # (board / engine) is the subdirectory.
-    out_dir = os.path.join(CONFIG["figures_dir"], category)
-    os.makedirs(out_dir, exist_ok=True)
-    
-    out_path_pdf = os.path.join(out_dir, f"{base}.pdf")
-    out_path_png = os.path.join(out_dir, f"{base}.png")
-    
-    # Save both formats
-    fig.savefig(out_path_pdf, dpi=300, bbox_inches="tight", pad_inches=0.3)
-    fig.savefig(out_path_png, dpi=300, bbox_inches="tight", pad_inches=0.3)
-    plt.close(fig)
-    print(f"Saved figures: {out_path_pdf} and {out_path_png}")
-    return out_path_pdf
+    base_dir = os.path.join(CONFIG["figures_dir"], category)
+    return save_pdf_png(fig, base_dir, base, dpi=300, pad_inches=0.3)
 

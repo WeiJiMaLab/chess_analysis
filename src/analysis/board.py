@@ -43,6 +43,7 @@ from analysis.utils.plots import (
     highlight_corr_row,
     plot_histogram_from_bins,
     save_figure,
+    save_table,
 )
 from analysis.utils.selected_db import (
     SELECTED_DB_DEFAULT,
@@ -501,10 +502,9 @@ def run_battery_corr(conn, sample_games: int = 25_000):
             rec["partial_spearman_ci_lo"], rec["partial_spearman_ci_hi"] = lo, hi
             rows.append(rec)
     res = pd.DataFrame(rows)
-    out_csv = os.path.join(CONFIG["figures_dir"], "board", "battery_correlations.csv")
-    res.to_csv(out_csv, index=False)
     print(res.round(4).to_string(index=False))
-    print(f"Saved -> {out_csv}")
+    save_table(res, os.path.join(CONFIG["figures_dir"], "board"),
+               "battery_correlations.csv", index=False)
 
 
 def run_imbalance_shape(conn, sample_games: int = 25_000):
@@ -577,7 +577,7 @@ def run_imbalance_shape(conn, sample_games: int = 25_000):
     ax.set_title(f"∩-shape test — {verdict}\n(n = {len(df):,} instances)",
                  fontsize=FONT_SIZE_TICKS + 4)
     ax.legend(fontsize=FONT_SIZE_TICKS)
-    agg.to_csv(os.path.join(CONFIG["figures_dir"], "board", "imbalance_shape_bins.csv"))
+    save_table(agg, os.path.join(CONFIG["figures_dir"], "board"), "imbalance_shape_bins.csv")
     save_figure(fig, "board", "imbalance_shape.pdf")
 
 
@@ -592,8 +592,8 @@ def run_battery_binaries(conn):
         ).df()
         print(f"\n{col}:")
         print(stats_.round(4).to_string(index=False))
-        stats_.to_csv(os.path.join(CONFIG["figures_dir"], "board", f"battery_{col}_groups.csv"),
-                      index=False)
+        save_table(stats_, os.path.join(CONFIG["figures_dir"], "board"),
+                   f"battery_{col}_groups.csv", index=False)
 
 
 def main(argv=None):
