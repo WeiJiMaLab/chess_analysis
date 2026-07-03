@@ -294,34 +294,69 @@ def _fen_captures_checks(fen):
     return caps, checks
 
 
-def add_board_position_features(conn: duckdb.DuckDBPyConnection, workers: int | None = None) -> None:
-    """Add ``n_captures_avail`` / ``n_checks_avail`` to processed_moves[_nonzero].
+# --- n_captures_avail / n_checks_avail: python-chess legal-move enumeration over
+# DISTINCT FENs, massively parallel across a Slurm array. process_moves dumps the
+# distinct FENs to a parquet; each array task featurizes its round-robin slice of
+# the parquet's row groups (using its node's cores too) into a shard; the merge
+# joins the shards back into processed_moves[_nonzero]. ---
 
-    These need python-chess legal-move enumeration (unlike material/in_check, which
-    are pure SQL in ``process_moves``). Featurize each DISTINCT fen ONCE and join —
-    computed with preprocess and cached in the DB, so downstream analysis just reads
-    the columns."""
+def _pos_features_dir(work_dir: str) -> str:
+    return os.path.join(work_dir, "pos_features")
+
+
+def dump_distinct_fens(conn: duckdb.DuckDBPyConnection, work_dir: str) -> str:
+    """Write the DISTINCT fens of processed_moves to a parquet for the featurize array."""
+    out = os.path.join(_pos_features_dir(work_dir), "distinct_fens.parquet")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    conn.execute(f"COPY (SELECT DISTINCT fen FROM processed_moves) TO '{_sql_str(out)}' (FORMAT PARQUET)")
+    n = conn.execute(f"SELECT count(*) FROM read_parquet('{_sql_str(out)}')").fetchone()[0]
+    print(f"✅ dumped {n:,} distinct FENs → {out}", flush=True)
+    return out
+
+
+def featurize_positions_shard(work_dir: str, worker_index: int, n_workers: int,
+                              local_workers: int | None = None) -> None:
+    """One array task: featurize this worker's round-robin slice of the distinct-FEN
+    parquet's row groups (parallel across the node's cores) → one shard parquet."""
     import multiprocessing as mp
     import pandas as pd
+    import pyarrow.parquet as pq
 
-    workers = workers or (os.cpu_count() or 8)
-    fens = [r[0] for r in conn.execute("SELECT DISTINCT fen FROM processed_moves").fetchall()]
-    print(f"add_board_position_features: featurizing {len(fens):,} distinct FENs "
-          f"({workers} workers)...", flush=True)
-    with mp.Pool(workers) as pool:
+    local_workers = local_workers or (os.cpu_count() or 8)
+    fens_path = os.path.join(_pos_features_dir(work_dir), "distinct_fens.parquet")
+    shards_dir = os.path.join(_pos_features_dir(work_dir), "shards")
+    os.makedirs(shards_dir, exist_ok=True)
+
+    pf = pq.ParquetFile(fens_path)
+    fens = []
+    for rg in range(worker_index, pf.num_row_groups, n_workers):
+        fens.extend(pf.read_row_group(rg, columns=["fen"])["fen"].to_pylist())
+    print(f"featurize_positions worker {worker_index}/{n_workers}: {len(fens):,} FENs "
+          f"({pf.num_row_groups} row groups, {local_workers} local cores)...", flush=True)
+    with mp.Pool(local_workers) as pool:
         res = pool.map(_fen_captures_checks, fens, chunksize=4000)
-    feats = pd.DataFrame([(f, c, k) for f, (c, k) in zip(fens, res)],
-                         columns=["fen", "n_captures_avail", "n_checks_avail"])
-    conn.register("_bpf", feats)
-    conn.execute("CREATE OR REPLACE TABLE board_position_features AS SELECT * FROM _bpf")
-    conn.unregister("_bpf")
+    df = pd.DataFrame([(f, c, k) for f, (c, k) in zip(fens, res)],
+                      columns=["fen", "n_captures_avail", "n_checks_avail"])
+    out = os.path.join(shards_dir, f"posfeat_{worker_index:04d}.parquet")
+    df.to_parquet(out, index=False)
+    print(f"✅ worker {worker_index}: {len(df):,} FENs → {out}", flush=True)
+
+
+def merge_position_features(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
+    """Join the array's captures/checks shards into processed_moves[_nonzero]."""
+    shards = os.path.join(_pos_features_dir(work_dir), "shards", "posfeat_*.parquet")
+    conn.execute(f"CREATE OR REPLACE TABLE board_position_features AS "
+                 f"SELECT * FROM read_parquet('{_sql_str(shards)}')")
+    n_feat = conn.execute("SELECT count(*) FROM board_position_features").fetchone()[0]
+    n_fen = conn.execute("SELECT count(DISTINCT fen) FROM processed_moves").fetchone()[0]
+    print(f"merge_position_features: {n_feat:,} featurized FENs vs {n_fen:,} distinct in DB", flush=True)
     for tbl in ("processed_moves", "processed_moves_nonzero"):
         conn.execute(
             f"CREATE OR REPLACE TABLE {tbl} AS "
             f"SELECT p.*, f.n_captures_avail, f.n_checks_avail "
             f"FROM {tbl} p LEFT JOIN board_position_features f USING (fen)"
         )
-    print("✅ added n_captures_avail / n_checks_avail to processed_moves[_nonzero]")
+    print("✅ merged n_captures_avail / n_checks_avail into processed_moves[_nonzero]")
 
 
 def merge_game_shards(
@@ -377,7 +412,24 @@ def run_process_moves(
         config=duckdb_connect_config(work_dir, threads, memory_limit),
     )
     process_moves(conn)
-    add_board_position_features(conn)
+    dump_distinct_fens(conn, work_dir)   # input for the featurize array
+    conn.close()
+
+
+def run_featurize_positions(work_dir: str, worker_index: int, n_workers: int) -> None:
+    """Array-task entry: featurize one slice of the distinct FENs (no DB access)."""
+    featurize_positions_shard(work_dir, worker_index, n_workers)
+
+
+def run_merge_position_features(
+    personal_db: str, work_dir: str, threads: int = 40, memory_limit: str = "64GB",
+) -> None:
+    """Join the featurize shards into processed_moves[_nonzero] (single DB writer)."""
+    conn = duckdb.connect(
+        database=personal_db, read_only=False,
+        config=duckdb_connect_config(work_dir, threads, memory_limit),
+    )
+    merge_position_features(conn, work_dir)
     conn.close()
 
 
@@ -432,7 +484,16 @@ def main() -> None:
     sub.add_parser("merge", help="Parquet shards → table moves only.")
     sub.add_parser(
         "process_moves",
-        help="From table moves → processed_moves and processed_moves_nonzero (feature SQL + captures/checks).",
+        help="table moves → processed_moves[_nonzero] (feature SQL) + dump distinct FENs.",
+    )
+    sub.add_parser(
+        "featurize_positions",
+        help="Array task: featurize a slice of distinct FENs (captures/checks) → shard. "
+             "Uses SLURM_ARRAY_TASK_ID / SLURM_ARRAY_TASK_COUNT (NWORKERS overrides count).",
+    )
+    sub.add_parser(
+        "merge_position_features",
+        help="Join the captures/checks shards into processed_moves[_nonzero] (DB writer).",
     )
 
     args = parser.parse_args()
@@ -475,6 +536,23 @@ def main() -> None:
         )
     elif args.cmd == "process_moves":
         run_process_moves(
+            personal_db=config["personal_db"],
+            work_dir=config["work_dir"],
+            threads=config["threads"],
+            memory_limit=config["memory_limit"],
+        )
+    elif args.cmd == "featurize_positions":
+        job_raw = os.environ.get("SLURM_ARRAY_TASK_ID")
+        if job_raw is None:
+            raise SystemExit("featurize_positions requires SLURM_ARRAY_TASK_ID (submit as an array).")
+        # NWORKERS overrides the array count so a straggler re-run keeps the SAME
+        # round-robin slicing (mirrors pack_root).
+        n_workers = int(os.environ.get("NWORKERS") or os.environ["SLURM_ARRAY_TASK_COUNT"])
+        run_featurize_positions(
+            work_dir=config["work_dir"], worker_index=int(job_raw), n_workers=n_workers,
+        )
+    elif args.cmd == "merge_position_features":
+        run_merge_position_features(
             personal_db=config["personal_db"],
             work_dir=config["work_dir"],
             threads=config["threads"],
