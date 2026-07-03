@@ -31,6 +31,16 @@ Older lmcos work (Apr–May 2026) lives in the [§ Legacy lmcos lab notebook](#l
 - **Tree spec (verified):** `max_depth=10`, value = **raw value-head** (win−loss), budget = **96 expansions** (total nodes ≈ 96 × branching).
 - **Open:** the resource-rational branching account ([R-BRANCH](reports/branching.md) P1–P5: policy-entropy ≈ branching; width-gated stop vs value-convergence); difficulty-residualized MQ; strength-matched SF-2000 oracle.
 
+## 2026-07-03 {#2026-07-03}
+
+> **PG readout froze (policy saturation) → stop-temperature anneal + minimal head; board features moved into preprocess; board.py unified.**
+
+| Description | Rationale | Status / finding | Reference |
+|---|---|---|---|
+| **LMCOS** PG readout (`pg_controller_train`) frozen: identical train/val metrics epochs 2–14 (`val_stop_acc=0.107`, greedy regret 200.74) | closed-form E[regret] on the soft stop policy `p_t = σ(A_t)`, head-only on frozen `z_t` | ❌→🔧 the soft policy **saturated to 0/1 in epoch 1** (LR 2e-3 lunge); the sigmoid slope `p(1−p)→0` kills the gradient (not slow convergence, not LR-only). Fix: **`stop_temperature` 4.0→1.0 anneal** (`p_t = σ(A_t/τ)` keeps it off the saturated tails; τ doesn't touch the deployed hard `sign(A_t)` rule → val selection stays comparable), **LR 2e-3→3e-4**, **minimal head 256×3 → 32×2** (~140k→2.2k params, 65×), per-epoch regret-curve CSV/PNG next to the checkpoint | commit `pg readout: stop-temperature…` |
+| **Human** board features → **preprocess** as first-class DB columns; board.py just reads them | uniform treatment (one `FEATURES` registry drives figures + partials + matrix; ply + RT-histogram the only special cases) | ✅ material/in_check/prev_capture in SQL (0/2014 mismatch vs python-chess); captures/checks via a **Slurm array** (32×16 = 512 cores) over distinct FENs; `personal_db` unified with analysis via a config `preprocess:` section; outputs split `pdf/png/csv` | [board.md](reports/board.md) methods |
+| **Human** ∩-shape (weighted `material_imbalance`) | engine-free decidedness/VOC test | ✅ CONFIRMED on a smoke sample (β₂<0, ΔR²=0.0052; both binned-CI + quadratic) — balanced → think more, decided → faster | [board.md](reports/board.md) |
+
 ## 2026-06-30 {#2026-06-30}
 
 Reclaimed the narrative: **legal-moves is the *explanandum*, not a floor to beat** — and a no-prune, per-operation-cost resource-rational stop **reproduces the whole decomposition**.
