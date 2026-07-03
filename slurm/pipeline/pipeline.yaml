@@ -4,7 +4,7 @@
 # dependency just start immediately. submit_all.sh submits everything below in
 # order, wiring `after` -> Slurm afterok on the parents' job ids.
 #
-#   preprocess ─┬─ featurize_board ── board_analysis          (P0: engine-free)
+#   preprocess ─┬─ board_analysis  (P0: engine-free; featurizes in-process)
 #               └─ filter_trees ── gen_trees(befs1cp) ─┬─ engine_analysis_pwin  (P1 stats, pwin)
 #                                                      ├─ engine_analysis_cp    (P1 stats, cp)
 #                                                      └─ pack_trees ── train_encoder ──
@@ -12,17 +12,13 @@
 #
 # Trees are built by greedy BeFS on native centipawns (key befs1cp_md36); both
 # WDL and cp/mate are stored per node, so the engine step runs twice (UNIT=pwin,
-# UNIT=cp) off the SAME trees. board_analysis depends on featurize_board (the
-# P0 board-correlate battery reads its per-FEN parquet).
+# UNIT=cp) off the SAME trees. board_analysis featurizes its
+# board features in-process on a game sample (no separate featurize step).
 steps:
-  # ---- P0: engine-free board battery ----
-  - name: featurize_board
-    script: featurize_board.slurm
-    after: [preprocess]
-
+  # ---- P0: engine-free board battery (featurizes in-process; no separate step) ----
   - name: board_analysis
     script: board_analysis.slurm
-    after: [featurize_board]
+    after: [preprocess]
 
   # ---- trees ----
   - name: filter_trees
