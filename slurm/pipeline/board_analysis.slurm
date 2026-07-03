@@ -9,11 +9,12 @@
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err
 #SBATCH --partition=cpu
+#SBATCH --qos=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=00:30:00
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 TINY=/home/hl4291/chess_analysis
