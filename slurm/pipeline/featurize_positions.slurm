@@ -8,7 +8,7 @@
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%A_%a.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%A_%a.err
 #SBATCH --partition=cpu
-#SBATCH --qos=test
+#SBATCH --qos=short
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
