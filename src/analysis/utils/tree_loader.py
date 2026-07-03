@@ -22,6 +22,7 @@ node's side-to-move POV; negamax parent value = −min(children) (the parent pic
 the child that is worst for the opponent).
 """
 
+import functools
 import os
 import random
 import multiprocessing as mp
@@ -46,9 +47,6 @@ UNITS = {
     "cp": {"feature": "cp_order", "frac_good_eps": 50.0, "acceptable_thr": -100.0,
            "oss_node_cost": 0.04},
 }
-# Backwards-compatible aliases (pre-unit constants; pwin semantics).
-FRAC_GOOD_EPS = UNITS["pwin"]["frac_good_eps"]
-OSS_NODE_COST = UNITS["pwin"]["oss_node_cost"]
 
 
 def _tree_arrays(payload, unit: str):
@@ -198,19 +196,11 @@ def _tree_hpi(payload) -> float:
     return float(-(p * np.log(p)).sum())
 
 
-_WORKER_UNIT = "pwin"  # set per-pool via initializer (picklable plain global)
-
-
-def _init_worker(unit: str):
-    global _WORKER_UNIT
-    _WORKER_UNIT = unit
-
-
-def _worker(path: str):
+def _worker(path: str, unit: str):
     try:
         torch.set_num_threads(1)
         t = torch.load(path, map_location="cpu", weights_only=False)
-        sig = _tree_signals(t, _WORKER_UNIT)
+        sig = _tree_signals(t, unit)
         if sig is None:
             return None
         hpi = _tree_hpi(t)
@@ -231,8 +221,9 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int,
     names = random.Random(seed).sample(names, min(n_trees, len(names)))
     paths = [os.path.join(trees_dir, nm) for nm in names]
     tree_rows, move_rows = [], []
-    with mp.Pool(n_workers, initializer=_init_worker, initargs=(unit,)) as pool:
-        for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
+    with mp.Pool(n_workers) as pool:
+        worker = functools.partial(_worker, unit=unit)
+        for r in tqdm(pool.imap_unordered(worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
             fen, gss, voc_val, gap, hpi, n_eps, n_acc, n_kids, oss, ucis, mqs = r

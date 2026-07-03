@@ -46,7 +46,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from sklearn.linear_model import Ridge  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
-from analysis.config import load_config_section
+from analysis.utils.helpers import load_config_section
 from analysis.evaluate import _load_split_episodes
 from analysis.mchalt_scorer import _load_materialized_cache_unchecked
 

@@ -339,18 +339,6 @@ class TestAnalyzerCorrectness(unittest.TestCase):
         # The NULL row is ignored in counting because it is filtered out by the finite condition in the view definition
         self.assertEqual(analyzer.n_moves, 3)
 
-    def test_sql_injection_prevention(self) -> None:
-        """Verify that SQL injection in identifiers raises a ValueError."""
-        with self.assertRaises(ValueError):
-            # Malicious table name with injection
-            Analyzer(
-                db_conn=self.con,
-                table_name="test_moves",
-                x_var=Variable("x_val"),
-                y_var=Variable("move_time"),
-                ply_tertile_source="test_moves; DROP TABLE test_moves;"
-            )
-
     def test_nan_inf_handling(self) -> None:
         """Verify that NaN, Inf, and -Inf values in the database are handled gracefully."""
         data = [

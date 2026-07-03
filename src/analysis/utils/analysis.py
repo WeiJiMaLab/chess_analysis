@@ -7,7 +7,6 @@ using a clean, object-oriented approach.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -32,46 +31,25 @@ from analysis.utils.plots import (
     plot_qbin_stats,
 )
 
-# Ply tertiles are settled **a priori from the whole move dataset**, not from the
-# (filtered) analysis subset: we infer the two ``move_ply`` tertile cutpoints once
-# from this source table and apply the *same* boundaries to every plot, so the
-# segmentation is identical and comparable across analyses regardless of filtering.
-_PLY_TERTILE_SOURCE_DEFAULT = "processed_moves_nonzero"
-_TERTILE_CUTS_CACHE: dict[tuple[str, str], tuple[int, int]] = {}
-
 # Highlight color for an isolated value point-mass (e.g. Gain==0) on a LOWESS panel:
 # black ``x`` reads as a discrete "special point" against the steel-blue smoother.
 _MASS_COLOR = "black"
 
 
 def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[int, int]:
-    """Return the (1/3, 2/3) tertile cutpoints of ``column`` over the whole ``source`` table.
-    Default ``column='move_ply'`` gives the a-priori ply tertiles; pass another column (e.g.
+    """The (1/3, 2/3) tertile cutpoints of ``column`` over the whole ``source`` table.
+    Default ``column='move_ply'`` gives the ply tertiles; pass another column (e.g.
     ``'gss'``) to segment the same plot by a different variable instead."""
-    key = (source, column)
-    if key not in _TERTILE_CUTS_CACHE:
-        c1, c2 = conn.execute(
-            f"SELECT quantile_disc({column}, 1.0/3), quantile_disc({column}, 2.0/3) FROM {source}"
-        ).fetchone()
-        if c1 is None or c2 is None:
-            c1, c2 = 0, 0
-        # Integer columns (move_ply) -> int cutpoints (clean "< n" labels); float
-        # columns (e.g. game_fraction) keep their float cutpoints.
-        if isinstance(c1, int) or (isinstance(c1, float) and c1.is_integer() and float(c2).is_integer()):
-            c1, c2 = int(c1), int(c2)
-        _TERTILE_CUTS_CACHE[key] = (c1, c2)
-    return _TERTILE_CUTS_CACHE[key]
-
-
-_SQL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-
-
-def _validate_sql_identifier(name: str) -> str:
-    if not _SQL_IDENTIFIER.match(name):
-        raise ValueError(
-            f"quantile_heatmap_row must be a simple SQL identifier (letters, digits, underscore); got {name!r}"
-        )
-    return name
+    cut_lo, cut_hi = conn.execute(
+        f"SELECT quantile_disc({column}, 1.0/3), quantile_disc({column}, 2.0/3) FROM {source}"
+    ).fetchone()
+    if cut_lo is None or cut_hi is None:
+        return 0, 0
+    # Integer columns (move_ply) -> int cutpoints (clean "< n" labels); float
+    # columns (e.g. game_fraction) keep their float cutpoints.
+    if isinstance(cut_lo, int) or (isinstance(cut_lo, float) and cut_lo.is_integer() and float(cut_hi).is_integer()):
+        return int(cut_lo), int(cut_hi)
+    return cut_lo, cut_hi
 
 
 @dataclass
@@ -98,13 +76,13 @@ class Analyzer:
     Standard analyzer for the relationship between two variables (X and Y).
     Runs SQL-native aggregations in DuckDB.
 
-    Segmentation by **ply tertiles** is settled a priori: the two ``move_ply``
-    cutpoints are inferred once from the whole ``ply_tertile_source`` dataset
-    (``quantile_disc`` at 1/3, 2/3), then applied as fixed boundaries to this
-    (possibly filtered) analysis — so the segmentation is identical and comparable
-    across plots. ``quantile_tertile_df`` holds per-tertile aggregates with the
-    qbin ``ntile`` recomputed **within** each fixed tertile; legend labels are the
-    fixed ply ranges (``self.ply_cuts``).
+    Segmentation by **ply tertiles**: the two ``move_ply`` cutpoints are inferred
+    from ``ply_tertile_source`` (``quantile_disc`` at 1/3, 2/3) and applied as fixed
+    boundaries, so the segmentation is comparable across plots. ``ply_tertile_source``
+    defaults to the analysis ``table_name`` (pass a broader table to share cutpoints
+    across several filtered analyses). ``quantile_tertile_df`` holds per-tertile
+    aggregates with the qbin ``ntile`` recomputed **within** each fixed tertile;
+    legend labels are the fixed ply ranges (``self.ply_cuts``).
 
     Optional ``quantile_heatmap_row``: second column (e.g. ``move_ply``) for a
     quantile×quantile heatmap of mean transformed Y, saved as its own figure when
@@ -124,7 +102,7 @@ class Analyzer:
         quantile_heatmap_row_label: str | None = None,
         zero_inflated: bool = False,
         zero_threshold: float = 0.0,
-        ply_tertile_source: str = _PLY_TERTILE_SOURCE_DEFAULT,
+        ply_tertile_source: str | None = None,
         segment_column: str = "move_ply",
         segment_source: str | None = None,
         segment_label: str = "ply",
@@ -174,14 +152,14 @@ class Analyzer:
         self.title = title or f"{self.x.label} vs {self.y.label}"
         # Source table whose whole move_ply distribution settles the tertile
         # cutpoints (applied identically to this — possibly filtered — analysis).
-        self.ply_tertile_source = _validate_sql_identifier(ply_tertile_source)
+        self.ply_tertile_source = ply_tertile_source or table_name
         # The by-segment panel splits on ``segment_column`` (default ``move_ply`` → ply
-        # tertiles); ``segment_source`` is the table its a-priori cutpoints come from
-        # (default = ``ply_tertile_source``), and ``segment_label`` is the legend prefix.
-        # Pass e.g. (segment_column='gss', segment_source='mq_rt', segment_label='GSS') to
-        # get the *same* MQ-vs-RT plot segmented by GSS stratum instead of ply.
-        self.segment_column = _validate_sql_identifier(segment_column)
-        self.segment_source = _validate_sql_identifier(segment_source or ply_tertile_source)
+        # tertiles); ``segment_source`` is the table its cutpoints come from (default =
+        # ``ply_tertile_source``), and ``segment_label`` is the legend prefix. Pass e.g.
+        # (segment_column='gss', segment_source='mq_rt', segment_label='GSS') to get the
+        # *same* MQ-vs-RT plot segmented by GSS stratum instead of ply.
+        self.segment_column = segment_column
+        self.segment_source = segment_source or self.ply_tertile_source
         self.segment_label = segment_label
         # Optional fixed cutpoints (bypass the empirical quantiles) + explicit legend
         # labels — e.g. game fraction split at fixed thirds 1/3, 2/3 with "< 1/3" labels.
@@ -226,13 +204,12 @@ class Analyzer:
         self.quantile_heatmap_count_df = None
 
         if quantile_heatmap_row is not None:
-            qhr = _validate_sql_identifier(quantile_heatmap_row)
-            if _SQL_IDENTIFIER.match(self.x.column.strip()) and qhr == self.x.column.strip():
+            if quantile_heatmap_row == self.x.column.strip():
                 raise ValueError(
                     "quantile_heatmap_row must differ from x_var.column (otherwise the quantile grid is degenerate)."
                 )
-            self.quantile_heatmap_row = qhr
-            self._quantile_heatmap_row_label = quantile_heatmap_row_label or qhr.replace("_", " ")
+            self.quantile_heatmap_row = quantile_heatmap_row
+            self._quantile_heatmap_row_label = quantile_heatmap_row_label or quantile_heatmap_row.replace("_", " ")
 
         # Results to be populated by _run_sql_pipeline()
         self.n_games = 0

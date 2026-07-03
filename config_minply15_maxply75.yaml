@@ -25,7 +25,6 @@ human_analysis:
   max_ply: ${max_ply}
   trees_default: ${trees_dir}/befs1cp_md36
   cache_default: ${run_dir}/tree_values_cache
-  key_default: befs1cp_md36_100000_7
   response_time_histogram_bins: 50
   qq_plot_quantile_probes: 200
   selected_db_default: ${scratch_dir}/personal.db     # shared, preprocessed once

@@ -1,22 +1,63 @@
 """
-Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engine.
+Shared analysis utilities: config loading, DuckDB connections/helpers, ply-window
+views, plotting style, and small stats helpers.
 """
 
 from __future__ import annotations
 
-from analysis.config import load_config_section
+import contextlib
+import os
+import re
+from pathlib import Path
 
-# Shared analysis config. The active file is chosen by the ``CONFIG`` env var
-# (which slurm/setup_env.sh exports and board.py / engine.py set from --config),
-# falling back to the repo default; ${...} placeholders in ``human_analysis`` are
-# resolved against ``globals`` (see analysis.config).
-CONFIG = load_config_section("human_analysis")
-
-import chess
-import chess.svg
 import duckdb
 import matplotlib.pyplot as plt
-from IPython.display import SVG, display
+import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_CONFIG = _REPO_ROOT / "config_allply.yaml"
+
+
+def config_path() -> Path:
+    """Active config file: $CONFIG if set, else the repo default."""
+    env = os.environ.get("CONFIG")
+    return Path(env) if env else _DEFAULT_CONFIG
+
+
+def _interpolate(value, variables):
+    """Recursively substitute ${key} / ${globals.key} placeholders."""
+    if isinstance(value, str):
+        def repl(match):
+            name = match.group(1).removeprefix("globals.")
+            return str(variables[name]) if name in variables else match.group(0)
+        return re.sub(r"\$\{([^}]+)\}", repl, value)
+    if isinstance(value, dict):
+        return {k: _interpolate(v, variables) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate(v, variables) for v in value]
+    return value
+
+
+def load_config_section(section: str, path=None) -> dict:
+    """Return one top-level section of the run config with ${...} placeholders
+    resolved against ``globals``."""
+    path = Path(path) if path else config_path()
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found at {path}")
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    body = data.get(section)
+    if not isinstance(body, dict):
+        raise KeyError(f"'{section}' section missing from {path}")
+    variables = dict(data.get("globals", {}))
+    for _ in range(5):
+        variables = {k: _interpolate(v, variables) for k, v in variables.items()}
+    return _interpolate(body, variables)
+
+
+# Shared analysis config: active file from $CONFIG (slurm/setup_env.sh exports it),
+# else the repo default; ${...} in ``human_analysis`` resolved against ``globals``.
+CONFIG = load_config_section("human_analysis")
 
 # --- Plotting Design System (Poster Style) ---
 MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
@@ -31,11 +72,6 @@ PHASE_COLORS = {
     3: "#08519C",  # Dark blue (Late)
 }
 
-# Game-fraction tertiles use FIXED thirds of the game (not empirical quantiles),
-# so the split reads as "early / mid / late third" with clean labels.
-GAME_FRAC_CUTS = (1.0 / 3.0, 2.0 / 3.0)
-GAME_FRAC_LABELS = {1: "< 1/3", 2: "1/3–2/3", 3: "> 2/3"}
-
 def apply_poster_style():
     """Apply global matplotlib settings for Poster Style."""
     plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
@@ -49,14 +85,37 @@ def apply_poster_style():
     plt.rcParams['legend.fontsize'] = FONT_SIZE_TICKS
 
 
-import contextlib
+def sql_str(s: str) -> str:
+    """Single-quoted SQL literal fragment."""
+    return s.replace("'", "''")
 
+
+def duckdb_connect_config(work_dir: str, threads: int, memory_limit: str) -> dict:
+    """DuckDB ``connect`` config: spill/sort temp files live in ``work_dir``."""
+    work_dir = os.path.abspath(work_dir)
+    os.makedirs(work_dir, exist_ok=True)
+    return {"threads": int(threads), "memory_limit": str(memory_limit), "temp_directory": work_dir}
+
+
+def connect(database: str, work_dir: str, threads: int, memory_limit: str,
+            read_only: bool) -> duckdb.DuckDBPyConnection:
+    """Open ``database`` with DuckDB spill/sort temp files routed to ``work_dir``."""
+    return duckdb.connect(database=database, read_only=read_only,
+                          config=duckdb_connect_config(work_dir, threads, memory_limit))
 
 
 @contextlib.contextmanager
 def db_connection(database: str = CONFIG["selected_db_default"], read_only: bool = True):
-    """Context manager for acquiring and safely releasing a DuckDB connection."""
-    conn = duckdb.connect(database=database, read_only=read_only)
+    """Acquire/release a DuckDB connection with spill routed to scratch (beside the
+    DB) and memory capped, so the full-table sorts in the analyses don't spill to
+    CWD or hit the default ceiling. Cap overridable via $DUCKDB_MEMORY_LIMIT."""
+    temp_dir = os.path.join(os.path.dirname(os.path.abspath(database)), "duckdb_tmp")
+    os.makedirs(temp_dir, exist_ok=True)
+    conn = duckdb.connect(
+        database=database, read_only=read_only,
+        config={"temp_directory": temp_dir,
+                "memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "64GB")},
+    )
     try:
         yield conn
     finally:

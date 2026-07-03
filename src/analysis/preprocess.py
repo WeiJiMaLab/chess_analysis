@@ -25,8 +25,7 @@ from datetime import datetime
 import duckdb
 from tqdm import tqdm
 
-from analysis.config import load_config_section
-from analysis.db import connect, sql_str
+from analysis.utils.helpers import connect, load_config_section, sql_str
 
 
 def get_games(
@@ -185,26 +184,30 @@ def preprocess_game_shard(
     conn.close()
 
 
-def process_moves(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
+def process_moves(conn: duckdb.DuckDBPyConnection, work_dir: str,
+                  table: str = "processed_moves") -> None:
     """
-    Build ``processed_moves`` (all board features) and ``processed_moves_nonzero`` (``move_time > 0``).
+    Build ``<table>`` (all board features) and ``<table>_nonzero`` (``move_time > 0``)
+    from table ``moves``. Defaults to ``processed_moves``; pass another ``table``
+    (e.g. ``full_rebuild``) to build a side-by-side candidate without touching the
+    official tables.
 
-    Expects table ``moves``; bad games are already removed at shard time. Board
-    features are first-class columns so downstream analysis reads them uniformly.
-    Material / in_check / prev_move_was_capture are pure regex/window SQL;
-    n_captures_avail / n_checks_avail need python-chess move enumeration
+    Bad games are already removed at shard time. Board features are first-class
+    columns so downstream analysis reads them uniformly. Material / in_check /
+    prev_move_was_capture are pure regex/window SQL; n_captures_avail /
+    n_checks_avail need python-chess move enumeration
     (:func:`_featurize_captures_checks`, scratch in ``work_dir``). All are added
-    before ``processed_moves_nonzero`` is derived.
+    before ``<table>_nonzero`` is derived.
     """
     # Weighted material (P/N/B/R/Q = 1/3/3/5/9, incl pawns, kings excluded) counts
     # piece letters in the placement string.
-    def _w(piece):
+    def _piece_count(piece):
         return f"len(regexp_extract_all(replace(board_position, '/', ''), '{piece}'))"
-    white_mat = f"(1*{_w('P')} + 3*{_w('N')} + 3*{_w('B')} + 5*{_w('R')} + 9*{_w('Q')})"
-    black_mat = f"(1*{_w('p')} + 3*{_w('n')} + 3*{_w('b')} + 5*{_w('r')} + 9*{_w('q')})"
+    white_mat = f"(1*{_piece_count('P')} + 3*{_piece_count('N')} + 3*{_piece_count('B')} + 5*{_piece_count('R')} + 9*{_piece_count('Q')})"
+    black_mat = f"(1*{_piece_count('p')} + 3*{_piece_count('n')} + 3*{_piece_count('b')} + 5*{_piece_count('r')} + 9*{_piece_count('q')})"
     conn.execute(
         f"""
-        CREATE OR REPLACE TABLE processed_moves AS
+        CREATE OR REPLACE TABLE {table} AS
         SELECT
             *,
             CASE WHEN player_white THEN {white_mat} ELSE {black_mat} END AS self_material,
@@ -234,16 +237,16 @@ def process_moves(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
         ) AS _base
         """
     )
-    _featurize_captures_checks(conn, work_dir)
+    _featurize_captures_checks(conn, work_dir, table)
     conn.execute(
-        """
-        CREATE OR REPLACE TABLE processed_moves_nonzero AS
-        SELECT * FROM processed_moves WHERE move_time > 0
+        f"""
+        CREATE OR REPLACE TABLE {table}_nonzero AS
+        SELECT * FROM {table} WHERE move_time > 0
         """
     )
-    n_e = conn.execute("SELECT count(*) FROM processed_moves").fetchone()[0]
-    n_z = conn.execute("SELECT count(*) FROM processed_moves_nonzero").fetchone()[0]
-    print(f"✅ processed_moves: {n_e:,} rows | processed_moves_nonzero: {n_z:,} rows")
+    n_all = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    n_nonzero = conn.execute(f"SELECT count(*) FROM {table}_nonzero").fetchone()[0]
+    print(f"✅ {table}: {n_all:,} rows | {table}_nonzero: {n_nonzero:,} rows")
 
 
 def calc_captures_checks(fen: str) -> tuple[int, int]:
@@ -259,9 +262,10 @@ def calc_captures_checks(fen: str) -> tuple[int, int]:
     return caps, checks
 
 
-def _featurize_captures_checks(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
-    """Add n_captures_avail / n_checks_avail columns to ``processed_moves`` via
-    python-chess over its DISTINCT FENs.
+def _featurize_captures_checks(conn: duckdb.DuckDBPyConnection, work_dir: str,
+                               table: str = "processed_moves") -> None:
+    """Add n_captures_avail / n_checks_avail columns to ``table`` via python-chess
+    over its DISTINCT FENs.
 
     Dumps the distinct FENs to parquet, featurizes them a row group at a time
     across the node's cores, joins the counts back. The pool uses ``spawn``: the
@@ -273,14 +277,17 @@ def _featurize_captures_checks(conn: duckdb.DuckDBPyConnection, work_dir: str) -
     import pyarrow.parquet as pq
 
     os.makedirs(work_dir, exist_ok=True)
-    fens_path = os.path.join(work_dir, "distinct_fens.parquet")
-    counts_path = os.path.join(work_dir, "captures_checks.parquet")
-    conn.execute(f"COPY (SELECT DISTINCT fen FROM processed_moves) TO '{sql_str(fens_path)}' (FORMAT PARQUET)")
+    fens_path = os.path.join(work_dir, f"distinct_fens_{table}.parquet")
+    counts_path = os.path.join(work_dir, f"captures_checks_{table}.parquet")
+    conn.execute(f"COPY (SELECT DISTINCT fen FROM {table}) TO '{sql_str(fens_path)}' (FORMAT PARQUET)")
 
     reader = pq.ParquetFile(fens_path)
     schema = pa.schema([("fen", pa.string()),
                         ("n_captures_avail", pa.int32()), ("n_checks_avail", pa.int32())])
-    with pq.ParquetWriter(counts_path, schema) as writer, mp.get_context("spawn").Pool() as pool:
+    # Cap the pool at the SLURM allocation (else it defaults to the node's full core
+    # count, oversubscribing cores and blowing the memory ceiling).
+    n_workers = int(os.environ.get("SLURM_CPUS_PER_TASK") or 0) or None
+    with pq.ParquetWriter(counts_path, schema) as writer, mp.get_context("spawn").Pool(n_workers) as pool:
         for rg in range(reader.num_row_groups):
             fens = reader.read_row_group(rg, columns=["fen"])["fen"].to_pylist()
             if not fens:
@@ -291,12 +298,12 @@ def _featurize_captures_checks(conn: duckdb.DuckDBPyConnection, work_dir: str) -
                                          "n_checks_avail": pa.array(checks, pa.int32())}))
 
     conn.execute(
-        f"CREATE OR REPLACE TABLE processed_moves AS "
+        f"CREATE OR REPLACE TABLE {table} AS "
         f"SELECT p.*, c.n_captures_avail, c.n_checks_avail "
-        f"FROM processed_moves p LEFT JOIN read_parquet('{sql_str(counts_path)}') c USING (fen)"
+        f"FROM {table} p LEFT JOIN read_parquet('{sql_str(counts_path)}') c USING (fen)"
     )
     n = conn.execute(f"SELECT count(*) FROM read_parquet('{sql_str(counts_path)}')").fetchone()[0]
-    print(f"✅ featurized captures/checks over {n:,} distinct FENs", flush=True)
+    print(f"✅ featurized captures/checks over {n:,} distinct FENs → {table}", flush=True)
 
 
 def merge_game_shards(
@@ -350,10 +357,12 @@ def main() -> None:
     sub.add_parser("get_games", help="Build games table from Lichess core DB.")
     sub.add_parser("shard", help="One array stride; uses config staging_dir, SLURM_ARRAY_TASK_ID, PREPROCESS_TOTAL_SHARDS.")
     sub.add_parser("merge", help="Parquet shards → table moves only.")
-    sub.add_parser(
+    p_process = sub.add_parser(
         "process_moves",
-        help="table moves → processed_moves[_nonzero] (board-feature SQL).",
+        help="table moves → <table>[_nonzero] board features (default processed_moves).",
     )
+    p_process.add_argument("--table", default="processed_moves",
+                           help="output base table (e.g. full_rebuild to build a candidate alongside the official tables).")
 
     args = parser.parse_args()
     if args.config:
@@ -396,7 +405,7 @@ def main() -> None:
     elif args.cmd == "process_moves":
         conn = connect(config["personal_db"], config["work_dir"],
                        config["threads"], config["memory_limit"], read_only=False)
-        process_moves(conn, config["work_dir"])
+        process_moves(conn, config["work_dir"], args.table)
         conn.close()
 
 

@@ -17,14 +17,6 @@ from __future__ import annotations
 import argparse
 import os
 
-# Resolve --config BEFORE importing analysis.utils so helpers loads the right
-# config file (its CONFIG global is built at import from the CONFIG env var).
-_pre = argparse.ArgumentParser(add_help=False)
-_pre.add_argument("--config")
-_cfg, _ = _pre.parse_known_args()
-if _cfg.config:
-    os.environ["CONFIG"] = _cfg.config
-
 from pathlib import Path
 
 import duckdb
@@ -65,24 +57,23 @@ def load_played_moves(cache_dir: Path, key: str, db_path: str) -> pd.DataFrame:
     vals = pd.read_parquet(cache_dir / f"vals_{key}.parquet")[["fen", "gss"]]
     root_moves = pd.read_parquet(cache_dir / f"rootmoves_{key}.parquet")[["fen", "move_uci", "mq"]]
 
-    conn = duckdb.connect(db_path, read_only=True)
-    create_ply_windowed_views(conn)   # ply filter applied on arrival (pmnz_win)
-    conn.register("_vals", vals)
-    conn.register("_root_moves", root_moves)
-    df = conn.execute("""
-        WITH human AS (
-            SELECT m.fen, m.gid, m.move_ply, m.move_time,
-                   m.n_possible_moves AS legal_moves, mv.move_uci
-            FROM (SELECT DISTINCT fen FROM _root_moves) f
-            JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
-            JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
-        )
-        SELECT rm.mq, ln(h.move_time) AS log_rt, v.gss, h.legal_moves
-        FROM human h
-        JOIN _root_moves rm ON rm.fen = h.fen AND rm.move_uci = h.move_uci
-        JOIN _vals v ON v.fen = h.fen
-    """).df()
-    conn.close()
+    with db_connection(db_path, read_only=True) as conn:
+        create_ply_windowed_views(conn)   # ply filter applied on arrival (pmnz_win)
+        conn.register("_vals", vals)
+        conn.register("_root_moves", root_moves)
+        df = conn.execute("""
+            WITH human AS (
+                SELECT m.fen, m.gid, m.move_ply, m.move_time,
+                       m.n_possible_moves AS legal_moves, mv.move_uci
+                FROM (SELECT DISTINCT fen FROM _root_moves) f
+                JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
+                JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
+            )
+            SELECT rm.mq, ln(h.move_time) AS log_rt, v.gss, h.legal_moves
+            FROM human h
+            JOIN _root_moves rm ON rm.fen = h.fen AND rm.move_uci = h.move_uci
+            JOIN _vals v ON v.fen = h.fen
+        """).df()
     return df.dropna(subset=["mq", "log_rt", "gss", "legal_moves"]).reset_index(drop=True)
 
 
@@ -94,7 +85,7 @@ def gss_strata(df: pd.DataFrame) -> pd.Series:
     return pd.cut(df["gss"], bins=edges, labels=labels, include_lowest=True)
 
 
-def run_difficulty_confound_stats(cache_dir: Path, key: str, db_path: str):
+def difficulty_confound_stats(cache_dir: Path, key: str, db_path: str):
     """Print the difficulty-confound partial Spearman correlation reports."""
     df = load_played_moves(cache_dir, key, db_path)
     print(f"\n=== MQ↔RT, conditioning on difficulty (n = {len(df):,} played moves) ===")
@@ -156,7 +147,7 @@ def save_tree_dashboard(analyzer_ply: Analyzer, out_dir: str, base_name: str) ->
     print(f"Saved figures: {out_path_pdf} and {out_path_png}")
 
 
-def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, unit: str = "pwin") -> None:
+def plot_engine_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, unit: str = "pwin") -> None:
     """Spearman AND Pearson matrices (trust protocol: report both; the Pearson
     matrix saves with a ``_pearson`` suffix)."""
     df = conn.execute("""
@@ -208,7 +199,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, 
         print(f"Saved figures: {base}{suffix}.pdf and {base}{suffix}.png")
 
 
-def run_trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
+def trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
     """P1 trust tests (trust_protocol.md §5): the pre-registered SIGN-MIRROR —
     net of legal moves, action_gap (decisiveness) and n_within_epsilon (ambiguity
     COUNT) must have OPPOSITE-signed partials with CIs excluding 0 and not
@@ -266,47 +257,42 @@ def run_trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
               f"(n={len(above):,})")
 
 
-def _ensure_counts(vals: pd.DataFrame, root_moves: pd.DataFrame) -> pd.DataFrame:
-    """Guarantee the integer COUNT columns exist (n_root_children, n_acceptable,
-    n_within_epsilon), deriving them from a legacy fraction cache when needed.
-
-    A tree written by the pre-count tree_loader stored ``frac_acceptable`` /
-    ``greedy_frac_good`` (= count / #root-children). The exact denominator is the
-    number of root moves the generator wrote for that FEN — i.e. the per-FEN row
-    count in ``root_moves`` — so ``count = round(frac * n_root_children)`` is exact
-    (integer up to fp error). This lets the counts pipeline run on an existing
-    fraction cache with NO tree recompute; a fresh --refresh emits the counts
-    natively and this is a no-op."""
+def _ensure_n_root_children(vals: pd.DataFrame, root_moves: pd.DataFrame) -> pd.DataFrame:
+    """Backfill ``n_root_children`` (the legal-move denominator) for a cache that
+    predates it, from the per-FEN root-move row count. The count signals themselves
+    are guaranteed by the recompute gate, so no fraction reconstruction is needed."""
     if "n_root_children" not in vals.columns:
-        nrc = root_moves.groupby("fen").size().rename("n_root_children")
-        vals = vals.merge(nrc, left_on="fen", right_index=True, how="left")
-    if "n_acceptable" not in vals.columns and "frac_acceptable" in vals.columns:
-        vals["n_acceptable"] = (vals["frac_acceptable"] * vals["n_root_children"]).round()
-    if "n_within_epsilon" not in vals.columns and "greedy_frac_good" in vals.columns:
-        vals["n_within_epsilon"] = (vals["greedy_frac_good"] * vals["n_root_children"]).round()
+        counts = root_moves.groupby("fen").size().rename("n_root_children")
+        vals = vals.merge(counts, left_on="fen", right_index=True, how="left")
     return vals
 
 
-def run_tree_values_pipeline(
+def cache_key(trees_dir: str, n_trees: int, seed: int, unit: str) -> str:
+    """The tree-values cache key. Built identically wherever the cache is written
+    (tree_values_pipeline) or read (mq_gss), so the two never disagree."""
+    return f"{os.path.basename(trees_dir.rstrip('/'))}_{n_trees}_{seed}_{unit}"
+
+
+def tree_values_pipeline(
     trees_dir: str, n_trees: int, n_workers: int, seed: int, db_path: str, cache_dir: str,
     refresh: bool, unit: str = "pwin"
 ):
     """Tree-values extraction, human-join, dashboards, and P1 trust tests — in one
     VALUE UNIT ("pwin" | "cp"; see tree_loader.UNITS). Figures land in
     figures_dir/engine_<unit>/ so both variants coexist."""
-    key = f"{os.path.basename(trees_dir.rstrip('/'))}_{n_trees}_{seed}_{unit}"
+    key = cache_key(trees_dir, n_trees, seed, unit)
     cache = Path(cache_dir)
-    vals_path, rm_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
+    vals_path, root_moves_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
 
-    use_cache = (not refresh) and vals_path.exists() and rm_path.exists()
+    use_cache = (not refresh) and vals_path.exists() and root_moves_path.exists()
     if use_cache:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
-        vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
-        # h_pi/oss are the deep signals a recompute is actually needed for; the COUNT
-        # signals are recovered cheaply from a legacy (fraction) cache below, so they
-        # are deliberately NOT in _required — no 5-hour tree recompute just to switch
-        # from fractions to counts.
-        _required = ("h_pi", "oss")
+        vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(root_moves_path)
+        # A cache missing any of these is recomputed from the trees. The count signals
+        # are included because they encode the acceptable/ε thresholds: a legacy cache's
+        # fractions were computed at the OLD threshold, so reconstructing counts from
+        # them would silently report the wrong bar.
+        _required = ("h_pi", "oss", "n_acceptable", "n_within_epsilon")
         _missing = [c for c in _required if c not in vals.columns]
         if _missing:
             print(f"  cached values predate columns {_missing}; recomputing from the trees …")
@@ -317,12 +303,10 @@ def run_tree_values_pipeline(
         vals, root_moves = compute_values(trees_dir, n_trees, seed, n_workers, unit=unit)
         cache.mkdir(parents=True, exist_ok=True)
         vals.to_parquet(vals_path)
-        root_moves.to_parquet(rm_path)
+        root_moves.to_parquet(root_moves_path)
         print(f"  cached → {cache} (key={key})")
 
-    # Guarantee the COUNT columns (n_acceptable / n_within_epsilon / n_root_children)
-    # exist — derived from a legacy fraction cache if needed (no tree recompute).
-    vals = _ensure_counts(vals, root_moves)
+    vals = _ensure_n_root_children(vals, root_moves)
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
     # Output dir is wired from config (human_analysis.figures_dir); engine figures
@@ -452,6 +436,9 @@ def run_tree_values_pipeline(
             )
             save_tree_dashboard(a_ply, out_dir, name)
 
+        # Axes are intentionally inverted vs the other signal dashboards: RT on X,
+        # MQ on Y. This panel asks "do longer thinks yield better moves?", so RT is
+        # the predictor and MQ the outcome — not signal-on-X-vs-RT like the rest.
         print("Executing engine tree analysis: mq...")
         mq_ply = _make_analyzer(
             "mq_rt",
@@ -463,10 +450,10 @@ def run_tree_values_pipeline(
         save_tree_dashboard(mq_ply, out_dir, "mq")
 
         print("Executing engine tree analysis: correlation_matrix...")
-        plot_lc0_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"), unit=unit)
+        plot_engine_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"), unit=unit)
 
         print("Executing engine tree analysis: P1 trust tests...")
-        run_trust_tests(conn, unit)
+        trust_tests(conn, unit)
 
 
 # =============================================================================
@@ -480,7 +467,6 @@ def main(argv=None):
         help="Execution mode: all (default), difficulty confound stats, or full tree-values pipeline."
     )
     parser.add_argument("--db", default=CONFIG["selected_db_default"])
-    parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     parser.add_argument("--seed", type=int, default=7)
 
     # Tree values args
@@ -490,23 +476,23 @@ def main(argv=None):
     parser.add_argument("--cache-dir", default=CONFIG["cache_default"])
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--key", default=None,
-                        help="cache key for mq_gss (default: <key_default>_<unit>)")
+                        help="cache key for mq_gss (default: derived from --trees-dir/--n-trees/--seed/--unit)")
     parser.add_argument("--unit", choices=sorted(UNITS), default="pwin",
                         help="value unit for the tree signals (pwin | cp); figures go to engine_<unit>/")
 
     args = parser.parse_args(argv)
-    key = args.key or f"{CONFIG['key_default']}_{args.unit}"
+    key = args.key or cache_key(args.trees_dir, args.n_trees, args.seed, args.unit)
 
     # tree_values BUILDS the cache parquet that mq_gss READS, so it must run first
     # in --mode all (otherwise a fresh cache, e.g. the first SF-2000 run, fails).
     modes = {
         "tree_values": {
-            "func": run_tree_values_pipeline,
+            "func": tree_values_pipeline,
             "args": [args.trees_dir, args.n_trees, args.n_workers, args.seed, args.db,
                      args.cache_dir, args.refresh, args.unit]
         },
         "mq_gss": {
-            "func": run_difficulty_confound_stats,
+            "func": difficulty_confound_stats,
             "args": [Path(args.cache_dir), key, args.db]
         }
     }

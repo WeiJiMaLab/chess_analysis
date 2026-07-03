@@ -23,5 +23,5 @@ cd "${TINY}"
 source "${TINY}/slurm/helpers/setup_env.sh"
 
 echo "board analysis on $(hostname) at $(date)"
-python3 src/analysis/board.py --all
+python3 src/analysis/board.py
 echo "Finished at $(date)"

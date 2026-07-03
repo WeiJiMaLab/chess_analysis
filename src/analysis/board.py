@@ -9,20 +9,12 @@ from the active config), saved under <figures_dir>/board/:
   3. correlation_matrix  Spearman + Pearson over log(RT), ply, and the covariates
   4. feature_histograms  marginal distribution of each covariate
 
-The covariates and the sample they read (``board_sample``) are set up in main().
+The covariates (read from the full ply-windowed table) are defined in main().
 """
 
 import argparse
 import math
 import os
-
-# Resolve --config BEFORE importing analysis.utils so helpers loads the right
-# config file (its CONFIG global is built at import from the CONFIG env var).
-_pre = argparse.ArgumentParser(add_help=False)
-_pre.add_argument("--config")
-_cfg, _ = _pre.parse_known_args()
-if _cfg.config:
-    os.environ["CONFIG"] = _cfg.config
 
 import numpy as np
 from scipy import stats
@@ -75,7 +67,7 @@ def move_time_summary(conn):
         GROUP BY b.bin_idx, b.bin_left, b.bin_right
         ORDER BY b.bin_idx
     """)
-    df_lmt = conn.execute("SELECT * FROM _lmt_bins ORDER BY bin_idx").df()
+    lmt_bins = conn.execute("SELECT * FROM _lmt_bins ORDER BY bin_idx").df()
 
     # Moments + empirical quantiles for the QQ plot (all SQL-side).
     mean, std = conn.execute("SELECT avg(ln_move_time), stddev(ln_move_time) FROM _summary_view").fetchone()
@@ -90,14 +82,14 @@ def move_time_summary(conn):
         idx = (cumsum >= df["n"].sum() / 2).idxmax()
         return float((df["bin_left"].iloc[idx] + df["bin_right"].iloc[idx]) / 2)
 
-    med_log = _weighted_median(df_lmt)
+    med_log = _weighted_median(lmt_bins)
 
     apply_poster_style()
     fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(34, 11), constrained_layout=True)
 
     # Panel 1: RT distribution in SECONDS on a log x-axis (bins uniform in ln(RT),
     # so exponentiating the edges gives geometric bins that read evenly on a log axis).
-    sec = df_lmt.assign(left_s=np.exp(df_lmt.bin_left), right_s=np.exp(df_lmt.bin_right))
+    sec = lmt_bins.assign(left_s=np.exp(lmt_bins.bin_left), right_s=np.exp(lmt_bins.bin_right))
     ax_h.bar(sec.left_s, sec.n, width=(sec.right_s - sec.left_s), align="edge",
              color=MAIN_COLOR, alpha=0.5, edgecolor=MAIN_COLOR, linewidth=1.2)
     ax_h.set_xscale("log")
@@ -122,11 +114,12 @@ def move_time_summary(conn):
     ax_p.axvspan(CONFIG["min_ply"], CONFIG["max_ply"], color="gray", alpha=0.12,
                  label=f"analysis window [{CONFIG['min_ply']},{CONFIG['max_ply']}]")
     _seconds_from_log(ax_p.yaxis)
-    ax_p.set(xlabel="Ply (whole game)", ylabel="mean RT (s, log axis)", title="RT vs ply (total)",
+    ax_p.set(xlabel="Ply (whole game)", ylabel="mean RT (s, log axis)",
+             title=f"RT vs ply (whole game, n = {int(ply.n.sum()):,})",
              xlim=(1, 150), xticks=[0, 50, 100, 150])
     ax_p.legend()
 
-    fig.suptitle(f"Response time — distribution, normal QQ, RT vs ply  (n = {n_moves:,} moves)",
+    fig.suptitle(f"Response time — distribution + normal QQ (windowed n = {n_moves:,}), RT vs ply (whole game)",
                  fontsize=FONT_SIZE_LABEL + 4)
     save_figure(fig, "board", "rt_distribution.pdf")
 
@@ -247,10 +240,10 @@ def feature_histograms(conn, features, table="pmnz_gf"):
             lo, hi = clip
             width = (hi - lo) / 50
             g = conn.execute(
-                f"SELECT width_bucket({col}, {lo}, {hi}, 50) AS b, count(*) AS n "
+                f"SELECT least(49, floor(({col} - {lo}) / {width}))::INT AS b, count(*) AS n "
                 f"FROM {table} {where} GROUP BY 1 ORDER BY 1"
             ).df()
-            ax.bar(lo + (g.b - 0.5) * width, g.n / g.n.sum() / width, width=width,
+            ax.bar(lo + (g.b + 0.5) * width, g.n / g.n.sum() / width, width=width,
                    color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
         ax.set(title=label, ylabel="density")
     fig.suptitle(f"Board features — distributions (n = {n_rows:,} move-instances)", fontsize=FONT_SIZE_LABEL)
@@ -260,7 +253,6 @@ def feature_histograms(conn, features, table="pmnz_gf"):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Board-level response time analyses")
     parser.add_argument("--db", default=CONFIG["selected_db_default"])
-    parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     args = parser.parse_args(argv)
     print(f"Board analysis: ply window [{CONFIG['min_ply']}, {CONFIG['max_ply']}], db={args.db}")
 
