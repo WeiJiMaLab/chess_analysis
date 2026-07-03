@@ -206,6 +206,23 @@ class MaterializedCache:
     examples: int  # total snapshots across all shards
 
 
+def _load_materialized_cache_unchecked(cache_index_path) -> "MaterializedCache":
+    """Load a materialized ``z_t`` cache index (shard list) WITHOUT the encoder-identity check that
+    :func:`_load_materialized_cache` enforces.
+
+    Used when scoring an already-trained checkpoint over a cache built for the SAME encoder (identity
+    holds by construction — same encoder produced both), so only the shard list is needed. Imported by
+    :mod:`cts.train.pg_controller_train`, :mod:`cts.analysis.zt_probe` and :mod:`analysis.evaluate`.
+    """
+    payload = torch.load(cache_index_path, weights_only=False)
+    if payload.get("format") != "cts_materialized_advantage_cache_v2":
+        raise ValueError(f"Unexpected materialized cache format: {cache_index_path}")
+    shards = payload.get("shards", [])
+    return MaterializedCache(shard_paths=[str(e["path"]) for e in shards],
+                             shard_sizes=[int(e["examples"]) for e in shards],
+                             examples=int(payload.get("examples", sum(int(e["examples"]) for e in shards))))
+
+
 # Oracle stop-step bucket boundaries used by --inverse-freq-weights. Bins are
 # right-open intervals against torch.bucketize: 0, 1, 2, 3, [4,8), [8,16), 16+.
 # These match the distribution buckets the dataset typically exhibits.

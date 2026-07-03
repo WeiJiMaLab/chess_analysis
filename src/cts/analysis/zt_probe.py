@@ -48,7 +48,7 @@ from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 from analysis.utils.helpers import load_config_section
 from analysis.evaluate import _load_split_episodes
-from analysis.mchalt_scorer import _load_materialized_cache_unchecked
+from cts.train.controller_train import _load_materialized_cache_unchecked
 
 
 # target name -> per-episode key emitted by _load_split_episodes

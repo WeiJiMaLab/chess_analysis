@@ -42,7 +42,7 @@ from cts.train.controller_train import (
     _collect_episode_metadata_and_step_count,
     _seed_and_resolve_paths,
 )
-from analysis.mchalt_scorer import _load_materialized_cache_unchecked
+from cts.train.controller_train import _load_materialized_cache_unchecked
 
 
 def _episode_feature_chunks(cache, episode_meta, total_steps, device):
@@ -62,6 +62,20 @@ def _episode_feature_chunks(cache, episode_meta, total_steps, device):
     for em in episode_meta:
         chunks.append(allf[off:off + em.num_steps])
         off += em.num_steps
+    return chunks
+
+
+def _use_steps_not_budget(chunks, d_embed):
+    """Scrap the budget: overwrite the ``T_t`` (remaining-budget) column of each per-episode feature
+    chunk with the within-episode STEP index, so the controller reads ``[z_t, steps_taken]`` instead of
+    ``[z_t, T_t]``. ``controller_inputs`` stays ``['z_t','T_t']`` — the ``T_t`` slot now carries steps.
+
+    Rationale: the per-episode budget entangles position-in-time with the episode's total budget, so we
+    drop it and feed the raw expansion count. Matches ``analysis.evaluate`` (steps-in / budget-out). The
+    budget idea may return later; this is the single point that would revert.
+    """
+    for ch in chunks:
+        ch[:, d_embed + 1] = torch.arange(ch.shape[0], device=ch.device, dtype=ch.dtype)
     return chunks
 
 
@@ -134,6 +148,58 @@ def _pad_scalars(g_list: list[torch.Tensor], ov_list: list[float], device):
     return g_pad, mask, lengths, torch.tensor(ov_list, device=device)
 
 
+def _pg_train_epoch(advantage_fn, feats, g_pad, mask, lengths, oracle_values, optimizer,
+                    *, perm, episode_batch, temperature, max_grad_norm, trainable_params):
+    """One PG (exact expected-return) epoch over episode-batched features; returns mean train loss.
+
+    ``advantage_fn(cat_features) -> flat advantages`` abstracts the model — a MetaController's
+    ``predict_from_features`` for the deployed controller (:func:`main`), or a bare readout head for
+    the ``analysis.evaluate`` baselines (:func:`fit_readout_pg`) — so both share ONE training loop.
+    """
+    epoch_loss, seen = 0.0, 0
+    for i in range(0, len(feats), episode_batch):
+        idxs = perm[i:i + episode_batch]
+        optimizer.zero_grad()
+        cat = torch.cat([feats[j] for j in idxs.tolist()], dim=0)       # one forward for the minibatch
+        adv_pad = _scatter_to_padded(advantage_fn(cat).reshape(-1), lengths[idxs])
+        t = adv_pad.shape[1]
+        loss = expected_regret_batched(adv_pad, g_pad[idxs, :t], mask[idxs, :t], lengths[idxs],
+                                       oracle_values[idxs], temperature=temperature)
+        loss.backward()
+        if max_grad_norm and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+        optimizer.step()
+        epoch_loss += float(loss) * idxs.numel()
+        seen += idxs.numel()
+    return epoch_loss / max(seen, 1)
+
+
+def fit_readout_pg(head, ep_feats, ep_curves, *, epochs, lr, seed=0, episode_batch=512,
+                   weight_decay=0.0, temperature=1.0, temperature_final=1.0, max_grad_norm=1.0):
+    """Train a STANDALONE readout head by exact expected-return over per-episode RETURN CURVES.
+
+    The ``analysis.evaluate`` path — no encoder / cache / checkpointing. ``ep_feats`` is a list of
+    per-episode ``[T_i, F]`` feature tensors; ``ep_curves`` the matching per-episode return curves
+    (``g(s)=curve[s]``, ``oracle_value=max(curve)``). Shares the exact training loop
+    (:func:`_pg_train_epoch`) the deployed controller uses, so the assessment fits and the deployed
+    controller optimize the identical objective. Returns the trained ``head``.
+    """
+    torch.manual_seed(seed)
+    g_list = [torch.tensor(c, dtype=torch.float32) for c in ep_curves]
+    ov_list = [float(c.max()) for c in ep_curves]
+    g_pad, mask, lengths, ov = _pad_scalars(g_list, ov_list, torch.device("cpu"))
+    opt = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
+    params = list(head.parameters())
+    for epoch in range(1, epochs + 1):
+        tau = (temperature_final if epochs <= 1 else
+               temperature + (temperature_final - temperature) * (epoch - 1) / (epochs - 1))
+        head.train()
+        _pg_train_epoch(head, ep_feats, g_pad, mask, lengths, ov, opt, perm=torch.randperm(len(ep_feats)),
+                        episode_batch=episode_batch, temperature=tau, max_grad_norm=max_grad_norm,
+                        trainable_params=params)
+    return head
+
+
 def main(config: ControllerTrainConfig) -> None:
     device, train_cache_path, validation_cache_path, oracle_config, schema = _seed_and_resolve_paths(config)
     model, optimizer, scheduler = _build_model_and_optimizer(config, schema)
@@ -148,12 +214,16 @@ def main(config: ControllerTrainConfig) -> None:
     print(f"[pg] train_episodes={len(train_meta)} val_episodes={len(val_meta)} "
           f"episode_batch={config.pg_episode_batch} epochs={config.epochs} device={device}", flush=True)
 
-    feats = _episode_feature_chunks(train_cache, train_meta, train_steps, device)  # per-episode [T,F]
+    # Budget scrapped: the T_t column is overwritten with steps-taken, so the controller reads
+    # [z_t, steps] (see _use_steps_not_budget). controller_inputs stays ['z_t','T_t'].
+    feats = _use_steps_not_budget(
+        _episode_feature_chunks(train_cache, train_meta, train_steps, device), config.d_embed)  # per-episode [T,F]
     g_list, ov_list = _episode_returns(train_meta, oracle_config, device)
     g_pad, mask, lengths, ov = _pad_scalars(g_list, ov_list, device)
     # Cache val features ONCE (episode-concatenated) so greedy eval re-forwards them each
     # epoch without re-reading shards from disk (the old per-epoch reload was a big cost).
-    val_feats = torch.cat(_episode_feature_chunks(val_cache, val_meta, val_steps, device), dim=0)
+    val_feats = torch.cat(_use_steps_not_budget(
+        _episode_feature_chunks(val_cache, val_meta, val_steps, device), config.d_embed), dim=0)
 
     n = len(feats)
     batch = max(1, int(config.pg_episode_batch))
@@ -172,24 +242,13 @@ def main(config: ControllerTrainConfig) -> None:
     for epoch in range(1, config.epochs + 1):
         tau = _tau(epoch)
         model.train()
-        perm = torch.randperm(n)
-        epoch_loss, seen = 0.0, 0
-        for i in range(0, n, batch):
-            idxs = perm[i:i + batch]
-            optimizer.zero_grad()
-            cat = torch.cat([feats[j] for j in idxs.tolist()], dim=0)   # one forward for the minibatch
-            A_flat = model.predict_from_features(cat)[0].reshape(-1)
-            L = lengths[idxs]
-            A_pad = _scatter_to_padded(A_flat, L)                       # [B, Tmax_mb], vectorized
-            t = A_pad.shape[1]
-            loss = expected_regret_batched(A_pad, g_pad[idxs, :t], mask[idxs, :t], L, ov[idxs], temperature=tau)
-            loss.backward()
-            if config.max_grad_norm and config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    (p for p in model.parameters() if p.requires_grad), config.max_grad_norm)
-            optimizer.step()
-            epoch_loss += float(loss) * idxs.numel()
-            seen += idxs.numel()
+        # SAME training loop as the analysis.evaluate baselines (fit_readout_pg); here the
+        # advantage_fn is the encoder-backed MetaController rather than a bare head.
+        mean_train_loss = _pg_train_epoch(
+            lambda cat: model.predict_from_features(cat)[0], feats, g_pad, mask, lengths, ov, optimizer,
+            perm=torch.randperm(n), episode_batch=batch, temperature=tau,
+            max_grad_norm=config.max_grad_norm,
+            trainable_params=[p for p in model.parameters() if p.requires_grad])
         if scheduler is not None:
             scheduler.step()
 
@@ -198,10 +257,10 @@ def main(config: ControllerTrainConfig) -> None:
             adv = model.predict_from_features(val_feats)[0].reshape(-1).cpu()
         m = _aggregate_greedy_rollout_metrics(
             val_meta, adv, oracle_config, log_interval=0, started=0.0, diagnostics_out=[])
-        print(f"[pg] epoch={epoch}/{config.epochs} tau={tau:.2f} train_E[regret]={epoch_loss / seen:.4f} "
+        print(f"[pg] epoch={epoch}/{config.epochs} tau={tau:.2f} train_E[regret]={mean_train_loss:.4f} "
               f"val_greedy_regret={m.average_regret:.4f} val_stop_acc={m.exact_stop_step_accuracy:.3f} "
               f"val_expansions={m.average_expansions:.2f}", flush=True)
-        history.append({"epoch": epoch, "tau": tau, "train_E_regret": epoch_loss / seen,
+        history.append({"epoch": epoch, "tau": tau, "train_E_regret": mean_train_loss,
                         "val_greedy_regret": m.average_regret,
                         "val_stop_acc": m.exact_stop_step_accuracy,
                         "val_expansions": m.average_expansions})
