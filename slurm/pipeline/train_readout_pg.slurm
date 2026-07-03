@@ -23,5 +23,5 @@ source "$TINY/slurm/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
 echo "train_readout_pg host=$(hostname) device=cpu objective=policy_gradient"; date
 python -u -m cts.train.pg_controller_train --config "$CONFIG" --stage train \
   --set device=cpu \
-  --set epochs=20 --set learning_rate=2.0e-3 --set pg_episode_batch=1024
+  --set epochs=20 --set pg_episode_batch=1024
 date

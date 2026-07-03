@@ -134,8 +134,8 @@ materialize:
   device: cuda
   episode_batch_size: 8
   max_snapshots_per_shard: 250000
-  hidden_dim: 256
-  hidden_layers: 3
+  hidden_dim: 32
+  hidden_layers: 2
 
 train:
   metrics_run_name: mchalt
@@ -153,12 +153,14 @@ train:
   d_message: 32
   n_heads: 2
   d_att: 16
-  hidden_dim: 256
-  hidden_layers: 3
+  hidden_dim: 32
+  hidden_layers: 2
   unfreeze_encoder: false
   separate_sign_head: false
   batch_size: 18000
-  learning_rate: 1.0e-3
+  learning_rate: 3.0e-4              # was 2e-3 (overshot into sigmoid saturation on step 1)
+  stop_temperature: 4.0             # soft stop policy; anneal -> 1 to avoid premature collapse
+  stop_temperature_final: 1.0
   weight_decay: 0.0
   sign_loss_weight: 0.1
   sign_pos_weight: 1.0

@@ -90,6 +90,14 @@ class ControllerTrainConfig(BaseModel):
     # with the stop step marginalized in closed form over the full trace (no REINFORCE sampling).
     pg_episode_batch: int = 1024        # episodes per PG gradient step
     pg_max_episodes: Optional[int] = None  # cap train/val episodes (smoke / quick runs)
+    # Stop-policy temperature for the PG trainer: continue prob = sigmoid(A_t / tau).
+    # tau > 1 keeps the soft policy AWAY from the 0/1 saturation boundary (where the
+    # sigmoid slope p(1-p) -> 0 and the gradient dies), so it explores to the right
+    # stop step before sharpening. Annealed linearly stop_temperature -> _final over
+    # the epochs. tau does NOT affect the deployed hard greedy rule (sign(A_t)), so
+    # checkpoint selection on hard val regret stays comparable. 1.0/1.0 = original.
+    stop_temperature: float = 1.0
+    stop_temperature_final: float = 1.0
     inverse_freq_weights: bool = False
     separate_sign_head: bool = False
     max_grad_norm: float = 1.0

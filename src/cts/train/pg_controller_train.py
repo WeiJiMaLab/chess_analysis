@@ -89,12 +89,16 @@ def _expected_regret(advantages: torch.Tensor, g: torch.Tensor, oracle_value: fl
 
 
 def expected_regret_batched(adv: torch.Tensor, g: torch.Tensor, mask: torch.Tensor,
-                            lengths: torch.Tensor, oracle_values: torch.Tensor) -> torch.Tensor:
+                            lengths: torch.Tensor, oracle_values: torch.Tensor,
+                            temperature: float = 1.0) -> torch.Tensor:
     """Mean E[regret] over a right-padded batch (closed form, fully vectorized).
 
     adv/g/mask: [B,Tmax]; lengths:[B]; oracle_values:[B]. Equivalent to averaging the
     per-episode :func:`_expected_regret` (verified to 1e-7), but as batched tensor ops.
-    """
+    ``temperature`` softens the stop policy: continue prob = sigmoid(A_t / tau); tau > 1
+    keeps the sigmoid off its saturated tails so the gradient survives (see config)."""
+    if temperature != 1.0:
+        adv = adv / temperature
     logp = F.logsigmoid(adv) * mask                  # zero padding so cumsum ignores it
     log1m = F.logsigmoid(-adv)
     prefix = torch.cat([logp.new_zeros(adv.shape[0], 1), torch.cumsum(logp, 1)[:, :-1]], dim=1)
@@ -156,8 +160,17 @@ def main(config: ControllerTrainConfig) -> None:
     best_regret = float("inf")
     out_path = Path(config.output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    history = []  # per-epoch (tau, train E[regret], val greedy regret, val stop acc, expansions)
+
+    def _tau(ep: int) -> float:
+        """Linear anneal stop_temperature -> stop_temperature_final over the run."""
+        if config.epochs <= 1:
+            return float(config.stop_temperature_final)
+        frac = (ep - 1) / (config.epochs - 1)
+        return float(config.stop_temperature + (config.stop_temperature_final - config.stop_temperature) * frac)
 
     for epoch in range(1, config.epochs + 1):
+        tau = _tau(epoch)
         model.train()
         perm = torch.randperm(n)
         epoch_loss, seen = 0.0, 0
@@ -169,7 +182,7 @@ def main(config: ControllerTrainConfig) -> None:
             L = lengths[idxs]
             A_pad = _scatter_to_padded(A_flat, L)                       # [B, Tmax_mb], vectorized
             t = A_pad.shape[1]
-            loss = expected_regret_batched(A_pad, g_pad[idxs, :t], mask[idxs, :t], L, ov[idxs])
+            loss = expected_regret_batched(A_pad, g_pad[idxs, :t], mask[idxs, :t], L, ov[idxs], temperature=tau)
             loss.backward()
             if config.max_grad_norm and config.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(
@@ -185,9 +198,13 @@ def main(config: ControllerTrainConfig) -> None:
             adv = model.predict_from_features(val_feats)[0].reshape(-1).cpu()
         m = _aggregate_greedy_rollout_metrics(
             val_meta, adv, oracle_config, log_interval=0, started=0.0, diagnostics_out=[])
-        print(f"[pg] epoch={epoch}/{config.epochs} train_E[regret]={epoch_loss / seen:.4f} "
+        print(f"[pg] epoch={epoch}/{config.epochs} tau={tau:.2f} train_E[regret]={epoch_loss / seen:.4f} "
               f"val_greedy_regret={m.average_regret:.4f} val_stop_acc={m.exact_stop_step_accuracy:.3f} "
               f"val_expansions={m.average_expansions:.2f}", flush=True)
+        history.append({"epoch": epoch, "tau": tau, "train_E_regret": epoch_loss / seen,
+                        "val_greedy_regret": m.average_regret,
+                        "val_stop_acc": m.exact_stop_step_accuracy,
+                        "val_expansions": m.average_expansions})
         if m.average_regret < best_regret:
             best_regret = m.average_regret
             torch.save({"model_state_dict": model.state_dict(), "metadata": {
@@ -199,7 +216,43 @@ def main(config: ControllerTrainConfig) -> None:
             }}, out_path)
             print(f"[pg] saved best val_greedy_regret={best_regret:.4f} -> {out_path}", flush=True)
 
+    _save_training_curves(history, out_path)
     print(f"[pg] DONE best_val_greedy_regret={best_regret:.4f}", flush=True)
+
+
+def _save_training_curves(history: list[dict], out_path: Path) -> None:
+    """Write the per-epoch regret/loss trajectory (CSV) and a curve figure next to
+    the checkpoint — train E[regret] and hard val greedy regret over epochs, plus
+    the temperature schedule."""
+    if not history:
+        return
+    import csv
+    base = out_path.with_suffix("")
+    csv_path = Path(f"{base}_training_curve.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(history[0].keys()))
+        w.writeheader()
+        w.writerows(history)
+    print(f"[pg] training curve -> {csv_path}", flush=True)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        ep = [h["epoch"] for h in history]
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.plot(ep, [h["train_E_regret"] for h in history], "-o", label="train E[regret] (soft)")
+        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-s", label="val regret (hard greedy)")
+        ax.set_xlabel("epoch"); ax.set_ylabel("regret"); ax.legend(loc="upper right")
+        ax2 = ax.twinx()
+        ax2.plot(ep, [h["tau"] for h in history], ":", color="gray", label="temperature τ")
+        ax2.set_ylabel("temperature τ")
+        ax.set_title("PG readout — regret over epochs")
+        fig.tight_layout()
+        fig.savefig(f"{base}_training_curve.png", dpi=150)
+        plt.close(fig)
+        print(f"[pg] training curve figure -> {base}_training_curve.png", flush=True)
+    except Exception as e:  # plotting is best-effort; the CSV is the source of truth
+        print(f"[pg] curve plot skipped: {e}", flush=True)
 
 
 if __name__ == "__main__":
