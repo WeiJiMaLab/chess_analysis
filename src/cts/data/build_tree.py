@@ -84,6 +84,17 @@ class BuildTreeConfig(BaseModel):
     max_depth: int = 4
     search_budget: int = 64
     c_puct: float = 1.0
+    # Generation-time leaf selection rule. "puct" is the historical default;
+    # "befs" is greedy best-first descent on the static per-node value_feature
+    # (no c_puct — see TeacherSearchConfig.selection for why c_puct=0 is NOT
+    # equivalent). Pair selection="befs" with value_feature="cp_order" for
+    # native-centipawn tree building.
+    selection: Literal["puct", "befs"] = "puct"
+    # Per-node scalar feature used as the search value (selection priority +
+    # backup targets). "value" = win-loss in [-1,1] from WDL; "cp_order" =
+    # Stockfish-native centipawns with mate scores folded into a ±20000 band
+    # (see cts.core.providers.parsers.score_order_features).
+    value_feature: str = "value"
     min_nodes: int = 16
     max_nodes: int = 128
     prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); None = no prune. See R-PRUNING.
@@ -176,18 +187,23 @@ def _build_quality_config(
         target_normalization_version: version tag stamped onto the produced
             examples so downstream consumers can detect format drift.
         search_config_id: short label identifying this search config in
-            saved examples (e.g. ``"supervised_branch_v1"``).
+            saved examples (e.g. ``"supervised_branch_v1"``). A non-default
+            selection rule is appended (e.g. ``"..._befs"``) so saved trees
+            self-describe how they were built.
     """
+    if config.selection != "puct":
+        search_config_id = f"{search_config_id}_{config.selection}"
     return TeacherSearchConfig(
         max_depth=config.max_depth,
         search_budget=config.search_budget,
         c_puct=config.c_puct,
         prior_feature="prior",
-        value_feature="value",
+        value_feature=config.value_feature,
         target_normalization_version=target_normalization_version,
         search_config_id=search_config_id,
         prune_epsilon=config.prune_epsilon,
         prune_mode=config.prune_mode,
+        selection=config.selection,
     )
 
 

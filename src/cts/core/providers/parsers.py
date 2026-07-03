@@ -25,6 +25,44 @@ from .common import (
 from ..tree import ExpansionChild
 
 
+# Centipawn band reserved for mate scores in ``cp_order``. Stockfish's maximum
+# *real* centipawn magnitude is VALUE_MAX_EVAL * 100 / PawnValueEg ≈
+# 32000 * 100 / 208 ≈ 15385 (see stockfish/src/uci.cpp:309), so mapping a
+# "mate in N (moves)" score to ``±(20000 − N)`` keeps every mate strictly above
+# (below, when getting mated) every possible non-mate score, while closer mates
+# rank higher — preserving Stockfish's own mate-distance ordering.
+MATE_CP_ORDER_BAND = 20000.0
+
+
+def score_order_features(kind: str, raw_score: int) -> Dict[str, float]:
+    """Map a UCI ``score cp N`` / ``score mate N`` into native-unit features.
+
+    Emits (additively; never part of ``TREE_ENCODER_FEATURE_NAMES``):
+      - ``cp``: the raw centipawn score, side-to-move POV. Only present for
+        non-mate scores.
+      - ``mate``: the signed mate distance in moves (positive = side to move
+        mates, negative = side to move gets mated). Only present for mate
+        scores.
+      - ``cp_order``: a single scalar usable as a search priority in
+        centipawn units: equal to ``cp`` for non-mate scores, and
+        ``sign(mate) * (MATE_CP_ORDER_BAND - |mate|)`` for mate scores.
+        Always present.
+
+    Missing keys are simply absent from the dict (node feature tensors store
+    NaN for absent features), never ``None`` — ``SearchTree`` scalar features
+    must be numeric.
+    """
+    if kind == "mate":
+        distance = abs(int(raw_score))
+        # ``mate 0`` means the side to move is checkmated; treat it as a loss.
+        sign = 1.0 if int(raw_score) > 0 else -1.0
+        return {
+            "mate": float(raw_score),
+            "cp_order": sign * (MATE_CP_ORDER_BAND - float(distance)),
+        }
+    return {"cp": float(raw_score), "cp_order": float(raw_score)}
+
+
 @dataclass
 class UciAnalysis:
     """Result of parsing a single engine analysis turn at one node.
@@ -138,12 +176,21 @@ def terminal_value_features(value: float) -> Dict[str, float]:
     Maps a deterministic terminal outcome to a degenerate WDL: a win is
     all win-mass, a loss is all loss-mass, anything else is treated as a
     forced draw. Used when the engine reports a mate score instead of WDL.
+
+    Also emits the native-unit features (see ``score_order_features``): a
+    decided terminal is a mate at distance 0 (``mate=0.0`` — the sign of the
+    outcome lives in ``cp_order = ±MATE_CP_ORDER_BAND``, since a float can't
+    carry a signed zero reliably); a draw is ``cp=0``/``cp_order=0``.
     """
     if value > 0.0:
-        return value_features_from_wdl(1.0, 0.0, 0.0)
+        # Side to move has won with no move to make — unreachable in chess,
+        # kept for interface symmetry.
+        return {**value_features_from_wdl(1.0, 0.0, 0.0), "mate": 0.0, "cp_order": MATE_CP_ORDER_BAND}
     if value < 0.0:
-        return value_features_from_wdl(0.0, 0.0, 1.0)
-    return value_features_from_wdl(0.0, 1.0, 0.0)
+        # Checkmate: side to move is mated right now.
+        return {**value_features_from_wdl(0.0, 0.0, 1.0), "mate": 0.0, "cp_order": -MATE_CP_ORDER_BAND}
+    # Stalemate / draw.
+    return {**value_features_from_wdl(0.0, 1.0, 0.0), "cp": 0.0, "cp_order": 0.0}
 
 
 def parse_root_value_features_from_lines(
@@ -162,35 +209,57 @@ def parse_root_value_features_from_lines(
         lines: raw UCI output lines from the value engine at the root.
         require_wdl: if True, fail when no WDL or mate line is present.
             If False, accept a bare score line and return ``{"value": ...}``.
+
+    In addition to the WDL-derived features, the engine's native ``score
+    cp|mate`` is captured ADDITIVELY (``cp``/``mate``/``cp_order``, see
+    ``score_order_features``) when present — UCI ``info`` lines carry the
+    score alongside the wdl triple. Engines that emit WDL without a score
+    line (e.g. lc0 valuehead mode) simply omit these keys.
     """
     for line in lines:
         wdl_match = WDL_RE.search(line)
         if wdl_match is None:
             continue
-        return value_features_from_wdl(
+        features = value_features_from_wdl(
             float(wdl_match.group("win")),
             float(wdl_match.group("draw")),
             float(wdl_match.group("loss")),
         )
+        # Prefer the score on the same info line as the WDL (they describe
+        # the same evaluation); fall back to the first score line anywhere.
+        score_match = SCORE_LINE_RE.search(line)
+        if score_match is None:
+            for other_line in lines:
+                score_match = SCORE_LINE_RE.search(other_line)
+                if score_match is not None:
+                    break
+        if score_match is not None:
+            features.update(
+                score_order_features(score_match.group("kind"), int(score_match.group("score")))
+            )
+        return features
 
     if require_wdl:
         # No WDL line found, but a mate score collapses to a known terminal
-        # outcome, so accept it as a degenerate WDL distribution.
+        # outcome, so accept it as a degenerate WDL distribution. The native
+        # mate distance overrides the distance-0 stub from
+        # ``terminal_value_features``.
         for line in lines:
             score_match = SCORE_LINE_RE.search(line)
             if score_match is None:
                 continue
             if score_match.group("kind") == "mate":
-                return terminal_value_features(
-                    uci_score_to_value(
-                        score_match.group("kind"),
-                        int(score_match.group("score")),
-                    )
-                )
+                raw_score = int(score_match.group("score"))
+                return {
+                    **terminal_value_features(
+                        uci_score_to_value(score_match.group("kind"), raw_score)
+                    ),
+                    **score_order_features("mate", raw_score),
+                }
         raise ValueError("Could not parse WDL statistics from engine output.")
 
     # WDL not required: fall back to the first plain score line and return
-    # only the scalar value (no WDL triple, no variance).
+    # the scalar value (no WDL triple, no variance) plus the native score.
     for line in lines:
         score_match = SCORE_LINE_RE.search(line)
         if score_match is not None:
@@ -198,6 +267,7 @@ def parse_root_value_features_from_lines(
                 "value": uci_score_to_value(
                     score_match.group("kind"),
                     int(score_match.group("score")),
-                )
+                ),
+                **score_order_features(score_match.group("kind"), int(score_match.group("score"))),
             }
     raise ValueError("Could not parse a root value from engine output.")

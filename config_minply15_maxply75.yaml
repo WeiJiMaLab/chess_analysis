@@ -23,9 +23,9 @@ human_analysis:
   figures_dir: ${outputs_dir}/${run_name}
   min_ply: ${min_ply}
   max_ply: ${max_ply}
-  trees_default: ${trees_dir}/n1md36
+  trees_default: ${trees_dir}/befs1cp_md36
   cache_default: ${run_dir}/tree_values_cache
-  key_default: n1md36_100000_7
+  key_default: befs1cp_md36_100000_7
   response_time_histogram_bins: 50
   qq_plot_quantile_probes: 200
   selected_db_default: ${scratch_dir}/personal.db     # shared, preprocessed once
@@ -38,7 +38,13 @@ treegen:
   provider: stockfish
   engine_path: /home/hl4291/stockfish/src/stockfish
   fens: ${fens_sample}
-  output_dir: ${trees_dir}/n1md36
+  output_dir: ${trees_dir}/befs1cp_md36
+  # Greedy best-first search on Stockfish's native centipawn score (cp_order =
+  # cp, with mate scores folded into a ±20000 band). No c_puct: BeFS has no
+  # exploration/value-scale coupling, and cp resolves the frontier ties that
+  # pwin saturation creates. WDL features are still stored on every node.
+  selection: befs
+  value_feature: cp_order
   search_budget: ${search_budget}
   min_nodes: 96
   max_nodes: 96
@@ -49,7 +55,7 @@ treegen:
   log_interval: 50
 
 split:
-  source_root: ${trees_dir}/n1md36
+  source_root: ${trees_dir}/befs1cp_md36
   include_list: null
   split_root: ${split_dir}
   validation_fraction: 0.2

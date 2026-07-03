@@ -51,22 +51,34 @@ from cts.core.providers.base import TreeExpansionProvider
 
 @dataclass(frozen=True)
 class TeacherSearchConfig:
-    """PUCT hyperparameters for the teacher search that produces pretraining targets.
+    """Search hyperparameters for the teacher search that produces pretraining targets.
 
     The same config is used both during tree generation (drives leaf selection
     in ``generate_partial_tree_from_provider``) and during target consolidation
     (drives the post-hoc backup pass in ``compute_teacher_targets``).
+
+    ``selection`` picks the generation-time leaf-selection rule:
+      - ``"puct"`` (default): AlphaZero PUCT, ``Q + c_puct * P * sqrt(N)/(1+n)``.
+      - ``"befs"``: greedy best-first descent on the STATIC per-node
+        ``value_feature`` (see ``_select_leaf_by_befs``). No exploration
+        constant, no visit counts — tree topology depends only on the stored
+        child values, so the expansion order is exactly replayable from the
+        saved tree. NOTE: ``c_puct=0`` is NOT equivalent — with c_puct=0 the
+        PUCT rule greedily follows edge Q (a visit-mean of backed-up values,
+        0 for unvisited children, ties broken by insertion order), not the
+        static child value.
     """
 
     max_depth: int  # plies-from-root cap; deeper nodes are treated as terminal during search
     search_budget: int  # number of PUCT simulations in ``compute_teacher_targets``
-    c_puct: float = 1.0  # PUCT exploration constant
+    c_puct: float = 1.0  # PUCT exploration constant (selection="puct" only)
     prior_feature: str = "prior"  # name of the per-child prior feature on each node
     value_feature: str = "value"  # name of the per-node scalar value feature backed up at leaves
     target_normalization_version: str = "v1"  # stamped into metadata so consumers can detect format drift
     search_config_id: str = "default"  # short label identifying this config in metadata
     prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); meaning set by prune_mode. None = no prune.
     prune_mode: Optional[str] = None       # None/"relative" (eps) | "absolute" (win-prob floor) | "rank" (top-k)
+    selection: str = "puct"  # generation-time leaf selection: "puct" | "befs"
 
     def __post_init__(self) -> None:
         if self.max_depth < 0:
@@ -79,6 +91,8 @@ class TeacherSearchConfig:
             raise ValueError("prune_epsilon must be non-negative.")
         if self.prune_mode not in (None, "relative", "absolute", "rank"):
             raise ValueError(f"unknown prune_mode {self.prune_mode!r}")
+        if self.selection not in ("puct", "befs"):
+            raise ValueError(f"unknown selection {self.selection!r}")
 
 
 @dataclass(frozen=True)
@@ -1267,6 +1281,81 @@ def _select_leaf_by_puct(
         node_id = best_child_id
 
 
+def _befs_open_map(tree: SearchTree, config: TeacherSearchConfig) -> Dict[int, bool]:
+    """Per-node flag: does this node's subtree still contain an expandable leaf?
+
+    A leaf is *open* iff it is non-terminal, unexpanded, and under the depth
+    cap; an internal node is open iff any child is open. Computed bottom-up in
+    one pass — children always carry larger ids than their parent (ids are
+    insertion-ordered), so a reverse sweep sees every child before its parent.
+    """
+    open_map: Dict[int, bool] = {}
+    for node in reversed(list(tree.iter_nodes())):
+        if node.is_terminal:
+            open_map[node.node_id] = False
+        elif not node.is_expanded:
+            open_map[node.node_id] = node.depth < config.max_depth
+        else:
+            open_map[node.node_id] = any(
+                open_map[child_id] for child_id in tree.child_ids(node.node_id)
+            )
+    return open_map
+
+
+def _select_leaf_by_befs(
+    tree: SearchTree,
+    config: TeacherSearchConfig,
+) -> Tuple[int, List[Tuple[int, int]]]:
+    """Greedy best-first descent on STATIC child values (no c_puct, no visits).
+
+    At every expanded node, follow the child with the best static
+    ``config.value_feature`` among children whose subtree still contains an
+    expandable leaf, until reaching an unexpanded leaf. Returns the leaf id
+    and the (parent_id, child_id) edge path, like ``_select_leaf_by_puct``.
+
+    Perspective (NEGAMAX, same convention as ``_prune_children`` and
+    ``_backpropagate_path``): a child's value is from the *child's* mover's
+    perspective, so the best child for the parent is the MIN-value child.
+
+    Determinism: ties are broken by (incoming move UCI, child id), so given
+    the stored static values the expansion order of a saved tree is exactly
+    reproducible — the property the cp-greedy replay validation checks.
+
+    Closed subtrees (all leaves terminal or at ``max_depth``) are skipped
+    rather than re-selected, so — unlike PUCT — a selected leaf is always
+    expandable and every simulation produces exactly one expansion.
+    """
+    if tree.root_id is None:
+        raise ValueError("Tree must contain a root.")
+    open_map = _befs_open_map(tree, config)
+    if not open_map.get(tree.root_id, False):
+        raise ValueError("BeFS selection called with no expandable frontier.")
+
+    path: List[Tuple[int, int]] = []
+    node_id = tree.root_id
+    while True:
+        node = tree.get_node(node_id)
+        if not node.is_expanded:
+            return node_id, path
+        open_children = [
+            child_id for child_id in tree.child_ids(node_id) if open_map[child_id]
+        ]
+        if not open_children:
+            raise ValueError(
+                f"BeFS invariant violated: node {node_id} is open but has no open children."
+            )
+        best_child_id = min(
+            open_children,
+            key=lambda child_id: (
+                _static_node_value(tree, child_id, config.value_feature),
+                tree.get_node(child_id).incoming_move_uci or "",
+                child_id,
+            ),
+        )
+        path.append((node_id, best_child_id))
+        node_id = best_child_id
+
+
 def _backpropagate_path(
     edge_stats: Dict[Tuple[int, int], EdgeStats],
     path: Sequence[Tuple[int, int]],
@@ -1390,10 +1479,11 @@ def generate_partial_tree_from_provider(
     node_budget_distribution: NodeBudgetDistribution,
     rng: Optional[random.Random] = None,
 ) -> GeneratedTree:
-    """Build a tree by running PUCT until a sampled expansion budget is hit.
+    """Build a tree by running leaf selection until a sampled expansion budget is hit.
 
     This is the standard generation path: draw a node budget from
-    ``node_budget_distribution``, then alternate PUCT-selection of a leaf,
+    ``node_budget_distribution``, then alternate leaf selection
+    (``config.selection``: PUCT or greedy BeFS on static values),
     provider-driven expansion of that leaf, and full-path backprop. The
     oracle trace is captured after each expansion so we have the teacher's
     decision evolution recorded alongside the final tree.
@@ -1443,14 +1533,21 @@ def generate_partial_tree_from_provider(
         visits_row = [int(edge_stats.get((tree.root_id, child_id), EdgeStats()).visit_count) for child_id in root_children]
         oracle_root_visits_trace.append(visits_row)
 
-    # --- Main PUCT loop: pick a leaf, expand or terminate, backprop ---
+    # --- Main search loop: pick a leaf, expand or terminate, backprop ---
     simulations = 0
     max_simulations = sampled_node_budget * 50
     while num_expansions < sampled_node_budget and _has_expandable_frontier(tree, config):
         simulations += 1
         if simulations > max_simulations:
             break
-        node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
+        if config.selection == "befs":
+            # Greedy best-first on static values: no exploration term, and a
+            # selected leaf is always expandable (closed subtrees are skipped),
+            # so every simulation yields exactly one expansion. Backprop still
+            # runs so edge Q/visit stats and the oracle trace stay populated.
+            node_id, path = _select_leaf_by_befs(tree, config)
+        else:
+            node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
         node = tree.get_node(node_id)
         leaf_value = _static_node_value(tree, node_id, config.value_feature)
         leaf_wdl = _maybe_static_node_wdl(tree, node_id)
