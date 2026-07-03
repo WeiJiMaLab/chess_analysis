@@ -381,8 +381,50 @@ def run_process_moves(
     conn.close()
 
 
+def _load_preprocess_config() -> dict:
+    """Load the ``preprocess`` section from the active config ($CONFIG, else the
+    repo default), with ${...} placeholders resolved against ``globals`` — the same
+    contract analysis uses, so preprocess and analysis share paths (notably
+    ``personal_db`` == ``human_analysis.selected_db_default``). DUCKDB_THREADS /
+    DUCKDB_MEMORY_LIMIT / PREPROCESS_TOTAL_SHARDS still override if set."""
+    import re
+    import yaml
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cfg_path = os.environ.get("CONFIG") or os.path.join(repo_root, "config_allply.yaml")
+    with open(cfg_path) as f:
+        data = yaml.safe_load(f) or {}
+    section = data.get("preprocess")
+    if not isinstance(section, dict):
+        raise KeyError(f"'preprocess' section missing from {cfg_path}")
+
+    def interp(val, variables):
+        if isinstance(val, str):
+            for _ in range(5):
+                keys = re.findall(r"\$\{(\w+)\}", val)
+                if not keys:
+                    break
+                for k in keys:
+                    if k in variables:
+                        val = val.replace("${" + k + "}", str(variables[k]))
+            return val
+        if isinstance(val, dict):
+            return {k: interp(v, variables) for k, v in val.items()}
+        return val
+
+    variables = dict(data.get("globals", {}))
+    for _ in range(5):
+        variables = {k: interp(v, variables) for k, v in variables.items()}
+    cfg = interp(section, variables)
+    cfg["threads"] = int(os.environ.get("DUCKDB_THREADS", cfg["threads"]))
+    cfg["memory_limit"] = os.environ.get("DUCKDB_MEMORY_LIMIT", cfg["memory_limit"])
+    cfg["total_shards"] = int(os.environ.get("PREPROCESS_TOTAL_SHARDS", cfg["total_shards"]))
+    return cfg
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("get_games", help="Build games table from Lichess core DB.")
@@ -390,26 +432,13 @@ def main() -> None:
     sub.add_parser("merge", help="Parquet shards → table moves only.")
     sub.add_parser(
         "process_moves",
-        help="From table moves → processed_moves and processed_moves_nonzero (feature SQL).",
+        help="From table moves → processed_moves and processed_moves_nonzero (feature SQL + captures/checks).",
     )
 
     args = parser.parse_args()
-    # end_date is exclusive
-    config = {
-        "work_dir": "/scratch/gpfs/GRIFFITHS/hl4291/tmp/",
-        "staging_dir": "/scratch/gpfs/GRIFFITHS/hl4291/tmp/ld_moves_shard",
-        "personal_db": "/scratch/gpfs/GRIFFITHS/hl4291/personal.db",
-        "lichess_db": "/scratch/gpfs/GRIFFITHS/chess-db/lichess.db",
-        "moves_root": "/scratch/gpfs/GRIFFITHS/chess-db/rawdata",
-        "start_date": "2023-10-01",
-        "end_date": "2023-12-31",
-        "initial_clock": 600,
-        "clock_increment": 0,
-        "min_elo": 2000,
-        "threads": int(os.environ.get("DUCKDB_THREADS", "40")),
-        "memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "64GB"),
-        "total_shards": int(os.environ.get("PREPROCESS_TOTAL_SHARDS", "11")),
-    }
+    if args.config:
+        os.environ["CONFIG"] = args.config
+    config = _load_preprocess_config()
 
     if args.cmd == "get_games":
         get_games(
