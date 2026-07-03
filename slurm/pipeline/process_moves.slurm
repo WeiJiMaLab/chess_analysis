@@ -2,8 +2,8 @@
 # Rebuild processed_moves / processed_moves_nonzero from `moves` with the SQL board
 # features (material / in_check / prev_move_was_capture). Paths from the config
 # `preprocess:` section (personal_db unified with analysis). Opens personal.db
-# read_write — no other process may hold it. Final preprocess step; it also
-# featurizes captures/checks over the distinct FENs (python-chess, in-process).
+# read_write — no other process may hold it. Final preprocess step (pure SQL, no
+# python-chess); captures/checks are a board precondition (board --featurize).
 #   sbatch slurm/pipeline/process_moves.slurm
 #SBATCH --job-name=process-moves
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out

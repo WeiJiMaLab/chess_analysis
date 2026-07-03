@@ -28,8 +28,6 @@ from analysis.utils import Variable, Analyzer
 from analysis.utils.helpers import (
     apply_poster_style,
     db_connection,
-    create_ply_windowed_views,
-    WIN_PROCESSED_MOVES_NONZERO,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     partial_spearman,
@@ -58,7 +56,7 @@ def load_played_moves(cache_dir: Path, key: str, db_path: str) -> pd.DataFrame:
     root_moves = pd.read_parquet(cache_dir / f"rootmoves_{key}.parquet")[["fen", "move_uci", "mq"]]
 
     with db_connection(db_path, read_only=True) as conn:
-        create_ply_windowed_views(conn)   # ply filter applied on arrival (pmnz_win)
+        conn.execute(f"CREATE OR REPLACE TEMP VIEW filtered AS SELECT * FROM {CONFIG['table_filtered']}")
         conn.register("_vals", vals)
         conn.register("_root_moves", root_moves)
         df = conn.execute("""
@@ -66,7 +64,7 @@ def load_played_moves(cache_dir: Path, key: str, db_path: str) -> pd.DataFrame:
                 SELECT m.fen, m.gid, m.move_ply, m.move_time,
                        m.n_possible_moves AS legal_moves, mv.move_uci
                 FROM (SELECT DISTINCT fen FROM _root_moves) f
-                JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
+                JOIN filtered m ON m.fen = f.fen AND m.move_time > 0
                 JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
             )
             SELECT rm.mq, ln(h.move_time) AS log_rt, v.gss, h.legal_moves
@@ -156,7 +154,7 @@ def plot_engine_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: st
                m.mq, t.voc, t.action_gap, t.gss, t.n_within_epsilon, t.n_acceptable, t.oss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
-        JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        JOIN filtered p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0
     """).df()
     labels = {
@@ -215,7 +213,7 @@ def trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
                any_value(t.n_acceptable) AS n_acceptable,
                any_value(p.n_possible_moves) AS legal_moves
         FROM tree_rt t
-        JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        JOIN filtered p ON p.gid = t.gid AND p.move_ply = t.move_ply
         WHERE t.move_time > 0
         GROUP BY t.fen
     """).df().dropna()
@@ -315,19 +313,9 @@ def tree_values_pipeline(
     os.makedirs(out_dir, exist_ok=True)
 
     with db_connection(db_path, read_only=True) as conn:
-        create_ply_windowed_views(conn)   # ply filter on arrival; tree_rt/mq_rt build off pmnz_gf
-        # game_fraction = move_ply / TRUE total plies in the game. The total must
-        # come from the UNWINDOWED move table: max(move_ply) over the ply-windowed
-        # pmnz_win would cap the denominator at max_ply (=75), pinning every game
-        # longer than the window to the same denominator and inflating game_fraction
-        # toward 1.0 for the majority of moves whose game exceeds 75 plies.
-        conn.execute(
-            "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
-            "SELECT w.*, w.move_ply * 1.0 / g.game_len AS game_fraction "
-            "FROM pmnz_win w "
-            "JOIN (SELECT gid, max(move_ply) AS game_len "
-            f"      FROM {CONFIG['table_processed_moves']} GROUP BY gid) g USING (gid)"
-        )
+        # The run's canonical windowed table (game_fraction already baked in by the
+        # filter stage); tree_rt/mq_rt build off it.
+        conn.execute(f"CREATE OR REPLACE TEMP VIEW filtered AS SELECT * FROM {CONFIG['table_filtered']}")
         conn.register("_vals", vals)
         conn.register("_root_moves", root_moves)
         conn.execute("""
@@ -336,7 +324,7 @@ def tree_values_pipeline(
                    v.n_acceptable, v.n_root_children, v.oss,
                    v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction
             FROM _vals v
-            JOIN pmnz_gf m ON m.fen = v.fen
+            JOIN filtered m ON m.fen = v.fen
             WHERE m.move_time > 0
         """)
         n_rows = conn.execute("SELECT count(*) FROM tree_rt").fetchone()[0]
@@ -351,7 +339,7 @@ def tree_values_pipeline(
             SELECT ln(t.move_time) AS log_T, t.h_pi,
                    p.n_possible_moves AS legal_moves, t.voc, t.gss
             FROM tree_rt t
-            JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
+            JOIN filtered p ON p.gid = t.gid AND p.move_ply = t.move_ply
             WHERE t.move_time > 0 AND t.h_pi IS NOT NULL
         """).df()
         _spearman_partials(p1, "h_pi", "log_T", ["legal_moves", "voc", "gss"])
@@ -361,7 +349,7 @@ def tree_values_pipeline(
             WITH human AS (
                 SELECT m.fen, m.gid, m.move_ply, m.move_time, m.game_fraction, mv.move_uci
                 FROM (SELECT DISTINCT fen FROM _root_moves) f
-                JOIN pmnz_gf m ON m.fen = f.fen AND m.move_time > 0
+                JOIN filtered m ON m.fen = f.fen AND m.move_time > 0
                 JOIN moves mv ON mv.gid = m.gid AND mv.move_ply = m.move_ply
             )
             SELECT rm.mq, h.fen, h.gid, h.move_ply, h.move_time, h.game_fraction, v.gss
@@ -373,7 +361,7 @@ def tree_values_pipeline(
         
         n_human = conn.execute("""
             SELECT count(*) FROM (SELECT DISTINCT fen FROM _root_moves) f
-            JOIN pmnz_win m ON m.fen = f.fen AND m.move_time > 0
+            JOIN filtered m ON m.fen = f.fen AND m.move_time > 0
         """).fetchone()[0]
         n_mq = conn.execute("SELECT count(*) FROM mq_rt").fetchone()[0]
         r_mq = conn.execute("SELECT corr(mq, ln(move_time)) FROM mq_rt").fetchone()[0]

@@ -31,6 +31,12 @@ human_analysis:
   table_moves: moves
   table_processed_moves: processed_moves
   table_processed_moves_nonzero: processed_moves_nonzero
+  # run-specific canonical tables (namespaced: personal.db is shared across runs)
+  table_filtered: filtered_moves_${run_name}          # filter stage → the windowed canon
+  table_board_features: board_features_${run_name}     # board --featurize/--merge → captures/checks
+  fens_sample: ${fens_sample}                          # tree-root FEN sample (treegen input)
+  tree_fens_n: 250000                                  # # distinct FENs sampled for tree generation
+  tree_fens_seed: 42
 
 # Data preprocessing (builds the shared personal.db that every run reads).
 # Run-independent, but kept here so preprocess.py reads its paths/params from the

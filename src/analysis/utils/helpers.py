@@ -122,34 +122,6 @@ def db_connection(database: str = CONFIG["selected_db_default"], read_only: bool
         conn.close()
 
 
-# Ply window (Russek et al.-style): all board/engine analyses filter to
-# move_ply in [min_ply, max_ply] "on arrival". These are the names of the
-# windowed views create_ply_windowed_views() installs; downstream SQL references
-# ONLY these so the filter (and the derived ply tertiles) are consistent
-# everywhere, including on the backwards tree->move join.
-WIN_PROCESSED_MOVES = "pm_win"
-WIN_PROCESSED_MOVES_NONZERO = "pmnz_win"
-
-
-def create_ply_windowed_views(conn) -> tuple[str, str]:
-    """Install temp views of the processed-move tables filtered to the config ply
-    window (move_ply BETWEEN min_ply AND max_ply). Returns (pm_view, pmnz_view).
-
-    Every board/engine query reads these instead of the raw tables, so the ply
-    filter is applied once, on arrival, and ply tertiles computed off these views
-    are conditioned on the window (not the whole dataset)."""
-    lo, hi = int(CONFIG["min_ply"]), int(CONFIG["max_ply"])
-    for view, base in (
-        (WIN_PROCESSED_MOVES, CONFIG["table_processed_moves"]),
-        (WIN_PROCESSED_MOVES_NONZERO, CONFIG["table_processed_moves_nonzero"]),
-    ):
-        conn.execute(
-            f"CREATE OR REPLACE TEMP VIEW {view} AS "
-            f"SELECT * FROM {base} WHERE move_ply BETWEEN {lo} AND {hi}"
-        )
-    return WIN_PROCESSED_MOVES, WIN_PROCESSED_MOVES_NONZERO
-
-
 def partial_spearman(df, x: str, y: str, controls: list[str]) -> float:
     """Spearman rank correlation ρ(x, y) controlling for covariates."""
     import numpy as np

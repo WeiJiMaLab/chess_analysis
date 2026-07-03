@@ -1,23 +1,29 @@
 """
 Board-level (no-model) response time analyses (DuckDB + matplotlib).
 
-Four analyses, all over the ply-windowed move set (move_ply in [min_ply, max_ply]
-from the active config), saved under <figures_dir>/board/:
+Three ordered modes (each depends on the previous — mirror this in the pipeline):
+  --featurize  precondition: featurize the legal-move covariates (captures/checks)
+               over this task's hash-slice of the run's ``filtered_moves`` FENs →
+               a shard. Runs single, or as a Slurm array (task per hash partition).
+  --merge      merge the featurize shards → the ``board_features`` table (single).
+  --plot       (default) the four analyses over filtered_moves ⋈ board_features:
+                 move_time_summary  log(RT) distribution + normal QQ + RT-vs-ply arc
+                 bivariate_analysis RT vs each covariate, overall + by ply tertile
+                 correlation_matrix Spearman + Pearson over log(RT), ply, covariates
+                 feature_histograms marginal distribution of each covariate
 
-  1. move_time_summary   log(RT) distribution + normal QQ + RT-vs-ply arc
-  2. bivariate_analysis  RT vs each covariate, overall + by ply tertile
-  3. correlation_matrix  Spearman + Pearson over log(RT), ply, and the covariates
-  4. feature_histograms  marginal distribution of each covariate
-
-The covariates (read from the full ply-windowed table) are defined in main().
+The canonical windowed table (``table_filtered``) is built by the filter stage; the
+covariate list is defined in run_plot().
 """
 
 import argparse
 import math
+import multiprocessing as mp
 import os
 
 import numpy as np
 from scipy import stats
+import chess
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -25,28 +31,81 @@ import matplotlib.pyplot as plt
 from analysis.utils import Variable, Analyzer
 from analysis.utils.analysis import _seconds_from_log
 from analysis.utils.helpers import (
-    apply_poster_style,
-    db_connection,
-    create_ply_windowed_views,
-    WIN_PROCESSED_MOVES_NONZERO,
-    FONT_SIZE_LABEL,
-    MAIN_COLOR,
-    CONFIG,
+    apply_poster_style, db_connection, sql_str,
+    FONT_SIZE_LABEL, MAIN_COLOR, CONFIG,
 )
 from analysis.utils.plots import highlight_corr_row, save_figure
 
+FEATURE_COLS = ["n_captures_avail", "n_checks_avail"]
 
-def move_time_summary(conn):
+
+# =============================================================================
+# --featurize / --merge : the board_features precondition (captures/checks)
+# =============================================================================
+
+def calc_captures_checks(fen: str) -> tuple[int, int]:
+    """(#legal captures, #legal checks) for one FEN — needs move enumeration."""
+    board = chess.Board(fen)
+    caps = checks = 0
+    for move in board.legal_moves:
+        caps += board.is_capture(move)
+        checks += board.gives_check(move)
+    return caps, checks
+
+
+def _shards_dir() -> str:
+    scratch = os.path.dirname(os.path.abspath(CONFIG["selected_db_default"]))
+    return os.path.join(scratch, "tmp", f"{CONFIG['table_board_features']}_shards")
+
+
+def run_featurize(db: str) -> None:
+    """Featurize this task's hash-slice of filtered_moves' distinct FENs → a shard.
+    Single job (1 task) or a Slurm array (SLURM_ARRAY_TASK_ID / _COUNT, NWORKERS
+    overrides the count for straggler re-runs)."""
+    import pandas as pd
+    task = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
+    n_tasks = int(os.environ.get("NWORKERS") or os.environ.get("SLURM_ARRAY_TASK_COUNT") or 1)
+    with db_connection(db, read_only=True) as conn:
+        fens = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT fen FROM {CONFIG['table_filtered']} WHERE hash(fen) % {n_tasks} = {task}"
+        ).fetchall()]
+    # The DB connection is closed, so no live DuckDB threads — a fork pool is safe
+    # here (and fast: workers inherit the imported module, no re-import).
+    print(f"board featurize task {task}/{n_tasks}: {len(fens):,} FENs", flush=True)
+    with mp.Pool() as pool:
+        counts = pool.map(calc_captures_checks, fens, chunksize=4000)
+    df = pd.DataFrame([(f, c, k) for f, (c, k) in zip(fens, counts)], columns=["fen", *FEATURE_COLS])
+    os.makedirs(_shards_dir(), exist_ok=True)
+    out = os.path.join(_shards_dir(), f"shard_{task:04d}.parquet")
+    df.to_parquet(out, index=False)
+    print(f"✅ task {task}: {len(df):,} FENs → {out}", flush=True)
+
+
+def run_merge(db: str) -> None:
+    """Merge the featurize shards → the board_features table (single job)."""
+    shards = os.path.join(_shards_dir(), "shard_*.parquet")
+    with db_connection(db, read_only=False) as conn:
+        conn.execute(f"CREATE OR REPLACE TABLE {CONFIG['table_board_features']} AS "
+                     f"SELECT * FROM read_parquet('{sql_str(shards)}')")
+        n = conn.execute(f"SELECT count(*) FROM {CONFIG['table_board_features']}").fetchone()[0]
+    print(f"✅ {CONFIG['table_board_features']}: {n:,} FENs", flush=True)
+
+
+# =============================================================================
+# --plot : the four analyses (read filtered_moves ⋈ board_features)
+# =============================================================================
+
+def move_time_summary(conn, table):
     """log(RT) distribution histogram + normal QQ + mean-RT-vs-ply arc (whole game)."""
     n_bins = CONFIG["response_time_histogram_bins"]
     n_qq = CONFIG["qq_plot_quantile_probes"]
 
-    n_moves = conn.execute(f"SELECT count(*) FROM {WIN_PROCESSED_MOVES_NONZERO}").fetchone()[0]
+    n_moves = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
     print(f"Running response time summary: n = {n_moves:,} moves")
 
     conn.execute(
         "CREATE OR REPLACE TEMPORARY VIEW _summary_view AS "
-        f"SELECT ln(move_time) AS ln_move_time FROM {WIN_PROCESSED_MOVES_NONZERO}"
+        f"SELECT ln(move_time) AS ln_move_time FROM {table}"
     )
 
     # SQL-side histogram binning (uniform bins in ln(RT)).
@@ -102,8 +161,8 @@ def move_time_summary(conn):
     ax_q.scatter(theoretical, empirical, color=MAIN_COLOR, s=40, zorder=3)
     ax_q.set(xlabel="Theoretical quantile", ylabel="Actual quantile", title="Normal QQ")
 
-    # Panel 3: mean ln(RT) vs ply over the WHOLE game, on a linear axis relabeled to
-    # seconds (log-spaced positions, second-valued labels) so the arc reads evenly.
+    # Panel 3: mean ln(RT) vs ply over the WHOLE game (unwindowed), on a linear axis
+    # relabeled to seconds (log-spaced positions) so the arc reads evenly.
     ply = conn.execute(
         f"SELECT move_ply, avg(ln(move_time)) AS mean_log, count(*) AS n "
         f"FROM {CONFIG['table_processed_moves_nonzero']} "
@@ -125,7 +184,7 @@ def move_time_summary(conn):
 
 
 def bivariate_analysis(conn, column: str, name: str, filename: str, table: str,
-                           analyzer_opts: dict | None = None, reverse_x: bool = False):
+                       analyzer_opts: dict | None = None, reverse_x: bool = False):
     """RT-vs-covariate 1x2 dashboard: overall (left), colored by ply tertile (right).
 
     ``analyzer_opts`` are forwarded to ``Analyzer`` (e.g. integer binning for the
@@ -161,7 +220,7 @@ def bivariate_analysis(conn, column: str, name: str, filename: str, table: str,
     save_figure(fig, "board", filename)
 
 
-def correlation_matrix(conn, features, table="pmnz_gf", filename="board_feature_corr.pdf"):
+def correlation_matrix(conn, features, table, filename="board_feature_corr.pdf"):
     """Spearman AND Pearson correlation matrices over log(RT), ply, and every
     covariate, computed in SQL over the full windowed table (Spearman = Pearson on
     tie-corrected ranks). Pearson saves with a ``_pearson`` suffix."""
@@ -214,7 +273,7 @@ def correlation_matrix(conn, features, table="pmnz_gf", filename="board_feature_
         save_figure(fig, "board", f"{base}{suffix}{ext}")
 
 
-def feature_histograms(conn, features, table="pmnz_gf"):
+def feature_histograms(conn, features, table):
     """Marginal distribution of each covariate over the full windowed table,
     aggregated in SQL. Discrete/binary → per-value bars; continuous → 50-bin density."""
     n_rows = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -250,12 +309,8 @@ def feature_histograms(conn, features, table="pmnz_gf"):
     save_figure(fig, "board", "feature_histograms.pdf")
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="Board-level response time analyses")
-    parser.add_argument("--db", default=CONFIG["selected_db_default"])
-    args = parser.parse_args(argv)
-    print(f"Board analysis: ply window [{CONFIG['min_ply']}, {CONFIG['max_ply']}], db={args.db}")
-
+def run_plot(db: str) -> None:
+    """The four board analyses over filtered_moves ⋈ board_features."""
     # Covariates analyzed against RT. (label, kind, display_clip); kind ∈ {cont, disc,
     # bin} drives bivariate binning + histogram style; clip trims DISPLAY tails only.
     features = {
@@ -269,33 +324,48 @@ def main(argv=None):
         "in_check":              ("In check", "bin", None),
         "prev_move_was_capture": ("Prev move was capture", "bin", None),
     }
-
-    with db_connection(args.db, read_only=True) as conn:
-        create_ply_windowed_views(conn)   # ply window applied on arrival
-        # game_fraction = move_ply / TRUE total plies. The denominator comes from the
-        # UNWINDOWED move table: max(move_ply) over the windowed view would cap it at
-        # max_ply and inflate game_fraction for games longer than the window.
+    with db_connection(db, read_only=True) as conn:
+        # The one canonical view every analysis reads: the windowed moves (with
+        # game_fraction from the filter stage) joined to the featurized captures/checks.
         conn.execute(
-            "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
-            "SELECT w.*, w.move_ply * 1.0 / g.game_len AS game_fraction "
-            f"FROM {WIN_PROCESSED_MOVES_NONZERO} w "
-            "JOIN (SELECT gid, max(move_ply) AS game_len "
-            f"      FROM {CONFIG['table_processed_moves']} GROUP BY gid) g USING (gid)"
+            f"CREATE OR REPLACE TEMP VIEW board_view AS "
+            f"SELECT m.*, b.n_captures_avail, b.n_checks_avail "
+            f"FROM {CONFIG['table_filtered']} m LEFT JOIN {CONFIG['table_board_features']} b USING (fen)"
         )
-        print("Executing board analysis: RT distribution summary...")
-        move_time_summary(conn)
+        print("board analysis: RT distribution summary...")
+        move_time_summary(conn, "board_view")
 
-        print("Executing board analysis: bivariate RT-vs-covariate dashboards...")
+        print("board analysis: bivariate RT-vs-covariate dashboards...")
         for col, (label, kind, _clip) in features.items():
             opts = {"bin_mode": "integer", "integer_bin_width": 1} if kind in ("disc", "bin") else {}
             bivariate_analysis(conn, column=col, name=label, filename=f"bivariate_{col}.pdf",
-                               table="pmnz_gf", analyzer_opts=opts)
+                               table="board_view", analyzer_opts=opts)
 
-        print("Executing board analysis: correlation matrix...")
-        correlation_matrix(conn, features)
+        print("board analysis: correlation matrix...")
+        correlation_matrix(conn, features, "board_view")
 
-        print("Executing board analysis: feature histograms...")
-        feature_histograms(conn, features)
+        print("board analysis: feature histograms...")
+        feature_histograms(conn, features, "board_view")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Board-level response time analyses")
+    parser.add_argument("--db", default=CONFIG["selected_db_default"])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--featurize", action="store_true",
+                      help="featurize a hash-slice of filtered_moves' FENs → shard (single or Slurm array)")
+    mode.add_argument("--merge", action="store_true", help="merge featurize shards → board_features table")
+    mode.add_argument("--plot", action="store_true", help="run the analyses/figures (default)")
+    args = parser.parse_args(argv)
+    print(f"Board {('featurize' if args.featurize else 'merge' if args.merge else 'plot')}: "
+          f"window [{CONFIG['min_ply']}, {CONFIG['max_ply']}], db={args.db}")
+
+    if args.featurize:
+        run_featurize(args.db)
+    elif args.merge:
+        run_merge(args.db)
+    else:
+        run_plot(args.db)
 
 
 if __name__ == "__main__":

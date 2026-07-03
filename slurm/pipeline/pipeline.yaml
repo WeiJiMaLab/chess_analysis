@@ -1,33 +1,41 @@
 # Pipeline DAG (single source of truth for step order + dependencies).
-# `preprocess` is run on its own (`bash slurm/pipeline/preprocess.slurm`, builds
-# personal.db) and is NOT submitted by submit_all.sh — steps that list it as a
-# dependency just start immediately. submit_all.sh submits everything below in
-# order, wiring `after` -> Slurm afterok on the parents' job ids.
+# `preprocess` is run on its own (`bash slurm/pipeline/preprocess.slurm`, builds the
+# shared, run-independent personal.db) and is NOT submitted by submit_all.sh — steps
+# that list it as a dependency just start immediately. submit_all.sh submits
+# everything below in order, wiring `after` -> Slurm afterok on the parents' job ids.
 #
-#   preprocess ─┬─ board_analysis  (P0: engine-free; featurizes in-process)
-#               └─ filter_trees ── gen_trees(befs1cp) ─┬─ engine_analysis_pwin  (P1 stats, pwin)
-#                                                      ├─ engine_analysis_cp    (P1 stats, cp)
-#                                                      └─ pack_trees ── train_encoder ──
-#                                                         pack_root ── train_readout_pg ── eval  (P3)
+#   preprocess ── filter_and_sample ─┬─ board_featurize[] ── (merge) ── board_analysis   (P0)
+#                (filtered_moves +    ├─ gen_trees(befs1cp) ─┬─ engine_analysis_pwin      (P1, pwin)
+#                 tree-root FENs)     │                      ├─ engine_analysis_cp        (P1, cp)
+#                                     │                      └─ pack_trees ── train_encoder ──
+#                                     │                         pack_root ── train_readout_pg ── eval  (P3)
 #
-# Trees are built by greedy BeFS on native centipawns (key befs1cp_md36); both
-# WDL and cp/mate are stored per node, so the engine step runs twice (UNIT=pwin,
-# UNIT=cp) off the SAME trees. board_analysis featurizes its
-# board features in-process on a game sample (no separate featurize step).
+# filter_and_sample applies the ply window ONCE: it materializes the canonical
+# filtered_moves table (board + engine read it) and samples the tree-root FENs from
+# it. Captures/checks are a BOARD precondition (board_featurize array → merge →
+# board_features), not part of preprocess. Trees are greedy BeFS on native cp
+# (befs1cp_md36); the engine step runs twice (UNIT=pwin, UNIT=cp) off the same trees.
 steps:
-  # ---- P0: engine-free board battery (featurizes in-process; no separate step) ----
+  # ---- filter: window the moves (canon) + sample the tree-root FENs ----
+  - name: filter_and_sample
+    script: filter_and_sample.slurm
+    after: [preprocess]
+
+  # ---- P0: board — featurize captures/checks (array) -> merge -> analyses ----
+  - name: board_featurize
+    script: board_featurize.slurm
+    merge: board_merge.slurm       # afterok the array; board_analysis depends on THIS
+    after: [filter_and_sample]
+    array: 0-15
+
   - name: board_analysis
     script: board_analysis.slurm
-    after: [preprocess]
+    after: [board_featurize]
 
   # ---- trees ----
-  - name: filter_trees
-    script: filter_trees.slurm
-    after: [preprocess]
-
   - name: gen_trees
     script: gen_trees.slurm
-    after: [filter_trees]
+    after: [filter_and_sample]
     array: 0-99            # 100 tasks x 2500 FENs = full 250k -> befs1cp_md36
 
   # ---- P1: engine stats, two value units off the same trees ----

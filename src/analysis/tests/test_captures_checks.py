@@ -1,6 +1,6 @@
 """
 Skeptical provenance tests for the single python board featurizer
-(preprocess.calc_captures_checks, captures/checks via legal-move enumeration)
+(board.calc_captures_checks, captures/checks via legal-move enumeration)
 and the SQL-side board columns it complements.
 
 Assume the metrics are wrong until proven right — hand-computed fixtures plus
@@ -13,7 +13,7 @@ import os
 import chess
 import pytest
 
-from analysis.preprocess import calc_captures_checks
+from analysis.board import calc_captures_checks
 
 DB_PATH = "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/personal.db"
 _HAS_DB = os.path.exists(DB_PATH)
