@@ -291,16 +291,40 @@ _BOOT_HEADLINE = 1000  # trust protocol: B=1000 headline CIs
 _BOOT_CLUSTER = 200    # B=200 for the heavier per-instance runs
 
 
-def default_features_dir() -> str:
-    """Featurizer output lives beside the run's other scratch outputs."""
-    return os.path.join(os.path.dirname(CONFIG["cache_default"]), "board_features")
+def build_battery_views(conn, sample_games: int = 60_000, workers: int | None = None, seed: int = 7) -> None:
+    """Featurize the board features IN-PROCESS for a game-level sample and build
+    ``pmnz_bat``. No separate 84M-FEN job: the python-chess features
+    (captures/checks/material) are only consumed by the sampled battery analyses,
+    so featurizing the whole corpus is wasteful. We take a game-level sample, get
+    its DISTINCT FENs, featurize each ONCE with a worker pool (lossless — features
+    are a pure function of the FEN), then join back to EVERY sampled move-instance
+    (no statistical dedup: instance weighting is preserved, and the analyses still
+    compute both per-instance and per-FEN units).
 
+    ~1–2M distinct FENs at ~5k/s/core → tens of seconds on the analysis node,
+    versus ~10 min to featurize all 84M. Whole-corpus features are never needed:
+    in_check is also a DB column and prev_move_was_capture is pure SQL.
+    """
+    import multiprocessing as _mp
+    import pandas as pd
+    from analysis.featurize_board import featurize_fen, FEATURE_COLUMNS
 
-def setup_battery_views(conn, features_dir: str) -> None:
-    """feats (per-FEN parquet), prev_cap (lag over the FULL moves table so ply-15
-    rows still see ply-14), and pmnz_bat = windowed instances x features."""
-    glob_pat = os.path.join(features_dir, "features_*.parquet")
-    conn.execute(f"CREATE OR REPLACE TEMP VIEW feats AS SELECT * FROM read_parquet('{glob_pat}')")
+    workers = workers or (os.cpu_count() or 8)
+    conn.execute(
+        f"CREATE OR REPLACE TEMP TABLE sample_gids AS "
+        f"SELECT DISTINCT gid FROM pmnz_gf USING SAMPLE {sample_games} ROWS (reservoir, {seed})"
+    )
+    fens = [r[0] for r in conn.execute(
+        "SELECT DISTINCT m.fen FROM pmnz_gf m JOIN sample_gids sg ON sg.gid = m.gid"
+    ).fetchall()]
+    print(f"  battery: featurizing {len(fens):,} distinct FENs from {sample_games:,} "
+          f"sampled games ({workers} workers, in-process)...")
+    with _mp.Pool(workers) as pool:
+        rows = pool.map(featurize_fen, fens, chunksize=2000)
+    feats = pd.DataFrame([(f, *r) for f, r in zip(fens, rows)], columns=["fen", *FEATURE_COLUMNS])
+    conn.register("_feats_df", feats)
+    conn.execute("CREATE OR REPLACE TEMP TABLE feats AS SELECT * FROM _feats_df")
+    # prev_move_was_capture: lag over the FULL moves table so ply-15 still sees ply-14.
     conn.execute(
         "CREATE OR REPLACE TEMP VIEW prev_cap AS "
         "SELECT gid, move_ply, "
@@ -308,15 +332,19 @@ def setup_battery_views(conn, features_dir: str) -> None:
         "         AS prev_move_was_capture "
         f"FROM {CONFIG['table_moves']}"
     )
+    # pmnz_bat = every sampled windowed move-instance x its features (per-instance).
     conn.execute(
-        "CREATE OR REPLACE TEMP VIEW pmnz_bat AS "
+        "CREATE OR REPLACE TEMP TABLE pmnz_bat AS "
         "SELECT m.*, f.in_check, f.n_captures_avail, f.n_checks_avail, "
         "       f.self_material, f.opp_material, f.material_imbalance, "
         "       p.prev_move_was_capture "
         "FROM pmnz_gf m "
+        "JOIN sample_gids sg ON sg.gid = m.gid "
         "JOIN feats f ON f.fen = m.fen "
         "LEFT JOIN prev_cap p ON p.gid = m.gid AND p.move_ply = m.move_ply"
     )
+    n = conn.execute("SELECT count(*) FROM pmnz_bat").fetchone()[0]
+    print(f"  battery: pmnz_bat = {n:,} sampled move-instances (per-instance; not deduped)")
 
 
 def _binned_rt(x, y, kind, clip, *, stat="median", min_n=100):
@@ -463,20 +491,16 @@ def _boot_ci(fn, df, b: int, seed: int = 7) -> tuple[float, float]:
     return float(np.percentile(stats_, 2.5)), float(np.percentile(stats_, 97.5))
 
 
-def run_battery_corr(conn, sample_games: int = 25_000):
+def run_battery_corr(conn):
     """P0.b — Spearman+Pearson vs ln(RT), partials vs legal moves, bootstrap CIs,
-    on BOTH units (per-instance / per-FEN) from a game-level sample."""
+    on BOTH units (per-instance / per-FEN). Reads the already-sampled ``pmnz_bat``."""
     import pandas as pd
-    conn.execute(
-        f"CREATE OR REPLACE TEMP TABLE sample_gids AS "
-        f"SELECT DISTINCT gid FROM pmnz_gf USING SAMPLE {sample_games}"
-    )
     inst = conn.execute(
         "SELECT m.fen, ln(m.move_time) AS log_rt, m.n_possible_moves, "
         "       m.in_check::INT AS in_check, m.n_captures_avail, m.n_checks_avail, "
         "       m.self_material, m.material_imbalance, "
         "       COALESCE(m.prev_move_was_capture, FALSE)::INT AS prev_move_was_capture "
-        "FROM pmnz_bat m JOIN sample_gids sg ON sg.gid = m.gid"
+        "FROM pmnz_bat m"
     ).df()
     per_fen = inst.groupby("fen").agg(
         log_rt=("log_rt", "mean"), n_possible_moves=("n_possible_moves", "first"),
@@ -507,8 +531,9 @@ def run_battery_corr(conn, sample_games: int = 25_000):
                "battery_correlations.csv", index=False)
 
 
-def run_imbalance_shape(conn, sample_games: int = 25_000):
+def run_imbalance_shape(conn):
     """P0.b — pre-registered ∩-shape test for material_imbalance (weighted units).
+    Reads the already-sampled ``pmnz_bat``.
 
     Weighted material (incl pawns) spans a wide range, so: peak = {−1, 0, +1}
     (within ~a pawn of balance), tails = |imbalance| >= 4 (at least a minor piece
@@ -516,13 +541,8 @@ def run_imbalance_shape(conn, sample_games: int = 25_000):
     the CI upper bound of at least one bin in EACH tail. Test 2: quadratic beta < 0
     with bootstrap CI excluding 0 AND quadratic dR2 >= 0.001.
     """
-    conn.execute(
-        f"CREATE OR REPLACE TEMP TABLE sample_gids AS "
-        f"SELECT DISTINCT gid FROM pmnz_gf USING SAMPLE {sample_games}"
-    )
     df = conn.execute(
-        "SELECT m.material_imbalance, ln(m.move_time) AS log_rt "
-        "FROM pmnz_bat m JOIN sample_gids sg ON sg.gid = m.gid"
+        "SELECT m.material_imbalance, ln(m.move_time) AS log_rt FROM pmnz_bat m"
     ).df()
     rng = np.random.default_rng(7)
 
@@ -601,8 +621,8 @@ def main(argv=None):
     parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
     parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     parser.add_argument("--all", action="store_true", default=True, help="Run all analyses (default/always)")
-    parser.add_argument("--features-dir", default=None,
-                        help="P0 battery features dir (default: <run scratch>/board_features)")
+    parser.add_argument("--sample-games", type=int, default=60_000,
+                        help="game-level sample the battery featurizes in-process (~1-2M FENs)")
     args = parser.parse_args(argv)
     print(f"Board analysis: ply window [{CONFIG['min_ply']}, {CONFIG['max_ply']}], db={args.db}")
 
@@ -643,18 +663,9 @@ def main(argv=None):
                     reverse_x=config.get("reverse_x", False),
                 )
 
-        # ---- P0 battery (skipped with a warning if the featurizer hasn't run) ----
-        features_dir = args.features_dir or default_features_dir()
-        import glob as _glob
-        if not _glob.glob(os.path.join(features_dir, "features_*.parquet")):
-            print(f"WARNING: no battery features at {features_dir}; "
-                  "run analysis.featurize_board first. Skipping P0 battery.")
-            # Fallback: emit the base correlation matrix (no battery features) so
-            # board_feature_corr.pdf still exists when the featurizer hasn't run.
-            print("Executing board analysis: correlation matrix (base, no battery)...")
-            run_board_corr(conn)
-            return
-        setup_battery_views(conn, features_dir)
+        # ---- P0 battery (features computed in-process here; no separate job) ----
+        print("Executing board analysis: build battery views (in-process featurize)...")
+        build_battery_views(conn, sample_games=args.sample_games)
         print("Executing board analysis: battery figures (histograms / lowess / scatter)...")
         run_battery_figures(conn)
         print("Executing board analysis: battery_binaries...")
