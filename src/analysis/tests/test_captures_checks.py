@@ -19,6 +19,23 @@ DB_PATH = "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/personal.db"
 _HAS_DB = os.path.exists(DB_PATH)
 
 
+def _has_table(table: str) -> bool:
+    """The DB cross-checks depend on derived tables that may not exist yet (e.g. a
+    clean slate before a deployment rebuild) — skip rather than error in that case."""
+    if not _HAS_DB:
+        return False
+    import duckdb
+    conn = duckdb.connect(DB_PATH, read_only=True)
+    try:
+        return table in [r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()]
+    finally:
+        conn.close()
+
+
+_HAS_PROCESSED = _has_table("processed_moves_nonzero")
+_HAS_MOVES = _has_table("moves")
+
+
 # --------------------------------------------------------------------------
 # hand-computed fixtures (adversarial) — captures/checks only
 # --------------------------------------------------------------------------
@@ -72,7 +89,7 @@ def test_determinism():
 # DB cross-checks (skipped without the DB)
 # --------------------------------------------------------------------------
 
-@pytest.mark.skipif(not _HAS_DB, reason="personal.db not present")
+@pytest.mark.skipif(not _HAS_PROCESSED, reason="processed_moves_nonzero not present")
 def test_in_check_matches_db_column():
     import duckdb
     conn = duckdb.connect(DB_PATH, read_only=True)
@@ -86,7 +103,7 @@ def test_in_check_matches_db_column():
     assert not mism, f"{len(mism)} in_check mismatches vs moves.player_in_check, e.g. {mism[:3]}"
 
 
-@pytest.mark.skipif(not _HAS_DB, reason="personal.db not present")
+@pytest.mark.skipif(not _HAS_PROCESSED, reason="processed_moves_nonzero not present")
 def test_all_windowed_fens_parse():
     import duckdb
     conn = duckdb.connect(DB_PATH, read_only=True)
@@ -103,7 +120,7 @@ def test_all_windowed_fens_parse():
     assert not bad, f"{len(bad)} FENs failed to parse, e.g. {bad[:3]}"
 
 
-@pytest.mark.skipif(not _HAS_DB, reason="personal.db not present")
+@pytest.mark.skipif(not _HAS_MOVES, reason="moves table not present")
 def test_prev_capture_recipe_matches_replay():
     """The n_pieces-lag recipe for prev_move_was_capture must match a python-chess
     replay of the game's move sequence (including en-passant, which drops a pawn

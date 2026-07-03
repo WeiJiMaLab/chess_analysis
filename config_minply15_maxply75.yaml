@@ -202,3 +202,17 @@ eval:
   controller_checkpoint: ${packed_dir}/mchalt_controller.pt
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
+
+# --- Normative variant branches (optional; piggy-back on the base run) ---
+# A variant re-runs the model chain [from .. to] with `overrides`, reusing everything
+# before `from` (and any `share`d inputs) from the base run. Its OUTPUTS fork to
+# ${run_dir}/variants/<name> (figures too). Enable with RUN_VARIANTS=<name> bash submit_all.sh.
+# NB the tail is the path from `from` to `to`, so board/engine (off other branches,
+# and analysis-config anyway) are NOT forked.
+variants:
+  pruned:
+    from: gen_trees                 # RE-RUN BeFS tree generation WITH pruning ...
+    to: eval                        # ... through the normative model, to eval
+    share: [fens_sample]            # reuse the base tree-root FENs (grow pruned trees on the same roots)
+    overrides:                      # <section>.<field> — your BeFS pruning knobs (treegen section)
+      treegen.prune_eps: 0.2

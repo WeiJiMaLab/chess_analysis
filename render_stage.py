@@ -14,6 +14,7 @@ STAGE   which top-level section to emit as flat YAML.
 --set   inject/override a stage field (value is YAML-parsed).
 """
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -91,6 +92,42 @@ def load_with_extends(path, _seen=None):
     return deep_merge(base, data)
 
 
+def resolve_globals(data):
+    """Resolve data['globals'] into a flat {name: value, globals.name: value} table."""
+    variables = {}
+    for k, v in data.get("globals", {}).items():
+        variables[k] = v
+        variables[f"globals.{k}"] = v
+    for _ in range(5):
+        variables = {k: interpolate(v, variables) for k, v in variables.items()}
+        for k, v in list(variables.items()):
+            clean = k.removeprefix("globals.")
+            variables[clean] = v
+            variables[f"globals.{clean}"] = v
+    return variables
+
+
+def apply_variant(data):
+    """$VARIANT overlay for a normative variant branch (see config ``variants:``).
+
+    When $VARIANT names a variant, fork the run's OUTPUTS to a subdir (run_name →
+    run_name/variants/<VARIANT>, so run_dir/figures_dir/... all namespace under it),
+    PIN the variant's shared upstream dirs to the base run (so it reuses them rather
+    than regenerating), and apply its (dotted) overrides. Then drop the block."""
+    variant = os.environ.get("VARIANT")
+    vspec = (data.get("variants") or {}).get(variant) if variant else None
+    if vspec:
+        base = resolve_globals(data)
+        g = data.setdefault("globals", {})
+        g["run_name"] = f"{base['run_name']}/variants/{variant}"
+        for key in vspec.get("share", []):
+            if key in base:
+                g[key] = base[key]                 # literal base path — reused, not forked
+        for k, v in (vspec.get("overrides") or {}).items():
+            set_nested(data, k, v)                 # dotted, e.g. train.prune_eps
+    data.pop("variants", None)                     # consumed; never a renderable stage
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Render sections or query keys from merged configs.")
     ap.add_argument("config", help="Path to merged config YAML file.")
@@ -116,21 +153,10 @@ def main() -> None:
         if "." in key:
             set_nested(data, key, parsed_val)
 
-    # Build and resolve the globals variables block (supporting nested references)
-    variables = {}
-    for k, v in data.get("globals", {}).items():
-        variables[k] = v
-        variables[f"globals.{k}"] = v
+    apply_variant(data)   # $VARIANT overlay (fork outputs, pin shared upstream, overrides)
 
-    for _ in range(5):
-        variables = {k: interpolate(v, variables) for k, v in variables.items()}
-        for k, v in variables.items():
-            clean_k = k.removeprefix("globals.")
-            variables[clean_k] = v
-            variables[f"globals.{clean_k}"] = v
-
-    # Interpolate all config data with resolved variables
-    data = interpolate(data, variables)
+    # Interpolate all config data against the (possibly variant-overlaid) globals.
+    data = interpolate(data, resolve_globals(data))
 
     if args.get:
         try:

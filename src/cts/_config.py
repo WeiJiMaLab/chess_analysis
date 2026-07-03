@@ -108,6 +108,26 @@ def _resolve_globals(data: Dict[str, Any]) -> Dict[str, Any]:
     return variables
 
 
+def _apply_variant(data: Dict[str, Any]) -> None:
+    """$VARIANT overlay for a normative variant branch (see config ``variants:``).
+    Kept in sync with render_stage.apply_variant: fork the run's OUTPUTS to a variant
+    subdir (run_name → run_name/variants/<VARIANT>), PIN the variant's shared upstream
+    dirs to the base run, apply its (dotted) overrides, then drop the block."""
+    import os
+    variant = os.environ.get("VARIANT")
+    vspec = (data.get("variants") or {}).get(variant) if variant else None
+    if vspec:
+        base = _resolve_globals(data)
+        g = data.setdefault("globals", {})
+        g["run_name"] = f"{base['run_name']}/variants/{variant}"
+        for key in vspec.get("share", []):
+            if key in base:
+                g[key] = base[key]                 # literal base path — reused, not forked
+        for k, v in (vspec.get("overrides") or {}).items():
+            _set_nested(data, k, v)                 # dotted, e.g. train.prune_eps
+    data.pop("variants", None)
+
+
 def load_config(
     config_class: Type[C],
     path: str,
@@ -142,6 +162,8 @@ def load_config(
         key, value = _parse_kv(item, "--set")
         if "." in key:
             _set_nested(data, key, value)
+
+    _apply_variant(data)   # $VARIANT overlay (fork outputs, pin shared upstream, overrides)
 
     if stage is not None:
         data = _interpolate(data, _resolve_globals(data))
