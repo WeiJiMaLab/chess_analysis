@@ -32,8 +32,9 @@ def test_startpos_symmetry():
     assert f["in_check"] is False
     assert f["n_captures_avail"] == 0
     assert f["n_checks_avail"] == 0
-    assert f["self_material"] == 7   # 2N+2B+2R+1Q = 7 non-pawn pieces
-    assert f["opp_material"] == 7
+    # weighted incl pawns: 8*1 + 2*3 + 2*3 + 2*5 + 1*9 = 8+6+6+10+9 = 39
+    assert f["self_material"] == 39
+    assert f["opp_material"] == 39
     assert f["material_imbalance"] == 0
 
 
@@ -44,18 +45,18 @@ def test_material_imbalance_is_mover_pov_and_flips_sign():
     w_to_move = "rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     b_to_move = "rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1"
     fw, fb = _feat(w_to_move), _feat(b_to_move)
-    assert fw["self_material"] == 7 and fw["opp_material"] == 6
-    assert fw["material_imbalance"] == +1     # white (mover) is up a queen
-    assert fb["material_imbalance"] == -1     # black (mover) is down a queen
+    assert fw["self_material"] == 39 and fw["opp_material"] == 30   # black down a queen
+    assert fw["material_imbalance"] == +9     # white (mover) up a queen (weighted)
+    assert fb["material_imbalance"] == -9     # black (mover) down a queen
     assert fw["material_imbalance"] == -fb["material_imbalance"]
 
 
-def test_material_excludes_pawns_and_king():
-    # King + pawns only: zero non-pawn material on both sides.
-    f = _feat("4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1")
-    assert f["self_material"] == 0
-    assert f["opp_material"] == 0
-    assert f["material_imbalance"] == 0
+def test_material_includes_pawns_excludes_king():
+    # King + pawns only: weighted material = pawn count on each side (king excluded).
+    f = _feat("4k3/pp6/8/8/8/8/PPP5/4K3 w - - 0 1")
+    assert f["self_material"] == 3   # 3 white pawns
+    assert f["opp_material"] == 2    # 2 black pawns
+    assert f["material_imbalance"] == +1
 
 
 def test_in_check_and_reply_set():
@@ -124,23 +125,29 @@ def test_in_check_matches_db_column():
 
 
 @pytest.mark.skipif(not _HAS_DB, reason="personal.db not present")
-def test_material_king_inclusion_verdict():
-    """Establish (and pin) whether the DB non-pawn columns include the king:
-    if featurized count == DB column everywhere, the DB EXCLUDES the king;
-    if DB == featurized + 1 everywhere, it INCLUDES it. Either is fine — we just
-    assert the relationship is CONSISTENT so downstream cross-checks are valid."""
+def test_nonpawn_count_matches_db_king_inclusion_consistent():
+    """Cross-check the board's non-pawn piece COUNT (recomputed here, independent
+    of the weighted self_material) against the DB count columns. A single
+    consistent offset (0 = DB excludes king, 1 = includes) proves the columns are
+    well-defined; we don't require a particular value, just consistency."""
     import duckdb
+    NONPAWN = (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+
+    def nonpawn_count(fen, mover):
+        b = chess.Board(fen)
+        side = b.turn if mover else (not b.turn)
+        return sum(len(b.pieces(pt, side)) for pt in NONPAWN)
+
     conn = duckdb.connect(DB_PATH, read_only=True)
     rows = conn.execute(
         "SELECT fen, n_self_pieces_exc_pawns, n_opp_pieces_exc_pawns "
         "FROM processed_moves_nonzero WHERE move_ply BETWEEN 15 AND 75 USING SAMPLE 1500"
     ).fetchall()
     conn.close()
-    diffs_self = {int(db_self) - _feat(fen)["self_material"] for fen, db_self, _ in rows}
-    diffs_opp = {int(db_opp) - _feat(fen)["opp_material"] for fen, _, db_opp in rows}
-    # A single consistent offset (0 = excludes king, 1 = includes king).
-    assert len(diffs_self) == 1, f"inconsistent self-material offset vs DB: {sorted(diffs_self)[:5]}"
-    assert len(diffs_opp) == 1, f"inconsistent opp-material offset vs DB: {sorted(diffs_opp)[:5]}"
+    diffs_self = {int(db_self) - nonpawn_count(fen, True) for fen, db_self, _ in rows}
+    diffs_opp = {int(db_opp) - nonpawn_count(fen, False) for fen, _, db_opp in rows}
+    assert len(diffs_self) == 1, f"inconsistent self non-pawn offset vs DB: {sorted(diffs_self)[:5]}"
+    assert len(diffs_opp) == 1, f"inconsistent opp non-pawn offset vs DB: {sorted(diffs_opp)[:5]}"
     assert diffs_self == diffs_opp, f"self/opp offsets differ: {diffs_self} vs {diffs_opp}"
 
 

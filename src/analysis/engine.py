@@ -38,8 +38,6 @@ from analysis.utils.helpers import (
     db_connection,
     create_ply_windowed_views,
     WIN_PROCESSED_MOVES_NONZERO,
-    GAME_FRAC_CUTS,
-    GAME_FRAC_LABELS,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
     partial_spearman,
@@ -136,19 +134,19 @@ def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) ->
     print(f"  partial ρ(H(π), {y} | all)        = {rho_all:+.4f}")
 
 
-def save_tree_dashboard(analyzer_ply: Analyzer, analyzer_gf: Analyzer, out_dir: str, base_name: str) -> None:
-    """1x3 engine dashboard: overall, by ply tertile, by game-fraction tertile.
+def save_tree_dashboard(analyzer_ply: Analyzer, out_dir: str, base_name: str) -> None:
+    """1x2 engine dashboard: overall, by ply tertile.
 
-    ``analyzer_ply`` supplies the base panel + ply segmentation; ``analyzer_gf`` is
-    the same analysis segmented by game_fraction (identical x/y/options)."""
+    ``analyzer_ply`` supplies the base panel + ply segmentation."""
     apply_poster_style()
-    fig, axes = plt.subplots(1, 3, figsize=(36, 13.72))
+    fig, axes = plt.subplots(1, 2, figsize=(30, 13.72))
     analyzer_ply.plot_quantile_bins(axes[0])                    # overall
     analyzer_ply.plot_quantile_bins_tertile_segmented(axes[1])  # color: ply
-    analyzer_gf.plot_quantile_bins_tertile_segmented(axes[2])   # color: game fraction
-    for ax, t in zip(axes, ("overall", "by ply", "by game fraction")):
+    for ax, t in zip(axes, ("overall", "by ply")):
         ax.set_title(t, fontsize=FONT_SIZE_TICKS)
-    fig.subplots_adjust(top=0.80)
+    # wider figure + extra horizontal gap so the two panels' y-labels/legends
+    # don't crowd each other.
+    fig.subplots_adjust(top=0.80, wspace=0.28)
     suptitle = fig.suptitle(f"{analyzer_ply.title}\nn = {analyzer_ply.n_moves:,} moves",
                             fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
@@ -305,12 +303,17 @@ def run_tree_values_pipeline(
 
     with db_connection(db_path, read_only=True) as conn:
         create_ply_windowed_views(conn)   # ply filter on arrival; tree_rt/mq_rt build off pmnz_gf
-        # game_fraction = move_ply / total plies in game (max over the FULL windowed
-        # game, not the tree-matched subset), so the dashboards can segment by it.
+        # game_fraction = move_ply / TRUE total plies in the game. The total must
+        # come from the UNWINDOWED move table: max(move_ply) over the ply-windowed
+        # pmnz_win would cap the denominator at max_ply (=75), pinning every game
+        # longer than the window to the same denominator and inflating game_fraction
+        # toward 1.0 for the majority of moves whose game exceeds 75 plies.
         conn.execute(
             "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
-            "SELECT *, move_ply * 1.0 / max(move_ply) OVER (PARTITION BY gid) AS game_fraction "
-            "FROM pmnz_win"
+            "SELECT w.*, w.move_ply * 1.0 / g.game_len AS game_fraction "
+            "FROM pmnz_win w "
+            "JOIN (SELECT gid, max(move_ply) AS game_len "
+            f"      FROM {CONFIG['table_processed_moves']} GROUP BY gid) g USING (gid)"
         )
         conn.register("_vals", vals)
         conn.register("_root_moves", root_moves)
@@ -389,19 +392,16 @@ def run_tree_values_pipeline(
                     "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
         }
 
-        def _seg_pair(table, x_var, y_var, title, **opts):
-            """Two Analyzers (ply- and game-fraction-segmented) sharing x/y/options."""
-            common = dict(x_var=x_var, y_var=y_var, title=title, ply_tertile_source=table, **opts)
-            a_ply = Analyzer(conn, table, segment_column="move_ply",
-                             segment_source=table, segment_label="Ply", **common)
-            a_gf = Analyzer(conn, table, segment_column="game_fraction",
-                            segment_source=table, segment_label="Game fraction",
-                            segment_cuts=GAME_FRAC_CUTS, segment_range_labels=GAME_FRAC_LABELS, **common)
-            return a_ply, a_gf
+        def _make_analyzer(table, x_var, y_var, title, **opts):
+            """Ply-segmented Analyzer for the overall + by-ply dashboard."""
+            return Analyzer(conn, table, segment_column="move_ply",
+                            segment_source=table, segment_label="Ply",
+                            x_var=x_var, y_var=y_var, title=title,
+                            ply_tertile_source=table, **opts)
 
         for name, cfg in tree_signals.items():
             print(f"Executing engine tree analysis: {name}...")
-            a_ply, a_gf = _seg_pair(
+            a_ply = _make_analyzer(
                 "tree_rt",
                 Variable(column=cfg["column"], is_log=False, name=cfg["name"]),
                 Variable(column="move_time", is_log=True, name="RT"),
@@ -413,17 +413,17 @@ def run_tree_values_pipeline(
                 integer_bin_width=cfg.get("integer_bin_width", 1),
                 integer_tail_cut=cfg.get("integer_tail_cut"),
             )
-            save_tree_dashboard(a_ply, a_gf, out_dir, name)
+            save_tree_dashboard(a_ply, out_dir, name)
 
         print("Executing engine tree analysis: mq...")
-        mq_ply, mq_gf = _seg_pair(
+        mq_ply = _make_analyzer(
             "mq_rt",
             Variable(column="move_time", is_log=True, name="RT (s)"),
             Variable(column="mq", is_log=False, name=f"MQ (SF-1) ({unit})"),
             f"MQ (SF-1) ({unit}) vs. log(RT)",
             filter_query="move_time > 0", min_bin_count=300, n_bins=10,
         )
-        save_tree_dashboard(mq_ply, mq_gf, out_dir, "mq")
+        save_tree_dashboard(mq_ply, out_dir, "mq")
 
         print("Executing engine tree analysis: correlation_matrix...")
         plot_lc0_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"), unit=unit)
