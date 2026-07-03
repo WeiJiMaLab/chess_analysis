@@ -471,7 +471,7 @@ class Analyzer:
             )
         min_n = self.min_bin_count if min_n is None else min_n
         tertiles = sorted(self.quantile_tertile_df["tertile_id"].unique().tolist())
-        y_label = "Move time (s)" if self.y.is_log else self.y.label
+        y_label = "Response time (s)" if self.y.is_log else self.y.label
         x_label = self._x_axis_label
 
         any_pos_x = False
@@ -537,7 +537,7 @@ class Analyzer:
 
     def plot_quantile_bins(self, ax):
         """Plots the trend across equal-sized quantile bins."""
-        y_label = "Move time (s)" if self.y.is_log else self.y.label
+        y_label = "Response time (s)" if self.y.is_log else self.y.label
 
         df = self.quantile_df
         if self.min_bin_count:
@@ -632,7 +632,7 @@ class Analyzer:
             ax.scatter(df["mean_x"], df["mean_y"], s=16, color="0.5", alpha=0.5, zorder=1,
                        label="binned means (sanity)")
         ax.set_xlabel(self.x.label)  # raw label — LOWESS is binning-free, so no "(qbin)" suffix
-        ax.set_ylabel("Move time (s)" if self.y.is_log else self.y.label)
+        ax.set_ylabel("Response time (s)" if self.y.is_log else self.y.label)
         if self.y.is_log:
             _seconds_from_log(ax.yaxis)
         if self.x.is_log:

@@ -7,7 +7,7 @@ run — **all plies, no ply filter** — assembled from the per-inquiry reports 
 available as `config_minply15_maxply75.yaml`; this report is the full-data run.)*
 
 > **The one-line story.** Humans deliberate longest when the decision is *wide* — many legal moves to weigh.
-> The number of legal moves is the strongest predictor of think time, but that is the **fact to explain, not a
+> The number of legal moves is the strongest predictor of response time, but that is the **fact to explain, not a
 > model**: a count has no normative content. So the question is not "what beats legal-moves" (we chased that and
 > everything *correctly* collapsed onto it); it is **"is it resource-rational to spend effort proportional to your
 > options?"** The result we are after is a resource-rational planner — one that pays per operation and stops when
@@ -16,7 +16,7 @@ available as `config_minply15_maxply75.yaml`; this report is the full-data run.)
 
 The chapter has **three sections**, matching the figure categories in `figures/allply/{board,engine,normative}`:
 
-1. **Board** — model-free board regressors. *Legal moves dominate; think-time is log-normal.*
+1. **Board** — model-free board regressors. *Legal moves dominate; response time is log-normal.*
 2. **Engine** — Stockfish value-of-computation signals. *They track RT only weakly, and every one collapses toward the move count.*
 3. **Normative (TODO)** — the resource-rational planner that should *reproduce* the move-count effect. *Future work; one positive sign so far.*
 
@@ -29,8 +29,8 @@ The chapter has **three sections**, matching the figure categories in `figures/a
 ## Data
 
 Lichess **10+0** games (600 s base, 0 increment), **both players Elo ≥ 2000**, over the ingested date
-window. Games with negative move-times, berserk (halved-clock) starts, or opponent time-grants are
-dropped in preprocessing (`src/analysis/preprocess.py`). The move is the unit of analysis; think
+window. Games with negative response times, berserk (halved-clock) starts, or opponent time-grants are
+dropped in preprocessing (`src/analysis/preprocess.py`). The move is the unit of analysis; response
 time is `move_time` (seconds on the mover's clock). **No ply filter is applied for this run** (the
 window is a no-op); the analysis set is all non-instant moves.
 
@@ -53,22 +53,22 @@ Humans do not spend equal time on every move. Working **model-free** — no engi
 *of the position itself* — we ask which features predict how long a person thinks. Full inquiry:
 [(R-MOVETIME-BOARD)](board.md).
 
-First, the shape of the target. Log(move time) is approximately **normal** — move time is
+First, the shape of the target. Log(response time) is approximately **normal** — response time is
 **log-normal**, not exponential — so people scale thinking *multiplicatively* with difficulty.
 
-![log move time — histogram + normal QQ](../figures/allply/board/rt_distribution.png)
+![log response time — histogram + normal QQ](../figures/allply/board/rt_distribution.png)
 
-> **Decision:** Work in **log(RT)** throughout (think time is log-normal, Weber's law), and screen
+> **Decision:** Work in **log(RT)** throughout (response time is log-normal, Weber's law), and screen
 > structural features with **Spearman** rank correlation — they are skewed/bounded, so rank
 > correlation is the honest measure.
 
 Then the regressors. Each board feature gets the same dashboard (global + by game-stage tertile,
 K=10 tie-safe quantile bins with per-bin SEM):
 
-![legal moves vs move time](../figures/allply/board/legal_moves.png)
-![ply vs move time](../figures/allply/board/ply.png)
-![player clock vs move time](../figures/allply/board/clock.png)
-![game fraction vs move time](../figures/allply/board/game_fraction.png)
+![legal moves vs response time](../figures/allply/board/legal_moves.png)
+![ply vs response time](../figures/allply/board/ply.png)
+![player clock vs response time](../figures/allply/board/clock.png)
+![game fraction vs response time](../figures/allply/board/game_fraction.png)
 <!-- ⟨REFRESH⟩ game_fraction.png pending: new board covariate (move_ply / game length). -->
 
 *Numbers below are from this run — board-feature Spearman matrix (n = 1,000,000).*
@@ -86,7 +86,7 @@ The legal-move count is the strongest single board-feature tie to RT, and it is 
 the ply/material/clock complex (which all move together as games progress).
 
 > **Result:** The **width of the decision — the number of legal moves — is the strongest single
-> predictor of human think time**, stronger than ply or clock. This is the fact the rest of the
+> predictor of human response time**, stronger than ply or clock. This is the fact the rest of the
 > chapter has to explain.
 
 ---
@@ -193,7 +193,7 @@ satisficing concavity: high-satisfaction positions plateau low, low-satisfaction
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Human think-time is log-normal; decision **width** (legal moves) is its strongest single predictor | **Settled** | board regressors; legal moves ρ = +0.26, above ply / clock |
+| Human response time is log-normal; decision **width** (legal moves) is its strongest single predictor | **Settled** | board regressors; legal moves ρ = +0.26, above ply / clock |
 | Engine value-of-computation tracks RT only weakly, and every signal collapses toward the move count | **Settled** | SF1 `n1md36`; every engine \|ρ\| ≲ 0.17 |
 | H(π) is **not** a real engine signal (uniform SF prior ⇒ H(π) ≡ log #legal-moves) | **Settled** | partial \| legal ≈ 0 |
 | Sharpness is dropped — the deep action-gap was a post-search artifact; the myopic gap is ~null | **Settled** | engine plots use pre-search myopic values |

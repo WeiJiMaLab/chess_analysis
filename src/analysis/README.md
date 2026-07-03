@@ -19,7 +19,7 @@ All paths are relative to the **`chess_analysis/`** repo root (parent of `src/an
 | **Moves ETL (games → shards → merge → `process_moves`)** | `bash slurm/analysis/preprocess.sh` (or `preprocess.py get_games` / `shard` / `merge` / `process_moves` separately) |
 | **Regenerate standard figures** | `bash slurm/analysis/board.sh` |
 | **log(MT) histogram + normal QQ** | `python src/analysis/move_time_summary.py` |
-| **Move-time dashboards** (clock, branching, own non-pawn material, ply) | `python src/analysis/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
+| **Response-time dashboards** (clock, branching, own non-pawn material, ply) | `python src/analysis/movetime_analysis.py` (optional: `--only clock legal_moves own_material ply`) |
 | **Ply vs instant-move probability** | `python src/analysis/ply_premove.py` |
 | **Tree-derived GSS / VOC / Action Gap / MQ vs RT** (lc0-tree subset) | `sbatch slurm/analysis/tree_values.slurm` (`tree_values_analysis.py`; not part of the full-dataset pipeline) |
 | **Slidev deck (LMCOS overview)** | `cd src/analysis/presentations/lmcos-overview && npm install && npm run dev` (symlink `public/figures` per that README) |
@@ -73,7 +73,7 @@ chess_analysis/
 | :--- | :--- |
 | **Heavy tails** | Most moves are fast; long thinks dominate variance. Analyses use **$\log T$** (with `EPSILON` in `utils.helpers`) unless there is a strong reason not to. |
 | **Clock** | More remaining clock associates with longer thinks; signal is clearest when **ply** and player heterogeneity are accounted for. |
-| **VOC (value of computation)** | Engine-defined gain from deep vs shallow search relates to think time; often discussed vs **ply** “arc” (midgame peak ~40–50). |
+| **VOC (value of computation)** | Engine-defined gain from deep vs shallow search relates to response time; often discussed vs **ply** “arc” (midgame peak ~40–50). |
 | **Scale** | Core DuckDB pipelines target on the order of **~10⁸ moves**; always prefer **SQL-side** aggregation and sampling. |
 
 For publication-style figures, `utils.analysis.Analyzer.save_dashboard` produces a fixed **1×2**: **quantile bins** (global, left) and **quantile bins by ply tertile** (right). Raw-trend and scatter panels were removed — quantile binning is the canonical view. Ply tertiles are settled **a priori** from the whole-dataset `move_ply` distribution (`quantile_disc` at 1/3, 2/3 over `ply_tertile_source`, default `processed_moves_nonzero` → cuts ≈ 27, 56) and applied as fixed boundaries, so the segmentation is identical across plots. A log-`move_time` y-axis keeps log spacing but labels ticks in seconds (`exp`). For near-zero-inflated x (VOC / Action Gap / MQ — the last has a large mass at exactly 0 where the human played the engine-best move), pass `zero_inflated=True, zero_threshold=0.05` to lump the near-zero mass (`abs(x) ≤ threshold`, so MQ ∈ [−0.05, 0]) into one point and quantile-bin the rest. Optional `include_quantile_heatmap=True` (+ `quantile_heatmap_row='move_ply'`) writes a standalone quantile×quantile heatmap.
@@ -155,14 +155,14 @@ There is **no live-UCI evaluation** on the human side: the former `engine_eval.p
 
 ### Statistics
 
-- **Log space** for move time and clock in standard analyses.
+- **Log space** for response time and clock in standard analyses.
 - **Fixed effects / de-meaning:** subtract group means (e.g. by ply or player) when exploring confounding.
 
 ---
 
 ## 6. Quality control (do not regress)
 
-- **Negative move times:** exclude affected games when building analysis tables (pipeline enforces this for core paths).
+- **Negative response times:** exclude affected games when building analysis tables (pipeline enforces this for core paths).
 - **Berserk:** dedicated detection; do not mix berserk games into clock analyses without an explicit policy.
 - **Grant more time (GMT):** windowed detection on zero-increment games; tables like `grant_more_time_games` feed joins.
 

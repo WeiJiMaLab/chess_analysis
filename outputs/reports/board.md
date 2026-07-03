@@ -1,4 +1,4 @@
-# Human move time — what board features predict it
+# Human response time — what board features predict it
 
 **Ref:** `R-MOVETIME-BOARD` · [Index](reference.md)
 
@@ -8,31 +8,31 @@ Humans don't spend equal time on every move. Working model-free (no engine), we 
 features *of the position itself* predict how long a human thinks — on 135M non-zero-time
 moves from 1.97M Lichess games (60+0, Elo ≥ 2000).
 
-> **Result:** Human think time is driven most by the **width of the decision** (the number of
+> **Result:** Human response time is driven most by the **width of the decision** (the number of
 > legal moves) — more than by material, clock, or game stage.
 
-### How is think time distributed?
+### How is response time distributed?
 
-Across the full move set, log(move time) is approximately **normal** — i.e. move time is
+Across the full move set, log(response time) is approximately **normal** — i.e. response time is
 **log-normal**, not exponential or uniform — so players scale thinking *multiplicatively*
 with difficulty.
 
-![log move time — histogram + normal QQ](../figures/movetime_logmt_qq.png)
+![log response time — histogram + normal QQ](../figures/movetime_logmt_qq.png)
 
-> **Result:** Think time is log-normal (Weber's law) — the multiplicative scaling that
+> **Result:** Response time is log-normal (Weber's law) — the multiplicative scaling that
 > justifies working in **log(RT)** throughout.
 
-### Which board features move with think time?
+### Which board features move with response time?
 
-Each board feature gets the canonical move-time dashboard (global + by ply tertile), binned the
+Each board feature gets the canonical response-time dashboard (global + by ply tertile), binned the
 same way throughout — **K=10 tie-safe quantile bins** with per-bin SEM (tie-safe = a repeated
 integer is kept in one bin via quantile cut-points, so discrete counts don't split across bins;
 low-cardinality counts collapse to ≤10 integer points):
 
-![player clock vs move time](../figures/clock_vs_movetime.png)
-![legal moves vs move time](../figures/legal_moves_vs_movetime.png)
-![own non-pawn material vs move time](../figures/own_material_vs_movetime.png)
-![game stage (ply) vs move time](../figures/ply_vs_movetime.png)
+![player clock vs response time](../figures/clock_vs_movetime.png)
+![legal moves vs response time](../figures/legal_moves_vs_movetime.png)
+![own non-pawn material vs response time](../figures/own_material_vs_movetime.png)
+![game stage (ply) vs response time](../figures/ply_vs_movetime.png)
 
 | Feature (from position) | r with log(RT) | Reading |
 |---|---|---|
@@ -52,7 +52,7 @@ and ply move together (material/clock fall as games progress), so they are large
 with the game-stage axis — yet the legal-move count's RT coupling is *not* reducible to that complex.
 
 > **Result:** The **width** of the decision (the number of legal moves) is the strongest
-> board-feature predictor of human think time — stronger than realized value-of-search, and not
+> board-feature predictor of human response time — stronger than realized value-of-search, and not
 > reducible to the ply/material/clock complex.
 
 **The raw legal-move count is the *fundamental* width axis.** A natural worry is that the raw count
@@ -74,6 +74,6 @@ one. See the policy-entropy test in [the engine report](engine.md).
   Legal moves, Own material, Player clock, log(RT) on a 1M-row reservoir sample. Figures land
   in repo-root `figures/`.
 
-> **Decision:** Work in **log(RT)** (think time is log-normal) and use **Spearman** for the
+> **Decision:** Work in **log(RT)** (response time is log-normal) and use **Spearman** for the
 > board matrix — the structural features are skewed/bounded, so rank correlation is the
 > honest screen.

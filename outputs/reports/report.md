@@ -7,7 +7,7 @@ per-inquiry detail and methods live in the reports this paper points to. Here we
 narrative, in paper order, and say plainly what is **settled** and what is still **open**.
 
 > **The one-line story.** Humans deliberate longest when the decision is *wide* — many legal moves to weigh.
-> The number of legal moves is the strongest predictor of think time, but that is the **fact to explain, not a
+> The number of legal moves is the strongest predictor of response time, but that is the **fact to explain, not a
 > model**: a count has no normative content. So the question is not "what beats legal-moves" (we chased that and
 > everything *correctly* collapsed onto it); it is **"is it resource-rational to spend effort proportional to your
 > options?"** The result we are after is a resource-rational planner — one that pays per operation and stops when
@@ -16,7 +16,7 @@ narrative, in paper order, and say plainly what is **settled** and what is still
 
 The paper has **three sections**, matching the figure categories in `figures/{board,engine,normative}`:
 
-1. **Board** — model-free board regressors. *Legal moves dominate; think-time is log-normal.*
+1. **Board** — model-free board regressors. *Legal moves dominate; response time is log-normal.*
 2. **Engine** — Stockfish value-of-computation signals. *They track RT only weakly, and every one collapses toward the move count.*
 3. **Normative (TODO)** — the resource-rational planner that should *reproduce* the move-count effect. *Future work; one positive sign so far.*
 
@@ -28,21 +28,21 @@ Humans do not spend equal time on every move. Working **model-free** — no engi
 *of the position itself* — we ask which features predict how long a person thinks, on Lichess
 **10+0** games (both players Elo ≥ 2000). Full inquiry: [(R-MOVETIME-BOARD)](reports/board.md).
 
-First, the shape of the target. Log(move time) is approximately **normal** — move time is
+First, the shape of the target. Log(response time) is approximately **normal** — response time is
 **log-normal**, not exponential — so people scale thinking *multiplicatively* with difficulty.
 
-![log move time — histogram + normal QQ](figures/board/rt_distribution.png)
+![log response time — histogram + normal QQ](figures/board/rt_distribution.png)
 
-> **Decision:** Work in **log(RT)** throughout (think time is log-normal, Weber's law), and screen
+> **Decision:** Work in **log(RT)** throughout (response time is log-normal, Weber's law), and screen
 > structural features with **Spearman** rank correlation — they are skewed/bounded, so rank
 > correlation is the honest measure.
 
 Then the regressors. Each board feature gets the same dashboard (global + by game-stage tertile,
 K=10 tie-safe quantile bins with per-bin SEM):
 
-![legal moves vs move time](figures/board/legal_moves.png)
-![ply vs move time](figures/board/ply.png)
-![player clock vs move time](figures/board/clock.png)
+![legal moves vs response time](figures/board/legal_moves.png)
+![ply vs response time](figures/board/ply.png)
+![player clock vs response time](figures/board/clock.png)
 
 | Feature (from the position) | ρ with log(RT) | Reading |
 |---|---|---|
@@ -56,7 +56,7 @@ The legal-move count (ρ **+0.343**) is the strongest single board-feature tie t
 **not** reducible to the ply/material/clock complex (which all move together as games progress).
 
 > **Result:** The **width of the decision — the number of legal moves — is the strongest single
-> predictor of human think time** (ρ +0.343), stronger than ply (−0.248) or clock (+0.122). This is
+> predictor of human response time** (ρ +0.343), stronger than ply (−0.248) or clock (+0.122). This is
 > the fact the rest of the paper has to explain.
 
 ---
@@ -111,7 +111,7 @@ post-search artifact, and the myopic gap is ~null (+0.061).
 Every magnitude here is faint (|ρ| ≲ 0.17), and the values are **stable** across depth/eval budget.
 The dominant driver of human RT is the **move count**, not value — and indeed each engine signal
 collapses toward it: the engine confirms *that* width drives RT but offers no value-based reason for
-why a *count* should set think time.
+why a *count* should set response time.
 
 ![Spearman matrix — engine metrics, board structure, RT](figures/engine/correlation_matrix.png)
 
@@ -198,5 +198,5 @@ This paper is a synthesis; each section's full methods, data lineage, and caveat
 - **Data** — [(R-DATA)](reports/reference.md#data-reference-r-data): the human Lichess dataset and the
   search-tree dataset.
 
-All correlations are Spearman ρ with **percentile-bootstrap 95% CIs**; RT is always log(move time);
+All correlations are Spearman ρ with **percentile-bootstrap 95% CIs**; RT is always log(response time);
 the click-driven walkthrough is [`presentations/src/tree-search.md`](presentations/src/tree-search.md).

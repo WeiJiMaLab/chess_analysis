@@ -16,7 +16,7 @@ Reports come in two formats:
 > top-to-bottom**, and **every section header a question** (not a finding, and not numbered). Each
 > section/subsection closes with a typed callout that carries the takeaway:
 > - `> **Decision:** …` — a modeling/methodological choice.
-> - `> **Result:** …` — an empirical finding (e.g. "think time is log-normal").
+> - `> **Result:** …` — an empirical finding (e.g. "response time is log-normal").
 > - `> **Clarification:** …` — resolves a likely misreading (e.g. a confound, not a sign bug).
 >
 > See `monkey_4iar`'s R-GAZE / R-MODELCMP / R-RECOVERY for the worked pattern.
@@ -28,7 +28,7 @@ Reports come in two formats:
 
 | Inquiry | Report | Format | Thread | Status |
 |---------|--------|--------|--------|--------|
-| Human move time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
+| Human response time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
 | **Tree search & deliberation** — the single linear story: does VOC/engine-search explain *when* people think? No → RT = satisficed decision difficulty (size − satisfaction + sharpness) → **the reclaimed result: a resource-rational per-operation-cost stop *reproduces* the decomposition** (legal-moves is the explanandum, not a floor). Folds in the former engine / branching / halt-calibration / VOC threads. | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; `normative_curves` reproduces +size/−satisfaction/+sharpness |
 | **Value-pruning** — the cost-profile lever via ε-pruning; staged plan + the (negative) regen result; pruning is a *later refinement* of the resource-rational fit, not the first step | [(R-PRUNING)](pruning.md) | Plan | Deliberation | ❌ pruned node-count washes out at md36; success reframed to *reproduce the curves* |
 | Data reference — human Lichess dataset + SF/lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
@@ -38,10 +38,10 @@ lab notebook's [§ Legacy section](../labnotebook.md#legacy) (the former archive
 
 ## How the threads relate
 
-The human move-time inquiry now reads as **one arc** — *board → tree-search/deliberation* — all sitting on
+The human response-time inquiry now reads as **one arc** — *board → tree-search/deliberation* — all sitting on
 [(R-DATA)](#data-reference-r-data) (the human Lichess dataset + the search-tree dataset):
 
-1. **board** — [(R-MOVETIME-BOARD)](board.md): what board features predict think time (legal moves dominate).
+1. **board** — [(R-MOVETIME-BOARD)](board.md): what board features predict response time (legal moves dominate).
 2. **tree search & deliberation** — [(R-TREESEARCH)](treesearch.md): the single linear story — does
    value-of-computation / engine-search explain *when* people think? No (every value signal is faint and
    collapses to the move count) ⇒ RT = satisficed decision difficulty ⇒ **the reclaimed result: a

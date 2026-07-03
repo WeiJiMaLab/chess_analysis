@@ -14,7 +14,7 @@ where the median was flat; "structure" that appeared only under a log x-axis; bi
 than the bin CI; and pwin saturation (±1 rails at |cp|≳400, ~46% of root children) manufacturing
 zero-inflation downstream. Every rule below traces to one of these.
 
-**Conventions assumed throughout.** RT analyses are on **log RT** (think time is log-normal —
+**Conventions assumed throughout.** RT analyses are on **log RT** (response time is log-normal —
 bankable). All CIs are **95% percentile-bootstrap** — never normal-theory. Spearman *and* Pearson
 are always reported together. Engine metrics are side-burnered unless they pass P1/P2.
 

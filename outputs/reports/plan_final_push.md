@@ -18,7 +18,7 @@ test; Spearman *and* Pearson reported (no global swap).
 
 | # | Claim | Evidence | Status |
 |---|---|---|---|
-| 1 | Think time is log-normal | board run | **bankable** |
+| 1 | Response time is log-normal | board run | **bankable** |
 | 2 | Legal moves is the strongest RT predictor (ρ≈+0.26), not reducible to ply/clock | board run | **bankable** |
 | 3 | Engine value signals (gss/oss/voc/frac_good) collapse onto the move count (ΔR²≤0.0003) | 3-subagent diagnostic | **bankable (negative result)** |
 | 4 | action_gap is the one surviving engine signal (monotone −, ΔR²≈0.014, stable in strata) | diagnostic | **provisional** — pwin units, pending P1/P2 |
@@ -176,7 +176,7 @@ per node makes every readout (either unit) share **one topology**.
 on board-level facts (trustworthy); engine metrics enter only if they passed P1/P2.
 
 **Method.** Treat the model's stop step (oracle gss/oss; PG controller's halt step where
-available) as the model's "think time"; run the **same** correlate analysis on it as on human RT;
+available) as the model's "response time"; run the **same** correlate analysis on it as on human RT;
 place the sign columns side by side.
 
 | effect | humans (RT) | model (stop step) |

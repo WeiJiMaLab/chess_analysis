@@ -1,5 +1,5 @@
 """
-Preprocess Lichess data for move-time analysis.
+Preprocess Lichess data for response-time analysis.
 Includes selection of games, extraction of moves, and feature engineering.
 
 Contract (do not subvert with optional alternate temp paths):
