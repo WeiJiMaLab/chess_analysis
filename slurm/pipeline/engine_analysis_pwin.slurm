@@ -9,17 +9,19 @@
 # action gap / GSS / greedy frac-good / OSS), joins to human RT in DuckDB, and
 # plots. Per-tree values are cached to parquet so re-plots need no trees.
 #   N_TREES   (default 100000)  N_WORKERS (default = cpus-per-task)  REFRESH=1 forces recompute
-# Trees read from human_analysis.trees_default (sf_trees/n1md36); figures written
-# under human_analysis.figures_dir/engine (see config.yaml).
-#SBATCH --job-name=engine-analysis
+# Trees read from human_analysis.trees_default (befs1cp_md36); figures written
+# under human_analysis.figures_dir/engine_<unit> (UNIT env: pwin|cp; default pwin).
+# The cp twin (engine_analysis_cp.slurm) sets UNIT=cp and reuses this body.
+#SBATCH --job-name=engine-pwin
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err
 #SBATCH --partition=cpu
+#SBATCH --qos=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
-#SBATCH --time=00:30:00
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=96G
+#SBATCH --time=02:00:00
 
 set -euo pipefail
 TINY=/home/hl4291/chess_analysis
@@ -31,10 +33,12 @@ N_TREES="${N_TREES:-100000}"
 N_WORKERS="${N_WORKERS:-${SLURM_CPUS_PER_TASK:-16}}"
 # REFRESH forces a clean recompute of the per-tree parquet cache (default off).
 REFRESH_FLAG="${REFRESH:+--refresh}"
+UNIT="${UNIT:-pwin}"
 
-echo "engine analysis: n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $(date)"
+echo "engine analysis: unit=${UNIT} n_trees=${N_TREES} n_workers=${N_WORKERS} on $(hostname) at $(date)"
 python3 src/analysis/engine.py \
     --mode all \
+    --unit "${UNIT}" \
     --n-trees "${N_TREES}" \
     --n-workers "${N_WORKERS}" \
     ${REFRESH_FLAG}

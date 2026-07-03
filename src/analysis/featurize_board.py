@@ -6,7 +6,7 @@ the pre-registered board features via python-chess (no engine anywhere):
   in_check           mover is in check (also a DB column; recomputed for self-containment)
   n_captures_avail   # legal moves that are captures
   n_checks_avail     # legal moves that give check
-  self_material      weighted non-pawn material for the side to move (N/B/R/Q = 3/3/5/9)
+  self_material      non-pawn piece COUNT for the side to move (unweighted; kings excluded)
   opp_material       same for the opponent
   material_imbalance self_material - opp_material (mover POV)
 
@@ -43,9 +43,10 @@ import pandas as pd  # noqa: E402
 from analysis.utils.helpers import CONFIG, create_ply_windowed_views  # noqa: E402
 from analysis.utils.selected_db import SELECTED_DB_DEFAULT  # noqa: E402
 
-# Non-pawn material weights (kings excluded). Weighted, not raw count: the
-# depth/decidedness hypotheses are about value at stake (Q != N).
-_PIECE_VALUES = {chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+# Non-pawn piece COUNTS (kings excluded), unweighted — deliberate (plan P0):
+# raw counts keep the metric fully under our control and exactly cross-checkable
+# against the DB columns (n_self_pieces_exc_pawns); value-weighting is deferred.
+_NONPAWN_TYPES = (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
 
 FEATURE_COLUMNS = [
     "in_check", "n_captures_avail", "n_checks_avail",
@@ -63,8 +64,8 @@ def featurize_fen(fen: str):
             n_captures += 1
         if board.gives_check(move):
             n_checks += 1
-    self_material = sum(v * len(board.pieces(pt, board.turn)) for pt, v in _PIECE_VALUES.items())
-    opp_material = sum(v * len(board.pieces(pt, not board.turn)) for pt, v in _PIECE_VALUES.items())
+    self_material = sum(len(board.pieces(pt, board.turn)) for pt in _NONPAWN_TYPES)
+    opp_material = sum(len(board.pieces(pt, not board.turn)) for pt in _NONPAWN_TYPES)
     return (
         board.is_check(), n_captures, n_checks,
         self_material, opp_material, self_material - opp_material,

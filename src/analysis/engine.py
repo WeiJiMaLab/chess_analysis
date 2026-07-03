@@ -54,7 +54,7 @@ from analysis.utils.selected_db import (
 )
 
 # Imported from newly extracted modular utilities
-from analysis.utils.tree_loader import compute_values, _tree_voc_and_gap
+from analysis.utils.tree_loader import UNITS, compute_values
 import matplotlib.pyplot as plt
 
 
@@ -161,11 +161,13 @@ def save_tree_dashboard(analyzer_ply: Analyzer, analyzer_gf: Analyzer, out_dir: 
     print(f"Saved figures: {out_path_pdf} and {out_path_png}")
 
 
-def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) -> None:
+def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, unit: str = "pwin") -> None:
+    """Spearman AND Pearson matrices (trust protocol: report both; the Pearson
+    matrix saves with a ``_pearson`` suffix)."""
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
                p.n_possible_moves AS legal_moves, p.player_clock_time AS player_clock,
-               m.mq, t.voc, t.action_gap, t.gss, t.greedy_frac_good, t.oss
+               m.mq, t.voc, t.action_gap, t.gss, t.greedy_frac_good, t.frac_acceptable, t.oss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
         JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
@@ -175,63 +177,120 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str) 
         "log_T": "log(RT)",
         # board features
         "ply": "Ply", "legal_moves": "Legal moves", "player_clock": "Clock left",
-        # engine signals (all myopic/greedy) — order: Gain, MQ, ActionGap, FracGood, GSS, OSS
+        # engine signals — order: Gain, MQ, ActionGap, FracGood, FracAcceptable, GSS, OSS
         "voc": "Gain", "mq": "MQ", "action_gap": "Action Gap",
-        "greedy_frac_good": "Greedy frac-good", "gss": "GSS", "oss": "OSS",
+        "greedy_frac_good": "Greedy frac-good", "frac_acceptable": "Frac-acceptable",
+        "gss": "GSS", "oss": "OSS",
     }
-    corr = df[list(labels)].corr(method="spearman").rename(columns=labels, index=labels)
-    n = len(corr)
-    apply_poster_style()
-    fig, ax = plt.subplots(figsize=(11, 9))
-    ax.grid(False)
-    im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
-    ax.set_xticks(range(n))
-    ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
-    ax.set_yticks(range(n))
-    ax.set_yticklabels(corr.index, fontsize=20)
-    for i in range(n):
-        for j in range(n):
-            val = corr.values[i, j]
-            ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=16,
-                    color="white" if abs(val) > 0.5 else "black",
-                    fontweight="bold" if i == j else "normal")
-    highlight_corr_row(ax, n)
-    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Spearman ρ", fontsize=18)
-    cbar.ax.tick_params(labelsize=16)
-    ax.set_title(f"Spearman correlation — SF-1 (n1·d36) metrics (n = {len(df):,})", fontsize=20, pad=12)
-    plt.tight_layout()
-    
     base, _ = os.path.splitext(out_path)
-    out_path_pdf = f"{base}.pdf"
-    out_path_png = f"{base}.png"
-    fig.savefig(out_path_pdf, dpi=150, bbox_inches="tight")
-    fig.savefig(out_path_png, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Saved figures: {out_path_pdf} and {out_path_png}")
+    for method, mlabel, suffix in (("spearman", "Spearman ρ", ""), ("pearson", "Pearson r", "_pearson")):
+        corr = df[list(labels)].corr(method=method).rename(columns=labels, index=labels)
+        n = len(corr)
+        apply_poster_style()
+        fig, ax = plt.subplots(figsize=(12, 10))
+        ax.grid(False)
+        im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(corr.columns, fontsize=20, rotation=30, ha="right")
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(corr.index, fontsize=20)
+        for i in range(n):
+            for j in range(n):
+                val = corr.values[i, j]
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=16,
+                        color="white" if abs(val) > 0.5 else "black",
+                        fontweight="bold" if i == j else "normal")
+        highlight_corr_row(ax, n)
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(mlabel, fontsize=18)
+        cbar.ax.tick_params(labelsize=16)
+        ax.set_title(f"{mlabel} — SF-1 BeFS metrics, unit={unit} (n = {len(df):,})",
+                     fontsize=20, pad=12)
+        plt.tight_layout()
+        fig.savefig(f"{base}{suffix}.pdf", dpi=150, bbox_inches="tight")
+        fig.savefig(f"{base}{suffix}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"Saved figures: {base}{suffix}.pdf and {base}{suffix}.png")
+
+
+def run_trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
+    """P1 trust tests (trust_protocol.md §5): the pre-registered SIGN-MIRROR —
+    net of legal moves, action_gap (decisiveness) and greedy_frac_good
+    (ambiguity share) must have OPPOSITE-signed partials with CIs excluding 0
+    and not overlapping each other. Run per-FEN (the headline unit); also
+    reports frac_acceptable and the hurdle decomposition for zero-inflated
+    signals. Fail is a finding — printed either way."""
+    df = conn.execute("""
+        SELECT t.fen, avg(ln(t.move_time)) AS log_rt,
+               any_value(t.action_gap) AS action_gap,
+               any_value(t.greedy_frac_good) AS frac_good,
+               any_value(t.frac_acceptable) AS frac_acceptable,
+               any_value(p.n_possible_moves) AS legal_moves
+        FROM tree_rt t
+        JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
+        WHERE t.move_time > 0
+        GROUP BY t.fen
+    """).df().dropna()
+    rng = np.random.default_rng(seed)
+    n = len(df)
+
+    def _partial_rho(d, xcol):
+        rx = d[xcol].rank().to_numpy(float)
+        ry = d["log_rt"].rank().to_numpy(float)
+        rz = d["legal_moves"].rank().to_numpy(float)
+        zc = np.column_stack([np.ones_like(rz), rz])
+        bx, *_ = np.linalg.lstsq(zc, rx, rcond=None)
+        by, *_ = np.linalg.lstsq(zc, ry, rcond=None)
+        return float(np.corrcoef(rx - zc @ bx, ry - zc @ by)[0, 1])
+
+    print(f"\n  === P1 trust tests (unit={unit}, per-FEN, n={n:,}) ===")
+    results = {}
+    for xcol in ("action_gap", "frac_good", "frac_acceptable"):
+        point = _partial_rho(df, xcol)
+        boots = [_partial_rho(df.iloc[rng.integers(0, n, n)], xcol) for _ in range(n_boot)]
+        lo, hi = np.percentile(boots, [2.5, 97.5])
+        results[xcol] = (point, lo, hi)
+        print(f"  partial ρ({xcol:16s}, logRT | legal) = {point:+.4f}  [95% CI {lo:+.4f}, {hi:+.4f}]")
+    (ag, ag_lo, ag_hi), (fg, fg_lo, fg_hi) = results["action_gap"], results["frac_good"]
+    mirror = (ag * fg < 0) and (ag_lo * ag_hi > 0) and (fg_lo * fg_hi > 0) \
+        and (min(ag_hi, fg_hi) < max(ag_lo, fg_lo))
+    print(f"  SIGN-MIRROR (action_gap vs frac_good): {'PASS' if mirror else 'FAIL'} "
+          f"(opposite signs, CIs exclude 0, CIs disjoint)")
+
+    # Hurdle decomposition for the zero-inflated signals (per-unit threshold).
+    thr = {"pwin": 0.05, "cp": 5.0}[unit]
+    for xcol, t in (("action_gap", thr),):
+        above = df[df[xcol] > t]
+        p_above = float((df[xcol] > t).mean())
+        rho_mag = float(above[xcol].rank().corr(above["log_rt"].rank())) if len(above) > 100 else float("nan")
+        print(f"  hurdle {xcol}: P(>{t}) = {p_above:.3f}; ρ(magnitude | >{t}) = {rho_mag:+.4f} "
+              f"(n={len(above):,})")
 
 
 def run_tree_values_pipeline(
-    trees_dir: str, n_trees: int, n_workers: int, seed: int, db_path: str, cache_dir: str, refresh: bool
+    trees_dir: str, n_trees: int, n_workers: int, seed: int, db_path: str, cache_dir: str,
+    refresh: bool, unit: str = "pwin"
 ):
-    """Run the complete tree-values extraction, human-join, and dashboard generation pipeline."""
-    key = f"{os.path.basename(trees_dir.rstrip('/'))}_{n_trees}_{seed}"
+    """Tree-values extraction, human-join, dashboards, and P1 trust tests — in one
+    VALUE UNIT ("pwin" | "cp"; see tree_loader.UNITS). Figures land in
+    figures_dir/engine_<unit>/ so both variants coexist."""
+    key = f"{os.path.basename(trees_dir.rstrip('/'))}_{n_trees}_{seed}_{unit}"
     cache = Path(cache_dir)
     vals_path, rm_path = cache / f"vals_{key}.parquet", cache / f"rootmoves_{key}.parquet"
-    
+
     use_cache = (not refresh) and vals_path.exists() and rm_path.exists()
     if use_cache:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
-        _required = ("h_pi", "greedy_frac_good", "oss")
+        _required = ("h_pi", "greedy_frac_good", "frac_acceptable", "oss")
         _missing = [c for c in _required if c not in vals.columns]
         if _missing:
             print(f"  cached values predate columns {_missing}; recomputing from the trees …")
             use_cache = False
-            
+
     if not use_cache:
-        print(f"Deriving GSS/Gain/Action Gap/MQ on {n_trees:,} trees ({n_workers} workers) …")
-        vals, root_moves = compute_values(trees_dir, n_trees, seed, n_workers)
+        print(f"Deriving GSS/Gain/Action Gap/MQ on {n_trees:,} trees ({n_workers} workers, unit={unit}) …")
+        vals, root_moves = compute_values(trees_dir, n_trees, seed, n_workers, unit=unit)
         cache.mkdir(parents=True, exist_ok=True)
         vals.to_parquet(vals_path)
         root_moves.to_parquet(rm_path)
@@ -240,8 +299,8 @@ def run_tree_values_pipeline(
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
     # Output dir is wired from config (human_analysis.figures_dir); engine figures
-    # live in the "engine" subdir. (Matches utils.plots.save_figure used by board.py.)
-    out_dir = os.path.join(CONFIG["figures_dir"], "engine")
+    # live in a per-unit subdir so the pwin and cp variants coexist.
+    out_dir = os.path.join(CONFIG["figures_dir"], f"engine_{unit}")
     os.makedirs(out_dir, exist_ok=True)
 
     with db_connection(db_path, read_only=True) as conn:
@@ -257,7 +316,8 @@ def run_tree_values_pipeline(
         conn.register("_root_moves", root_moves)
         conn.execute("""
             CREATE OR REPLACE TEMP TABLE tree_rt AS
-            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good, v.oss,
+            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good,
+                   v.frac_acceptable, v.oss,
                    v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction
             FROM _vals v
             JOIN pmnz_gf m ON m.fen = v.fen
@@ -267,7 +327,7 @@ def run_tree_values_pipeline(
         n_fen = conn.execute("SELECT count(DISTINCT fen) FROM tree_rt").fetchone()[0]
         print(f"  joined {n_rows:,} human moves across {n_fen:,} FENs.")
 
-        for col in ("gss", "voc", "action_gap", "h_pi", "greedy_frac_good", "oss"):
+        for col in ("gss", "voc", "action_gap", "h_pi", "greedy_frac_good", "frac_acceptable", "oss"):
             r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt WHERE {col} IS NOT NULL").fetchone()[0]
             print(f"  r({col}, log RT) = {r:+.4f}")
 
@@ -309,16 +369,22 @@ def run_tree_values_pipeline(
         # fraction) via two Analyzers over tree_rt that differ only in segment column.
         # gss/oss are integers → bin per-integer (ntile over a discrete right-skewed
         # variable manufactures fake non-monotonicity); tail above the cut is merged.
+        # Value-unit thresholds scale with the unit (pwin ↔ cp, ~×100 near balance).
+        _zero_thr = {"pwin": 0.05, "cp": 5.0}[unit]
+        _u = f" ({unit})"
         tree_signals = {
-            "gss": {"column": "gss", "name": "Greedy stop step", "filter_query": "move_time > 0",
+            "gss": {"column": "gss", "name": "Greedy stop step" + _u, "filter_query": "move_time > 0",
                     "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
-            "gain": {"column": "voc", "name": "Gain (SF-1)", "filter_query": "move_time > 0",
+            "gain": {"column": "voc", "name": "Gain (SF-1)" + _u, "filter_query": "move_time > 0",
                      "zero_inflated": True, "zero_threshold": 0.0},
-            "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)", "filter_query": "move_time > 0",
-                           "zero_inflated": True, "zero_threshold": 0.05},
-            "frac_good": {"column": "greedy_frac_good", "name": "Greedy frac-good (SF-1)",
+            "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)" + _u,
+                           "filter_query": "move_time > 0",
+                           "zero_inflated": True, "zero_threshold": _zero_thr},
+            "frac_good": {"column": "greedy_frac_good", "name": "Greedy frac-good (SF-1)" + _u,
                           "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL"},
-            "oss": {"column": "oss", "name": "Optimal stop step (SF-1)",
+            "frac_acceptable": {"column": "frac_acceptable", "name": "Frac-acceptable (SF-1)" + _u,
+                                "filter_query": "move_time > 0 AND frac_acceptable IS NOT NULL"},
+            "oss": {"column": "oss", "name": "Optimal stop step (SF-1)" + _u,
                     "filter_query": "move_time > 0 AND oss IS NOT NULL",
                     "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
         }
@@ -353,14 +419,17 @@ def run_tree_values_pipeline(
         mq_ply, mq_gf = _seg_pair(
             "mq_rt",
             Variable(column="move_time", is_log=True, name="RT (s)"),
-            Variable(column="mq", is_log=False, name="MQ (SF-1)"),
-            "MQ (SF-1) vs. log(RT)",
+            Variable(column="mq", is_log=False, name=f"MQ (SF-1) ({unit})"),
+            f"MQ (SF-1) ({unit}) vs. log(RT)",
             filter_query="move_time > 0", min_bin_count=300, n_bins=10,
         )
         save_tree_dashboard(mq_ply, mq_gf, out_dir, "mq")
 
         print("Executing engine tree analysis: correlation_matrix...")
-        plot_lc0_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"))
+        plot_lc0_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"), unit=unit)
+
+        print("Executing engine tree analysis: P1 trust tests...")
+        run_trust_tests(conn, unit)
 
 
 # =============================================================================
@@ -383,20 +452,25 @@ def main(argv=None):
     parser.add_argument("--n-workers", type=int, default=os.cpu_count() or 8)
     parser.add_argument("--cache-dir", default=CONFIG["cache_default"])
     parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--key", default=CONFIG["key_default"])
-    
+    parser.add_argument("--key", default=None,
+                        help="cache key for mq_gss (default: <key_default>_<unit>)")
+    parser.add_argument("--unit", choices=sorted(UNITS), default="pwin",
+                        help="value unit for the tree signals (pwin | cp); figures go to engine_<unit>/")
+
     args = parser.parse_args(argv)
+    key = args.key or f"{CONFIG['key_default']}_{args.unit}"
 
     # tree_values BUILDS the cache parquet that mq_gss READS, so it must run first
     # in --mode all (otherwise a fresh cache, e.g. the first SF-2000 run, fails).
     modes = {
         "tree_values": {
             "func": run_tree_values_pipeline,
-            "args": [args.trees_dir, args.n_trees, args.n_workers, args.seed, args.db, args.cache_dir, args.refresh]
+            "args": [args.trees_dir, args.n_trees, args.n_workers, args.seed, args.db,
+                     args.cache_dir, args.refresh, args.unit]
         },
         "mq_gss": {
             "func": run_difficulty_confound_stats,
-            "args": [Path(args.cache_dir), args.key, args.db]
+            "args": [Path(args.cache_dir), key, args.db]
         }
     }
 

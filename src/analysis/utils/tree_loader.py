@@ -1,7 +1,24 @@
 """
-PyTorch Leela tree data loading and feature extraction.
-Handles loading PT files in parallel to extract Greedy Stopping Step (GSS),
-Value of Computation (Gain), Action Gap, Prior Entropy H(π), and Root MQ.
+Tree data loading and signal extraction, UNIT-PARAMETRIC (pwin | cp).
+
+Loads teacher-tree ``.pt`` payloads in parallel and derives the engine signals —
+Greedy Stopping Step (GSS), Gain/VOC, Action Gap, greedy frac-good,
+frac-acceptable, Optimal Stopping Step (OSS), prior entropy H(π), and per-root-
+move MQ — in a chosen VALUE UNIT:
+
+  unit="pwin"  per-node feature ``value``    = p_win − p_loss ∈ [−1, 1] (WDL-derived)
+  unit="cp"    per-node feature ``cp_order`` = Stockfish-native centipawns with mate
+               scores folded into a ±20000 band (see cts parsers.score_order_features)
+
+Provenance note (deliberate): DEEP signals are computed by REPLAYING the negamax
+backup over the stored per-node static values in the requested unit — we do NOT
+read the generator's ``oracle_*`` value arrays, whose unit silently follows the
+generation-time ``value_feature``. BeFS insertion order is the expansion order
+(children always have higher node index than their parent), so the step-by-step
+trace is exactly reconstructable from the saved tree. Sign convention matches
+the generator (parsers/teacher_targets): a node's static value is from that
+node's side-to-move POV; negamax parent value = −min(children) (the parent picks
+the child that is worst for the opponent).
 """
 
 import os
@@ -12,109 +29,144 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-# Greedy fraction-good tolerance: a root move "looks good at a glance" if its
-# myopic (mover-perspective leaf-eval) value is within this of the best myopic value.
-FRAC_GOOD_EPS = 0.1
-# Node cost for the budgeted-oracle Optimal Stopping Step (the value we settled on).
-OSS_NODE_COST = 1e-4
+# Per-unit readout constants. frac_good ε: "within ε of the best myopic value";
+# 0.1 pwin ↔ 50 cp (≈ half a pawn; the sigmoid slope at 0 is ~0.002/cp · 2 range,
+# so 50 cp ≈ 0.1 value-units near balance). acceptable_thr: an ABSOLUTE
+# satisficing bar — value ≥ 0 ("at least equal for the mover") in both units.
+# oss_node_cost: per-node halt cost; 1e-4 was settled in pwin units (range ~2);
+# the cp default scales by the ~×400 effective range ratio (±800 cp interior).
+UNITS = {
+    "pwin": {"feature": "value", "frac_good_eps": 0.1, "acceptable_thr": 0.0,
+             "oss_node_cost": 1e-4},
+    "cp": {"feature": "cp_order", "frac_good_eps": 50.0, "acceptable_thr": 0.0,
+           "oss_node_cost": 0.04},
+}
+# Backwards-compatible aliases (pre-unit constants; pwin semantics).
+FRAC_GOOD_EPS = UNITS["pwin"]["frac_good_eps"]
+OSS_NODE_COST = UNITS["pwin"]["oss_node_cost"]
 
-# The budgeted-oracle trajectory builder is the one piece the human OSS readout shares
-# with the cts pipeline. cts is a normal import here — every entry point that loads this
-# module puts src on PYTHONPATH (env.sh / the human slurm launchers).
-try:
-    from cts.data.preprocess_mc.pack import build_compact_trajectory_from_payload
-except ImportError:  # keep the loader importable for the cts-free board-only analysis
-    build_compact_trajectory_from_payload = None
 
+def _tree_arrays(payload, unit: str):
+    """(static_values, parent_index, root, kids) in the unit's per-node feature.
 
-def _tree_frac_good(payload) -> float:
-    """Greedy fraction-good: fraction of root moves whose MYOPIC value is within
-    FRAC_GOOD_EPS of the best myopic value. Myopic value = mover-perspective root-child
-    leaf-eval = -node_features[root_children, "value"]. This is the greedy / pre-search
-    analog of satisfaction ("how many moves look good at a glance"); it deliberately
-    uses the myopic leaf evals, NOT the deep oracle_final_root_q_values."""
+    static values are each node's OWN-side-to-move POV; kids are the root's
+    children in node-index (= insertion/expansion) order.
+    """
     feature_names = list(payload["feature_names"])
     nf = payload["node_features"].numpy()
     par = payload["parent_index"].numpy()
-    vi = feature_names.index("value")
+    vi = feature_names.index(UNITS[unit]["feature"])
+    static = nf[:, vi].astype(float)
     roots = np.where(par < 0)[0]
     if not roots.size:
-        return float("nan")
-    kids = np.where(par == int(roots[0]))[0]
-    if kids.size < 1:
-        return float("nan")
-    myo = -nf[kids, vi].astype(float)
-    if not np.isfinite(myo).all():
-        return float("nan")
-    return float(np.mean(myo >= myo.max() - FRAC_GOOD_EPS))
+        return None
+    root = int(roots[0])
+    kids = np.where(par == root)[0]
+    return static, par, root, kids
 
 
-def _tree_oss(payload, source_path: str, node_cost: float = OSS_NODE_COST) -> float:
-    """Optimal Stopping Step (OSS): the budgeted-oracle dynamic stop on the compact
-    trajectory. OSS = argmax_t [ halt_reward(t) - node_cost * n_total(t) ], with a
-    per-NODE cost (cost grows with cumulative tree size; settled node-cost c=1e-4)."""
-    if build_compact_trajectory_from_payload is None:
-        return float("nan")
-    traj = build_compact_trajectory_from_payload(payload, source_path=source_path)
-    if traj is None or traj.get("num_steps", 0) <= 0:
-        return float("nan")
-    hr = np.asarray(traj["halt_rewards"], dtype=float)
-    ts = np.asarray(traj["tree_sizes"], dtype=float)
-    if hr.size < 2:
-        return float("nan")
-    return float(np.argmax(hr - node_cost * ts))
+def _deep_values_prefix(static: np.ndarray, par: np.ndarray, upto: int) -> np.ndarray:
+    """Negamax deep values over the tree prefix of nodes [0, upto].
+
+    v(node) = static(node) if it has no children in the prefix, else
+    −min(v(children)) — the node's STM picks the child worst for the opponent.
+    Children always have a higher index than their parent (insertion order), so
+    one reverse pass suffices.
+    """
+    v = static[: upto + 1].copy()
+    has_kid = np.zeros(upto + 1, dtype=bool)
+    minkid = np.full(upto + 1, np.inf)
+    for i in range(upto, 0, -1):
+        # Finalize node i's deep value FIRST (all its children have higher index
+        # and are already processed), THEN fold that value into its parent — folding
+        # the raw static value would break negamax for trees deeper than one level.
+        if has_kid[i]:
+            v[i] = -minkid[i]
+        p = par[i]
+        if 0 <= p <= upto:
+            if v[i] < minkid[p]:
+                minkid[p] = v[i]
+            has_kid[p] = True
+    if has_kid[0]:
+        v[0] = -minkid[0]
+    return v
 
 
-def _tree_voc_and_gap(payload) -> tuple[float, float]:
-    """Extract Gain and Action Gap from tree payload."""
-    feature_names = list(payload["feature_names"])
-    nf = payload["node_features"].numpy()
-    par = payload["parent_index"].numpy()
-    vi = feature_names.index("value")
-    final_q = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
+def _tree_signals(payload, unit: str) -> dict | None:
+    """All unit-parametric signals for one tree (see module docstring)."""
+    arrs = _tree_arrays(payload, unit)
+    if arrs is None:
+        return None
+    static, par, root, kids = arrs
+    if kids.size < 2 or not np.isfinite(static[kids]).all():
+        return None
+    cfg = UNITS[unit]
+    n_nodes = static.size
 
-    action_gap = float("nan")
-    voc_val = float("nan")
-    roots = np.where(par < 0)[0]
-    if roots.size:
-        kids = np.where(par == int(roots[0]))[0]
-        if kids.size >= 2:
-            myopic_q = -nf[kids, vi]
-            order = np.argsort(myopic_q)[::-1]
-            action_gap = float(myopic_q[order[0]] - myopic_q[order[1]])
-            qt = np.asarray(payload["oracle_root_q_trace"], dtype=float)
-            qt = qt.reshape(qt.shape[0], -1)
-            if qt.shape[1] == final_q.size and final_q.size >= 2:
-                visited = qt != 0.0
-                if visited.any():
-                    steps = np.where(visited, np.arange(qt.shape[0])[:, None], qt.shape[0])
-                    first_visit = np.where(visited.any(axis=0), steps.min(axis=0), qt.shape[0] + 1)
-                    a_shallow = int(np.argmin(first_visit))
-                    a_deep = int(np.argmax(final_q))
-                    voc_val = float(final_q[a_deep] - final_q[a_shallow])
-    return voc_val, action_gap
+    # --- myopic (pre-search) signals: mover-POV leaf evals of the root children
+    myo = -static[kids]
+    order = np.argsort(myo)[::-1]
+    action_gap = float(myo[order[0]] - myo[order[1]])
+    frac_good = float(np.mean(myo >= myo.max() - cfg["frac_good_eps"]))
+    frac_acceptable = float(np.mean(myo >= cfg["acceptable_thr"]))
 
+    # --- deep signals: replayed negamax trace over the expansion prefix.
+    # Root-child deep values are the ROOT mover's values: −v(kid).
+    # trace[t] = best root child (by deep value) if the search stopped after
+    # node t entered the tree.
+    best_trace = np.empty(n_nodes, dtype=int)
+    final_kid_vals = None
+    for t in range(n_nodes):
+        v = _deep_values_prefix(static, par, t)
+        kid_vals = np.where(kids <= t, -v[np.minimum(kids, t)], myo * np.nan)
+        # before a kid exists in the prefix it can't be chosen; at t >= kids.max()
+        # (root expansion complete) all kids are live. Root expansion inserts all
+        # children consecutively, so early prefixes only matter for tiny trees.
+        live = kids <= t
+        if not live.any():
+            best_trace[t] = -1
+            continue
+        vals = np.where(live, kid_vals, -np.inf)
+        best_trace[t] = int(np.argmax(vals))
+        if t == n_nodes - 1:
+            final_kid_vals = kid_vals
+    if final_kid_vals is None or not np.isfinite(final_kid_vals).all():
+        return None
+    final_best = best_trace[-1]
 
-def _tree_root_mq(payload) -> tuple[list[str], list[float]]:
-    """Extract Lc0 root-move MQ from tree payload."""
-    moves = list(payload["oracle_root_moves"])
-    fq = np.asarray(payload["oracle_final_root_q_values"], dtype=float).ravel()
-    if not moves or fq.size != len(moves) or not np.isfinite(fq).all():
-        return [], []
-    mq = (fq - float(np.max(fq))).tolist()
-    return moves, mq
+    # GSS: first step from which the running best equals the final best.
+    gss = int(np.argmax(best_trace == final_best))
+    # VOC/Gain: deep value of the deep-best move minus deep value of the move
+    # the GREEDY (myopic) policy would pick with no search.
+    voc = float(final_kid_vals[final_best] - final_kid_vals[int(np.argmax(myo))])
+    # OSS: budgeted-oracle stop on the replayed trace — commit at step t to the
+    # move that LOOKS best at step t; reward = that move's FINAL deep value; cost
+    # grows per node. Steps before any root child is live (best_trace == -1) are
+    # not stoppable → reward −inf (else the fallback-to-final-best makes t=0 the
+    # trivial argmax and OSS collapses to 0).
+    live_step = best_trace >= 0
+    committed = np.where(live_step, best_trace, 0)
+    rewards = np.where(live_step, final_kid_vals[committed], -np.inf)
+    oss = int(np.argmax(rewards - cfg["oss_node_cost"] * (np.arange(n_nodes) + 1.0)))
 
+    # MQ per root move: final deep value relative to the best (≤ 0; cp unit =
+    # centipawn loss). Move labels come from oracle_root_moves, which the
+    # generator writes in root-children node order.
+    moves = list(payload.get("oracle_root_moves", []))
+    if len(moves) == kids.size:
+        mq = (final_kid_vals - final_kid_vals.max()).tolist()
+    else:
+        moves, mq = [], []
 
-def _tree_gss(payload) -> int:
-    """Extract Greedy Stopping Step from tree payload."""
-    bmi = np.asarray(payload["oracle_best_move_index"]).ravel()
-    if bmi.size == 0:
-        return -1
-    return int(np.argmax(bmi == bmi[-1]))
+    return {
+        "gss": gss, "voc": voc, "action_gap": action_gap,
+        "greedy_frac_good": frac_good, "frac_acceptable": frac_acceptable,
+        "oss": oss, "moves": moves, "mq": mq,
+    }
 
 
 def _tree_hpi(payload) -> float:
-    """Extract policy prior entropy H(π)."""
+    """Policy prior entropy H(π) (unit-independent; degenerate under uniform priors)."""
     feature_names = list(payload["feature_names"])
     nf = payload["node_features"].numpy()
     par = payload["parent_index"].numpy()
@@ -134,36 +186,47 @@ def _tree_hpi(payload) -> float:
     return float(-(p * np.log(p)).sum())
 
 
+_WORKER_UNIT = "pwin"  # set per-pool via initializer (picklable plain global)
+
+
+def _init_worker(unit: str):
+    global _WORKER_UNIT
+    _WORKER_UNIT = unit
+
+
 def _worker(path: str):
     try:
         torch.set_num_threads(1)
         t = torch.load(path, map_location="cpu", weights_only=False)
-        gss = _tree_gss(t)
-        if gss < 0:
+        sig = _tree_signals(t, _WORKER_UNIT)
+        if sig is None:
             return None
-        voc_val, gap = _tree_voc_and_gap(t)
         hpi = _tree_hpi(t)
-        frac_good = _tree_frac_good(t)
-        oss = _tree_oss(t, path)
-        ucis, mqs = _tree_root_mq(t)
         fen = " ".join(t["root_position_spec"].split()[:4])
-        return (fen, gss, voc_val, gap, hpi, frac_good, oss, ucis, mqs)
+        return (fen, sig["gss"], sig["voc"], sig["action_gap"], hpi,
+                sig["greedy_frac_good"], sig["frac_acceptable"], sig["oss"],
+                sig["moves"], sig["mq"])
     except Exception:
         return None
 
 
-def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int,
+                   unit: str = "pwin") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Per-tree signals + per-root-move MQ in the requested unit ("pwin" | "cp")."""
+    if unit not in UNITS:
+        raise ValueError(f"unknown unit {unit!r}; expected one of {sorted(UNITS)}")
     names = [e.name for e in os.scandir(trees_dir) if e.name.endswith(".pt")]
     names = random.Random(seed).sample(names, min(n_trees, len(names)))
     paths = [os.path.join(trees_dir, nm) for nm in names]
     tree_rows, move_rows = [], []
-    with mp.Pool(n_workers) as pool:
+    with mp.Pool(n_workers, initializer=_init_worker, initargs=(unit,)) as pool:
         for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
-            fen, gss, voc_val, gap, hpi, frac_good, oss, ucis, mqs = r
+            fen, gss, voc_val, gap, hpi, frac_good, frac_acc, oss, ucis, mqs = r
             tree_rows.append({"fen": fen, "gss": gss, "voc": voc_val, "action_gap": gap,
-                              "h_pi": hpi, "greedy_frac_good": frac_good, "oss": oss})
+                              "h_pi": hpi, "greedy_frac_good": frac_good,
+                              "frac_acceptable": frac_acc, "oss": oss})
             for u, q in zip(ucis, mqs):
                 move_rows.append({"fen": fen, "move_uci": u, "mq": q})
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)
