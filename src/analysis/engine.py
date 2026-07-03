@@ -47,9 +47,6 @@ from analysis.utils.plots import (
     highlight_corr_row,
     save_figure,
 )
-from analysis.utils.selected_db import (
-    SELECTED_DB_DEFAULT,
-)
 
 # Imported from newly extracted modular utilities
 from analysis.utils.tree_loader import UNITS, compute_values
@@ -165,7 +162,7 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, 
     df = conn.execute("""
         SELECT ln(t.move_time) AS log_T, t.move_ply AS ply,
                p.n_possible_moves AS legal_moves, p.player_clock_time AS player_clock,
-               m.mq, t.voc, t.action_gap, t.gss, t.greedy_frac_good, t.frac_acceptable, t.oss
+               m.mq, t.voc, t.action_gap, t.gss, t.n_within_epsilon, t.n_acceptable, t.oss
         FROM tree_rt t
         JOIN mq_rt m ON m.gid = t.gid AND m.move_ply = t.move_ply
         JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
@@ -175,9 +172,9 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, 
         "log_T": "log(RT)",
         # board features
         "ply": "Ply", "legal_moves": "Legal moves", "player_clock": "Clock left",
-        # engine signals — order: Gain, MQ, ActionGap, FracGood, FracAcceptable, GSS, OSS
+        # engine signals — order: Gain, MQ, ActionGap, n-within-ε, n-acceptable, GSS, OSS
         "voc": "Gain", "mq": "MQ", "action_gap": "Action Gap",
-        "greedy_frac_good": "Greedy frac-good", "frac_acceptable": "Frac-acceptable",
+        "n_within_epsilon": "n within ε", "n_acceptable": "n acceptable",
         "gss": "GSS", "oss": "OSS",
     }
     base, _ = os.path.splitext(out_path)
@@ -213,16 +210,18 @@ def plot_lc0_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: str, 
 
 def run_trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
     """P1 trust tests (trust_protocol.md §5): the pre-registered SIGN-MIRROR —
-    net of legal moves, action_gap (decisiveness) and greedy_frac_good
-    (ambiguity share) must have OPPOSITE-signed partials with CIs excluding 0
-    and not overlapping each other. Run per-FEN (the headline unit); also
-    reports frac_acceptable and the hurdle decomposition for zero-inflated
-    signals. Fail is a finding — printed either way."""
+    net of legal moves, action_gap (decisiveness) and n_within_epsilon (ambiguity
+    COUNT) must have OPPOSITE-signed partials with CIs excluding 0 and not
+    overlapping each other. Run per-FEN (the headline unit); also reports
+    n_acceptable and the hurdle decomposition for the zero-inflated signals
+    (action_gap, and n_acceptable whose zero = 'no ≥-equal move'). The ambiguity
+    signal is now a raw count (no legal-move denominator confound); the mirror
+    logic is unchanged. Fail is a finding — printed either way."""
     df = conn.execute("""
         SELECT t.fen, avg(ln(t.move_time)) AS log_rt,
                any_value(t.action_gap) AS action_gap,
-               any_value(t.greedy_frac_good) AS frac_good,
-               any_value(t.frac_acceptable) AS frac_acceptable,
+               any_value(t.n_within_epsilon) AS n_within_epsilon,
+               any_value(t.n_acceptable) AS n_acceptable,
                any_value(p.n_possible_moves) AS legal_moves
         FROM tree_rt t
         JOIN pmnz_win p ON p.gid = t.gid AND p.move_ply = t.move_ply
@@ -243,26 +242,49 @@ def run_trust_tests(conn, unit: str, n_boot: int = 1000, seed: int = 7) -> None:
 
     print(f"\n  === P1 trust tests (unit={unit}, per-FEN, n={n:,}) ===")
     results = {}
-    for xcol in ("action_gap", "frac_good", "frac_acceptable"):
+    for xcol in ("action_gap", "n_within_epsilon", "n_acceptable"):
         point = _partial_rho(df, xcol)
         boots = [_partial_rho(df.iloc[rng.integers(0, n, n)], xcol) for _ in range(n_boot)]
         lo, hi = np.percentile(boots, [2.5, 97.5])
         results[xcol] = (point, lo, hi)
         print(f"  partial ρ({xcol:16s}, logRT | legal) = {point:+.4f}  [95% CI {lo:+.4f}, {hi:+.4f}]")
-    (ag, ag_lo, ag_hi), (fg, fg_lo, fg_hi) = results["action_gap"], results["frac_good"]
+    (ag, ag_lo, ag_hi), (fg, fg_lo, fg_hi) = results["action_gap"], results["n_within_epsilon"]
     mirror = (ag * fg < 0) and (ag_lo * ag_hi > 0) and (fg_lo * fg_hi > 0) \
         and (min(ag_hi, fg_hi) < max(ag_lo, fg_lo))
-    print(f"  SIGN-MIRROR (action_gap vs frac_good): {'PASS' if mirror else 'FAIL'} "
+    print(f"  SIGN-MIRROR (action_gap vs n_within_epsilon): {'PASS' if mirror else 'FAIL'} "
           f"(opposite signs, CIs exclude 0, CIs disjoint)")
 
-    # Hurdle decomposition for the zero-inflated signals (per-unit threshold).
-    thr = {"pwin": 0.05, "cp": 5.0}[unit]
-    for xcol, t in (("action_gap", thr),):
+    # Hurdle decomposition for the zero-inflated signals. action_gap uses a per-unit
+    # magnitude threshold; n_acceptable is a count whose zero ('no ≥-equal move' =
+    # losing/forced) is the natural hurdle, so its threshold is 0.
+    ag_thr = {"pwin": 0.05, "cp": 5.0}[unit]
+    for xcol, t in (("action_gap", ag_thr), ("n_acceptable", 0)):
         above = df[df[xcol] > t]
         p_above = float((df[xcol] > t).mean())
         rho_mag = float(above[xcol].rank().corr(above["log_rt"].rank())) if len(above) > 100 else float("nan")
         print(f"  hurdle {xcol}: P(>{t}) = {p_above:.3f}; ρ(magnitude | >{t}) = {rho_mag:+.4f} "
               f"(n={len(above):,})")
+
+
+def _ensure_counts(vals: pd.DataFrame, root_moves: pd.DataFrame) -> pd.DataFrame:
+    """Guarantee the integer COUNT columns exist (n_root_children, n_acceptable,
+    n_within_epsilon), deriving them from a legacy fraction cache when needed.
+
+    A tree written by the pre-count tree_loader stored ``frac_acceptable`` /
+    ``greedy_frac_good`` (= count / #root-children). The exact denominator is the
+    number of root moves the generator wrote for that FEN — i.e. the per-FEN row
+    count in ``root_moves`` — so ``count = round(frac * n_root_children)`` is exact
+    (integer up to fp error). This lets the counts pipeline run on an existing
+    fraction cache with NO tree recompute; a fresh --refresh emits the counts
+    natively and this is a no-op."""
+    if "n_root_children" not in vals.columns:
+        nrc = root_moves.groupby("fen").size().rename("n_root_children")
+        vals = vals.merge(nrc, left_on="fen", right_index=True, how="left")
+    if "n_acceptable" not in vals.columns and "frac_acceptable" in vals.columns:
+        vals["n_acceptable"] = (vals["frac_acceptable"] * vals["n_root_children"]).round()
+    if "n_within_epsilon" not in vals.columns and "greedy_frac_good" in vals.columns:
+        vals["n_within_epsilon"] = (vals["greedy_frac_good"] * vals["n_root_children"]).round()
+    return vals
 
 
 def run_tree_values_pipeline(
@@ -280,7 +302,11 @@ def run_tree_values_pipeline(
     if use_cache:
         print(f"Loading cached values from {cache} (key={key}; --refresh to recompute) …")
         vals, root_moves = pd.read_parquet(vals_path), pd.read_parquet(rm_path)
-        _required = ("h_pi", "greedy_frac_good", "frac_acceptable", "oss")
+        # h_pi/oss are the deep signals a recompute is actually needed for; the COUNT
+        # signals are recovered cheaply from a legacy (fraction) cache below, so they
+        # are deliberately NOT in _required — no 5-hour tree recompute just to switch
+        # from fractions to counts.
+        _required = ("h_pi", "oss")
         _missing = [c for c in _required if c not in vals.columns]
         if _missing:
             print(f"  cached values predate columns {_missing}; recomputing from the trees …")
@@ -294,6 +320,9 @@ def run_tree_values_pipeline(
         root_moves.to_parquet(rm_path)
         print(f"  cached → {cache} (key={key})")
 
+    # Guarantee the COUNT columns (n_acceptable / n_within_epsilon / n_root_children)
+    # exist — derived from a legacy fraction cache if needed (no tree recompute).
+    vals = _ensure_counts(vals, root_moves)
     print(f"  {len(vals):,} trees (GSS {vals['gss'].min()}–{vals['gss'].max()}); {len(root_moves):,} root moves for MQ.")
 
     # Output dir is wired from config (human_analysis.figures_dir); engine figures
@@ -319,8 +348,8 @@ def run_tree_values_pipeline(
         conn.register("_root_moves", root_moves)
         conn.execute("""
             CREATE OR REPLACE TEMP TABLE tree_rt AS
-            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.greedy_frac_good,
-                   v.frac_acceptable, v.oss,
+            SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.n_within_epsilon,
+                   v.n_acceptable, v.n_root_children, v.oss,
                    v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction
             FROM _vals v
             JOIN pmnz_gf m ON m.fen = v.fen
@@ -330,7 +359,7 @@ def run_tree_values_pipeline(
         n_fen = conn.execute("SELECT count(DISTINCT fen) FROM tree_rt").fetchone()[0]
         print(f"  joined {n_rows:,} human moves across {n_fen:,} FENs.")
 
-        for col in ("gss", "voc", "action_gap", "h_pi", "greedy_frac_good", "frac_acceptable", "oss"):
+        for col in ("gss", "voc", "action_gap", "h_pi", "n_within_epsilon", "n_acceptable", "oss"):
             r = conn.execute(f"SELECT corr({col}, ln(move_time)) FROM tree_rt WHERE {col} IS NOT NULL").fetchone()[0]
             print(f"  r({col}, log RT) = {r:+.4f}")
 
@@ -383,10 +412,18 @@ def run_tree_values_pipeline(
             "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)" + _u,
                            "filter_query": "move_time > 0",
                            "zero_inflated": True, "zero_threshold": _zero_thr},
-            "frac_good": {"column": "greedy_frac_good", "name": "Greedy frac-good (SF-1)" + _u,
-                          "filter_query": "move_time > 0 AND greedy_frac_good IS NOT NULL"},
-            "frac_acceptable": {"column": "frac_acceptable", "name": "Frac-acceptable (SF-1)" + _u,
-                                "filter_query": "move_time > 0 AND frac_acceptable IS NOT NULL"},
+            # COUNTS, not fractions (no legal-move denominator confound). n_within_epsilon
+            # is a right-skewed count with min 1 (best move is always within ε of itself),
+            # binned per-integer with a merged tail. n_acceptable is zero-inflated (~47% of
+            # positions have NO ≥-equal move = losing/forced): the zero mass is split off as
+            # its own point (hurdle) so it can't straddle bins, then the >0 magnitude is
+            # tie-safe binned.
+            "n_good": {"column": "n_within_epsilon", "name": "n within ε (SF-1)" + _u,
+                       "filter_query": "move_time > 0 AND n_within_epsilon IS NOT NULL",
+                       "bin_mode": "integer", "integer_bin_width": 3, "integer_tail_cut": 30},
+            "n_acceptable": {"column": "n_acceptable", "name": "n acceptable (SF-1)" + _u,
+                             "filter_query": "move_time > 0 AND n_acceptable IS NOT NULL",
+                             "zero_inflated": True, "zero_threshold": 0.0},
             "oss": {"column": "oss", "name": "Optimal stop step (SF-1)" + _u,
                     "filter_query": "move_time > 0 AND oss IS NOT NULL",
                     "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
@@ -442,7 +479,7 @@ def main(argv=None):
         "--mode", choices=["all", "mq_gss", "tree_values"], default="all",
         help="Execution mode: all (default), difficulty confound stats, or full tree-values pipeline."
     )
-    parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
+    parser.add_argument("--db", default=CONFIG["selected_db_default"])
     parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
     parser.add_argument("--seed", type=int, default=7)
 

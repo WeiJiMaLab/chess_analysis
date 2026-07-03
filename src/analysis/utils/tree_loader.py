@@ -2,9 +2,10 @@
 Tree data loading and signal extraction, UNIT-PARAMETRIC (pwin | cp).
 
 Loads teacher-tree ``.pt`` payloads in parallel and derives the engine signals —
-Greedy Stopping Step (GSS), Gain/VOC, Action Gap, greedy frac-good,
-frac-acceptable, Optimal Stopping Step (OSS), prior entropy H(π), and per-root-
-move MQ — in a chosen VALUE UNIT:
+Greedy Stopping Step (GSS), Gain/VOC, Action Gap, n-within-epsilon (COUNT of
+near-best root moves), n-acceptable (COUNT of ≥-equal root moves), n-root-children
+(the legal-move denominator), Optimal Stopping Step (OSS), prior entropy H(π), and
+per-root-move MQ — in a chosen VALUE UNIT:
 
   unit="pwin"  per-node feature ``value``    = p_win − p_loss ∈ [−1, 1] (WDL-derived)
   unit="cp"    per-node feature ``cp_order`` = Stockfish-native centipawns with mate
@@ -31,14 +32,18 @@ from tqdm import tqdm
 
 # Per-unit readout constants. frac_good ε: "within ε of the best myopic value";
 # 0.1 pwin ↔ 50 cp (≈ half a pawn; the sigmoid slope at 0 is ~0.002/cp · 2 range,
-# so 50 cp ≈ 0.1 value-units near balance). acceptable_thr: an ABSOLUTE
-# satisficing bar — value ≥ 0 ("at least equal for the mover") in both units.
+# so 50 cp ≈ 0.1 value-units near balance). acceptable_thr: an ABSOLUTE satisficing
+# bar — "not clearly losing", value ≥ −0.20 pwin (≈ −100 cp). The old ≥ 0 ("at least
+# equal") bar was too strict: the side-to-move is routinely a hair below equal, so
+# ~48% of positions had ZERO acceptable moves (n_acceptable degenerate). −0.20 pwin
+# cuts that to ~32%; the residual zeros are genuinely lost positions (best move still
+# on the pwin losing rail) and are handled by the hurdle split in the dashboards.
 # oss_node_cost: per-node halt cost; 1e-4 was settled in pwin units (range ~2);
 # the cp default scales by the ~×400 effective range ratio (±800 cp interior).
 UNITS = {
-    "pwin": {"feature": "value", "frac_good_eps": 0.1, "acceptable_thr": 0.0,
+    "pwin": {"feature": "value", "frac_good_eps": 0.1, "acceptable_thr": -0.20,
              "oss_node_cost": 1e-4},
-    "cp": {"feature": "cp_order", "frac_good_eps": 50.0, "acceptable_thr": 0.0,
+    "cp": {"feature": "cp_order", "frac_good_eps": 50.0, "acceptable_thr": -100.0,
            "oss_node_cost": 0.04},
 }
 # Backwards-compatible aliases (pre-unit constants; pwin semantics).
@@ -103,12 +108,18 @@ def _tree_signals(payload, unit: str) -> dict | None:
     cfg = UNITS[unit]
     n_nodes = static.size
 
-    # --- myopic (pre-search) signals: mover-POV leaf evals of the root children
+    # --- myopic (pre-search) signals: mover-POV leaf evals of the root children.
+    # COUNTS, not fractions: a fraction divides by the legal-move count, folding
+    # board-crowding back into the signal (a confound with RT) and manufacturing a
+    # non-monotone proxy; the raw count is monotone in "how many good/safe moves
+    # exist" and has no denominator. n_root_children is kept so the fraction is
+    # recoverable downstream (frac = count / n_root_children) if ever needed.
     myo = -static[kids]
     order = np.argsort(myo)[::-1]
     action_gap = float(myo[order[0]] - myo[order[1]])
-    frac_good = float(np.mean(myo >= myo.max() - cfg["frac_good_eps"]))
-    frac_acceptable = float(np.mean(myo >= cfg["acceptable_thr"]))
+    n_within_epsilon = int(np.sum(myo >= myo.max() - cfg["frac_good_eps"]))
+    n_acceptable = int(np.sum(myo >= cfg["acceptable_thr"]))
+    n_root_children = int(kids.size)
 
     # --- deep signals: replayed negamax trace over the expansion prefix.
     # Root-child deep values are the ROOT mover's values: −v(kid).
@@ -160,7 +171,8 @@ def _tree_signals(payload, unit: str) -> dict | None:
 
     return {
         "gss": gss, "voc": voc, "action_gap": action_gap,
-        "greedy_frac_good": frac_good, "frac_acceptable": frac_acceptable,
+        "n_within_epsilon": n_within_epsilon, "n_acceptable": n_acceptable,
+        "n_root_children": n_root_children,
         "oss": oss, "moves": moves, "mq": mq,
     }
 
@@ -204,8 +216,8 @@ def _worker(path: str):
         hpi = _tree_hpi(t)
         fen = " ".join(t["root_position_spec"].split()[:4])
         return (fen, sig["gss"], sig["voc"], sig["action_gap"], hpi,
-                sig["greedy_frac_good"], sig["frac_acceptable"], sig["oss"],
-                sig["moves"], sig["mq"])
+                sig["n_within_epsilon"], sig["n_acceptable"], sig["n_root_children"],
+                sig["oss"], sig["moves"], sig["mq"])
     except Exception:
         return None
 
@@ -223,10 +235,11 @@ def compute_values(trees_dir: str, n_trees: int, seed: int, n_workers: int,
         for r in tqdm(pool.imap_unordered(_worker, paths, chunksize=64), total=len(paths), desc="trees"):
             if r is None:
                 continue
-            fen, gss, voc_val, gap, hpi, frac_good, frac_acc, oss, ucis, mqs = r
+            fen, gss, voc_val, gap, hpi, n_eps, n_acc, n_kids, oss, ucis, mqs = r
             tree_rows.append({"fen": fen, "gss": gss, "voc": voc_val, "action_gap": gap,
-                              "h_pi": hpi, "greedy_frac_good": frac_good,
-                              "frac_acceptable": frac_acc, "oss": oss})
+                              "h_pi": hpi, "n_within_epsilon": n_eps,
+                              "n_acceptable": n_acc, "n_root_children": n_kids,
+                              "oss": oss})
             for u, q in zip(ucis, mqs):
                 move_rows.append({"fen": fen, "move_uci": u, "mq": q})
     return pd.DataFrame(tree_rows), pd.DataFrame(move_rows)

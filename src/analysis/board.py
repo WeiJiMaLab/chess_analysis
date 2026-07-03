@@ -1,16 +1,19 @@
 """
-Unified board-level (no-model) response time analyses (DuckDB dashboards).
-The log(RT) distribution + normal QQ plot, bivariate RT-vs-feature dashboards
-for ply, legal moves, and clock time left, plus a Spearman correlation matrix
-over those features and log(RT).
+Board-level (no-model) response time analyses (DuckDB + matplotlib).
 
-All analyses read a ply-windowed view (move_ply in [min_ply, max_ply] from the
-active config) so the filter is applied on arrival and ply tertiles are
-conditioned on the window. All plots are saved (PDF + PNG) under
-<figures_dir>/board/ (figures_dir is namespaced by run_name in the config).
+Four analyses, all over the ply-windowed move set (move_ply in [min_ply, max_ply]
+from the active config), saved under <figures_dir>/board/:
+
+  1. move_time_summary   log(RT) distribution + normal QQ + RT-vs-ply arc
+  2. bivariate_analysis  RT vs each covariate, overall + by ply tertile
+  3. correlation_matrix  Spearman + Pearson over log(RT), ply, and the covariates
+  4. feature_histograms  marginal distribution of each covariate
+
+The covariates and the sample they read (``board_sample``) are set up in main().
 """
 
 import argparse
+import math
 import os
 
 # Resolve --config BEFORE importing analysis.utils so helpers loads the right
@@ -27,31 +30,22 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Align imports with the src/analysis package structure
 from analysis.utils import Variable, Analyzer
+from analysis.utils.analysis import _seconds_from_log
 from analysis.utils.helpers import (
     apply_poster_style,
     db_connection,
     create_ply_windowed_views,
     WIN_PROCESSED_MOVES_NONZERO,
     FONT_SIZE_LABEL,
-    FONT_SIZE_TICKS,
     MAIN_COLOR,
     CONFIG,
 )
-from analysis.utils.plots import (
-    highlight_corr_row,
-    plot_histogram_from_bins,
-    save_figure,
-    save_table,
-)
-from analysis.utils.selected_db import (
-    SELECTED_DB_DEFAULT,
-)
+from analysis.utils.plots import highlight_corr_row, save_figure
 
 
-def run_move_time_summary(conn):
-    """Response time distribution: log(RT) histogram (left) + normal QQ plot (right)."""
+def move_time_summary(conn):
+    """log(RT) distribution histogram + normal QQ + mean-RT-vs-ply arc (whole game)."""
     n_bins = CONFIG["response_time_histogram_bins"]
     n_qq = CONFIG["qq_plot_quantile_probes"]
 
@@ -63,7 +57,7 @@ def run_move_time_summary(conn):
         f"SELECT ln(move_time) AS ln_move_time FROM {WIN_PROCESSED_MOVES_NONZERO}"
     )
 
-    # SQL-side histogram binning
+    # SQL-side histogram binning (uniform bins in ln(RT)).
     conn.execute(f"""
         CREATE OR REPLACE TEMPORARY TABLE _lmt_bins AS
         WITH stats AS (SELECT min(ln_move_time) AS min_v, max(ln_move_time) AS max_v FROM _summary_view),
@@ -86,12 +80,10 @@ def run_move_time_summary(conn):
     # Moments + empirical quantiles for the QQ plot (all SQL-side).
     mean, std = conn.execute("SELECT avg(ln_move_time), stddev(ln_move_time) FROM _summary_view").fetchone()
     probs = (np.arange(1, n_qq + 1)) / (n_qq + 1)
-    emp_q = np.array(conn.execute(
+    empirical = np.array(conn.execute(
         "SELECT quantile_cont(ln_move_time, ?) FROM _summary_view", [probs.tolist()]
     ).fetchone()[0], dtype=float)
-
-    theo_q = stats.norm.ppf(probs)  # standard-normal quantiles
-    ref = mean + std * theo_q       # reference line if log(RT) ~ Normal(mean, std)
+    theoretical = stats.norm.ppf(probs)  # standard-normal quantiles
 
     def _weighted_median(df):
         cumsum = df["n"].cumsum()
@@ -103,472 +95,194 @@ def run_move_time_summary(conn):
     apply_poster_style()
     fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(34, 11), constrained_layout=True)
 
-    # --- Panel 1: RT distribution in SECONDS on a log x-axis (bins are uniform in
-    # ln(RT), so exponentiating the edges gives geometric bins that read evenly on
-    # a log axis). Mean/median drawn in seconds. ---
+    # Panel 1: RT distribution in SECONDS on a log x-axis (bins uniform in ln(RT),
+    # so exponentiating the edges gives geometric bins that read evenly on a log axis).
     sec = df_lmt.assign(left_s=np.exp(df_lmt.bin_left), right_s=np.exp(df_lmt.bin_right))
     ax_h.bar(sec.left_s, sec.n, width=(sec.right_s - sec.left_s), align="edge",
              color=MAIN_COLOR, alpha=0.5, edgecolor=MAIN_COLOR, linewidth=1.2)
     ax_h.set_xscale("log")
     ax_h.axvline(np.exp(mean), color="black", ls="--", lw=2.5, label=f"mean = {np.exp(mean):.1f}s")
     ax_h.axvline(np.exp(med_log), color="dimgray", ls=":", lw=2.5, label=f"median = {np.exp(med_log):.1f}s")
-    ax_h.set_xlabel("RT (s, log axis)", fontsize=FONT_SIZE_LABEL)
-    ax_h.set_ylabel("count", fontsize=FONT_SIZE_LABEL)
-    ax_h.set_title("RT distribution", fontsize=FONT_SIZE_TICKS)
-    ax_h.legend(fontsize=FONT_SIZE_TICKS)
+    ax_h.set(xlabel="RT (s, log axis)", ylabel="count", title="RT distribution")
+    ax_h.legend()
 
-    # --- Panel 2: normal QQ (points only; no reference line, per request) ---
-    ax_q.scatter(theo_q, emp_q, color=MAIN_COLOR, s=40, zorder=3)
-    ax_q.set_xlabel("Theoretical normal quantile", fontsize=FONT_SIZE_LABEL)
-    ax_q.set_ylabel("log(RT) quantile", fontsize=FONT_SIZE_LABEL)
-    ax_q.set_title("Normal QQ", fontsize=FONT_SIZE_TICKS)
+    # Panel 2: normal QQ (points only).
+    ax_q.scatter(theoretical, empirical, color=MAIN_COLOR, s=40, zorder=3)
+    ax_q.set(xlabel="Theoretical quantile", ylabel="Actual quantile", title="Normal QQ")
 
-    # --- Panel 3: median RT (s) vs ply over the WHOLE game (unwindowed "total";
-    # log y so the multiplicative arc is legible) ---
+    # Panel 3: mean ln(RT) vs ply over the WHOLE game, on a linear axis relabeled to
+    # seconds (log-spaced positions, second-valued labels) so the arc reads evenly.
     ply = conn.execute(
-        f"SELECT move_ply, median(move_time) AS med_s, count(*) AS n "
+        f"SELECT move_ply, avg(ln(move_time)) AS mean_log, count(*) AS n "
         f"FROM {CONFIG['table_processed_moves_nonzero']} "
         f"WHERE move_time > 0 AND move_ply BETWEEN 1 AND 150 GROUP BY 1 ORDER BY 1"
     ).df()
     ply = ply[ply.n >= 200]
-    ax_p.plot(ply.move_ply, ply.med_s, color=MAIN_COLOR, lw=3)
+    ax_p.plot(ply.move_ply, ply.mean_log, color=MAIN_COLOR, lw=3)
     ax_p.axvspan(CONFIG["min_ply"], CONFIG["max_ply"], color="gray", alpha=0.12,
                  label=f"analysis window [{CONFIG['min_ply']},{CONFIG['max_ply']}]")
-    ax_p.set_yscale("log")
-    ax_p.set_xlabel("Ply (whole game)", fontsize=FONT_SIZE_LABEL)
-    ax_p.set_ylabel("median RT (s, log axis)", fontsize=FONT_SIZE_LABEL)
-    ax_p.set_title("RT vs ply (total)", fontsize=FONT_SIZE_TICKS)
-    ax_p.legend(fontsize=FONT_SIZE_TICKS - 4)
+    _seconds_from_log(ax_p.yaxis)
+    ax_p.set(xlabel="Ply (whole game)", ylabel="mean RT (s, log axis)", title="RT vs ply (total)",
+             xlim=(1, 150), xticks=[0, 50, 100, 150])
+    ax_p.legend()
 
     fig.suptitle(f"Response time — distribution, normal QQ, RT vs ply  (n = {n_moves:,} moves)",
                  fontsize=FONT_SIZE_LABEL + 4)
     save_figure(fig, "board", "rt_distribution.pdf")
 
 
-def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_query: str | None = None,
-                           n_bins: int = 10, tie_safe: bool = True, table: str = "pmnz_gf",
-                           reverse_x: bool = False, analyzer_opts: dict | None = None):
-    """RT-vs-covariate 1x2 dashboard: overall, colored by ply tertile. Reads
-    ``pmnz_gf`` (windowed view).
+def bivariate_analysis(conn, column: str, name: str, filename: str, table: str,
+                           analyzer_opts: dict | None = None, reverse_x: bool = False):
+    """RT-vs-covariate 1x2 dashboard: overall (left), colored by ply tertile (right).
 
-    ``analyzer_opts`` are forwarded to ``Analyzer`` and override the defaults below
-    (e.g. ``bin_mode="integer"``, ``min_bin_count=300``) — the battery's small-integer
-    features bin per-integer per the trust protocol, not by ntile."""
-    def _analyzer(segment_column, segment_label, **extra):
-        kw = dict(
-            db_conn=conn,
-            table_name=table,
-            x_var=Variable(column=column, is_log=False, name=name),
-            y_var=Variable(column="move_time", is_log=True, name="RT"),
-            filter_query=filter_query,
-            title=name,
-            n_bins=n_bins,
-            tie_safe=tie_safe,
-            min_bin_count=100 if tie_safe else 0,
-            # Tertiles conditioned on the (windowed) analysis table, not the whole dataset.
-            ply_tertile_source=table,
-            segment_column=segment_column,
-            segment_source=table,
-            segment_label=segment_label,
-        )
-        kw.update(extra)
-        kw.update(analyzer_opts or {})
-        return Analyzer(**kw)
-    a_ply = _analyzer("move_ply", "Ply")
+    ``analyzer_opts`` are forwarded to ``Analyzer`` (e.g. integer binning for the
+    small-integer covariates)."""
+    kw = dict(
+        db_conn=conn,
+        table_name=table,
+        x_var=Variable(column=column, is_log=False, name=name),
+        y_var=Variable(column="move_time", is_log=True, name="RT"),
+        title=name,
+        n_bins=10,
+        tie_safe=True,
+        min_bin_count=100,
+        ply_tertile_source=table,     # tertiles conditioned on the windowed table
+        segment_column="move_ply",
+        segment_source=table,
+        segment_label="Ply",
+    )
+    kw.update(analyzer_opts or {})
+    analyzer = Analyzer(**kw)
 
     fig = plt.figure(figsize=(30, 13.72))
-    ax1, ax2 = (fig.add_subplot(121), fig.add_subplot(122))
-    a_ply.plot_quantile_bins(ax1)                     # overall
-    a_ply.plot_quantile_bins_tertile_segmented(ax2)   # color: ply
-    ax1.set_title("overall", fontsize=FONT_SIZE_TICKS)
-    ax2.set_title("by ply", fontsize=FONT_SIZE_TICKS)
+    ax1, ax2 = fig.add_subplot(121), fig.add_subplot(122)
+    analyzer.plot_quantile_bins(ax1)                     # overall
+    analyzer.plot_quantile_bins_tertile_segmented(ax2)   # color: ply
+    ax1.set(title="overall")
+    ax2.set(title="by ply")
     if reverse_x:
         for ax in (ax1, ax2):
             ax.invert_xaxis()
-    fig.suptitle(f"{a_ply.title}\nn = {a_ply.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
-    # wider + more horizontal gap so the two panels don't crowd.
+    fig.suptitle(f"{analyzer.title}\nn = {analyzer.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=1.0)
     fig.subplots_adjust(top=0.80, wspace=0.28)
     save_figure(fig, "board", filename)
 
 
-def run_correlation_matrix(conn, filename="board_feature_corr.pdf"):
-    """Spearman AND Pearson correlation matrices over log(RT), ply, and EVERY
-    feature in the registry (uniform — same columns the figures and partials use),
-    read from the pre-sampled ``pmnz_bat``. Pearson saves with a ``_pearson``
-    filename suffix."""
-    import pandas as pd
-    # Columns: RT, ply (the special covariate), then every registry feature.
+def correlation_matrix(conn, features, table="pmnz_gf", filename="board_feature_corr.pdf"):
+    """Spearman AND Pearson correlation matrices over log(RT), ply, and every
+    covariate, computed in SQL over the full windowed table (Spearman = Pearson on
+    tie-corrected ranks). Pearson saves with a ``_pearson`` suffix."""
     labels = {"log_rt": "log(RT)", "move_ply": "Ply"}
-    labels.update({col: lbl for col, (lbl, _, _) in FEATURES.items()})
-    sel = ["ln(move_time) AS log_rt", "move_ply"]
-    for col, (_, kind, _) in FEATURES.items():
-        sel.append(f"COALESCE({col}, FALSE)::INT AS {col}" if kind == "bin" else col)
-    df = conn.execute(f"SELECT {', '.join(sel)} FROM pmnz_bat").df()
+    labels.update({col: lbl for col, (lbl, _, _) in features.items()})
+    cols = list(labels)
 
+    terms = ["ln(move_time) AS log_rt", "move_ply::DOUBLE AS move_ply"]
+    for col, (_, kind, _) in features.items():
+        terms.append(f"COALESCE({col}, FALSE)::INT::DOUBLE AS {col}" if kind == "bin" else f"{col}::DOUBLE AS {col}")
+    conn.execute(f"CREATE OR REPLACE TEMP TABLE _corr_base AS SELECT {', '.join(terms)} FROM {table}")
+    n_rows = conn.execute("SELECT count(*) FROM _corr_base").fetchone()[0]
+    # Average ranks (tie-corrected) so Pearson-on-ranks equals Spearman.
+    ranks = [f"rank() OVER (ORDER BY {c}) + (count(*) OVER (PARTITION BY {c}) - 1) / 2.0 AS {c}" for c in cols]
+    conn.execute(f"CREATE OR REPLACE TEMP TABLE _corr_rank AS SELECT {', '.join(ranks)} FROM _corr_base")
+
+    def matrix(source):
+        pairs = [(i, j) for i in range(len(cols)) for j in range(i + 1, len(cols))]
+        vals = conn.execute(
+            f"SELECT {', '.join(f'corr({cols[i]}, {cols[j]})' for i, j in pairs)} FROM {source}"
+        ).fetchone()
+        m = np.eye(len(cols))
+        for (i, j), v in zip(pairs, vals):
+            m[i, j] = m[j, i] = v
+        return m
+
+    display = [labels[c] for c in cols]
     base, ext = os.path.splitext(filename)
-    for method, mlabel, suffix in (("spearman", "Spearman ρ", ""), ("pearson", "Pearson r", "_pearson")):
-        corr = df[list(labels)].corr(method=method).rename(columns=labels, index=labels)
-        n = len(corr)
+    for mlabel, suffix, m in (("Spearman ρ", "", matrix("_corr_rank")),
+                              ("Pearson r", "_pearson", matrix("_corr_base"))):
+        n = len(cols)
         apply_poster_style()
-        side = max(9, 1.6 * n)  # grow with the number of features so cells stay legible
+        side = max(9, 1.6 * n)  # grow with the feature count so cells stay legible
         fig, ax = plt.subplots(figsize=(side, side * 0.83))
         ax.grid(False)
-        im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
-        ax.set_xticks(range(n))
-        ax.set_xticklabels(corr.columns, fontsize=18, rotation=30, ha="right")
-        ax.set_yticks(range(n))
-        ax.set_yticklabels(corr.index, fontsize=18)
+        im = ax.imshow(m, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
+        ax.set_xticks(range(n)); ax.set_xticklabels(display, fontsize=18, rotation=30, ha="right")
+        ax.set_yticks(range(n)); ax.set_yticklabels(display, fontsize=18)
         for i in range(n):
             for j in range(n):
-                v = corr.values[i, j]
-                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=15,
-                        color="white" if abs(v) > 0.5 else "black",
+                ax.text(j, i, f"{m[i, j]:.2f}", ha="center", va="center", fontsize=15,
+                        color="white" if abs(m[i, j]) > 0.5 else "black",
                         fontweight="bold" if i == j else "normal")
         highlight_corr_row(ax, n)
         cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label(mlabel, fontsize=16)
         cbar.ax.tick_params(labelsize=14)
-        ax.set_title(f"{mlabel} — board features (n = {len(df):,})", fontsize=18, pad=12)
+        ax.set_title(f"{mlabel} — board features (n = {n_rows:,})", fontsize=18, pad=12)
         plt.tight_layout()
         save_figure(fig, "board", f"{base}{suffix}{ext}")
 
 
-# =============================================================================
-# P0 board-correlate battery (engine-free; features from analysis.featurize_board;
-# rules per outputs/reports/trust_protocol.md). Merged from board_battery.py.
-# =============================================================================
-
-# SINGLE feature registry — the classic board covariates and the engine-free
-# features are ONE uniform set, driving every analysis alike: the descriptive
-# figures (histograms / lowess / scatter), the per-feature correlations +
-# partials, and the correlation matrix. Add a feature here once and it flows
-# everywhere. Each entry is (label, kind, display_clip): kind ∈ {cont, disc, bin}
-# drives binning/jitter; clip trims DISPLAY tails only (never drops rows).
-#
-# Two deliberate exceptions, handled outside this registry:
-#   * response-time histogram + QQ  → run_move_time_summary (it is about RT itself)
-#   * ply                           → the total-ply arc in run_move_time_summary,
-#                                      and a column in the correlation matrix
-# ``CONTROL`` (legal moves) is the partial-out variable; its own self-partial is
-# undefined and reported as NaN.
-FEATURES = {
-    "n_possible_moves":      ("Legal moves", "disc", (0, 60)),
-    "player_clock_time":     ("Player clock (s)", "cont", (0, 600)),
-    "game_fraction":         ("Game fraction", "cont", (0.0, 1.0)),
-    "n_captures_avail":      ("Captures available", "disc", (0, 15)),
-    "n_checks_avail":        ("Checks available", "disc", (0, 8)),
-    "self_material":         ("Self material (weighted)", "disc", (0, 40)),
-    "material_imbalance":    ("Material imbalance (weighted)", "disc", (-15, 15)),
-    "in_check":              ("In check", "bin", None),
-    "prev_move_was_capture": ("Prev move was capture", "bin", None),
-}
-CONTROL = "n_possible_moves"      # legal moves — the partial-out control
-_BOOT_HEADLINE = 1000  # trust protocol: B=1000 headline CIs
-_BOOT_CLUSTER = 200    # B=200 for the heavier per-instance runs
-
-
-def build_battery_views(conn, sample_games: int = 60_000, seed: int = 7) -> None:
-    """Sample a game-level subset for the feature battery → ``pmnz_bat``.
-
-    All board features are first-class columns of ``processed_moves`` (added by
-    preprocess: material/in_check/prev_move_was_capture in SQL, captures/checks in
-    the featurize step), so there is NO featurization here — this just draws a
-    game-level sample of the windowed instances. Per-instance (no dedup); the
-    analyses still compute both per-instance and per-FEN units.
-    """
-    conn.execute(
-        f"CREATE OR REPLACE TEMP TABLE sample_gids AS "
-        f"SELECT DISTINCT gid FROM pmnz_gf USING SAMPLE {sample_games} ROWS (reservoir, {seed})"
-    )
-    conn.execute(
-        "CREATE OR REPLACE TEMP TABLE pmnz_bat AS "
-        "SELECT m.* FROM pmnz_gf m JOIN sample_gids sg ON sg.gid = m.gid"
-    )
-    n = conn.execute("SELECT count(*) FROM pmnz_bat").fetchone()[0]
-    print(f"  battery: pmnz_bat = {n:,} sampled move-instances (features are DB columns)")
-
-
-def _binned_rt(x, y, kind, clip, *, stat="median", min_n=100):
-    """(centres, stat(log RT)) per bin. Discrete/binary -> per value; continuous
-    -> up to 20 quantile bins. Bins with < min_n rows are dropped."""
-    import pandas as pd
-    d = pd.DataFrame({"x": x, "y": y}).dropna()
-    if clip:
-        d = d[(d.x >= clip[0]) & (d.x <= clip[1])]
-    if len(d) == 0:
-        return np.array([]), np.array([])
-    if kind in ("disc", "bin"):
-        g = d.groupby("x").y.agg([stat, "size"])
-        g = g[g["size"] >= min_n]
-        return g.index.to_numpy(float), g[stat].to_numpy()
-    nb = min(20, max(2, d.x.nunique()))
-    d = d.assign(b=pd.qcut(d.x, nb, duplicates="drop"))
-    g = d.groupby("b", observed=True).agg(cx=("x", "mean"), sy=("y", stat), n=("y", "size"))
-    g = g[g.n >= min_n]
-    return g.cx.to_numpy(), g.sy.to_numpy()
-
-
-def _battery_grid(n_panels):
-    """A constrained-layout grid (3 cols) sized to hold n_panels; extra axes off."""
+def feature_histograms(conn, features, table="pmnz_gf"):
+    """Marginal distribution of each covariate over the full windowed table,
+    aggregated in SQL. Discrete/binary → per-value bars; continuous → 50-bin density."""
+    n_rows = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    cols = list(features)
     ncol = 3
-    nrow = -(-n_panels // ncol)
+    nrow = math.ceil(len(cols) / ncol)
     apply_poster_style()
-    fig, axes = plt.subplots(nrow, ncol, figsize=(8.5 * ncol, 6.2 * nrow),
-                             constrained_layout=True)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(8.5 * ncol, 6.2 * nrow), constrained_layout=True)
     axes = np.atleast_1d(axes).ravel()
-    for ax in axes[n_panels:]:
+    for ax in axes[len(cols):]:
         ax.axis("off")
-    return fig, axes
 
-
-def run_battery_figures(conn, sample_rows=200_000, seed=7):
-    """The full-battery descriptive figures over ALL features (classic covariates
-    + new): battery_histograms (marginals), battery_lowess (log RT vs feature,
-    LOWESS + binned median), battery_scatter (subsample points + binned median).
-    constrained_layout keeps titles/labels from colliding with the panels."""
-    from statsmodels.nonparametric.smoothers_lowess import lowess
-
-    cols = list(FEATURES)
-    df = conn.execute(
-        f"SELECT {', '.join(cols)}, ln(move_time) AS log_rt "
-        f"FROM pmnz_bat WHERE move_time > 0 USING SAMPLE {sample_rows} ROWS (reservoir, {seed})"
-    ).df()
-    df["in_check"] = df.in_check.astype(float)
-    df["prev_move_was_capture"] = df.prev_move_was_capture.fillna(False).astype(float)
-    n = len(df)
-    rng = np.random.default_rng(seed)
-
-    # --- 1. histograms (marginal distribution of each feature) ---
-    fig, axes = _battery_grid(len(cols))
     for ax, col in zip(axes, cols):
-        label, kind, clip = FEATURES[col]
-        x = df[col].dropna()
-        if clip:
-            x = x[(x >= clip[0]) & (x <= clip[1])]
+        label, kind, clip = features[col]
+        where = f"WHERE {col} BETWEEN {clip[0]} AND {clip[1]}" if clip else f"WHERE {col} IS NOT NULL"
         if kind in ("disc", "bin"):
-            vc = x.value_counts().sort_index()
-            ax.bar(vc.index, vc.values / len(x), width=(0.4 if kind == "bin" else 0.9),
+            g = conn.execute(
+                f"SELECT {col}::DOUBLE AS value, count(*) AS n FROM {table} {where} GROUP BY 1 ORDER BY 1"
+            ).df()
+            ax.bar(g.value, g.n / g.n.sum(), width=(0.4 if kind == "bin" else 0.9),
                    color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
         else:
-            ax.hist(x, bins=50, density=True, color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
-        ax.set_title(label, fontsize=FONT_SIZE_TICKS)
-        ax.set_ylabel("density", fontsize=FONT_SIZE_LABEL - 8)
-    fig.suptitle(f"Board battery — feature distributions (n = {n:,} move-instances)",
-                 fontsize=FONT_SIZE_LABEL)
-    save_figure(fig, "board", "battery_histograms.pdf")
-
-    # --- 2. LOWESS: log RT vs feature (+ binned median for context) ---
-    # lowess is O(n^2 * frac); keep the subsample small and use it=0 + a delta so
-    # nearby x-values are interpolated rather than each getting a local fit — this
-    # is the difference between seconds and many minutes at this scale.
-    lw = df.sample(min(6_000, n), random_state=seed)
-    fig, axes = _battery_grid(len(cols))
-    for ax, col in zip(axes, cols):
-        label, kind, clip = FEATURES[col]
-        cx, my = _binned_rt(df[col], df.log_rt, kind, clip, stat="median")
-        ax.plot(cx, my, "o", color="gray", alpha=0.55, ms=7, label="binned median")
-        if kind == "cont" or (kind == "disc" and df[col].nunique() > 3):
-            d = lw[[col, "log_rt"]].dropna()
-            if clip:
-                d = d[(d[col] >= clip[0]) & (d[col] <= clip[1])]
-            xv = d[col].to_numpy()
-            delta = 0.01 * (xv.max() - xv.min()) if len(xv) else 0.0
-            lo = lowess(d.log_rt.to_numpy(), xv, frac=0.3, it=0, delta=delta,
-                        return_sorted=True)
-            ax.plot(lo[:, 0], lo[:, 1], color=MAIN_COLOR, lw=3.5, label="LOWESS")
-        ax.set_title(label, fontsize=FONT_SIZE_TICKS)
-        ax.set_ylabel("log RT", fontsize=FONT_SIZE_LABEL - 8)
-        ax.legend(fontsize=FONT_SIZE_TICKS - 8)
-    fig.suptitle(f"Board battery — log RT vs feature (LOWESS + binned median, n = {n:,})",
-                 fontsize=FONT_SIZE_LABEL)
-    save_figure(fig, "board", "battery_lowess.pdf")
-
-    # --- 3. scatter (subsample) + binned median ---
-    sc = df.sample(min(8_000, n), random_state=seed)
-    fig, axes = _battery_grid(len(cols))
-    for ax, col in zip(axes, cols):
-        label, kind, clip = FEATURES[col]
-        d = sc[[col, "log_rt"]].dropna()
-        if clip:
-            d = d[(d[col] >= clip[0]) & (d[col] <= clip[1])]
-        jit = rng.uniform(-0.35, 0.35, len(d)) if kind in ("disc", "bin") else 0.0
-        ax.scatter(d[col].to_numpy() + jit, d.log_rt, s=5, alpha=0.15,
-                   color=MAIN_COLOR, edgecolors="none")
-        cx, my = _binned_rt(df[col], df.log_rt, kind, clip, stat="median")
-        ax.plot(cx, my, "-o", color="black", lw=2.5, ms=6, label="binned median")
-        ax.set_title(label, fontsize=FONT_SIZE_TICKS)
-        ax.set_ylabel("log RT", fontsize=FONT_SIZE_LABEL - 8)
-        ax.legend(fontsize=FONT_SIZE_TICKS - 8)
-    fig.suptitle("Board battery — log RT vs feature (scatter subsample + binned median)",
-                 fontsize=FONT_SIZE_LABEL)
-    save_figure(fig, "board", "battery_scatter.pdf")
-
-
-def _spearman(x: np.ndarray, y: np.ndarray) -> float:
-    import pandas as pd
-    rx = pd.Series(x).rank().to_numpy()
-    ry = pd.Series(y).rank().to_numpy()
-    return float(np.corrcoef(rx, ry)[0, 1])
-
-
-def _partial(x: np.ndarray, y: np.ndarray, z: np.ndarray, *, rank: bool) -> float:
-    """Partial corr of x,y | z (rank=True -> partial Spearman via ranked vars)."""
-    import pandas as pd
-    if rank:
-        x = pd.Series(x).rank().to_numpy()
-        y = pd.Series(y).rank().to_numpy()
-        z = pd.Series(z).rank().to_numpy()
-    zc = np.column_stack([np.ones_like(z), z])
-    bx, *_ = np.linalg.lstsq(zc, x, rcond=None)
-    by, *_ = np.linalg.lstsq(zc, y, rcond=None)
-    return float(np.corrcoef(x - zc @ bx, y - zc @ by)[0, 1])
-
-
-def _boot_ci(fn, df, b: int, seed: int = 7) -> tuple[float, float]:
-    """Percentile bootstrap resampling ROWS of df (rows = FENs on the per-FEN unit)."""
-    rng = np.random.default_rng(seed)
-    n = len(df)
-    stats_ = [fn(df.iloc[rng.integers(0, n, n)]) for _ in range(b)]
-    return float(np.percentile(stats_, 2.5)), float(np.percentile(stats_, 97.5))
-
-
-def run_feature_correlations(conn):
-    """Per-feature Spearman + Pearson with log(RT) and the partial vs legal moves
-    (the CONTROL), FEN-cluster bootstrap CIs, on BOTH units (per-instance and
-    per-FEN). Uniform over the whole FEATURES registry — one row per (feature,
-    unit) → feature_correlations.csv. The control's self-partial is NaN."""
-    import pandas as pd
-    sel = ["m.fen", "ln(m.move_time) AS log_rt"]
-    for col, (_, kind, _) in FEATURES.items():
-        sel.append(f"COALESCE(m.{col}, FALSE)::INT AS {col}" if kind == "bin" else f"m.{col}")
-    inst = conn.execute(f"SELECT {', '.join(sel)} FROM pmnz_bat m").df()
-    per_fen = inst.groupby("fen").agg(
-        log_rt=("log_rt", "mean"), **{c: (c, "first") for c in FEATURES},
-    ).reset_index(drop=True)
-
-    rows = []
-    for col in FEATURES:
-        is_control = col == CONTROL
-        for unit, df, b in (("instance", inst, _BOOT_CLUSTER), ("fen", per_fen, _BOOT_HEADLINE)):
-            x = df[col].to_numpy(float)
-            y = df.log_rt.to_numpy()
-            z = df[CONTROL].to_numpy(float)
-            rec = {
-                "feature": col, "unit": unit, "n": len(df),
-                "spearman": _spearman(x, y), "pearson": float(np.corrcoef(x, y)[0, 1]),
-                "partial_spearman_legal": np.nan if is_control else _partial(x, y, z, rank=True),
-                "partial_pearson_legal": np.nan if is_control else _partial(x, y, z, rank=False),
-            }
-            if is_control:
-                lo, hi = np.nan, np.nan
-            else:
-                lo, hi = _boot_ci(
-                    lambda d, c=col: _partial(d[c].to_numpy(float), d.log_rt.to_numpy(),
-                                              d[CONTROL].to_numpy(float), rank=True),
-                    df, b)
-            rec["partial_spearman_ci_lo"], rec["partial_spearman_ci_hi"] = lo, hi
-            rows.append(rec)
-    res = pd.DataFrame(rows)
-    print(res.round(4).to_string(index=False))
-    save_table(res, os.path.join(CONFIG["figures_dir"], "board"),
-               "feature_correlations.csv", index=False)
-
-
-def run_imbalance_shape(conn):
-    """P0.b — pre-registered ∩-shape test for material_imbalance (weighted units).
-    Reads the already-sampled ``pmnz_bat``.
-
-    Weighted material (incl pawns) spans a wide range, so: peak = {−1, 0, +1}
-    (within ~a pawn of balance), tails = |imbalance| >= 4 (at least a minor piece
-    up/down), display clipped ±12. Test 1: the peak bins' CI lower bound sits above
-    the CI upper bound of at least one bin in EACH tail. Test 2: quadratic beta < 0
-    with bootstrap CI excluding 0 AND quadratic dR2 >= 0.001.
-    """
-    df = conn.execute(
-        "SELECT m.material_imbalance, ln(m.move_time) AS log_rt FROM pmnz_bat m"
-    ).df()
-    rng = np.random.default_rng(7)
-
-    imb = df.material_imbalance.clip(-12, 12)
-    agg = df.assign(imb=imb).groupby("imb").log_rt.agg(["mean", "median", "count"])
-    ci = {}
-    for v, grp in df.assign(imb=imb).groupby("imb"):
-        vals = grp.log_rt.to_numpy()
-        boots = [np.median(vals[rng.integers(0, len(vals), len(vals))])
-                 for _ in range(_BOOT_HEADLINE)]
-        ci[v] = (np.percentile(boots, 2.5), np.percentile(boots, 97.5))
-    agg["ci_lo"] = [ci[v][0] for v in agg.index]
-    agg["ci_hi"] = [ci[v][1] for v in agg.index]
-
-    peak_lo = agg.loc[[i for i in (-1, 0, 1) if i in agg.index], "ci_lo"].min()
-    left_tail = agg.loc[agg.index <= -4, "ci_hi"]
-    right_tail = agg.loc[agg.index >= 4, "ci_hi"]
-    test1 = bool(len(left_tail) and len(right_tail)
-                 and (peak_lo > left_tail.min()) and (peak_lo > right_tail.min()))
-
-    x = df.material_imbalance.to_numpy(float)
-    y = df.log_rt.to_numpy()
-    X1 = np.column_stack([np.ones_like(x), x])
-    X2 = np.column_stack([np.ones_like(x), x, x ** 2])
-    _, res1, *_ = np.linalg.lstsq(X1, y, rcond=None)
-    b2, res2, *_ = np.linalg.lstsq(X2, y, rcond=None)
-    sst = ((y - y.mean()) ** 2).sum()
-    dr2 = float((res1[0] - res2[0]) / sst) if len(res1) and len(res2) else float("nan")
-    boots_b2 = []
-    n = len(df)
-    for _ in range(_BOOT_CLUSTER):
-        idx = rng.integers(0, n, n)
-        bb, *_ = np.linalg.lstsq(X2[idx], y[idx], rcond=None)
-        boots_b2.append(bb[2])
-    b2_lo, b2_hi = np.percentile(boots_b2, [2.5, 97.5])
-    test2 = bool(b2[2] < 0 and b2_hi < 0 and dr2 >= 0.001)
-
-    verdict = {True: {True: "CONFIRMED (both tests)", False: "suggestive (binned only)"},
-               False: {True: "suggestive (quadratic only)", False: "NOT confirmed"}}[test1][test2]
-    print(f"∩-shape test: binned={test1}, quadratic={test2} (β2={b2[2]:+.5f} "
-          f"[{b2_lo:+.5f},{b2_hi:+.5f}], ΔR²={dr2:.5f}) -> {verdict}")
-
-    apply_poster_style()
-    fig, ax = plt.subplots(figsize=(14, 10))
-    ax.errorbar(agg.index, agg["median"],
-                yerr=[agg["median"] - agg.ci_lo, agg.ci_hi - agg["median"]],
-                marker="o", lw=3, capsize=4, color=MAIN_COLOR, label="median log RT (95% CI)")
-    ax.plot(agg.index, agg["mean"], marker="s", lw=1.5, ls="--", color="gray", label="mean log RT")
-    ax.set_xlabel("Material imbalance (mover POV, weighted incl pawns; clipped ±12)",
-                  fontsize=FONT_SIZE_LABEL)
-    ax.set_ylabel("log RT", fontsize=FONT_SIZE_LABEL)
-    ax.set_title(f"∩-shape test — {verdict}\n(n = {len(df):,} instances)",
-                 fontsize=FONT_SIZE_TICKS + 4)
-    ax.legend(fontsize=FONT_SIZE_TICKS)
-    save_table(agg, os.path.join(CONFIG["figures_dir"], "board"), "imbalance_shape_bins.csv")
-    save_figure(fig, "board", "imbalance_shape.pdf")
+            lo, hi = clip
+            width = (hi - lo) / 50
+            g = conn.execute(
+                f"SELECT width_bucket({col}, {lo}, {hi}, 50) AS b, count(*) AS n "
+                f"FROM {table} {where} GROUP BY 1 ORDER BY 1"
+            ).df()
+            ax.bar(lo + (g.b - 0.5) * width, g.n / g.n.sum() / width, width=width,
+                   color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
+        ax.set(title=label, ylabel="density")
+    fig.suptitle(f"Board features — distributions (n = {n_rows:,} move-instances)", fontsize=FONT_SIZE_LABEL)
+    save_figure(fig, "board", "feature_histograms.pdf")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Unified board-level response time analyses")
-    parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
+    parser = argparse.ArgumentParser(description="Board-level response time analyses")
+    parser.add_argument("--db", default=CONFIG["selected_db_default"])
     parser.add_argument("--config", help="Path to the run config (else $CONFIG or the default).")
-    parser.add_argument("--all", action="store_true", default=True, help="Run all analyses (default/always)")
-    parser.add_argument("--sample-games", type=int, default=60_000,
-                        help="game-level sample the battery featurizes in-process (~1-2M FENs)")
     args = parser.parse_args(argv)
     print(f"Board analysis: ply window [{CONFIG['min_ply']}, {CONFIG['max_ply']}], db={args.db}")
 
-    # The legacy per-feature 1x3 dashboards (ply/legal_moves/clock) are subsumed by
-    # the full-battery figures below (which include ply/legal-moves/clock + the new
-    # features under one clean constrained-layout), so only the RT summary runs here.
-    analyses = {
-        "summary": run_move_time_summary,
+    # Covariates analyzed against RT. (label, kind, display_clip); kind ∈ {cont, disc,
+    # bin} drives bivariate binning + histogram style; clip trims DISPLAY tails only.
+    features = {
+        "n_possible_moves":      ("Legal moves", "disc", (0, 60)),
+        "player_clock_time":     ("Player clock (s)", "cont", (0, 600)),
+        "game_fraction":         ("Game fraction", "cont", (0.0, 1.0)),
+        "n_captures_avail":      ("Captures available", "disc", (0, 15)),
+        "n_checks_avail":        ("Checks available", "disc", (0, 8)),
+        "self_material":         ("Self material (weighted)", "disc", (0, 40)),
+        "material_imbalance":    ("Material imbalance (weighted)", "disc", (-15, 15)),
+        "in_check":              ("In check", "bin", None),
+        "prev_move_was_capture": ("Prev move was capture", "bin", None),
     }
 
     with db_connection(args.db, read_only=True) as conn:
-        # Apply the ply window ON ARRIVAL: every analysis reads these views.
-        create_ply_windowed_views(conn)
-        # game_fraction = move_ply / TRUE total plies in the game. The total must
-        # come from the UNWINDOWED move table: taking max(move_ply) over the
-        # ply-windowed view would cap the denominator at max_ply (=75), pinning
-        # every game longer than the window to the same denominator and inflating
-        # game_fraction toward 1.0 for the ~55% of moves whose game exceeds 75 plies.
+        create_ply_windowed_views(conn)   # ply window applied on arrival
+        # game_fraction = move_ply / TRUE total plies. The denominator comes from the
+        # UNWINDOWED move table: max(move_ply) over the windowed view would cap it at
+        # max_ply and inflate game_fraction for games longer than the window.
         conn.execute(
             "CREATE OR REPLACE TEMP VIEW pmnz_gf AS "
             "SELECT w.*, w.move_ply * 1.0 / g.game_len AS game_fraction "
@@ -576,33 +290,20 @@ def main(argv=None):
             "JOIN (SELECT gid, max(move_ply) AS game_len "
             f"      FROM {CONFIG['table_processed_moves']} GROUP BY gid) g USING (gid)"
         )
-        for name, config in analyses.items():
-            print(f"Executing board analysis: {name}...")
-            if callable(config):
-                config(conn)
-            else:
-                run_bivariate_analysis(
-                    conn,
-                    column=config["column"],
-                    name=config["name"],
-                    filename=config["filename"],
-                    filter_query=config.get("filter_query"),
-                    tie_safe=config.get("tie_safe", True),
-                    reverse_x=config.get("reverse_x", False),
-                )
+        print("Executing board analysis: RT distribution summary...")
+        move_time_summary(conn)
 
-        # ---- Feature battery: ONE uniform registry drives every analysis.
-        # Features computed in-process here (no separate job).
-        print("Executing board analysis: build feature views (in-process featurize)...")
-        build_battery_views(conn, sample_games=args.sample_games)
-        print("Executing board analysis: feature figures (histograms / lowess / scatter)...")
-        run_battery_figures(conn)
-        print("Executing board analysis: feature correlations (both units + partials + CIs)...")
-        run_feature_correlations(conn)
+        print("Executing board analysis: bivariate RT-vs-covariate dashboards...")
+        for col, (label, kind, _clip) in features.items():
+            opts = {"bin_mode": "integer", "integer_bin_width": 1} if kind in ("disc", "bin") else {}
+            bivariate_analysis(conn, column=col, name=label, filename=f"bivariate_{col}.pdf",
+                               table="pmnz_gf", analyzer_opts=opts)
+
         print("Executing board analysis: correlation matrix...")
-        run_correlation_matrix(conn)
-        print("Executing board analysis: imbalance ∩-shape test...")
-        run_imbalance_shape(conn)
+        correlation_matrix(conn, features)
+
+        print("Executing board analysis: feature histograms...")
+        feature_histograms(conn, features)
 
 
 if __name__ == "__main__":

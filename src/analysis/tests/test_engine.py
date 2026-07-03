@@ -86,10 +86,11 @@ def test_flat_tree_signals():
     myo = np.array([0.5, -0.3, 0.1])
     assert sig["voc"] == pytest.approx(0.0, abs=1e-12)          # leaves: deep == myopic
     assert sig["action_gap"] == pytest.approx(0.5 - 0.1)       # top1 - top2
-    # frac_good: within 0.1 of best (0.5) -> only the 0.5 move
-    assert sig["greedy_frac_good"] == pytest.approx(1 / 3)
-    # frac_acceptable: myo >= 0 -> {0.5, 0.1} = 2/3
-    assert sig["frac_acceptable"] == pytest.approx(2 / 3)
+    # n_within_epsilon: COUNT within 0.1 of best (0.5) -> only the 0.5 move
+    assert sig["n_within_epsilon"] == 1
+    # n_acceptable: COUNT of myo >= 0 -> {0.5, 0.1} = 2
+    assert sig["n_acceptable"] == 2
+    assert sig["n_root_children"] == 3                          # legal-move denominator
     # mq: final deep values (== myo) minus best; best is 0
     assert max(sig["mq"]) == pytest.approx(0.0)
     assert all(q <= 1e-12 for q in sig["mq"])
@@ -170,9 +171,12 @@ class TestSavedTrees(unittest.TestCase):
         for unit in UNITS:
             vals, moves = compute_values(TREES_DIR, n_trees=50, seed=7, n_workers=2, unit=unit)
             self.assertGreater(len(vals), 0)
-            self.assertIn("frac_acceptable", vals.columns)
+            self.assertIn("n_acceptable", vals.columns)
             self.assertTrue((vals["gss"] >= 0).all())
-            self.assertTrue((vals["greedy_frac_good"].dropna() <= 1.0).all())
+            # counts are bounded by the legal-move denominator, and >= 0 (acceptable)
+            # / >= 1 (within-epsilon: the best move is always within epsilon of itself).
+            self.assertTrue((vals["n_within_epsilon"].dropna() >= 1).all())
+            self.assertTrue((vals["n_acceptable"] <= vals["n_root_children"]).all())
             if len(moves):
                 # MQ is a loss: <= 0, best == 0 within each fen
                 self.assertLessEqual(moves["mq"].max(), 1e-9)

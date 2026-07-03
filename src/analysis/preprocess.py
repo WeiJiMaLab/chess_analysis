@@ -8,10 +8,12 @@ Contract (do not subvert with optional alternate temp paths):
     ``moves``. :func:`process_moves` builds ``processed_moves`` and ``processed_moves_nonzero`` from ``moves``;
     ``preprocess.sh`` runs merge then ``process_moves``.
 
-Each function carries its own default ``threads`` / ``memory_limit`` / ``moves_root`` in its signature;
-the CLI builds a local ``config`` dict (paths, ``staging_dir``, ``threads``, ``memory_limit``, ``total_shards``).
-``threads`` / ``memory_limit`` follow ``DUCKDB_THREADS`` / ``DUCKDB_MEMORY_LIMIT``; ``total_shards`` follows
-``PREPROCESS_TOTAL_SHARDS``. The ``shard`` subcommand reads ``job_id`` from ``SLURM_ARRAY_TASK_ID`` only.
+The CLI (:func:`main`) resolves every parameter from the active config via
+:func:`_load_preprocess_config` and passes them in explicitly — the yaml is the single source
+of ``threads`` / ``memory_limit`` / ``moves_root`` / the selection filters and the rest.
+``threads`` / ``memory_limit`` / ``total_shards`` still honor ``DUCKDB_THREADS`` /
+``DUCKDB_MEMORY_LIMIT`` / ``PREPROCESS_TOTAL_SHARDS`` overrides. The ``shard`` subcommand reads
+``job_id`` from ``SLURM_ARRAY_TASK_ID`` only.
 """
 
 from __future__ import annotations
@@ -23,21 +25,8 @@ from datetime import datetime
 import duckdb
 from tqdm import tqdm
 
-
-def duckdb_connect_config(work_dir: str, threads: int, memory_limit: str) -> dict:
-    """DuckDB ``connect`` config: spill/sort temp files live in ``work_dir``."""
-    work_dir = os.path.abspath(work_dir)
-    os.makedirs(work_dir, exist_ok=True)
-    return {
-        "threads": int(threads),
-        "memory_limit": str(memory_limit),
-        "temp_directory": work_dir,
-    }
-
-
-def _sql_str(s: str) -> str:
-    """Single-quoted SQL literal fragment."""
-    return s.replace("'", "''")
+from analysis.config import load_config_section
+from analysis.db import connect, sql_str
 
 
 def get_games(
@@ -46,11 +35,11 @@ def get_games(
     start_date: str,
     end_date: str,
     work_dir: str,
-    initial_clock: int = 600,
-    clock_increment: int = 0,
-    min_elo: int = 2000,
-    threads: int = 40,
-    memory_limit: str = "64GB",
+    initial_clock: int,
+    clock_increment: int,
+    min_elo: int,
+    threads: int,
+    memory_limit: str,
 ):
     """
     Build table ``games`` in ``personal_db`` from ``core.games`` using fixed selection filters.
@@ -58,15 +47,11 @@ def get_games(
     DuckDB temporary files use ``work_dir`` (same constraint as :func:`preprocess_game_shard`).
     """
     print(f"Fetching games and saving to database:\n\t{lichess_db} --> \n\t{personal_db}")
-    conn = duckdb.connect(
-        database=personal_db,
-        read_only=False,
-        config=duckdb_connect_config(work_dir, threads, memory_limit),
-    )
+    conn = connect(personal_db, work_dir, threads, memory_limit, read_only=False)
     conn.sql(f"""ATTACH '{lichess_db}' AS core (READ_ONLY);""")
 
-    s_start = _sql_str(start_date)
-    s_end = _sql_str(end_date)
+    s_start = sql_str(start_date)
+    s_end = sql_str(end_date)
 
     start_yyyymm = int(start_date.replace("-", "")[:6])
     end_yyyymm = int(end_date.replace("-", "")[:6]) + 1
@@ -107,9 +92,9 @@ def preprocess_game_shard(
     job_id: int,
     total_jobs: int,
     staging_dir: str,
-    moves_root: str = "/scratch/gpfs/GRIFFITHS/chess-db/rawdata",
-    threads: int = 40,
-    memory_limit: str = "64GB",
+    moves_root: str,
+    threads: int,
+    memory_limit: str,
 ):
     """
     Shard moves parquet by ``(partition, segment)``, join ``games``, then drop bad games.
@@ -123,11 +108,7 @@ def preprocess_game_shard(
     staging_dir = os.path.abspath(staging_dir)
     os.makedirs(staging_dir, exist_ok=True)
 
-    conn = duckdb.connect(
-        database=personal_db,
-        read_only=True,
-        config=duckdb_connect_config(staging_dir, threads, memory_limit),
-    )
+    conn = connect(personal_db, staging_dir, threads, memory_limit, read_only=True)
 
     pairs = conn.execute(
         """
@@ -155,9 +136,9 @@ def preprocess_game_shard(
                         pq.*,
                         CAST(g.initial_clock AS DOUBLE) AS initial_clock,
                         CAST(g.clock_increment AS BIGINT) AS clock_increment
-                    FROM read_parquet('{_sql_str(pq_path)}') pq
+                    FROM read_parquet('{sql_str(pq_path)}') pq
                     INNER JOIN games g ON pq.gid = g.gid
-                    WHERE g.partition = '{_sql_str(partition)}' AND g.segment = '{_sql_str(segment)}'
+                    WHERE g.partition = '{sql_str(partition)}' AND g.segment = '{sql_str(segment)}'
                 ),
                 -- Drop entire games if any move has negative move_time.
                 exclude_neg_gid AS (
@@ -196,30 +177,28 @@ def preprocess_game_shard(
                 WHERE j.gid NOT IN (SELECT gid FROM exclude_neg_gid)
                   AND j.gid NOT IN (SELECT gid FROM exclude_berserk_gid)
                   AND j.gid NOT IN (SELECT gid FROM exclude_grant_more_time_gid)
-            ) TO '{_sql_str(out)}' (FORMAT PARQUET)
+            ) TO '{sql_str(out)}' (FORMAT PARQUET)
             """
         )
-        nm = conn.execute(f"SELECT count(*) FROM read_parquet('{_sql_str(out)}')").fetchone()[0]
+        nm = conn.execute(f"SELECT count(*) FROM read_parquet('{sql_str(out)}')").fetchone()[0]
         print(f"\t{partition}/{segment} | {nm:,} moves | → {out}")
     conn.close()
 
 
-def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
+def process_moves(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
     """
-    Build ``processed_moves`` (board/fen/ply_tertiles features) and ``processed_moves_nonzero`` (``move_time > 0``).
+    Build ``processed_moves`` (all board features) and ``processed_moves_nonzero`` (``move_time > 0``).
 
-    Expects table ``moves`` to exist. Matches the former ``_selected_moves`` /
-    ``_selected_moves_nonzero_T`` feature set, with bad games already removed at shard time.
+    Expects table ``moves``; bad games are already removed at shard time. Board
+    features are first-class columns so downstream analysis reads them uniformly.
+    Material / in_check / prev_move_was_capture are pure regex/window SQL;
+    n_captures_avail / n_checks_avail need python-chess move enumeration
+    (:func:`_featurize_captures_checks`, scratch in ``work_dir``). All are added
+    before ``processed_moves_nonzero`` is derived.
     """
-    # Board features are first-class columns here so downstream analysis just reads
-    # them (uniform with n_possible_moves / clock). WEIGHTED material (P/N/B/R/Q =
-    # 1/3/3/5/9, incl pawns, kings excluded) is a pure regex count on the piece
-    # placement string — no python-chess needed. in_check comes from the moves
-    # table (parser-computed). prev_move_was_capture is a per-game window on the
-    # inc-pawns piece count (a capture strictly lowers it; en-passant included).
-    # n_captures_avail / n_checks_avail (which DO need legal-move enumeration) are
-    # added by add_board_position_features() after this step.
-    def _w(piece):  # weighted count of a piece letter in the placement string
+    # Weighted material (P/N/B/R/Q = 1/3/3/5/9, incl pawns, kings excluded) counts
+    # piece letters in the placement string.
+    def _w(piece):
         return f"len(regexp_extract_all(replace(board_position, '/', ''), '{piece}'))"
     white_mat = f"(1*{_w('P')} + 3*{_w('N')} + 3*{_w('B')} + 5*{_w('R')} + 9*{_w('Q')})"
     black_mat = f"(1*{_w('p')} + 3*{_w('n')} + 3*{_w('b')} + 5*{_w('r')} + 9*{_w('q')})"
@@ -229,47 +208,33 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
         SELECT
             *,
             CASE WHEN player_white THEN {white_mat} ELSE {black_mat} END AS self_material,
-            CASE WHEN player_white THEN {black_mat} ELSE {white_mat} END AS opp_material,
             CASE WHEN player_white THEN {white_mat} - {black_mat}
                  ELSE {black_mat} - {white_mat} END AS material_imbalance,
+            -- a capture strictly lowers the inc-pawns piece count (en-passant included)
             (n_pieces_on_board_inc_pawns
              < lag(n_pieces_on_board_inc_pawns) OVER (PARTITION BY gid ORDER BY move_ply))
                 AS prev_move_was_capture
         FROM (
-        SELECT
-            gid,
-            move_ply,
-            board_position,
-            player_white,
-            player_clock_time,
-            opponent_clock_time,
-            n_possible_moves,
-            move_time,
-            player_in_check AS in_check,
-            len(regexp_extract_all(replace(board_position, '/', ''), '[a-zA-Z]')) AS n_pieces_on_board_inc_pawns,
-            len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqkRNBQK]')) AS n_pieces_on_board_exc_pawns,
-            CASE WHEN player_white THEN len(regexp_extract_all(replace(board_position, '/', ''), '[RNBQK]'))
-                 ELSE len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqk]'))
-            END AS n_self_pieces_exc_pawns,
-            CASE WHEN player_white THEN len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqk]'))
-                 ELSE len(regexp_extract_all(replace(board_position, '/', ''), '[RNBQK]'))
-            END AS n_opp_pieces_exc_pawns,
-            board_position || ' ' ||
-            CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' ||
-            COALESCE(castling_rights, '-') || ' ' ||
-            COALESCE(en_passant_targets, '-') AS fen,
-            ntile(3) OVER (ORDER BY move_ply) AS ply_tertiles
-        FROM (
             SELECT
-                m.gid, m.move_ply, m.board_position, m.player_white,
-                m.player_clock_time, m.opponent_clock_time, m.n_possible_moves,
-                m.move_time, m.player_in_check, m.castling_rights,
-                m.en_passant_targets, m.halfmove_clock
-            FROM moves m
-        ) AS _m
-        ) AS _feat
+                gid,
+                move_ply,
+                board_position,
+                player_white,
+                player_clock_time,
+                opponent_clock_time,
+                n_possible_moves,
+                move_time,
+                player_in_check AS in_check,
+                len(regexp_extract_all(replace(board_position, '/', ''), '[a-zA-Z]')) AS n_pieces_on_board_inc_pawns,
+                board_position || ' ' ||
+                CASE WHEN player_white THEN 'w' ELSE 'b' END || ' ' ||
+                COALESCE(castling_rights, '-') || ' ' ||
+                COALESCE(en_passant_targets, '-') AS fen
+            FROM moves
+        ) AS _base
         """
     )
+    _featurize_captures_checks(conn, work_dir)
     conn.execute(
         """
         CREATE OR REPLACE TABLE processed_moves_nonzero AS
@@ -281,89 +246,64 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
     print(f"✅ processed_moves: {n_e:,} rows | processed_moves_nonzero: {n_z:,} rows")
 
 
-def _fen_captures_checks(fen):
-    """(#legal captures, #legal checks) for one FEN — needs legal-move enumeration."""
+def calc_captures_checks(fen: str) -> tuple[int, int]:
+    """(#legal captures, #legal checks) for one FEN — needs move enumeration."""
     import chess
     board = chess.Board(fen)
     caps = checks = 0
-    for mv in board.legal_moves:
-        if board.is_capture(mv):
+    for move in board.legal_moves:
+        if board.is_capture(move):
             caps += 1
-        if board.gives_check(mv):
+        if board.gives_check(move):
             checks += 1
     return caps, checks
 
 
-# --- n_captures_avail / n_checks_avail: python-chess legal-move enumeration over
-# DISTINCT FENs, massively parallel across a Slurm array. process_moves dumps the
-# distinct FENs to a parquet; each array task featurizes its round-robin slice of
-# the parquet's row groups (using its node's cores too) into a shard; the merge
-# joins the shards back into processed_moves[_nonzero]. ---
+def _featurize_captures_checks(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
+    """Add n_captures_avail / n_checks_avail columns to ``processed_moves`` via
+    python-chess over its DISTINCT FENs.
 
-def _pos_features_dir(work_dir: str) -> str:
-    return os.path.join(work_dir, "pos_features")
-
-
-def dump_distinct_fens(conn: duckdb.DuckDBPyConnection, work_dir: str) -> str:
-    """Write the DISTINCT fens of processed_moves to a parquet for the featurize array."""
-    out = os.path.join(_pos_features_dir(work_dir), "distinct_fens.parquet")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    conn.execute(f"COPY (SELECT DISTINCT fen FROM processed_moves) TO '{_sql_str(out)}' (FORMAT PARQUET)")
-    n = conn.execute(f"SELECT count(*) FROM read_parquet('{_sql_str(out)}')").fetchone()[0]
-    print(f"✅ dumped {n:,} distinct FENs → {out}", flush=True)
-    return out
-
-
-def featurize_positions_shard(work_dir: str, worker_index: int, n_workers: int,
-                              local_workers: int | None = None) -> None:
-    """One array task: featurize this worker's round-robin slice of the distinct-FEN
-    parquet's row groups (parallel across the node's cores) → one shard parquet."""
+    Dumps the distinct FENs to parquet, featurizes them a row group at a time
+    across the node's cores, joins the counts back. The pool uses ``spawn``: the
+    open DuckDB connection has live background threads, and forking under them
+    deadlocks the workers.
+    """
     import multiprocessing as mp
-    import pandas as pd
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
-    local_workers = local_workers or (os.cpu_count() or 8)
-    fens_path = os.path.join(_pos_features_dir(work_dir), "distinct_fens.parquet")
-    shards_dir = os.path.join(_pos_features_dir(work_dir), "shards")
-    os.makedirs(shards_dir, exist_ok=True)
+    os.makedirs(work_dir, exist_ok=True)
+    fens_path = os.path.join(work_dir, "distinct_fens.parquet")
+    counts_path = os.path.join(work_dir, "captures_checks.parquet")
+    conn.execute(f"COPY (SELECT DISTINCT fen FROM processed_moves) TO '{sql_str(fens_path)}' (FORMAT PARQUET)")
 
-    pf = pq.ParquetFile(fens_path)
-    fens = []
-    for rg in range(worker_index, pf.num_row_groups, n_workers):
-        fens.extend(pf.read_row_group(rg, columns=["fen"])["fen"].to_pylist())
-    print(f"featurize_positions worker {worker_index}/{n_workers}: {len(fens):,} FENs "
-          f"({pf.num_row_groups} row groups, {local_workers} local cores)...", flush=True)
-    with mp.Pool(local_workers) as pool:
-        res = pool.map(_fen_captures_checks, fens, chunksize=4000)
-    df = pd.DataFrame([(f, c, k) for f, (c, k) in zip(fens, res)],
-                      columns=["fen", "n_captures_avail", "n_checks_avail"])
-    out = os.path.join(shards_dir, f"posfeat_{worker_index:04d}.parquet")
-    df.to_parquet(out, index=False)
-    print(f"✅ worker {worker_index}: {len(df):,} FENs → {out}", flush=True)
+    reader = pq.ParquetFile(fens_path)
+    schema = pa.schema([("fen", pa.string()),
+                        ("n_captures_avail", pa.int32()), ("n_checks_avail", pa.int32())])
+    with pq.ParquetWriter(counts_path, schema) as writer, mp.get_context("spawn").Pool() as pool:
+        for rg in range(reader.num_row_groups):
+            fens = reader.read_row_group(rg, columns=["fen"])["fen"].to_pylist()
+            if not fens:
+                continue
+            caps, checks = zip(*pool.map(calc_captures_checks, fens, chunksize=4000))
+            writer.write_table(pa.table({"fen": fens,
+                                         "n_captures_avail": pa.array(caps, pa.int32()),
+                                         "n_checks_avail": pa.array(checks, pa.int32())}))
 
-
-def merge_position_features(conn: duckdb.DuckDBPyConnection, work_dir: str) -> None:
-    """Join the array's captures/checks shards into processed_moves[_nonzero]."""
-    shards = os.path.join(_pos_features_dir(work_dir), "shards", "posfeat_*.parquet")
-    conn.execute(f"CREATE OR REPLACE TABLE board_position_features AS "
-                 f"SELECT * FROM read_parquet('{_sql_str(shards)}')")
-    n_feat = conn.execute("SELECT count(*) FROM board_position_features").fetchone()[0]
-    n_fen = conn.execute("SELECT count(DISTINCT fen) FROM processed_moves").fetchone()[0]
-    print(f"merge_position_features: {n_feat:,} featurized FENs vs {n_fen:,} distinct in DB", flush=True)
-    for tbl in ("processed_moves", "processed_moves_nonzero"):
-        conn.execute(
-            f"CREATE OR REPLACE TABLE {tbl} AS "
-            f"SELECT p.*, f.n_captures_avail, f.n_checks_avail "
-            f"FROM {tbl} p LEFT JOIN board_position_features f USING (fen)"
-        )
-    print("✅ merged n_captures_avail / n_checks_avail into processed_moves[_nonzero]")
+    conn.execute(
+        f"CREATE OR REPLACE TABLE processed_moves AS "
+        f"SELECT p.*, c.n_captures_avail, c.n_checks_avail "
+        f"FROM processed_moves p LEFT JOIN read_parquet('{sql_str(counts_path)}') c USING (fen)"
+    )
+    n = conn.execute(f"SELECT count(*) FROM read_parquet('{sql_str(counts_path)}')").fetchone()[0]
+    print(f"✅ featurized captures/checks over {n:,} distinct FENs", flush=True)
 
 
 def merge_game_shards(
     personal_db: str,
     staging_dir: str,
-    threads: int = 40,
-    memory_limit: str = "64GB",
+    threads: int,
+    memory_limit: str,
 ):
     """
     Load ``selected_moves_*.parquet`` from ``staging_dir`` into ``moves``.
@@ -378,12 +318,8 @@ def merge_game_shards(
     ts = datetime.now().astimezone().replace(microsecond=0).isoformat()
     print(f"\n{'=' * 72}\n merge_game_shards started {ts}\n read_parquet → {personal_db}.moves\n{'=' * 72}\n", flush=True)
     print(f"merge_game_shards: read_parquet('{pattern}') → {personal_db}.moves", flush=True)
-    conn = duckdb.connect(
-        database=personal_db,
-        read_only=False,
-        config=duckdb_connect_config(staging_dir, threads, memory_limit),
-    )
-    pat = _sql_str(pattern)
+    conn = connect(personal_db, staging_dir, threads, memory_limit, read_only=False)
+    pat = sql_str(pattern)
     conn.execute(
         f"""
         CREATE OR REPLACE TABLE moves AS
@@ -395,79 +331,11 @@ def merge_game_shards(
     conn.close()
 
 
-def run_process_moves(
-    personal_db: str,
-    work_dir: str,
-    threads: int = 40,
-    memory_limit: str = "64GB",
-) -> None:
-    """Open ``personal_db``, run :func:`process_moves` (expects table ``moves``). Spill in ``work_dir``."""
-    work_dir = os.path.abspath(work_dir)
-    os.makedirs(work_dir, exist_ok=True)
-    ts = datetime.now().astimezone().replace(microsecond=0).isoformat()
-    print(f"\n{'=' * 72}\n process_moves started {ts}\n {personal_db} (spill: {work_dir})\n{'=' * 72}\n", flush=True)
-    conn = duckdb.connect(
-        database=personal_db,
-        read_only=False,
-        config=duckdb_connect_config(work_dir, threads, memory_limit),
-    )
-    process_moves(conn)
-    dump_distinct_fens(conn, work_dir)   # input for the featurize array
-    conn.close()
-
-
-def run_featurize_positions(work_dir: str, worker_index: int, n_workers: int) -> None:
-    """Array-task entry: featurize one slice of the distinct FENs (no DB access)."""
-    featurize_positions_shard(work_dir, worker_index, n_workers)
-
-
-def run_merge_position_features(
-    personal_db: str, work_dir: str, threads: int = 40, memory_limit: str = "64GB",
-) -> None:
-    """Join the featurize shards into processed_moves[_nonzero] (single DB writer)."""
-    conn = duckdb.connect(
-        database=personal_db, read_only=False,
-        config=duckdb_connect_config(work_dir, threads, memory_limit),
-    )
-    merge_position_features(conn, work_dir)
-    conn.close()
-
-
 def _load_preprocess_config() -> dict:
-    """Load the ``preprocess`` section from the active config ($CONFIG, else the
-    repo default), with ${...} placeholders resolved against ``globals`` — the same
-    contract analysis uses, so preprocess and analysis share paths (notably
-    ``personal_db`` == ``human_analysis.selected_db_default``). DUCKDB_THREADS /
-    DUCKDB_MEMORY_LIMIT / PREPROCESS_TOTAL_SHARDS still override if set."""
-    import re
-    import yaml
-
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cfg_path = os.environ.get("CONFIG") or os.path.join(repo_root, "config_allply.yaml")
-    with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
-    section = data.get("preprocess")
-    if not isinstance(section, dict):
-        raise KeyError(f"'preprocess' section missing from {cfg_path}")
-
-    def interp(val, variables):
-        if isinstance(val, str):
-            for _ in range(5):
-                keys = re.findall(r"\$\{(\w+)\}", val)
-                if not keys:
-                    break
-                for k in keys:
-                    if k in variables:
-                        val = val.replace("${" + k + "}", str(variables[k]))
-            return val
-        if isinstance(val, dict):
-            return {k: interp(v, variables) for k, v in val.items()}
-        return val
-
-    variables = dict(data.get("globals", {}))
-    for _ in range(5):
-        variables = {k: interp(v, variables) for k, v in variables.items()}
-    cfg = interp(section, variables)
+    """Resolve the ``preprocess`` config section (shared loader; ``personal_db`` ==
+    ``human_analysis.selected_db_default``), then apply the DUCKDB_THREADS /
+    DUCKDB_MEMORY_LIMIT / PREPROCESS_TOTAL_SHARDS env overrides."""
+    cfg = load_config_section("preprocess")
     cfg["threads"] = int(os.environ.get("DUCKDB_THREADS", cfg["threads"]))
     cfg["memory_limit"] = os.environ.get("DUCKDB_MEMORY_LIMIT", cfg["memory_limit"])
     cfg["total_shards"] = int(os.environ.get("PREPROCESS_TOTAL_SHARDS", cfg["total_shards"]))
@@ -484,16 +352,7 @@ def main() -> None:
     sub.add_parser("merge", help="Parquet shards → table moves only.")
     sub.add_parser(
         "process_moves",
-        help="table moves → processed_moves[_nonzero] (feature SQL) + dump distinct FENs.",
-    )
-    sub.add_parser(
-        "featurize_positions",
-        help="Array task: featurize a slice of distinct FENs (captures/checks) → shard. "
-             "Uses SLURM_ARRAY_TASK_ID / SLURM_ARRAY_TASK_COUNT (NWORKERS overrides count).",
-    )
-    sub.add_parser(
-        "merge_position_features",
-        help="Join the captures/checks shards into processed_moves[_nonzero] (DB writer).",
+        help="table moves → processed_moves[_nonzero] (board-feature SQL).",
     )
 
     args = parser.parse_args()
@@ -535,29 +394,10 @@ def main() -> None:
             memory_limit=config["memory_limit"],
         )
     elif args.cmd == "process_moves":
-        run_process_moves(
-            personal_db=config["personal_db"],
-            work_dir=config["work_dir"],
-            threads=config["threads"],
-            memory_limit=config["memory_limit"],
-        )
-    elif args.cmd == "featurize_positions":
-        job_raw = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if job_raw is None:
-            raise SystemExit("featurize_positions requires SLURM_ARRAY_TASK_ID (submit as an array).")
-        # NWORKERS overrides the array count so a straggler re-run keeps the SAME
-        # round-robin slicing (mirrors pack_root).
-        n_workers = int(os.environ.get("NWORKERS") or os.environ["SLURM_ARRAY_TASK_COUNT"])
-        run_featurize_positions(
-            work_dir=config["work_dir"], worker_index=int(job_raw), n_workers=n_workers,
-        )
-    elif args.cmd == "merge_position_features":
-        run_merge_position_features(
-            personal_db=config["personal_db"],
-            work_dir=config["work_dir"],
-            threads=config["threads"],
-            memory_limit=config["memory_limit"],
-        )
+        conn = connect(config["personal_db"], config["work_dir"],
+                       config["threads"], config["memory_limit"], read_only=False)
+        process_moves(conn, config["work_dir"])
+        conn.close()
 
 
 if __name__ == "__main__":

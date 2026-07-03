@@ -4,61 +4,13 @@ Shared utilities for chess_analysis: DB connection, FEN display, Stockfish engin
 
 from __future__ import annotations
 
-import os
-import re
-from pathlib import Path
-import yaml
+from analysis.config import load_config_section
 
-
-def _interpolate(value, variables):
-    """Recursively substitute ${key} / ${globals.key} placeholders in value.
-
-    Mirrors render_stage.py so the human_analysis section can reference the
-    shared `globals` dirs (e.g. ${scratch_dir}, ${trees_dir})."""
-    if isinstance(value, str):
-        def repl(match):
-            name = match.group(1).removeprefix("globals.")
-            return str(variables[name]) if name in variables else match.group(0)
-        return re.sub(r"\$\{([^}]+)\}", repl, value)
-    if isinstance(value, dict):
-        return {k: _interpolate(v, variables) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_interpolate(v, variables) for v in value]
-    return value
-
-
-# Load the shared configuration. Path-aware: the active config file is chosen by
-# the ``CONFIG`` env var (which slurm/helpers/setup_env.sh exports, and board.py /
-# engine.py set from their ``--config`` flag); it falls back to the repo default
-# below. ${...} placeholders in ``human_analysis`` are resolved against ``globals``
-# (same contract as render_stage.py / cts._config) so analysis shares the
-# pipeline's per-run dirs.
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_DEFAULT_CONFIG = _REPO_ROOT / "config_allply.yaml"
-
-
-def _config_path() -> Path:
-    env = os.environ.get("CONFIG")
-    return Path(env) if env else _DEFAULT_CONFIG
-
-
-def _load_shared_config() -> dict:
-    config_path = _config_path()
-    if not config_path.exists():
-        raise FileNotFoundError(f"Shared config not found at {config_path}")
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f) or {}
-    section = data.get("human_analysis")
-    if not isinstance(section, dict):
-        raise KeyError(f"'human_analysis' section missing from {config_path}.")
-
-    # Resolve globals (which may reference each other), then the section.
-    variables = dict(data.get("globals", {}))
-    for _ in range(5):
-        variables = {k: _interpolate(v, variables) for k, v in variables.items()}
-    return _interpolate(section, variables)
-
-CONFIG = _load_shared_config()
+# Shared analysis config. The active file is chosen by the ``CONFIG`` env var
+# (which slurm/setup_env.sh exports and board.py / engine.py set from --config),
+# falling back to the repo default; ${...} placeholders in ``human_analysis`` are
+# resolved against ``globals`` (see analysis.config).
+CONFIG = load_config_section("human_analysis")
 
 import chess
 import chess.svg
@@ -93,6 +45,8 @@ def apply_poster_style():
     plt.rcParams['axes.grid'] = True
     plt.rcParams['grid.alpha'] = 0.3
     plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
+    plt.rcParams['axes.titlesize'] = FONT_SIZE_TICKS
+    plt.rcParams['legend.fontsize'] = FONT_SIZE_TICKS
 
 
 import contextlib

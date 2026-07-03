@@ -1,9 +1,9 @@
 #!/bin/bash
 # Rebuild processed_moves / processed_moves_nonzero from `moves` with the SQL board
-# features (material / in_check / prev_move_was_capture) and dump the DISTINCT FENs
-# to a parquet for the featurize array. Paths from the config `preprocess:` section
-# (personal_db unified with analysis). Opens personal.db read_write — no other
-# process may hold it. Chain: process_moves -> featurize_positions[] -> merge.
+# features (material / in_check / prev_move_was_capture). Paths from the config
+# `preprocess:` section (personal_db unified with analysis). Opens personal.db
+# read_write — no other process may hold it. Final preprocess step; it also
+# featurizes captures/checks over the distinct FENs (python-chess, in-process).
 #   sbatch slurm/pipeline/process_moves.slurm
 #SBATCH --job-name=process-moves
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
