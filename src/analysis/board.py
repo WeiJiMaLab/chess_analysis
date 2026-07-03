@@ -191,48 +191,26 @@ def run_bivariate_analysis(conn, column: str, name: str, filename: str, filter_q
     save_figure(fig, "board", filename)
 
 
-def run_board_corr(conn, n_sample=1_000_000, seed=42, resid_col=None,
-                   filename="board_feature_corr.pdf", title="correlation — board features",
-                   table="pmnz_gf", extra_cols: list[tuple[str, str, str]] | None = None):
-    """Correlation matrices (Spearman AND Pearson, per the trust protocol) over
-    board structural features + log(RT). The Pearson matrix saves with a
-    ``_pearson`` filename suffix.
+def run_correlation_matrix(conn, filename="board_feature_corr.pdf"):
+    """Spearman AND Pearson correlation matrices over log(RT), ply, and EVERY
+    feature in the registry (uniform — same columns the figures and partials use),
+    read from the pre-sampled ``pmnz_bat``. Pearson saves with a ``_pearson``
+    filename suffix."""
+    import pandas as pd
+    # Columns: RT, ply (the special covariate), then every registry feature.
+    labels = {"log_rt": "log(RT)", "move_ply": "Ply"}
+    labels.update({col: lbl for col, (lbl, _, _) in FEATURES.items()})
+    sel = ["ln(move_time) AS log_rt", "move_ply"]
+    for col, (_, kind, _) in FEATURES.items():
+        sel.append(f"COALESCE({col}, FALSE)::INT AS {col}" if kind == "bin" else col)
+    df = conn.execute(f"SELECT {', '.join(sel)} FROM pmnz_bat").df()
 
-    If ``resid_col`` is given (e.g. ``"move_ply"``), RT is first **residualized**
-    on it — ``log(RT) − mean(log(RT) | resid_col)`` — so the correlations reflect
-    the part of think-time NOT explained by that covariate (e.g. game stage). The
-    conditional mean is taken over the sampled rows via a partitioned window.
-
-    ``extra_cols``: list of (sql_expr, alias, label) appended to the matrix — the
-    P0 battery features join in via ``table="pmnz_bat"``.
-    """
-    if resid_col:
-        rt_sql = f"ln(move_time) - avg(ln(move_time)) OVER (PARTITION BY {resid_col})"
-        rt_label = f"log(RT) ⟂ {resid_col}"
-    else:
-        rt_sql = "ln(move_time)"
-        rt_label = "log(RT)"
-    extra_cols = extra_cols or []
-    extra_sql = "".join(f", {expr} AS {alias}" for expr, alias, _ in extra_cols)
-    df = conn.execute(f"""
-        SELECT move_ply AS ply, n_possible_moves AS legal_moves,
-               player_clock_time AS player_clock, {rt_sql} AS log_T
-               {extra_sql}
-        FROM {table}
-        USING SAMPLE {n_sample} ROWS (reservoir, {seed})
-    """).df()
-    # Order: RT, Ply, Player clock, Legal moves, then battery features.
-    labels = {
-        "log_T": rt_label, "ply": "Ply",
-        "player_clock": "Player clock", "legal_moves": "Legal moves",
-    }
-    labels.update({alias: label for _, alias, label in extra_cols})
     base, ext = os.path.splitext(filename)
     for method, mlabel, suffix in (("spearman", "Spearman ρ", ""), ("pearson", "Pearson r", "_pearson")):
         corr = df[list(labels)].corr(method=method).rename(columns=labels, index=labels)
         n = len(corr)
         apply_poster_style()
-        side = max(9, 1.6 * n)  # grow with battery columns so cells stay legible
+        side = max(9, 1.6 * n)  # grow with the number of features so cells stay legible
         fig, ax = plt.subplots(figsize=(side, side * 0.83))
         ax.grid(False)
         im = ax.imshow(corr.values, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
@@ -250,7 +228,7 @@ def run_board_corr(conn, n_sample=1_000_000, seed=42, resid_col=None,
         cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label(mlabel, fontsize=16)
         cbar.ax.tick_params(labelsize=14)
-        ax.set_title(f"{mlabel} {title} (n = {len(df):,})", fontsize=18, pad=12)
+        ax.set_title(f"{mlabel} — board features (n = {len(df):,})", fontsize=18, pad=12)
         plt.tight_layout()
         save_figure(fig, "board", f"{base}{suffix}{ext}")
 
@@ -260,91 +238,54 @@ def run_board_corr(conn, n_sample=1_000_000, seed=42, resid_col=None,
 # rules per outputs/reports/trust_protocol.md). Merged from board_battery.py.
 # =============================================================================
 
-# The new engine-free board features (subset that gets the partial-vs-legal-moves
-# analysis — legal moves itself is the control, so it is not in this list).
-BATTERY_FEATURES = {
-    "n_captures_avail": "Captures available",
-    "n_checks_avail": "Checks available",
-    "self_material": "Self material (weighted)",
-    "material_imbalance": "Material imbalance (weighted)",
-    "in_check": "In check",
-    "prev_move_was_capture": "Prev move was capture",
-}
-
-# The FULL battery for the descriptive figures (histograms / lowess / scatter):
-# the classic board covariates PLUS the new features. Each entry is
-# (label, kind, display_clip) — kind drives binning/jitter, clip trims display
-# tails only (never drops rows from the stats).
-BATTERY_ALL = {
-    "move_ply":            ("Ply", "disc", (0, 150)),
-    "n_possible_moves":    ("Legal moves", "disc", (0, 60)),
-    "player_clock_time":   ("Player clock (s)", "cont", (0, 600)),
-    "game_fraction":       ("Game fraction", "cont", (0.0, 1.0)),
-    "n_captures_avail":    ("Captures available", "disc", (0, 15)),
-    "n_checks_avail":      ("Checks available", "disc", (0, 8)),
-    "self_material":       ("Self material (weighted)", "disc", (0, 40)),
-    "material_imbalance":  ("Material imbalance (weighted)", "disc", (-15, 15)),
-    "in_check":            ("In check", "bin", None),
+# SINGLE feature registry — the classic board covariates and the engine-free
+# features are ONE uniform set, driving every analysis alike: the descriptive
+# figures (histograms / lowess / scatter), the per-feature correlations +
+# partials, and the correlation matrix. Add a feature here once and it flows
+# everywhere. Each entry is (label, kind, display_clip): kind ∈ {cont, disc, bin}
+# drives binning/jitter; clip trims DISPLAY tails only (never drops rows).
+#
+# Two deliberate exceptions, handled outside this registry:
+#   * response-time histogram + QQ  → run_move_time_summary (it is about RT itself)
+#   * ply                           → the total-ply arc in run_move_time_summary,
+#                                      and a column in the correlation matrix
+# ``CONTROL`` (legal moves) is the partial-out variable; its own self-partial is
+# undefined and reported as NaN.
+FEATURES = {
+    "n_possible_moves":      ("Legal moves", "disc", (0, 60)),
+    "player_clock_time":     ("Player clock (s)", "cont", (0, 600)),
+    "game_fraction":         ("Game fraction", "cont", (0.0, 1.0)),
+    "n_captures_avail":      ("Captures available", "disc", (0, 15)),
+    "n_checks_avail":        ("Checks available", "disc", (0, 8)),
+    "self_material":         ("Self material (weighted)", "disc", (0, 40)),
+    "material_imbalance":    ("Material imbalance (weighted)", "disc", (-15, 15)),
+    "in_check":              ("In check", "bin", None),
     "prev_move_was_capture": ("Prev move was capture", "bin", None),
 }
+CONTROL = "n_possible_moves"      # legal moves — the partial-out control
 _BOOT_HEADLINE = 1000  # trust protocol: B=1000 headline CIs
 _BOOT_CLUSTER = 200    # B=200 for the heavier per-instance runs
 
 
-def build_battery_views(conn, sample_games: int = 60_000, workers: int | None = None, seed: int = 7) -> None:
-    """Featurize the board features IN-PROCESS for a game-level sample and build
-    ``pmnz_bat``. No separate 84M-FEN job: the python-chess features
-    (captures/checks/material) are only consumed by the sampled battery analyses,
-    so featurizing the whole corpus is wasteful. We take a game-level sample, get
-    its DISTINCT FENs, featurize each ONCE with a worker pool (lossless — features
-    are a pure function of the FEN), then join back to EVERY sampled move-instance
-    (no statistical dedup: instance weighting is preserved, and the analyses still
-    compute both per-instance and per-FEN units).
+def build_battery_views(conn, sample_games: int = 60_000, seed: int = 7) -> None:
+    """Sample a game-level subset for the feature battery → ``pmnz_bat``.
 
-    ~1–2M distinct FENs at ~5k/s/core → tens of seconds on the analysis node,
-    versus ~10 min to featurize all 84M. Whole-corpus features are never needed:
-    in_check is also a DB column and prev_move_was_capture is pure SQL.
+    All board features are first-class columns of ``processed_moves`` (added by
+    preprocess: material/in_check/prev_move_was_capture in SQL, captures/checks in
+    the featurize step), so there is NO featurization here — this just draws a
+    game-level sample of the windowed instances. Per-instance (no dedup); the
+    analyses still compute both per-instance and per-FEN units.
     """
-    import multiprocessing as _mp
-    import pandas as pd
-    from analysis.featurize_board import featurize_fen, FEATURE_COLUMNS
-
-    workers = workers or (os.cpu_count() or 8)
     conn.execute(
         f"CREATE OR REPLACE TEMP TABLE sample_gids AS "
         f"SELECT DISTINCT gid FROM pmnz_gf USING SAMPLE {sample_games} ROWS (reservoir, {seed})"
     )
-    fens = [r[0] for r in conn.execute(
-        "SELECT DISTINCT m.fen FROM pmnz_gf m JOIN sample_gids sg ON sg.gid = m.gid"
-    ).fetchall()]
-    print(f"  battery: featurizing {len(fens):,} distinct FENs from {sample_games:,} "
-          f"sampled games ({workers} workers, in-process)...")
-    with _mp.Pool(workers) as pool:
-        rows = pool.map(featurize_fen, fens, chunksize=2000)
-    feats = pd.DataFrame([(f, *r) for f, r in zip(fens, rows)], columns=["fen", *FEATURE_COLUMNS])
-    conn.register("_feats_df", feats)
-    conn.execute("CREATE OR REPLACE TEMP TABLE feats AS SELECT * FROM _feats_df")
-    # prev_move_was_capture: lag over the FULL moves table so ply-15 still sees ply-14.
-    conn.execute(
-        "CREATE OR REPLACE TEMP VIEW prev_cap AS "
-        "SELECT gid, move_ply, "
-        "       (n_pieces < lag(n_pieces) OVER (PARTITION BY gid ORDER BY move_ply)) "
-        "         AS prev_move_was_capture "
-        f"FROM {CONFIG['table_moves']}"
-    )
-    # pmnz_bat = every sampled windowed move-instance x its features (per-instance).
     conn.execute(
         "CREATE OR REPLACE TEMP TABLE pmnz_bat AS "
-        "SELECT m.*, f.in_check, f.n_captures_avail, f.n_checks_avail, "
-        "       f.self_material, f.opp_material, f.material_imbalance, "
-        "       p.prev_move_was_capture "
-        "FROM pmnz_gf m "
-        "JOIN sample_gids sg ON sg.gid = m.gid "
-        "JOIN feats f ON f.fen = m.fen "
-        "LEFT JOIN prev_cap p ON p.gid = m.gid AND p.move_ply = m.move_ply"
+        "SELECT m.* FROM pmnz_gf m JOIN sample_gids sg ON sg.gid = m.gid"
     )
     n = conn.execute("SELECT count(*) FROM pmnz_bat").fetchone()[0]
-    print(f"  battery: pmnz_bat = {n:,} sampled move-instances (per-instance; not deduped)")
+    print(f"  battery: pmnz_bat = {n:,} sampled move-instances (features are DB columns)")
 
 
 def _binned_rt(x, y, kind, clip, *, stat="median", min_n=100):
@@ -387,7 +328,7 @@ def run_battery_figures(conn, sample_rows=200_000, seed=7):
     constrained_layout keeps titles/labels from colliding with the panels."""
     from statsmodels.nonparametric.smoothers_lowess import lowess
 
-    cols = list(BATTERY_ALL)
+    cols = list(FEATURES)
     df = conn.execute(
         f"SELECT {', '.join(cols)}, ln(move_time) AS log_rt "
         f"FROM pmnz_bat WHERE move_time > 0 USING SAMPLE {sample_rows} ROWS (reservoir, {seed})"
@@ -400,7 +341,7 @@ def run_battery_figures(conn, sample_rows=200_000, seed=7):
     # --- 1. histograms (marginal distribution of each feature) ---
     fig, axes = _battery_grid(len(cols))
     for ax, col in zip(axes, cols):
-        label, kind, clip = BATTERY_ALL[col]
+        label, kind, clip = FEATURES[col]
         x = df[col].dropna()
         if clip:
             x = x[(x >= clip[0]) & (x <= clip[1])]
@@ -423,7 +364,7 @@ def run_battery_figures(conn, sample_rows=200_000, seed=7):
     lw = df.sample(min(6_000, n), random_state=seed)
     fig, axes = _battery_grid(len(cols))
     for ax, col in zip(axes, cols):
-        label, kind, clip = BATTERY_ALL[col]
+        label, kind, clip = FEATURES[col]
         cx, my = _binned_rt(df[col], df.log_rt, kind, clip, stat="median")
         ax.plot(cx, my, "o", color="gray", alpha=0.55, ms=7, label="binned median")
         if kind == "cont" or (kind == "disc" and df[col].nunique() > 3):
@@ -446,7 +387,7 @@ def run_battery_figures(conn, sample_rows=200_000, seed=7):
     sc = df.sample(min(8_000, n), random_state=seed)
     fig, axes = _battery_grid(len(cols))
     for ax, col in zip(axes, cols):
-        label, kind, clip = BATTERY_ALL[col]
+        label, kind, clip = FEATURES[col]
         d = sc[[col, "log_rt"]].dropna()
         if clip:
             d = d[(d[col] >= clip[0]) & (d[col] <= clip[1])]
@@ -491,44 +432,46 @@ def _boot_ci(fn, df, b: int, seed: int = 7) -> tuple[float, float]:
     return float(np.percentile(stats_, 2.5)), float(np.percentile(stats_, 97.5))
 
 
-def run_battery_corr(conn):
-    """P0.b — Spearman+Pearson vs ln(RT), partials vs legal moves, bootstrap CIs,
-    on BOTH units (per-instance / per-FEN). Reads the already-sampled ``pmnz_bat``."""
+def run_feature_correlations(conn):
+    """Per-feature Spearman + Pearson with log(RT) and the partial vs legal moves
+    (the CONTROL), FEN-cluster bootstrap CIs, on BOTH units (per-instance and
+    per-FEN). Uniform over the whole FEATURES registry — one row per (feature,
+    unit) → feature_correlations.csv. The control's self-partial is NaN."""
     import pandas as pd
-    inst = conn.execute(
-        "SELECT m.fen, ln(m.move_time) AS log_rt, m.n_possible_moves, "
-        "       m.in_check::INT AS in_check, m.n_captures_avail, m.n_checks_avail, "
-        "       m.self_material, m.material_imbalance, "
-        "       COALESCE(m.prev_move_was_capture, FALSE)::INT AS prev_move_was_capture "
-        "FROM pmnz_bat m"
-    ).df()
+    sel = ["m.fen", "ln(m.move_time) AS log_rt"]
+    for col, (_, kind, _) in FEATURES.items():
+        sel.append(f"COALESCE(m.{col}, FALSE)::INT AS {col}" if kind == "bin" else f"m.{col}")
+    inst = conn.execute(f"SELECT {', '.join(sel)} FROM pmnz_bat m").df()
     per_fen = inst.groupby("fen").agg(
-        log_rt=("log_rt", "mean"), n_possible_moves=("n_possible_moves", "first"),
-        **{c: (c, "first") for c in BATTERY_FEATURES},
+        log_rt=("log_rt", "mean"), **{c: (c, "first") for c in FEATURES},
     ).reset_index(drop=True)
 
     rows = []
-    for col in BATTERY_FEATURES:
+    for col in FEATURES:
+        is_control = col == CONTROL
         for unit, df, b in (("instance", inst, _BOOT_CLUSTER), ("fen", per_fen, _BOOT_HEADLINE)):
             x = df[col].to_numpy(float)
             y = df.log_rt.to_numpy()
-            z = df.n_possible_moves.to_numpy(float)
+            z = df[CONTROL].to_numpy(float)
             rec = {
                 "feature": col, "unit": unit, "n": len(df),
                 "spearman": _spearman(x, y), "pearson": float(np.corrcoef(x, y)[0, 1]),
-                "partial_spearman_legal": _partial(x, y, z, rank=True),
-                "partial_pearson_legal": _partial(x, y, z, rank=False),
+                "partial_spearman_legal": np.nan if is_control else _partial(x, y, z, rank=True),
+                "partial_pearson_legal": np.nan if is_control else _partial(x, y, z, rank=False),
             }
-            lo, hi = _boot_ci(
-                lambda d, c=col: _partial(d[c].to_numpy(float), d.log_rt.to_numpy(),
-                                          d.n_possible_moves.to_numpy(float), rank=True),
-                df, b)
+            if is_control:
+                lo, hi = np.nan, np.nan
+            else:
+                lo, hi = _boot_ci(
+                    lambda d, c=col: _partial(d[c].to_numpy(float), d.log_rt.to_numpy(),
+                                              d[CONTROL].to_numpy(float), rank=True),
+                    df, b)
             rec["partial_spearman_ci_lo"], rec["partial_spearman_ci_hi"] = lo, hi
             rows.append(rec)
     res = pd.DataFrame(rows)
     print(res.round(4).to_string(index=False))
     save_table(res, os.path.join(CONFIG["figures_dir"], "board"),
-               "battery_correlations.csv", index=False)
+               "feature_correlations.csv", index=False)
 
 
 def run_imbalance_shape(conn):
@@ -601,21 +544,6 @@ def run_imbalance_shape(conn):
     save_figure(fig, "board", "imbalance_shape.pdf")
 
 
-def run_battery_binaries(conn):
-    """Group means + SEM for the binary features (dashboards are meaningless)."""
-    for col in ("in_check", "prev_move_was_capture"):
-        stats_ = conn.execute(
-            f"SELECT {col} AS v, count(*) AS n, avg(ln(move_time)) AS mean_lrt, "
-            f"       median(ln(move_time)) AS median_lrt, "
-            f"       stddev(ln(move_time)) / sqrt(count(*)) AS sem "
-            f"FROM pmnz_bat WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY 1"
-        ).df()
-        print(f"\n{col}:")
-        print(stats_.round(4).to_string(index=False))
-        save_table(stats_, os.path.join(CONFIG["figures_dir"], "board"),
-                   f"battery_{col}_groups.csv", index=False)
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Unified board-level response time analyses")
     parser.add_argument("--db", default=SELECTED_DB_DEFAULT)
@@ -663,29 +591,18 @@ def main(argv=None):
                     reverse_x=config.get("reverse_x", False),
                 )
 
-        # ---- P0 battery (features computed in-process here; no separate job) ----
-        print("Executing board analysis: build battery views (in-process featurize)...")
+        # ---- Feature battery: ONE uniform registry drives every analysis.
+        # Features computed in-process here (no separate job).
+        print("Executing board analysis: build feature views (in-process featurize)...")
         build_battery_views(conn, sample_games=args.sample_games)
-        print("Executing board analysis: battery figures (histograms / lowess / scatter)...")
+        print("Executing board analysis: feature figures (histograms / lowess / scatter)...")
         run_battery_figures(conn)
-        print("Executing board analysis: battery_binaries...")
-        run_battery_binaries(conn)
-        print("Executing board analysis: battery_corr (units + partials + CIs)...")
-        run_battery_corr(conn)
+        print("Executing board analysis: feature correlations (both units + partials + CIs)...")
+        run_feature_correlations(conn)
+        print("Executing board analysis: correlation matrix...")
+        run_correlation_matrix(conn)
         print("Executing board analysis: imbalance ∩-shape test...")
         run_imbalance_shape(conn)
-        print("Executing board analysis: correlation matrix (board + battery)...")
-        run_board_corr(
-            conn, table="pmnz_bat", filename="board_feature_corr.pdf",
-            extra_cols=[
-                ("n_captures_avail", "captures", "Captures"),
-                ("n_checks_avail", "checks", "Checks"),
-                ("self_material", "self_mat", "Self material"),
-                ("material_imbalance", "imbalance", "Imbalance"),
-                ("in_check::INT", "in_check", "In check"),
-                ("COALESCE(prev_move_was_capture, FALSE)::INT", "prev_cap", "Prev capture"),
-            ],
-        )
 
 
 if __name__ == "__main__":

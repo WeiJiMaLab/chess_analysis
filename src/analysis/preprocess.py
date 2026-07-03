@@ -211,9 +211,31 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
     Expects table ``moves`` to exist. Matches the former ``_selected_moves`` /
     ``_selected_moves_nonzero_T`` feature set, with bad games already removed at shard time.
     """
+    # Board features are first-class columns here so downstream analysis just reads
+    # them (uniform with n_possible_moves / clock). WEIGHTED material (P/N/B/R/Q =
+    # 1/3/3/5/9, incl pawns, kings excluded) is a pure regex count on the piece
+    # placement string — no python-chess needed. in_check comes from the moves
+    # table (parser-computed). prev_move_was_capture is a per-game window on the
+    # inc-pawns piece count (a capture strictly lowers it; en-passant included).
+    # n_captures_avail / n_checks_avail (which DO need legal-move enumeration) are
+    # added by add_board_position_features() after this step.
+    def _w(piece):  # weighted count of a piece letter in the placement string
+        return f"len(regexp_extract_all(replace(board_position, '/', ''), '{piece}'))"
+    white_mat = f"(1*{_w('P')} + 3*{_w('N')} + 3*{_w('B')} + 5*{_w('R')} + 9*{_w('Q')})"
+    black_mat = f"(1*{_w('p')} + 3*{_w('n')} + 3*{_w('b')} + 5*{_w('r')} + 9*{_w('q')})"
     conn.execute(
-        """
+        f"""
         CREATE OR REPLACE TABLE processed_moves AS
+        SELECT
+            *,
+            CASE WHEN player_white THEN {white_mat} ELSE {black_mat} END AS self_material,
+            CASE WHEN player_white THEN {black_mat} ELSE {white_mat} END AS opp_material,
+            CASE WHEN player_white THEN {white_mat} - {black_mat}
+                 ELSE {black_mat} - {white_mat} END AS material_imbalance,
+            (n_pieces_on_board_inc_pawns
+             < lag(n_pieces_on_board_inc_pawns) OVER (PARTITION BY gid ORDER BY move_ply))
+                AS prev_move_was_capture
+        FROM (
         SELECT
             gid,
             move_ply,
@@ -223,6 +245,7 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
             opponent_clock_time,
             n_possible_moves,
             move_time,
+            player_in_check AS in_check,
             len(regexp_extract_all(replace(board_position, '/', ''), '[a-zA-Z]')) AS n_pieces_on_board_inc_pawns,
             len(regexp_extract_all(replace(board_position, '/', ''), '[rnbqkRNBQK]')) AS n_pieces_on_board_exc_pawns,
             CASE WHEN player_white THEN len(regexp_extract_all(replace(board_position, '/', ''), '[RNBQK]'))
@@ -240,9 +263,11 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
             SELECT
                 m.gid, m.move_ply, m.board_position, m.player_white,
                 m.player_clock_time, m.opponent_clock_time, m.n_possible_moves,
-                m.move_time, m.castling_rights, m.en_passant_targets, m.halfmove_clock
+                m.move_time, m.player_in_check, m.castling_rights,
+                m.en_passant_targets, m.halfmove_clock
             FROM moves m
         ) AS _m
+        ) AS _feat
         """
     )
     conn.execute(
@@ -254,6 +279,49 @@ def process_moves(conn: duckdb.DuckDBPyConnection) -> None:
     n_e = conn.execute("SELECT count(*) FROM processed_moves").fetchone()[0]
     n_z = conn.execute("SELECT count(*) FROM processed_moves_nonzero").fetchone()[0]
     print(f"✅ processed_moves: {n_e:,} rows | processed_moves_nonzero: {n_z:,} rows")
+
+
+def _fen_captures_checks(fen):
+    """(#legal captures, #legal checks) for one FEN — needs legal-move enumeration."""
+    import chess
+    board = chess.Board(fen)
+    caps = checks = 0
+    for mv in board.legal_moves:
+        if board.is_capture(mv):
+            caps += 1
+        if board.gives_check(mv):
+            checks += 1
+    return caps, checks
+
+
+def add_board_position_features(conn: duckdb.DuckDBPyConnection, workers: int | None = None) -> None:
+    """Add ``n_captures_avail`` / ``n_checks_avail`` to processed_moves[_nonzero].
+
+    These need python-chess legal-move enumeration (unlike material/in_check, which
+    are pure SQL in ``process_moves``). Featurize each DISTINCT fen ONCE and join —
+    computed with preprocess and cached in the DB, so downstream analysis just reads
+    the columns."""
+    import multiprocessing as mp
+    import pandas as pd
+
+    workers = workers or (os.cpu_count() or 8)
+    fens = [r[0] for r in conn.execute("SELECT DISTINCT fen FROM processed_moves").fetchall()]
+    print(f"add_board_position_features: featurizing {len(fens):,} distinct FENs "
+          f"({workers} workers)...", flush=True)
+    with mp.Pool(workers) as pool:
+        res = pool.map(_fen_captures_checks, fens, chunksize=4000)
+    feats = pd.DataFrame([(f, c, k) for f, (c, k) in zip(fens, res)],
+                         columns=["fen", "n_captures_avail", "n_checks_avail"])
+    conn.register("_bpf", feats)
+    conn.execute("CREATE OR REPLACE TABLE board_position_features AS SELECT * FROM _bpf")
+    conn.unregister("_bpf")
+    for tbl in ("processed_moves", "processed_moves_nonzero"):
+        conn.execute(
+            f"CREATE OR REPLACE TABLE {tbl} AS "
+            f"SELECT p.*, f.n_captures_avail, f.n_checks_avail "
+            f"FROM {tbl} p LEFT JOIN board_position_features f USING (fen)"
+        )
+    print("✅ added n_captures_avail / n_checks_avail to processed_moves[_nonzero]")
 
 
 def merge_game_shards(
@@ -309,6 +377,7 @@ def run_process_moves(
         config=duckdb_connect_config(work_dir, threads, memory_limit),
     )
     process_moves(conn)
+    add_board_position_features(conn)
     conn.close()
 
 
