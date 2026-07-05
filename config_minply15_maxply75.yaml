@@ -214,5 +214,7 @@ variants:
     from: gen_trees                 # RE-RUN BeFS tree generation WITH pruning ...
     to: eval                        # ... through the normative model, to eval
     share: [fens_sample]            # reuse the base tree-root FENs (grow pruned trees on the same roots)
-    overrides:                      # <section>.<field> — your BeFS pruning knobs (treegen section)
-      treegen.prune_eps: 0.2
+    overrides:                      # <section>.<field> — BuildTreeConfig's real prune fields
+      treegen.prune_mode: relative       # keep child iff value <= best + prune_epsilon
+      treegen.prune_epsilon: 50.0        # cp; = UNITS["cp"]["frac_good_eps"] (the existing
+                                          # "near-best" epsilon used for n_within_epsilon)

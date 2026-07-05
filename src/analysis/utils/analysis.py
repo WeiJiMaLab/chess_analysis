@@ -236,6 +236,9 @@ class Analyzer:
         Dedicated points use sentinel qbins offset from the interior range.
         """
         col = self.x.column
+        # quantile_cont/abs reject BOOLEAN (e.g. in_check, prev_move_was_capture);
+        # cast to DOUBLE wherever x is used numerically (no-op for numeric columns).
+        col_num = f"{col}::DOUBLE"
         sel = f"{partition_by} as tertile_id, " if partition_by else ""
         part_clause = f"PARTITION BY {partition_by}" if partition_by else ""
 
@@ -268,7 +271,7 @@ class Analyzer:
         thr = self.zero_threshold
         edge_pred = self._edge_predicate()
         # Interior = rows that are neither the near-zero lump nor an edge mass.
-        zero_pred = f"abs({col}) <= {thr}" if has_zero else "FALSE"
+        zero_pred = f"abs({col_num}) <= {thr}" if has_zero else "FALSE"
         interior_pred = f"NOT ({zero_pred}) AND NOT ({edge_pred})"
 
         parts: list[str] = []
@@ -286,7 +289,7 @@ class Analyzer:
             # the number of cut-points the value exceeds (computed with list_filter,
             # which is portable across DuckDB builds that lack width_bucket).
             edges = ", ".join(
-                f"quantile_cont({col}, {i / self.n_bins})" for i in range(1, self.n_bins)
+                f"quantile_cont({col_num}, {i / self.n_bins})" for i in range(1, self.n_bins)
             )
             edges_subq = (
                 f"(SELECT [{edges}] FROM _analyzer_view i2 WHERE {interior_pred}"
@@ -295,7 +298,7 @@ class Analyzer:
             )
             interior = (
                 f"SELECT {sel}{col}, _y_transformed, "
-                f"1 + len(list_filter({edges_subq}, e -> {col} > e)) AS qbin "
+                f"1 + len(list_filter({edges_subq}, e -> {col_num} > e)) AS qbin "
                 f"FROM _analyzer_view i WHERE {interior_pred}"
             )
         else:
@@ -334,9 +337,12 @@ class Analyzer:
 
         # 1. Prepare temporary analysis view.
         # Filter out non-finite (NaN, Inf, -Inf) values to prevent mathematical out-of-range errors in stddev/aggregates.
+        # Cast to DOUBLE before isnan/isinf: they reject BOOLEAN (e.g. in_check,
+        # prev_move_was_capture), and DOUBLE is a safe supertype for every column
+        # kind this pipeline passes here (bool/int/float).
         finite_cond = (
-            f"({self.x.column} IS NOT NULL AND NOT isnan({self.x.column}) AND NOT isinf({self.x.column})) AND "
-            f"({self.y.column} IS NOT NULL AND NOT isnan({self.y.column}) AND NOT isinf({self.y.column}))"
+            f"({self.x.column} IS NOT NULL AND NOT isnan({self.x.column}::DOUBLE) AND NOT isinf({self.x.column}::DOUBLE)) AND "
+            f"({self.y.column} IS NOT NULL AND NOT isnan({self.y.column}::DOUBLE) AND NOT isinf({self.y.column}::DOUBLE))"
         )
         if self.filter_query:
             where_clause = f"WHERE ({self.filter_query}) AND {finite_cond}"
@@ -366,10 +372,12 @@ class Analyzer:
         # ``_bin_assignment_sql`` so the global and per-tertile panels stay identical.
         col = self.x.column
 
+        # avg() rejects BOOLEAN (e.g. in_check, prev_move_was_capture) — cast to
+        # DOUBLE, a no-op for the numeric columns that already worked.
         global_inner = self._bin_assignment_sql(partition_by=None)
         self.quantile_df = self.conn.execute(f"""
             SELECT qbin,
-                   avg({col}) as mean_x,
+                   avg({col}::DOUBLE) as mean_x,
                    avg(_y_transformed) as mean_y,
                    stddev(_y_transformed) as std_y,
                    count(*) as n
@@ -380,7 +388,7 @@ class Analyzer:
         tertile_inner = self._bin_assignment_sql(partition_by="_ply_tertile")
         self.quantile_tertile_df = self.conn.execute(f"""
             SELECT tertile_id, qbin,
-                   avg({col}) as mean_x,
+                   avg({col}::DOUBLE) as mean_x,
                    avg(_y_transformed) as mean_y,
                    stddev(_y_transformed) as std_y,
                    count(*) as n

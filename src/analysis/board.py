@@ -186,9 +186,11 @@ def move_time_summary(conn, table):
 def bivariate_analysis(conn, column: str, name: str, filename: str, table: str,
                        analyzer_opts: dict | None = None, reverse_x: bool = False):
     """RT-vs-covariate 1x2 dashboard: overall (left), colored by ply tertile (right).
+    Bins x by quantile (tie-safe, so a repeated value never straddles a bin edge) —
+    the uniform scheme for every covariate, discrete or continuous.
 
-    ``analyzer_opts`` are forwarded to ``Analyzer`` (e.g. integer binning for the
-    small-integer covariates)."""
+    ``analyzer_opts`` are forwarded to ``Analyzer`` for a caller that needs to
+    override the default binning for a specific covariate."""
     kw = dict(
         db_conn=conn,
         table_name=table,
@@ -312,7 +314,8 @@ def feature_histograms(conn, features, table):
 def run_plot(db: str) -> None:
     """The four board analyses over filtered_moves ⋈ board_features."""
     # Covariates analyzed against RT. (label, kind, display_clip); kind ∈ {cont, disc,
-    # bin} drives bivariate binning + histogram style; clip trims DISPLAY tails only.
+    # bin} drives histogram style only (bivariate binning is quantile for every
+    # covariate); clip trims DISPLAY tails only (feature_histograms; never drops rows).
     features = {
         "n_possible_moves":      ("Legal moves", "disc", (0, 60)),
         "player_clock_time":     ("Player clock (s)", "cont", (0, 600)),
@@ -336,10 +339,9 @@ def run_plot(db: str) -> None:
         move_time_summary(conn, "board_view")
 
         print("board analysis: bivariate RT-vs-covariate dashboards...")
-        for col, (label, kind, _clip) in features.items():
-            opts = {"bin_mode": "integer", "integer_bin_width": 1} if kind in ("disc", "bin") else {}
+        for col, (label, _kind, _clip) in features.items():
             bivariate_analysis(conn, column=col, name=label, filename=f"bivariate_{col}.pdf",
-                               table="board_view", analyzer_opts=opts)
+                               table="board_view")
 
         print("board analysis: correlation matrix...")
         correlation_matrix(conn, features, "board_view")
