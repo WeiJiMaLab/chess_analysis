@@ -13,7 +13,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from analysis.utils.helpers import CONFIG, FONT_SIZE_LABEL, FONT_SIZE_TICKS, MAIN_COLOR, apply_poster_style
+from analysis.utils.helpers import (
+    CONFIG, FONT_SIZE_LABEL, FONT_SIZE_TICKS, LEGEND_FONTSIZE, MAIN_COLOR, apply_poster_style,
+)
 
 
 
@@ -33,40 +35,135 @@ def plot_qbin_stats(
     show_legend=True,
     *,
     ci_legend_label="95% CI",
+    mass_col: str = "is_mass",
 ):
     """Mean and CI band over quantile-bin aggregates (same SEM recipe as ``plot_raw_trend``).
 
     If ``normalized`` is True, x positions are replaced by ranks ``1..K`` scaled to ``(0, 1]``
     for a quantile-rank axis (default x-axis label: "Quantile Rank").
+
+    If ``df`` carries a boolean ``mass_col`` (set by ``Analyzer._is_mass_qbin`` for a
+    zero_inflated/edge_mass covariate's dedicated point-mass row(s), e.g. Gain==0),
+    those rows are pulled OUT of the interior circle-marker/line and drawn as their
+    own ✕ marker + CI whisker — visually flagging a hurdle/mass point as a
+    qualitatively different kind of point, not an interior quantile.
     """
     apply_poster_style()
     df = df.sort_values(x_col).copy()
-    sem = df[std_col] / np.sqrt(df[n_col])
-    ci_y = 1.96 * sem
-    y_mean = df[y_col]
-    y_lower = y_mean - ci_y
-    y_upper = y_mean + ci_y
+    is_mass = (df[mass_col].to_numpy(dtype=bool) if mass_col in df.columns
+               else np.zeros(len(df), dtype=bool))
+
     if normalized:
         x_vals = np.arange(1, len(df) + 1) / len(df)
         if x_label is None:
             x_label = "Quantile Rank"
     else:
-        x_vals = df[x_col]
-    # Shrink markers when there are many points (e.g. per-integer binning) so the
-    # line doesn't read as a string of big dots; keep them bold on sparse plots.
-    _ms = 12 if len(x_vals) <= 15 else (7 if len(x_vals) <= 30 else 5)
-    ax.plot(x_vals, y_mean, marker='o', color=color, lw=3, markersize=_ms, label=label)
+        x_vals = df[x_col].to_numpy()
+
+    def _ci(mask):
+        sub = df[mask]
+        return 1.96 * sub[std_col].to_numpy() / np.sqrt(sub[n_col].to_numpy())
+
+    interior, mass = ~is_mass, is_mass
+    y_mean = df.loc[interior, y_col]
+    ci_y = _ci(interior)
+    # Fixed marker/line weight: every quantile-binned trend should read with the same
+    # visual weight regardless of how many bins THIS covariate happens to produce
+    # (a boolean collapses to 2 bins; a continuous covariate keeps ~10).
+    ax.plot(x_vals[interior], y_mean, marker='o', color=color, lw=3, markersize=9, label=label)
     fb_kwargs = {"color": color, "alpha": 0.2}
     if ci_legend_label is not None:
         fb_kwargs["label"] = ci_legend_label
-    ax.fill_between(x_vals, y_lower, y_upper, **fb_kwargs)
+    ax.fill_between(x_vals[interior], y_mean - ci_y, y_mean + ci_y, **fb_kwargs)
+
+    if mass.any():
+        ax.errorbar(x_vals[mass], df.loc[mass, y_col], yerr=_ci(mass),
+                    marker='x', ms=14, mew=3, linestyle='none',
+                    color=color, ecolor=color, elinewidth=2.2, capsize=5, zorder=5)
+
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
     if show_legend:
-        ax.legend(fontsize=FONT_SIZE_TICKS)
+        ax.legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
+                  bbox_to_anchor=(0.5, -0.16), frameon=False)
 
+
+
+def _annotate_n(fig, n: int) -> None:
+    """``n = {count:,}`` above the top-left of the figure — the only headline text a
+    dashboard carries (house style omits titles/suptitles uniformly; see
+    ``outputs/reports/reference.md`` "Plot standards"). Sized to read as part of
+    the figure (close to the legend's font size), not a footnote. Placed just
+    ABOVE the axes area (y > 1 in figure fraction) rather than at y=0.99 inside
+    it — the first panel's own top y-tick label (e.g. a histogram's density axis)
+    sits right there, and with ``constrained_layout``/``tight_layout`` neither
+    knows to leave this text room, so anything at y<=1 collides with it.
+    ``bbox_inches="tight"`` on save still expands the canvas to include it."""
+    fig.text(0.01, 1.03, f"n = {n:,}", fontsize=LEGEND_FONTSIZE, ha="left", va="bottom")
+
+
+def _draw_feature_histogram(
+    conn, table, col, kind, clip, ax, *,
+    name: str | None = None,
+    zero_inflated: bool = False,
+    zero_threshold: float = 0.0,
+    extra_where: str | None = None,
+    n_hist_bins: int = 50,
+):
+    """Marginal distribution of one covariate (SQL-aggregated), shared by
+    board.py's ``bivariate_analysis``/``feature_histograms`` and engine.py's
+    per-signal tree dashboards. ``kind`` ∈ {"cont", "disc", "bin"}:
+      disc/bin -> one bar per distinct value (bin -> False/True tick labels).
+      cont     -> ``n_hist_bins`` fixed-width bins over ``clip`` (auto-derived
+                  from the 0.5th/99.5th percentile when ``clip`` is None — the
+                  engine tree signals vary in scale by value unit, pwin vs cp).
+    ``zero_inflated``: for a ``cont`` covariate with a point mass at/near
+    ``zero_threshold`` (e.g. Gain==0, ~55% of rows), that mass is split OUT of
+    the continuous binning and drawn as its own isolated bar (solid + black
+    edge) rather than being smeared across a couple of bins next to it —
+    the histogram-panel analogue of the ✕-marker split on the trend panels.
+    """
+    extra = f" AND ({extra_where})" if extra_where else ""
+    where = (f"WHERE {col} BETWEEN {clip[0]} AND {clip[1]}{extra}" if clip
+              else f"WHERE {col} IS NOT NULL{extra}")
+    if kind in ("disc", "bin"):
+        g = conn.execute(
+            f"SELECT {col}::DOUBLE AS value, count(*) AS n FROM {table} {where} GROUP BY 1 ORDER BY 1"
+        ).df()
+        ax.bar(g.value, g.n / g.n.sum(), width=(0.4 if kind == "bin" else 0.9),
+               color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
+        if kind == "bin":
+            ax.set_xticks([0, 1]); ax.set_xticklabels(["False", "True"])
+    else:
+        lo, hi = clip if clip else conn.execute(
+            f"SELECT quantile_cont({col}, 0.005), quantile_cont({col}, 0.995) FROM {table} {where}"
+        ).fetchone()
+        width = (hi - lo) / n_hist_bins
+        if zero_inflated:
+            zero_pred = f"abs({col}) <= {zero_threshold}"
+            n_total = conn.execute(f"SELECT count(*) FROM {table} {where}").fetchone()[0]
+            n_zero = conn.execute(f"SELECT count(*) FROM {table} {where} AND {zero_pred}").fetchone()[0]
+            g = conn.execute(
+                f"SELECT least({n_hist_bins - 1}, greatest(0, floor(({col} - {lo}) / {width})))::INT AS b, "
+                f"count(*) AS n FROM {table} {where} AND NOT ({zero_pred}) GROUP BY 1 ORDER BY 1"
+            ).df()
+            if n_total:
+                ax.bar(lo + (g.b + 0.5) * width, g.n / n_total / width, width=width,
+                       color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
+                ax.bar([zero_threshold], [n_zero / n_total / width], width=width,
+                       color=MAIN_COLOR, alpha=1.0, edgecolor="black", linewidth=2.0, zorder=3)
+        else:
+            g = conn.execute(
+                f"SELECT least({n_hist_bins - 1}, floor(({col} - {lo}) / {width}))::INT AS b, count(*) AS n "
+                f"FROM {table} {where} GROUP BY 1 ORDER BY 1"
+            ).df()
+            ax.bar(lo + (g.b + 0.5) * width, g.n / g.n.sum() / width, width=width,
+                   color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
+    ax.set(ylabel="Density")
+    if name:
+        ax.set_xlabel(name)
 
 
 def plot_histogram_from_bins(
@@ -91,7 +188,7 @@ def plot_histogram_from_bins(
     if median is not None:
         ax.axvline(median, color="dimgray", linestyle=":", lw=2.5, label=f"Median = {median:.3f}")
     if mean is not None or median is not None:
-        ax.legend(fontsize=FONT_SIZE_TICKS)
+        ax.legend(fontsize=LEGEND_FONTSIZE)
     if x_label:
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:

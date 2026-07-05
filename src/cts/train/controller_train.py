@@ -126,6 +126,8 @@ class ControllerTrainConfig(BaseModel):
     timeout_value: float = -1.0
     time_mode: str = "power_law"
     samples_per_bucket: int = 2
+    fixed_budget: Optional[int] = None  # if set, every episode gets this one starting budget
+                                         # (must match the packing-time value — see _oracle_config)
     scramble_min_time: int = 1
     scramble_max_time: int = 3
     medium_small_min_time: int = 4
@@ -1118,7 +1120,27 @@ def _feature_schema() -> NodeFeatureSchema:
 
 
 def _oracle_config(config: ControllerTrainConfig) -> BudgetedOracleConfig:
-    """Build a ``BudgetedOracleConfig`` from the parsed CLI arguments."""
+    """Build a ``BudgetedOracleConfig`` from the parsed CLI arguments.
+
+    ``fixed_budget`` collapses the usual 5-bucket stratification to a single bucket — must
+    stay byte-identical to the packing-time choice (`cts.data.preprocess_mc.pack._oracle_config`)
+    or `_validate_packed_manifest_oracle` below will reject the packed manifest.
+    """
+    if config.fixed_budget is not None:
+        return BudgetedOracleConfig(
+            maintenance_scale=config.maintenance_scale,
+            maintenance_ref_nodes=config.maintenance_ref_nodes,
+            maintenance_exponent=config.maintenance_exponent,
+            time_lambda=config.time_lambda,
+            time_p=config.time_p,
+            time_tau=config.time_tau,
+            time_delta=config.time_delta,
+            timeout_value=config.timeout_value,
+            time_mode=config.time_mode,
+            budget_buckets=(BudgetBucket("fixed", config.fixed_budget, config.fixed_budget),),
+            samples_per_bucket=1,
+            seed=config.seed,
+        )
     return BudgetedOracleConfig(
         maintenance_scale=config.maintenance_scale,
         maintenance_ref_nodes=config.maintenance_ref_nodes,

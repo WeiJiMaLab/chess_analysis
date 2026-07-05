@@ -28,14 +28,14 @@ from analysis.utils import Variable, Analyzer
 from analysis.utils.helpers import (
     apply_poster_style,
     db_connection,
-    FONT_SIZE_LABEL,
-    FONT_SIZE_TICKS,
     partial_spearman,
     CONFIG,
 )
 from analysis.utils.plots import (
     highlight_corr_row,
     save_figure,
+    _annotate_n,
+    _draw_feature_histogram,
 )
 
 # Imported from newly extracted modular utilities
@@ -120,28 +120,38 @@ def _spearman_partials(df: pd.DataFrame, x: str, y: str, controls: list[str]) ->
     print(f"  partial ρ(H(π), {y} | all)        = {rho_all:+.4f}")
 
 
-def save_tree_dashboard(analyzer_ply: Analyzer, out_dir: str, base_name: str) -> None:
-    """1x2 engine dashboard: overall, by ply tertile.
-
-    ``analyzer_ply`` supplies the base panel + ply segmentation."""
+def save_tree_dashboard(
+    analyzer_ply: Analyzer, out_dir: str, base_name: str, *,
+    hist_column: str | None = None, hist_label: str | None = None,
+    hist_kind: str = "cont", hist_clip=None, hist_where: str | None = None,
+) -> None:
+    """1x3 engine dashboard: marginal histogram (left), overall trend (middle), by
+    ply tertile (right) — the same layout as board.py's ``bivariate_analysis``
+    (house plot standard, ``outputs/reports/reference.md``). ``analyzer_ply``
+    supplies the trend panels + ply segmentation; the histogram reads
+    ``hist_column`` (default: ``analyzer_ply.x.column`` — override for a caller
+    like the MQ dashboard, whose Analyzer has RT on x and the signal on y).
+    ``analyzer_ply.zero_inflated``/``zero_threshold`` drive the histogram's
+    isolated zero-mass bar too, so it stays in sync with the trend panels'
+    ✕-marker mass point."""
     apply_poster_style()
-    fig, axes = plt.subplots(1, 2, figsize=(30, 13.72))
-    analyzer_ply.plot_quantile_bins(axes[0])                    # overall
-    analyzer_ply.plot_quantile_bins_tertile_segmented(axes[1])  # color: ply
-    for ax, t in zip(axes, ("overall", "by ply")):
-        ax.set_title(t, fontsize=FONT_SIZE_TICKS)
-    # wider figure + extra horizontal gap so the two panels' y-labels/legends
-    # don't crowd each other.
-    fig.subplots_adjust(top=0.80, wspace=0.28)
-    suptitle = fig.suptitle(f"{analyzer_ply.title}\nn = {analyzer_ply.n_moves:,} moves",
-                            fontsize=FONT_SIZE_LABEL + 10, y=1.0)
-    extra = [suptitle] + [ax.get_legend() for ax in axes if ax.get_legend() is not None]
+    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(42, 13), constrained_layout=True)
+    _draw_feature_histogram(
+        analyzer_ply.conn, analyzer_ply.table,
+        hist_column or analyzer_ply.x.column, hist_kind, hist_clip, ax0,
+        name=hist_label or analyzer_ply.x.label,
+        zero_inflated=analyzer_ply.zero_inflated, zero_threshold=analyzer_ply.zero_threshold,
+        extra_where=hist_where,
+    )
+    analyzer_ply.plot_quantile_bins(ax1)                    # overall
+    analyzer_ply.plot_quantile_bins_tertile_segmented(ax2)  # color: ply
+    _annotate_n(fig, analyzer_ply.n_moves)
 
     out_path_pdf = os.path.join(out_dir, f"{base_name}.pdf")
     out_path_png = os.path.join(out_dir, f"{base_name}.png")
-    fig.savefig(out_path_pdf, dpi=300, bbox_inches="tight", bbox_extra_artists=extra, pad_inches=0.3)
-    fig.savefig(out_path_png, dpi=300, bbox_inches="tight", bbox_extra_artists=extra, pad_inches=0.3)
-    plt.close()
+    fig.savefig(out_path_pdf, dpi=300, bbox_inches="tight", pad_inches=0.3)
+    fig.savefig(out_path_png, dpi=300, bbox_inches="tight", pad_inches=0.3)
+    plt.close(fig)
     print(f"Saved figures: {out_path_pdf} and {out_path_png}")
 
 
@@ -188,9 +198,8 @@ def plot_engine_correlation_matrix(conn: duckdb.DuckDBPyConnection, out_path: st
         cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label(mlabel, fontsize=18)
         cbar.ax.tick_params(labelsize=16)
-        ax.set_title(f"{mlabel} — SF-1 BeFS metrics, unit={unit} (n = {len(df):,})",
-                     fontsize=20, pad=12)
         plt.tight_layout()
+        _annotate_n(fig, len(df))
         fig.savefig(f"{base}{suffix}.pdf", dpi=150, bbox_inches="tight")
         fig.savefig(f"{base}{suffix}.png", dpi=150, bbox_inches="tight")
         plt.close()
@@ -376,14 +385,24 @@ def tree_values_pipeline(
         # Value-unit thresholds scale with the unit (pwin ↔ cp, ~×100 near balance).
         _zero_thr = {"pwin": 0.05, "cp": 5.0}[unit]
         _u = f" ({unit})"
+        # hist_kind/hist_clip drive ``_draw_feature_histogram``'s left panel (the
+        # shared board.py/engine.py histogram helper): "disc" -> one bar per integer
+        # value, clipped to the same tail cut as the trend panel's integer binning;
+        # "cont" -> a 50-bin continuous histogram, auto-ranged (0.5th/99.5th pctile)
+        # since the pwin/cp value units have very different scales; zero_inflated
+        # continuous signals additionally split their zero mass into its own
+        # isolated bar (consistent with the ✕-marker mass point on the trend panels).
         tree_signals = {
             "gss": {"column": "gss", "name": "Greedy stop step" + _u, "filter_query": "move_time > 0",
-                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
+                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35,
+                    "hist_kind": "disc", "hist_clip": (0, 35)},
             "gain": {"column": "voc", "name": "Gain (SF-1)" + _u, "filter_query": "move_time > 0",
-                     "zero_inflated": True, "zero_threshold": 0.0},
+                     "zero_inflated": True, "zero_threshold": 0.0,
+                     "hist_kind": "cont", "hist_clip": None},
             "action_gap": {"column": "action_gap", "name": "Action Gap (SF-1)" + _u,
                            "filter_query": "move_time > 0",
-                           "zero_inflated": True, "zero_threshold": _zero_thr},
+                           "zero_inflated": True, "zero_threshold": _zero_thr,
+                           "hist_kind": "cont", "hist_clip": None},
             # COUNTS, not fractions (no legal-move denominator confound). n_within_epsilon
             # is a right-skewed count with min 1 (best move is always within ε of itself),
             # binned per-integer with a merged tail. n_acceptable is zero-inflated (~47% of
@@ -392,13 +411,16 @@ def tree_values_pipeline(
             # tie-safe binned.
             "n_good": {"column": "n_within_epsilon", "name": "n within ε (SF-1)" + _u,
                        "filter_query": "move_time > 0 AND n_within_epsilon IS NOT NULL",
-                       "bin_mode": "integer", "integer_bin_width": 3, "integer_tail_cut": 30},
+                       "bin_mode": "integer", "integer_bin_width": 3, "integer_tail_cut": 30,
+                       "hist_kind": "disc", "hist_clip": (0, 30)},
             "n_acceptable": {"column": "n_acceptable", "name": "n acceptable (SF-1)" + _u,
                              "filter_query": "move_time > 0 AND n_acceptable IS NOT NULL",
-                             "zero_inflated": True, "zero_threshold": 0.0},
+                             "zero_inflated": True, "zero_threshold": 0.0,
+                             "hist_kind": "cont", "hist_clip": None},
             "oss": {"column": "oss", "name": "Optimal stop step (SF-1)" + _u,
                     "filter_query": "move_time > 0 AND oss IS NOT NULL",
-                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35},
+                    "bin_mode": "integer", "integer_bin_width": 5, "integer_tail_cut": 35,
+                    "hist_kind": "disc", "hist_clip": (0, 35)},
         }
 
         def _make_analyzer(table, x_var, y_var, title, **opts):
@@ -422,11 +444,16 @@ def tree_values_pipeline(
                 integer_bin_width=cfg.get("integer_bin_width", 1),
                 integer_tail_cut=cfg.get("integer_tail_cut"),
             )
-            save_tree_dashboard(a_ply, out_dir, name)
+            save_tree_dashboard(a_ply, out_dir, name,
+                                hist_kind=cfg["hist_kind"], hist_clip=cfg["hist_clip"],
+                                hist_where=cfg["filter_query"])
 
         # Axes are intentionally inverted vs the other signal dashboards: RT on X,
         # MQ on Y. This panel asks "do longer thinks yield better moves?", so RT is
         # the predictor and MQ the outcome — not signal-on-X-vs-RT like the rest.
+        # The histogram panel still shows MQ's own marginal (not RT's, already
+        # covered by move_time_summary), so hist_column/hist_label override the
+        # Analyzer's (inverted) x_var.
         print("Executing engine tree analysis: mq...")
         mq_ply = _make_analyzer(
             "mq_rt",
@@ -435,7 +462,9 @@ def tree_values_pipeline(
             f"MQ (SF-1) ({unit}) vs. log(RT)",
             filter_query="move_time > 0", min_bin_count=300, n_bins=10,
         )
-        save_tree_dashboard(mq_ply, out_dir, "mq")
+        save_tree_dashboard(mq_ply, out_dir, "mq",
+                            hist_column="mq", hist_label=f"MQ (SF-1) ({unit})",
+                            hist_kind="cont", hist_clip=None, hist_where="move_time > 0")
 
         print("Executing engine tree analysis: correlation_matrix...")
         plot_engine_correlation_matrix(conn, os.path.join(out_dir, "correlation_matrix.pdf"), unit=unit)

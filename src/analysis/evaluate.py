@@ -1,8 +1,8 @@
-"""Meta-controller assessment plots (R-EVALUATE) — mechanism behind ``outputs/reports/evaluate.md``.
+"""Meta-controller assessment plots (R-EVALUATE) — mechanism behind ``outputs/reports/normative.md``.
 
 Does the learned ``z_t`` halting head beat hand-crafted tree-stats and a fixed stop, and in WHICH
-cost regime? Three figures answer it (:func:`plot_regret_effort_frontier`, :func:`plot_r_decodability`,
-:func:`plot_tier_separation`).
+cost regime? Four figures answer it (:func:`plot_regret_effort_frontier`, :func:`plot_r_decodability`,
+:func:`plot_delta_regret_vs_zt` — the latter renders both the lambda- and maintenance-sweep panels).
 
 The halt policies are stop-controller modules, fit on the train split and scored per-episode on eval:
   * Frac*   — one parameter ``k`` (fixed stop step), fit by minimizing fit-split regret
@@ -19,7 +19,7 @@ are recomputed for any cost config without repacking.
 
     python -m analysis.evaluate --which all \
         --packed-root <mc_packed> --cache <validation_cache.pt> \
-        --out-dir outputs/figures/minply15_maxply75/mchalt_diagnosis
+        --out-dir outputs/figures/minply15_maxply75/normative
 
 ``_load_split_episodes`` / ``_oracle_config`` / ``_load_materialized_cache_unchecked`` are the shared
 data-loaders (also imported by ``cts.analysis.zt_probe`` and ``cts.train.pg_controller_train``).
@@ -48,6 +48,7 @@ from cts.stats import bootstrap_ci
 from cts.train.controller_train import _load_materialized_cache_unchecked
 from cts.train.pg_controller_train import fit_readout_pg
 from analysis.utils.plots import save_pdf_png
+from analysis.utils.helpers import MAIN_COLOR
 
 
 # ===========================================================================
@@ -112,8 +113,10 @@ def _oracle_config(packed_root: Path) -> BudgetedOracleConfig:
 # Style (bundled Helvetica Neue, fonts/ at repo root — same toolkit as monkey_4iar)
 # ===========================================================================
 _INK, _MUTED, _GRID = "#2C3E50", "#7A8894", "#E3E7EB"
-_C = {"front": "#556270", "best": "#E4A11B", "stats": "#12A19A", "zt": "#6C3FA0",
-      "always": "#C0392B", "never": "#8B97A3", "steps": "#B0B8C0"}
+_C = {"front": "#556270", "best": "#E4A11B", "stats": "#12A19A", "zt": "#3F4DA0",
+      "always": "#C0392B", "never": "#8B97A3", "steps": "#B0B8C0",
+      "frac": "#F2A9A6",  # pastel red — Frac* (fixed-stop) point, distinct from the deep-red AlwaysStop endpoint
+      "mono": MAIN_COLOR}  # board/engine's indigo-blue — monochrome base for the decodability bars
 _HELVETICA_FAMILY: str | None = None
 
 
@@ -134,7 +137,7 @@ def _rcparams() -> None:
     plt.rcParams.update({
         "font.family": "sans-serif", "font.sans-serif": sans, "svg.fonttype": "path",
         "font.size": 12, "text.color": _INK, "axes.edgecolor": "#B7C0C9",
-        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.spines.top": False, "axes.spines.right": False, "axes.axisbelow": True,
         "figure.facecolor": "white", "axes.facecolor": "white",
     })
 
@@ -260,20 +263,34 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
 # ===========================================================================
 # Plots
 # ===========================================================================
-def _frontier_panel(ax, fr_x, fr, points, *, ends, xlim, ylim, legend=False):
-    """Draw the fixed-stop frontier line, its AlwaysStop/NeverStop endpoints (``ends``), and the learned
-    controllers (``points`` = (x, mean, lo, hi, color, marker, size, label)) with CI error bars."""
-    ax.plot(fr_x, fr, color=_C["front"], lw=2, label="fixed-stop frontier" if legend else None)
-    for x, y, color in ends:
-        ax.scatter([x], [y], s=60, color=color, zorder=5, ec="white")
-    for x, y, lo, hi, color, marker, size, lbl in points:
-        ax.errorbar([x], [y], yerr=[[y - lo], [hi - y]], fmt=marker, ms=size, color=color, ecolor=color,
-                    elinewidth=1.6, capsize=3.5, mec="white", mew=1.2, zorder=6, label=lbl if legend else None)
+_PT_SIZE, _PT_ALPHA = 4, 0.88  # one uniform marker size/alpha for every point series — color is the only encoding
+
+
+def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False):
+    """Draw the fixed-stop frontier line and every point (Frac*/Stats/z_t/AlwaysStop/AlwaysContinue) —
+    all the SAME marker/size, differing only by color, each with 95% CI error bars in x AND y."""
+    ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label="fixed-stop frontier" if label_line else None)
+    for p in points:
+        ax.errorbar([p["x"]], [p["y"]], xerr=[[p["x"] - p["xlo"]], [p["xhi"] - p["x"]]],
+                    yerr=[[p["y"] - p["lo"]], [p["hi"] - p["y"]]], fmt="o", ms=_PT_SIZE, color=p["color"],
+                    ecolor=p["color"], elinewidth=1.5, capsize=3.5, mec="none", alpha=_PT_ALPHA,
+                    zorder=p.get("zorder", 6), label=p["label"] if label_line else None)
     ax.set_xlim(*xlim); ax.set_ylim(*ylim)
-    ax.set_xlabel("average stop step"); ax.set_ylabel("mean hard-greedy regret")
-    ax.grid(axis="y", color=_GRID, lw=1)
-    if legend:
-        ax.legend(fontsize=10, loc="upper right", frameon=False)
+    ax.set_xlabel("average stop step"); ax.set_ylabel("Regret")
+    ax.grid(axis="both", color=_GRID, lw=1)
+
+
+def _draw_zoom_indicator(fig, ax_from, ax_to, xlim, ylim):
+    """Box the (xlim, ylim) region on ``ax_from`` that ``ax_to`` zooms into, connected by two lines —
+    the classic 'this panel is a zoom of that box' indicator, drawn manually since ``ax_from``/``ax_to``
+    are independent side-by-side subplots rather than a true embedded inset."""
+    from matplotlib.patches import Rectangle, ConnectionPatch
+    x0, x1 = xlim; y0, y1 = ylim
+    ax_from.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=_INK, lw=1.3, alpha=0.5, zorder=8))
+    for corner_from, corner_to in [((x1, y1), (0, 1)), ((x1, y0), (0, 0))]:
+        fig.add_artist(ConnectionPatch(xyA=corner_from, coordsA=ax_from.transData,
+                                       xyB=corner_to, coordsB=ax_to.transAxes,
+                                       color=_MUTED, lw=0.9, ls=(0, (6, 4)), alpha=0.7, zorder=1))
 
 
 def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
@@ -281,8 +298,9 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
                                 maintenance_scale: float = 0.0, max_episodes: int = 15000, seed: int = 0):
     """(1) The fixed-stop frontier (search effort vs regret) with the Stats-/Zt-Controllers as points.
 
-    A learned point BELOW the frontier beats every fixed stop at that effort. Left panel = full range;
-    right panel = zoom on the controllers with 95% CI error bars.
+    A learned point BELOW the frontier beats every fixed stop at that effort. Left panel = full range,
+    with a boxed+dotted-line indicator of the region the right panel zooms into; right panel = zoom on
+    the controllers, each point with 95% CI error bars in both x (average stop step) and y (regret).
     """
     config = replace(_oracle_config(packed_root), time_mode=time_mode, time_lambda=time_lambda,
                      maintenance_scale=maintenance_scale)
@@ -296,26 +314,36 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
     fr_x = np.array([np.mean([min(k, len(c) - 1) for c in ev]) for k in range(kmax)])
     kf = min(ctrl["k_frac"], kmax - 1)
 
-    def controller_point(stops, color, marker, size, lbl):
-        m, lo, hi = _mean_ci(_regret_at(ev, stops))
-        return (float(np.mean(stops)), m, lo, hi, color, marker, size, lbl)
-    fm, flo, fhi = _mean_ci(_regret_at(ev, ctrl["fraction"]))
-    points = [(fr_x[kf], fm, flo, fhi, _C["best"], "D", 8, "Frac* (fixed stop)"),
-              controller_point(ctrl["stats"], _C["stats"], "o", 10, "Stats-Controller"),
-              controller_point(ctrl["zt"], _C["zt"], "o", 12, "$z_t$-Controller")]
-    ends = [(fr_x[0], fr[0], _C["always"]), (fr_x[-1], fr[-1], _C["never"])]
+    def point(stops, color, lbl, **kw):
+        xs = np.array([min(int(s), len(c) - 1) for s, c in zip(stops, ev)], dtype=float)
+        xm, xlo, xhi = _mean_ci(xs)
+        ym, ylo, yhi = _mean_ci(_regret_at(ev, stops))
+        return dict(x=xm, xlo=xlo, xhi=xhi, y=ym, lo=ylo, hi=yhi, color=color, label=lbl, **kw)
+
+    controllers = [point(ctrl["fraction"], _C["frac"], "Frac* (fixed stop)", zorder=7),
+                  point(ctrl["stats"], _C["stats"], "Stats-Controller"),
+                  point(ctrl["zt"], _C["zt"], "$z_t$-Controller")]
+    ends = [point(np.zeros(len(ev_idx), dtype=int), _C["always"], "Always Stop (k=0)"),
+           point(np.full(len(ev_idx), kmax - 1, dtype=int), _C["never"], "Always Continue (k=max)")]
+    all_points = controllers + ends
 
     _rcparams()
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 5.4), gridspec_kw={"width_ratios": [1, 1.1]})
-    ylo, yhi = min(p[2] for p in points) - 25, max(p[3] for p in points) + 30
-    _frontier_panel(axL, fr_x, fr, points, ends=ends, xlim=(-1, fr_x[-1] + 1),
-                    ylim=(min(0, ylo - 10), max(fr[0], fr[-1]) * 1.05))
-    _frontier_panel(axR, fr_x, fr, points, ends=[], legend=True, ylim=(ylo, yhi),
-                    xlim=(min(p[0] for p in points) - 8, max(p[0] for p in points) + 10))
-    save_pdf_png(fig, str(out_dir), "frontier", dpi=200)
+    ylo, yhi = min(p["lo"] for p in controllers) - 25, max(p["hi"] for p in controllers) + 30
+    zoom_xlim = (max(0, min(p["x"] for p in controllers) - 8), max(p["x"] for p in controllers) + 10)
+    zoom_ylim = (ylo, yhi)
+    full_ylim = (min(0, min(p["lo"] for p in all_points) - 20), max(p["hi"] for p in all_points) * 1.05)
+    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim)
+    _frontier_panel(axR, fr_x, fr, all_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True)
+    _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
+    handles, labels = axR.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.06), ncol=3,
+              fontsize=10, frameon=False)
+    save_pdf_png(fig, str(out_dir), "frontier", dpi=200, bbox_extra_artists=(fig.legends[0],))
+    fm, fhi_ = controllers[0]["y"], controllers[0]["hi"]
     d_zs = bootstrap_ci(lambda d: float(d.mean()), _regret_at(ev, ctrl["zt"]) - _regret_at(ev, ctrl["stats"]), n_boot=2000)
     print(f"[assess] frontier {time_mode} λ={time_lambda} m={maintenance_scale}: Frac*(k={kf})={fm:.1f} "
-          f"Stats={points[1][1]:.1f} z_t={points[2][1]:.1f}  paired z_t-Stats={d_zs}", flush=True)
+          f"Stats={controllers[1]['y']:.1f} z_t={controllers[2]['y']:.1f}  paired z_t-Stats={d_zs}", flush=True)
     return {"k_frac": kf, "paired_zt_minus_stats": d_zs}
 
 
@@ -353,64 +381,100 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
     shuf_r2 = _linear_r2(Xs[is_tr], R[is_tr], Xs[is_te], R[is_te])
 
     _rcparams()
-    colors = {"steps": _C["steps"], "stats": _C["stats"], "z_t": _C["zt"], "z_t+stats": _C["best"]}
-    fig, ax = plt.subplots(figsize=(8.6, 5.2))
-    x, w = np.arange(len(rows)), 0.38
-    ax.bar(x - w / 2, [r[1] for r in rows], w, color=[colors[r[0]] for r in rows], alpha=0.55, edgecolor="white", label="linear (Ridge)")
-    ax.bar(x + w / 2, [r[2] for r in rows], w, color=[colors[r[0]] for r in rows], edgecolor="white", label="MLP (2×64)")
+    mono = _C["mono"]
+    fig, ax = plt.subplots(figsize=(7.4, 4.4))
+    y, h = np.arange(len(rows)), 0.30
+    ax.barh(y - h / 2, [r[1] for r in rows], h, color=mono, alpha=0.5, hatch="///",
+           edgecolor=_INK, linewidth=0.3, label="linear (Ridge)")
+    ax.barh(y + h / 2, [r[2] for r in rows], h, color=mono, edgecolor="none", linewidth=0, label="MLP (2×64)")
     for i, r in enumerate(rows):
-        ax.text(i + w / 2, r[2] + 0.006, f"{r[2]:.2f}", ha="center", fontsize=10, fontweight="bold", color=_INK)
-    ax.axhline(shuf_r2, color=_C["always"], ls="--", lw=1.3, label=f"shuffle floor ({shuf_r2:+.2f})")
-    ax.axhline(0, color=_MUTED, lw=0.8)
-    ax.set_xticks(x); ax.set_xticklabels(["steps\n(C-step)", "+ stats\n(C-maint)", "+ $z_t$\n(R via GNN)", "$z_t$ + stats"], fontsize=10.5)
-    ax.set_ylabel("held-out $R^2$ — predicting R(t) = value of continuing")
-    ax.grid(axis="y", color=_GRID, lw=1); ax.legend(fontsize=10, loc="upper left")
+        ax.text(r[2] + 0.006, i + h / 2, f"{r[2]:.2f}", va="center", fontsize=10, fontweight="bold", color=_INK)
+    ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"shuffle floor ({shuf_r2:+.2f})")
+    ax.axvline(0, color=_MUTED, lw=0.8)
+    ax.set_yticks(y); ax.set_yticklabels(["steps\n(C-step)", "+ stats\n(C-maint)", "+ $z_t$\n(R via GNN)", "$z_t$ + stats"], fontsize=10.5)
+    ax.invert_yaxis()
+    ax.set_xlabel("held-out $R^2$ — predicting R(t) = value of continuing")
+    ax.grid(axis="x", color=_GRID, lw=1)
+    ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False)
     save_pdf_png(fig, str(out_dir), "decodability", dpi=200)
     out = {r[0]: {"linear": r[1], "mlp": r[2]} for r in rows}
     print(f"[assess] R-decodability  " + "  ".join(f"{k}={v['mlp']:.3f}" for k, v in out.items()), flush=True)
     return out
 
 
-def plot_tier_separation(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
-                         d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
-                         regimes: list[tuple[str, str, float, float]] | None = None):
-    """(3) The controllers relative to the fixed (Frac*) baseline across cost regimes: the two tier edges
-    with paired 95% CIs — ``Stats - Frac*`` (C-maint) and ``z_t - Stats`` (R). A point whose CI stays
-    below 0 significantly beats the tier below it. Power-law is degenerate; constant-cost surfaces R;
-    a small per-node cost (maint≈0.05) surfaces the weaker C-maint edge."""
-    regimes = regimes or [("linear λ=5", "linear", 5.0, 0.0), ("linear λ=10", "linear", 10.0, 0.0),
-                          ("λ=5, maint 0.05", "linear", 5.0, 0.05), ("λ=5, maint 0.3", "linear", 5.0, 0.3),
-                          ("powerlaw (shipped)", "power_law", 18.537, 0.0)]
+_DELTA_CANDIDATES = [("frac", _C["frac"], "Frac*"), ("stats", _C["stats"], "Stats-Controller"),
+                    ("always_stop", _C["always"], "Always Stop"), ("always_continue", _C["never"], "Always Continue")]
+
+
+def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, d_embed, seed):
+    """Per-episode paired delta = candidate_regret − z_t_regret for {frac, stats, always_stop,
+    always_continue} under one cost regime (mode/lam/mnt). Positive = z_t beats the candidate."""
+    curves = _return_curves(episodes, replace(base_cfg, time_mode=mode, time_lambda=lam, maintenance_scale=mnt))
+    ev = [curves[i] for i in ev_idx]
+    ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
+    kmax = max(len(c) for c in ev)
+    zt_regret = _regret_at(ev, ctrl["zt"])
+    stops = {"frac": ctrl["fraction"], "stats": ctrl["stats"],
+            "always_stop": np.zeros(len(ev_idx), dtype=int),
+            "always_continue": np.full(len(ev_idx), kmax - 1, dtype=int)}
+    return {name: _regret_at(ev, s) - zt_regret for name, s in stops.items()}
+
+
+def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDIDATES):
+    """Horizontal dot-and-whisker: one row per regime, one 95% CI point per candidate (offset within
+    the row) — mean Δ regret vs z_t, same marker/size convention as the frontier plot's points."""
+    n, m = len(regime_labels), len(candidates)
+    step = 0.68 / m
+    for ci, (key, color, lbl) in enumerate(candidates):
+        positions = np.arange(n) + (ci - (m - 1) / 2) * step
+        data = [deltas_by_regime[i][key] for i in range(n)]
+        means, los, his = zip(*(_mean_ci(d) for d in data))
+        xerr = [[me - lo for me, lo in zip(means, los)], [hi - me for me, hi in zip(means, his)]]
+        ax.errorbar(means, positions, xerr=xerr, fmt="o", ms=_PT_SIZE, color=color, ecolor=color,
+                    elinewidth=1.6, capsize=3.5, mec="none", alpha=_PT_ALPHA, zorder=6, label=lbl)
+    ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
+    ax.set_yticks(np.arange(n)); ax.set_yticklabels(regime_labels, fontsize=10)
+    ax.invert_yaxis()
+    ax.set_xlabel("Δ regret  (model − $z_t$)", fontsize=11)
+    ax.grid(axis="both", color=_GRID, lw=1)
+    ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=len(candidates), frameon=False)
+
+
+def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                            d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
+                            lambda_grid: tuple[float, ...] = (5.0, 10.0, 40.0), maint_lambda: float = 5.0,
+                            maint_grid: tuple[float, ...] = (0.0, 0.05, 0.10, 0.30, 1.0)):
+    """(3) Δ mean regret (model − $z_t$) for {Frac*, Stats-Controller, AlwaysStop, AlwaysContinue} —
+    z_t is always the baseline, so positive = z_t wins. Two horizontal-violin figures: (A) sweep the
+    linear time cost λ at maintenance=0 (isolates the C-step/R edge); (B) sweep maintenance_scale at a
+    fixed λ (isolates the weaker C-maint edge). Grids match the constant-cost regime and maintenance
+    probe already reported in R-EVALUATE (see outputs/reports/normative.md)."""
     episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed)
     base_cfg = _oracle_config(packed_root)
-    results = []
-    for label, mode, lam, mnt in regimes:
-        curves = _return_curves(episodes, replace(base_cfg, time_mode=mode, time_lambda=lam, maintenance_scale=mnt))
-        ev = [curves[i] for i in ev_idx]
-        ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
-        frac, stats, zt = (_regret_at(ev, ctrl[k]) for k in ("fraction", "stats", "zt"))
-        d_sf = bootstrap_ci(lambda d: float(d.mean()), stats - frac, n_boot=2000)
-        d_zs = bootstrap_ci(lambda d: float(d.mean()), zt - stats, n_boot=2000)
-        results.append({"label": label, "d_sf": d_sf, "d_zs": d_zs})
-        print(f"[assess] {label:18s} Stats-Frac*={d_sf[0]:+6.1f}[{d_sf[1]:+.0f},{d_sf[2]:+.0f}] "
-              f"z_t-Stats={d_zs[0]:+6.1f}[{d_zs[1]:+.0f},{d_zs[2]:+.0f}]", flush=True)
+
+    def regime(mode, lam, mnt):
+        return _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, d_embed, seed)
 
     _rcparams()
-    fig, ax = plt.subplots(figsize=(9.5, 5.6))
-    x = np.arange(len(results))
-    for key, color, off, lbl in [("d_sf", _C["stats"], -0.11, "Stats − Frac*  (C-maint edge)"),
-                                 ("d_zs", _C["zt"], 0.11, "$z_t$ − Stats  (R edge)")]:
-        m = [r[key][0] for r in results]
-        yerr = [[r[key][0] - r[key][1] for r in results], [r[key][2] - r[key][0] for r in results]]
-        ax.errorbar(x + off, m, yerr=yerr, fmt="o", ms=8, color=color, ecolor=color, elinewidth=1.6,
-                    capsize=4, mec="white", mew=1.1, label=lbl)
-    ax.axhline(0, color=_MUTED, lw=1.2, ls="--")
-    ax.text(len(results) - 0.5, 0, "Δ = 0: tiers tied  (below 0 = richer tier wins)", ha="right", va="bottom", fontsize=9, color=_MUTED)
-    ax.set_xticks(x); ax.set_xticklabels([r["label"] for r in results], rotation=25, ha="right", fontsize=10)
-    ax.set_ylabel("paired Δ mean regret", fontsize=11)
-    ax.grid(axis="y", color=_GRID, lw=1); ax.legend(fontsize=10)
-    save_pdf_png(fig, str(out_dir), "delta_mean_regret", dpi=200)
-    return results
+    labels_a = [f"linear λ={lam:g}" for lam in lambda_grid]
+    deltas_a = [regime("linear", lam, 0.0) for lam in lambda_grid]
+    figA, axA = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_a)))
+    _delta_ci_panel(axA, labels_a, deltas_a)
+    axA.set_title("varying linear cost λ  (maintenance = 0)", fontsize=12, loc="left")
+    save_pdf_png(figA, str(out_dir), "delta_mean_regret_lambda", dpi=200)
+
+    labels_b = [f"maint={mnt:g}" for mnt in maint_grid]
+    deltas_b = [regime("linear", maint_lambda, mnt) for mnt in maint_grid]
+    figB, axB = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_b)))
+    _delta_ci_panel(axB, labels_b, deltas_b)
+    axB.set_title(f"varying maintenance scale  (linear λ={maint_lambda:g})", fontsize=12, loc="left")
+    save_pdf_png(figB, str(out_dir), "delta_mean_regret_maintenance", dpi=200)
+
+    for group_label, labels, deltas in [("lambda", labels_a, deltas_a), ("maintenance", labels_b, deltas_b)]:
+        for lbl, d in zip(labels, deltas):
+            summary = "  ".join(f"{k}={_mean_ci(d[k])[0]:+.1f}" for k, _, _ in _DELTA_CANDIDATES)
+            print(f"[assess] delta[{group_label}] {lbl:16s} {summary}", flush=True)
+    return {"lambda": dict(zip(labels_a, deltas_a)), "maintenance": dict(zip(labels_b, deltas_b))}
 
 
 # ===========================================================================
@@ -420,7 +484,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="R-EVALUATE meta-controller assessment plots")
     ap.add_argument("--packed-root", required=True, help="MC packed dir with validation/ + validation_manifest.json")
     ap.add_argument("--cache", required=True, help="validation materialized cache (.pt); MUST be shuffle=False")
-    ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/mchalt_diagnosis")
+    ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/normative")
     ap.add_argument("--which", choices=["frontier", "decodability", "separation", "all"], default="all")
     ap.add_argument("--d-embed", type=int, default=32)
     ap.add_argument("--max-episodes", type=int, default=15000)
@@ -437,7 +501,7 @@ def main() -> None:
     if args.which in ("decodability", "all"):
         plot_r_decodability(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=min(args.max_episodes, 12000))
     if args.which in ("separation", "all"):
-        plot_tier_separation(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes)
+        plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes)
 
 
 if __name__ == "__main__":

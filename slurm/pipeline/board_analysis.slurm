@@ -11,8 +11,11 @@
 #SBATCH --qos=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+# 128G total: correlation_matrix ranks 11 columns (RANK() OVER unpartitioned ORDER BY,
+# twice) over the full ~89M-row windowed table — DuckDB's own budget (below) must
+# leave real headroom under this for pandas/matplotlib/OS, or it OOMs the container.
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=02:00:00
 
 set -euo pipefail
@@ -20,6 +23,7 @@ TINY=/home/hl4291/chess_analysis
 cd "${TINY}"
 
 source "${TINY}/slurm/helpers/setup_env.sh"
+export DUCKDB_MEMORY_LIMIT=100GB
 
 echo "board analysis (--plot) on $(hostname) config=$CONFIG at $(date)"
 python -m analysis.board --plot

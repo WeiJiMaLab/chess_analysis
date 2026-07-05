@@ -22,6 +22,7 @@ from analysis.utils.helpers import (
     apply_poster_style,
     FONT_SIZE_LABEL,
     FONT_SIZE_TICKS,
+    LEGEND_FONTSIZE,
     MAIN_COLOR,
     PHASE_COLORS,
 )
@@ -110,6 +111,7 @@ class Analyzer:
         segment_range_labels: dict[int, str] | None = None,
         bin_mode: str = "ntile",
         integer_tail_cut: float | None = None,
+        integer_floor_cut: float | None = None,
         integer_bin_width: int = 1,
         edge_mass: tuple[str, float] | list[tuple[str, float]] | None = None,
         tie_safe: bool = False,
@@ -126,7 +128,9 @@ class Analyzer:
             point-mass across several identical-mean bins. Each point is plotted at the
             group's mean x. The long thin tail above ``integer_tail_cut`` (if given) is
             merged into a single point, so sparse high values don't read as noise.
-            Applies to BOTH the global and the by-ply-tertile panels.
+            ``integer_floor_cut`` is the mirror-image merge for the LOW end (e.g. a
+            signed variable's sparse negative tail) — set both for a symmetric
+            two-sided merge. Applies to BOTH the global and the by-ply-tertile panels.
 
         ``edge_mass`` (tie-safe boundary masses): one ``(op, value)`` pair or a list
         of them, where ``op`` is ``">="``/``"<="``/``">"``/``"<"``/``"=="``. Rows
@@ -178,6 +182,7 @@ class Analyzer:
             raise ValueError(f"bin_mode must be 'ntile' or 'integer'; got {bin_mode!r}")
         self.bin_mode = bin_mode
         self.integer_tail_cut = None if integer_tail_cut is None else float(integer_tail_cut)
+        self.integer_floor_cut = None if integer_floor_cut is None else float(integer_floor_cut)
         self.integer_bin_width = int(integer_bin_width)
         if self.integer_bin_width < 1:
             raise ValueError(f"integer_bin_width must be >= 1; got {integer_bin_width!r}")
@@ -248,12 +253,14 @@ class Analyzer:
             # Group index = floor(x / w); width 1 ⇒ one point per integer. Points are
             # plotted at the group mean x (avg(col)), so the bin width need not show.
             grp = f"CAST(floor({col} / {w}) AS BIGINT)" if w != 1 else f"CAST({col} AS BIGINT)"
+            qbin = grp
             if self.integer_tail_cut is not None:
                 # At/above cut: a single merged point (sentinel qbin sorts rightmost;
                 # plot orders by mean_x anyway).
-                qbin = f"CASE WHEN {col} >= {self.integer_tail_cut} THEN 1000000000 ELSE {grp} END"
-            else:
-                qbin = grp
+                qbin = f"CASE WHEN {col} >= {self.integer_tail_cut} THEN 1000000000 ELSE ({qbin}) END"
+            if self.integer_floor_cut is not None:
+                # At/below floor: the mirror-image merged point (sentinel sorts leftmost).
+                qbin = f"CASE WHEN {col} <= {self.integer_floor_cut} THEN -1000000000 ELSE ({qbin}) END"
             return f"SELECT {sel}{col}, _y_transformed, {qbin} AS qbin FROM _analyzer_view"
 
         # --- ntile / zero-inflated / tie-safe / edge-mass modes ----------------
@@ -397,6 +404,12 @@ class Analyzer:
             ORDER BY tertile_id, qbin
         """).df()
 
+        # Flag the dedicated zero/edge-mass point(s) (sentinel qbins — see
+        # ``_bin_assignment_sql``) so plotting can render them as a ✕ marker
+        # instead of folding them into the interior circle-marker trend line.
+        self.quantile_df["is_mass"] = self.quantile_df["qbin"].apply(self._is_mass_qbin)
+        self.quantile_tertile_df["is_mass"] = self.quantile_tertile_df["qbin"].apply(self._is_mass_qbin)
+
         if self.quantile_heatmap_row:
             hr = self.quantile_heatmap_row
             nb = self.n_bins
@@ -420,6 +433,19 @@ class Analyzer:
                 ON x_qbin USING count(*) GROUP BY row_qbin
             """).df().set_index("row_qbin")
 
+    def _is_mass_qbin(self, qbin: int) -> bool:
+        """True iff ``qbin`` is the sentinel for a dedicated zero/edge point-mass
+        (0 for the zero_inflated lump, > n_bins for an edge_mass clause — see
+        ``_bin_assignment_sql``). NOT true for the integer-mode merged tail point
+        (that's just a sparse bin, not a qualitatively different kind of point)."""
+        if self.bin_mode == "integer":
+            return False
+        if self.zero_inflated and qbin == 0:
+            return True
+        if self.edge_mass and qbin > self.n_bins:
+            return True
+        return False
+
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
         """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints, prefixed
         with ``segment_label`` (e.g. 'ply < 28' for ply, 'GSS 2–31' for a GSS segmentation)."""
@@ -436,14 +462,27 @@ class Analyzer:
     @property
     def _x_axis_label(self) -> str:
         """X label; only suffix "(qbin)" when x is binned by plain equal-count ntile.
-        Integer / tie-safe / zero-inflated / edge-mass modes are not qbins."""
+        Integer / tie-safe modes are not qbins and get the bare label. A
+        zero_inflated/edge_mass axis gets an explicit "(bin; ... isolated)" suffix
+        instead, so the reader knows one of the plotted points is a dedicated
+        hurdle/mass point (rendered with a ✕ marker), not an interior bin."""
         plain_qbin = (
             self.bin_mode == "ntile"
             and not self.zero_inflated
             and not self.tie_safe
             and not self.edge_mass
         )
-        return f"{self.x.label} (qbin)" if plain_qbin else self.x.label
+        if plain_qbin:
+            return f"{self.x.label} (qbin)"
+        if self.zero_inflated or self.edge_mass:
+            parts = []
+            if self.zero_inflated:
+                thr = self.zero_threshold
+                parts.append("0 isolated" if thr == 0.0 else f"|x|≤{thr:g} isolated")
+            if self.edge_mass:
+                parts.append("edge mass isolated")
+            return f"{self.x.label} (bin; {', '.join(parts)})"
+        return self.x.label
 
     def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int | None = None):
         """
@@ -484,7 +523,7 @@ class Analyzer:
         if self.x.is_log and any_pos_x:
             ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
         ax.legend(
-            fontsize=FONT_SIZE_TICKS,
+            fontsize=LEGEND_FONTSIZE,
             loc="upper center",
             bbox_to_anchor=(0.5, -0.16),
             ncol=1,
@@ -632,7 +671,7 @@ class Analyzer:
                              grid_n=grid_n, color=PHASE_COLORS.get(t, MAIN_COLOR), tertile=t,
                              show_band=True, band_alpha=0.12, show_mass=False,
                              label_prefix=self._ply_tertile_legend_label(t) + ": ")
-        ax.legend(fontsize=FONT_SIZE_TICKS, loc="upper center",
+        ax.legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
                   bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)
 
     def save_quantile_heatmap_figure(
@@ -694,7 +733,7 @@ class Analyzer:
             # named in the title; legend minimal (mass point only, when present).
             self.plot_lowess(axes[0], mass_values=mass_values, frac=lowess_frac)
             if axes[0].get_legend_handles_labels()[1]:
-                axes[0].legend(fontsize=FONT_SIZE_TICKS, loc="upper center",
+                axes[0].legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
                                bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)  # below the panel
             self.plot_lowess_tertile_segmented(axes[1], mass_values=mass_values, frac=lowess_frac)
         else:

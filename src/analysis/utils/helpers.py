@@ -60,16 +60,25 @@ def load_config_section(section: str, path=None) -> dict:
 CONFIG = load_config_section("human_analysis")
 
 # --- Plotting Design System (Poster Style) ---
-MAIN_COLOR = "#2E86C1"  # Consistent Steel Blue for all analysis
+MAIN_COLOR = "#6378f1"  # Blue-leaning indigo — the presentations' indigo accent (VOC in
+                        # make_rt_figures.py, hue 239°) with its hue nudged ~35% toward
+                        # Tailwind blue-500 (217°) to read a bit more blue; same lightness/
+                        # saturation as the original indigo.
 FONT_SIZE_LABEL = 52
 FONT_SIZE_TICKS = 42
+# Legend text size == the n= annotation size (house style: the n= label and every
+# legend should read as the same visual weight — see reference.md "Plot standards").
+LEGEND_FONTSIZE = 36
 
-# Standard palette for progress tertiles 1–3 (segmented dashboards).
-# Early = light, late = dark (so deeper into the game reads darker).
+# Standard palette for progress tertiles 1–3 (segmented dashboards). Same hue as
+# MAIN_COLOR (blue-leaning indigo) at 3 lightness steps, so every plot — base
+# series AND ply-tertile segmentation — reads as one consistent color family,
+# rather than MAIN_COLOR's indigo-blue next to a separate plain-blue ColorBrewer
+# ramp. Early = light, late = dark (so deeper into the game reads darker).
 PHASE_COLORS = {
-    1: "#9ECAE1",  # Light blue (Early)
-    2: "#3182BD",  # Medium blue (Mid)
-    3: "#08519C",  # Dark blue (Late)
+    1: "#a7b2f1",  # Light indigo-blue (Early)
+    2: "#3e57ea",  # Medium indigo-blue (Mid)
+    3: "#0c2197",  # Dark indigo-blue (Late)
 }
 
 def apply_poster_style():

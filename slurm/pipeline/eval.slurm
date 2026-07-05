@@ -1,9 +1,10 @@
 #!/bin/bash
-# Pipeline step — eval (CPU). Writes the three meta-controller ASSESSMENT figures
-# (frontier / R-decodability / tier-separation) via `analysis.evaluate` — the
-# mechanism behind outputs/reports/evaluate.md. Reads paths from the `eval:`
-# section of config.yaml. Refits the tree-stats + z_t readouts (budget-out /
-# steps-in) on the validation 70/30 split, so it needs the z_t cache in RAM.
+# Pipeline step — eval (CPU). Writes the meta-controller ASSESSMENT figures
+# (frontier / R-decodability / delta-mean-regret lambda+maintenance sweeps) via
+# `analysis.evaluate` — the mechanism behind outputs/reports/normative.md. Reads
+# paths from the `eval:` section of config.yaml. Refits the tree-stats + z_t
+# readouts (budget-out / steps-in) on the validation 70/30 split, so it needs the
+# z_t cache in RAM.
 #   sbatch --dependency=afterok:<train_readout_pg_jobid> slurm/pipeline/eval.slurm
 #SBATCH --job-name=eval
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out

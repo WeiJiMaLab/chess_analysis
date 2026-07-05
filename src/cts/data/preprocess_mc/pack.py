@@ -72,6 +72,8 @@ class PackControllerEpisodesConfig(BaseModel):
     timeout_value: float = -1.0
     time_mode: str = "power_law"
     samples_per_bucket: int = 2
+    fixed_budget: Optional[int] = None  # if set, every episode gets this one starting budget (1 per
+                                         # tree), bypassing the 5-bucket stratification entirely
     seed: int = 0
     scramble_min_time: int = 1
     scramble_max_time: int = 3
@@ -136,7 +138,30 @@ def _quality_config(config: PackControllerEpisodesConfig) -> TeacherSearchConfig
 
 
 def _oracle_config(config: PackControllerEpisodesConfig) -> BudgetedOracleConfig:
-    """Build the budgeted oracle config from CLI args, including all 5 bucket ranges."""
+    """Build the budgeted oracle config from CLI args.
+
+    ``fixed_budget`` collapses the usual 5-bucket stratification to a single bucket
+    (one starting budget for every episode, one episode per tree) — see
+    outputs/reports/normative.md (R-EVALUATE): the per-episode budget is a hard cap (92% of
+    packed episodes just run to exhaustion of their own sampled budget), which is the right
+    design for the bucket-stratified regret analyses but conflates budget with episode length
+    for a single-cost-regime assessment. Otherwise builds all 5 bucket ranges as before.
+    """
+    if config.fixed_budget is not None:
+        return BudgetedOracleConfig(
+            maintenance_scale=config.maintenance_scale,
+            maintenance_ref_nodes=config.maintenance_ref_nodes,
+            maintenance_exponent=config.maintenance_exponent,
+            time_lambda=config.time_lambda,
+            time_p=config.time_p,
+            time_tau=config.time_tau,
+            time_delta=config.time_delta,
+            timeout_value=config.timeout_value,
+            time_mode=config.time_mode,
+            budget_buckets=(BudgetBucket("fixed", config.fixed_budget, config.fixed_budget),),
+            samples_per_bucket=1,
+            seed=config.seed,
+        )
     return BudgetedOracleConfig(
         maintenance_scale=config.maintenance_scale,
         maintenance_ref_nodes=config.maintenance_ref_nodes,

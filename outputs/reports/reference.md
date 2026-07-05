@@ -24,6 +24,96 @@ Reports come in two formats:
 > **Cross-references live here, not in the reports.** Individual reports avoid citing each other; this
 > index is the single place that maps how they relate. Reports are primarily about **scientific questions**.
 
+## Plot standards (board.py / engine.py)
+
+Binding house style for every RT-vs-covariate figure produced by `analysis/board.py` and
+`analysis/engine.py` — the two modules share one visual language because their figures are
+interleaved in the same reports/decks. A change to one must be mirrored in the other.
+
+**Layout.** Every bivariate dashboard is a fixed **1×3**: `[marginal histogram] [overall trend]
+[trend by ply tertile]`. This applies to board.py's `bivariate_analysis` (already 1×3) *and*
+engine.py's per-signal tree dashboards (`save_tree_dashboard`, currently 1×2 — must gain the
+histogram panel to match).
+
+**Axis labels.**
+- Histogram x-axis: the bare variable name (e.g. "Legal Moves") — it's a marginal distribution,
+  not a binned trend, so no "(bin)" suffix.
+- Trend-panel x-axis: the **capitalized** variable name, with a "(bin)" suffix **only** when x is
+  actually quantile-binned (`bin_mode="ntile"`, no zero-inflation/tie-safe/edge-mass — see
+  `Analyzer._x_axis_label`).
+- **Integer-valued covariates are never quantile-binned** — they use `bin_mode="integer"` (one
+  point per legal value, sparse tail merged into a single point at the display clip). No "(bin)"
+  suffix; the axis just reads e.g. "Legal Moves".
+- **Zero (or other) point-mass isolation:** when quantile-binning a continuous covariate that has
+  a large mass at one value (canonical case: Gain==0 in engine.py, ~55% of rows), split that mass
+  into its own dedicated point (`zero_inflated=True` / `edge_mass=...`) rather than letting `ntile`
+  smear it across bins. That point must (a) be folded into the axis label so the reader knows it's
+  not an interior bin (e.g. "Gain (bin; 0 isolated)"), and (b) render as an **✕ marker**, not a
+  circle, on every trend panel it appears in — visually flagging it as a qualitatively different
+  kind of point (a hurdle mass, not a quantile).
+- **Material Imbalance tracks BOTH the signed and absolute value, as two separate features.**
+  `material_imbalance` is the natural SIGNED quantity (self − opponent, weighted, mover POV — matches
+  the raw DB column), and `abs_material_imbalance` is its explicit absolute-value twin — each gets
+  its own bivariate dashboard. Weighting is assumed everywhere now, so neither label spells it out:
+  just `"Material Imbalance"` and `"Material Imbalance (Absolute)"` (and `self_material`'s is just
+  `"Self Material"`) — no "(Weighted)" suffix. The signed feature's sparse tails at BOTH ends are
+  merged (`integer_floor_cut` mirrors `integer_tail_cut` — see `Analyzer`), not display-excluded like
+  a naturally-nonnegative covariate's sparse floor (`self_material` below 14) — dropping "mover is
+  way behind" rows would bias a signed variable.
+- **Supplementary confound-removed dashboards (`supp_*`).** When a wrinkle in a covariate's curve is
+  explained by a compositional confound (e.g. legal-moves' 9–10 dip being an in-check artifact —
+  see `board.md`), prefer re-running the SAME `bivariate_analysis` on a filtered sub-population and
+  letting the reader see the wrinkle vanish, over a table-and-prose argument. `run_plot`'s
+  `supplements` dict in board.py is the registry for these — add an entry rather than writing a new
+  one-off table when a future wrinkle has a clean confound-removal story.
+
+**n annotation.** Top-left, above the plot, reading `n = {count:,}`. This must be the actual row
+count considered by *that specific* analysis (recomputed per call — never a cached/hardcoded
+number), so it stays honest under smoke mode, clipping, or filtering. Font size is
+`LEGEND_FONTSIZE` (`helpers.py`) — the **same** size as every legend in the figure, exactly, not
+just "close to." `_annotate_n` (`utils/plots.py`) and every `ax.legend(...)` call across
+board.py/engine.py/`Analyzer` share this one constant — don't hardcode a legend fontsize elsewhere.
+
+**No titles, anywhere.** No `fig.suptitle`, no per-axes `ax.set_title`. The n= annotation plus
+axis labels (and legend, where present) carry all the figure's text — a title is redundant with
+them and this house style omits it uniformly (feature histograms, correlation matrices, RT
+distribution, bivariate dashboards, engine dashboards — all of it).
+
+**Color.** The base series color (`MAIN_COLOR`) is a **blue-leaning indigo** (`#6378f1` — the
+presentations' indigo accent, `#6366f1` in `style.css`/`VOC` in `make_rt_figures.py`, with its hue
+nudged ~35% toward Tailwind blue-500 so it reads a bit more blue) — histogram bars, trend lines,
+boolean bar charts, all of it. `PHASE_COLORS` (the ply-tertile palette) is a light/medium/dark
+3-tone ramp at the **same hue** (`#a7b2f1` / `#3e57ea` / `#0c2197`, early→late), so the base series
+and the ply-tertile segmentation read as one consistent color family rather than two different
+blues.
+
+**Smoke tests.** A fast-iteration mode samples **~50,000 rows** (not the full 80–135M) from the
+relevant table. Output artifacts are distinguished with a `smoke_` filename prefix (established
+convention). The n= annotation always reflects the *actual* sampled/observed row count post-filter
+— never the nominal sample size requested.
+
+**RT-distribution summary figure (`move_time_summary`) specifics.**
+- The normal-fit panel is a **P-P plot** (probability–probability), not a QQ plot in raw ln(RT)
+  units: both axes run **0 to 1** — x = the theoretical quantile probability, y = the empirical
+  quantile mapped through the fitted `Normal(mean, std)` CDF. Under perfect normality every point
+  sits on `y = x` regardless of RT's own scale, so this reads the same way across runs/configs.
+- The ply-vs-RT panel (whole game, unwindowed) draws an `axvspan` + below-axes `legend()` marking
+  the analysis window on a `constrained_layout` multi-panel figure — a reproduced matplotlib
+  layout-engine bug corrupts that axis' tick formatter into a 2-entry `FixedFormatter` keyed off
+  the span's own bounds (ticks overlap, render blank past the first two) unless the locator AND
+  formatter are explicitly reset (`mticker.MaxNLocator` / `mticker.ScalarFormatter`) after the
+  `axvspan`+`legend` calls. Any new panel combining `axvspan` + a below-axes legend on a
+  `constrained_layout` figure needs the same explicit reset.
+
+**Numbers cited in reports (pgfvals).** Every headline statistic board.py actually computes (RT
+mean/median, per-feature Pearson r vs. log RT, …) is registered under a stable key via
+`analysis.utils.pgfvals.pgf_set(key, value, fmt)` and dumped to one canonical file,
+`outputs/reports/board_stats.tex`, as `\pgfkeyssetvalue{key}{value}` lines (`\pgfkeysvalueof{...}`
+to use one in LaTeX). This only happens on a real (non-`--smoke`) run — a smoke sample must never
+overwrite the canonical numbers. When a report cites one of these numbers, name its key alongside
+the value (e.g. "mean 6.5 s (key: `board/rt/mean_s`)") so a reader can trace it back to the exact
+line that produced it, instead of the prose and the code silently drifting apart.
+
 ## Reports
 
 | Inquiry | Report | Format | Thread | Status |
@@ -31,6 +121,7 @@ Reports come in two formats:
 | Human response time — what board features predict it (distribution, per-feature dashboards, board correlations) | [(R-MOVETIME-BOARD)](board.md) | Scientific | Human | ✅ done |
 | **Tree search & deliberation** — the single linear story: does VOC/engine-search explain *when* people think? No → RT = satisficed decision difficulty (size − satisfaction + sharpness) → **the reclaimed result: a resource-rational per-operation-cost stop *reproduces* the decomposition** (legal-moves is the explanandum, not a floor). Folds in the former engine / branching / halt-calibration / VOC threads. | [(R-TREESEARCH)](treesearch.md) | Scientific | Deliberation | 📝 active; `normative_curves` reproduces +size/−satisfaction/+sharpness |
 | **Value-pruning** — the cost-profile lever via ε-pruning; staged plan + the (negative) regen result; pruning is a *later refinement* of the resource-rational fit, not the first step | [(R-PRUNING)](pruning.md) | Plan | Deliberation | ❌ pruned node-count washes out at md36; success reframed to *reproduce the curves* |
+| **Normative controller assessment** — does the MCHalt meta-controller's learned `z_t` halting head beat hand-crafted tree-stats and a fixed stop at deciding when to stop searching? Yes, significantly, in a constant-cost regime that isolates the value of continued search; the shipped power-law regime is degenerate. | [(R-EVALUATE)](normative.md) | Scientific | Deliberation | 📝 active; `z_t` significantly beats Stats-Controller and Frac\* (paired regret −151 [−190,−114] at λ=10) |
 | Data reference — human Lichess dataset + SF/lc0 tree generation | [(R-DATA)](#data-reference-r-data) | Reference | Data | ✅ stable |
 
 Older lmcos work (Apr–May 2026; GNN-pretrain, meta-controller, tree-gen engineering) lives in the

@@ -18,7 +18,7 @@ The paper has **three sections**, matching the figure categories in `figures/{bo
 
 1. **Board** — model-free board regressors. *Legal moves dominate; response time is log-normal.*
 2. **Engine** — Stockfish value-of-computation signals. *They track RT only weakly, and every one collapses toward the move count.*
-3. **Normative (TODO)** — the resource-rational planner that should *reproduce* the move-count effect. *Future work; one positive sign so far.*
+3. **Normative** — the resource-rational planner that should *reproduce* the move-count effect. *One positive sign on the human-RT curves so far; a related controller-assessment result (R-EVALUATE) is settled.*
 
 ---
 
@@ -122,10 +122,15 @@ why a *count* should set response time.
 
 ---
 
-## Normative (TODO) — does a resource-rational planner explain the move-count effect?
+## Normative — does a resource-rational planner explain the move-count effect?
 
-This section is a **placeholder** — `figures/normative/` is intentionally empty for now — but it
-carries the paper's thesis, so we state the reclaimed framing precisely.
+This section carries the paper's thesis, so we state the reclaimed framing precisely. `figures/normative/`
+is no longer empty, but it currently holds a *related, more targeted* result rather than the full curve fit
+(below): [normative.md](normative.md) (R-EVALUATE) asks whether a *learned* value-of-continuing signal
+actually helps a resource-rational stopping rule beat naive alternatives, in a controlled MCTS-style
+setting — and finds that it does, significantly. That is evidence for a piece of this section's mechanism
+(a value-sensitive stop can genuinely outperform simple heuristics), but it does not yet close the loop
+back to human RT curves — that fit is still the open work described below.
 
 **The reframing.** The legal-move count is the **explanandum, not a floor to beat.** A count has no
 normative content: "RT correlates with legal moves" is a fact in search of a mechanism, not a model.
@@ -148,9 +153,9 @@ search) action-gap, which the Engine section shows is a post-search artifact con
 think-time. The honest **myopic** gap is ~null (+0.061), so sharpness is no longer part of the target
 decomposition; the curves to reproduce are `size − satisfaction`.
 
-**Future work (the actual fit + plots).** What remains — and what the empty `figures/normative/`
-will hold — is the model fit itself: take the resource-rational planner with sensible cost
-parameters and show it **regenerates the `RT-vs-{n_moves, fraction_good}` curves** with the right
+**Future work (the actual fit + plots).** What remains is the model fit itself: take the
+resource-rational planner with sensible cost parameters and show it **regenerates the
+`RT-vs-{n_moves, fraction_good}` curves** with the right
 shape (the satisficing concavity: high-satisfaction positions plateau low, low-satisfaction ones
 stay steep). Only then does the normative story earn its keep, turning "RT re-describes decision
 width" into "a resource-rational planner *predicts* when people think." That is the next step, not a
@@ -173,6 +178,7 @@ result yet.
 | Searching for a signal that **beats** legal-moves | **Retired (wrong target)** | a count is the *explanandum*, not a rival model; everything correctly collapses onto it |
 | A resource-rational (per-op cost) stop **reproduces** +size and −satisfaction | **Settled (one sign)** | `/analysis/normative_curves.py` |
 | A resource-rational model **reproduces** the `size − satisfaction` *curves* with sensible cost params | **Open (the fit)** | future work; check RT-vs-{n_moves, fraction_good} |
+| A *learned* value-of-continuing signal (`z_t`) significantly beats hand-crafted tree-stats and the best fixed stop, in a controlled MCTS-style setting | **Settled** | [(R-EVALUATE)](normative.md) — paired `z_t`−Stats regret −164 [−205,−125] at λ=10 |
 
 > **The working conclusion.** RT tracks **decision width** with a **satisficing signature**, and that is the
 > **fingerprint of resource-rational option-consideration** — *not* "people irrationally count moves," and *not* a
@@ -194,7 +200,9 @@ This paper is a synthesis; each section's full methods, data lineage, and caveat
 - **Normative** — [(R-TREESEARCH)](reports/treesearch.md): the resource-rational framing and the
   reclaimed result (a per-operation-cost stop *reproduces* the curves). The pruning refinement is
   [(R-PRUNING)](reports/pruning.md). The positive `+size / −satisfaction` sign lives in
-  `/analysis/normative_curves.py`.
+  `/analysis/normative_curves.py`. The related controller-assessment result — does a *learned*
+  value-of-continuing signal beat hand-crafted heuristics at a stopping decision — is
+  [(R-EVALUATE)](normative.md).
 - **Data** — [(R-DATA)](reports/reference.md#data-reference-r-data): the human Lichess dataset and the
   search-tree dataset.
 
