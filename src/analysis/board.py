@@ -35,10 +35,29 @@ from analysis.utils.helpers import (
     apply_poster_style, db_connection, sql_str,
     MAIN_COLOR, PHASE_COLORS, LEGEND_FONTSIZE, CONFIG,
 )
-from analysis.utils.plots import highlight_corr_row, save_figure, _annotate_n, _draw_feature_histogram
+from analysis.utils.plots import (
+    highlight_corr_row, save_figure, _annotate_n, _draw_feature_histogram,
+    get_isoluminant_cmap, plot_heatmap_with_alpha,
+)
 from analysis.utils.pgfvals import pgf_set, write_pgf_tex
 
 FEATURE_COLS = ["n_captures_avail", "n_checks_avail"]
+
+# Material-imbalance bands for the checks-available x material interaction views
+# (checks_material_interaction_heatmap / checks_material_band_curves): signed
+# material_imbalance (mover POV) bucketed into 5 bands, ordered heavily-behind ->
+# heavily-ahead. Colors are the SAME indigo-blue hue family as MAIN_COLOR/PHASE_COLORS
+# (light->dark = behind->ahead) at 5 steps instead of PHASE_COLORS' 3 (ply tertiles) —
+# one consistent "ordered category" color language across the report, not a new palette.
+MATERIAL_BAND_ORDER = ["≤-5", "-4..-1", "0", "+1..+4", "≥+5"]
+MATERIAL_BAND_COLORS = ["#abb6f7", "#697df2", "#2845ec", "#112abb", "#0b1b7a"]
+_MATERIAL_BAND_SQL = (
+    "CASE WHEN material_imbalance <= -5 THEN '≤-5' "
+    "WHEN material_imbalance BETWEEN -4 AND -1 THEN '-4..-1' "
+    "WHEN material_imbalance = 0 THEN '0' "
+    "WHEN material_imbalance BETWEEN 1 AND 4 THEN '+1..+4' "
+    "ELSE '≥+5' END"
+)
 
 
 # =============================================================================
@@ -146,7 +165,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     empirical = np.array(conn.execute(
         "SELECT quantile_cont(ln_move_time, ?) FROM _summary_view", [probs.tolist()]
     ).fetchone()[0], dtype=float)
-    empirical_prob = stats.norm.cdf(empirical, loc=mean, scale=std)  # P-P plot: both axes in [0, 1]
+    theoretical = stats.norm.ppf(probs, loc=mean, scale=std)  # QQ plot: theoretical Normal(mean, std) quantiles
 
     def _weighted_median(df):
         cumsum = df["n"].cumsum()
@@ -171,14 +190,18 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ax_h.set(xlabel="RT (s, log axis)", ylabel="Count")
     ax_h.legend(**_LEGEND_KW)
 
-    # Panel 2: normal P-P plot — theoretical quantile PROBABILITY (0-1, i.e. ``probs``
-    # itself) vs. the empirical quantile's probability under the fitted Normal(mean,
-    # std) CDF. Both axes are plain probabilities in [0, 1] (not ln(RT) units): under
-    # perfect normality every point sits at (p, p), so y=x is a meaningful normality
-    # reference regardless of RT's own scale.
-    ax_q.scatter(probs, empirical_prob, color=MAIN_COLOR, s=40, zorder=3)
-    ax_q.plot([0, 1], [0, 1], "k--", lw=1.5, zorder=2, label="y = x")
-    ax_q.set(xlabel="Theoretical Probability", ylabel="Empirical Probability", xlim=(0, 1), ylim=(0, 1))
+    # Panel 2: QQ plot — theoretical Normal(mean, std) quantile vs. empirical quantile
+    # of RT, both in SECONDS on a log-log scale (RT spans orders of magnitude, same
+    # reasoning as panel 1's log x-axis). A straight y=x line means log(RT) is well
+    # fit by a Normal; curvature away from it shows where/how the fit departs (e.g.
+    # heavier tails than lognormal).
+    theo_s, emp_s = np.exp(theoretical), np.exp(empirical)
+    ax_q.scatter(theo_s, emp_s, color=MAIN_COLOR, s=40, zorder=3)
+    lims = (float(min(theo_s.min(), emp_s.min())), float(max(theo_s.max(), emp_s.max())))
+    ax_q.plot(lims, lims, "k--", lw=1.5, zorder=2, label="y = x")
+    ax_q.set_xscale("log")
+    ax_q.set_yscale("log")
+    ax_q.set(xlabel="Theoretical Quantile (s)", ylabel="Empirical Quantile (s)", xlim=lims, ylim=lims)
     ax_q.legend(**_LEGEND_KW)
 
     # Panel 3: RT vs ply over the WHOLE game (unwindowed) — same quantile-binned
@@ -190,7 +213,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
         n_bins=20, tie_safe=True, min_bin_count=200,
     )
     ply_analyzer.plot_quantile_bins(ax_p)
-    ax_p.axvspan(CONFIG["min_ply"], CONFIG["max_ply"], color="gray", alpha=0.12,
+    ax_p.axvspan(int(CONFIG["min_ply"]), int(CONFIG["max_ply"]), color="gray", alpha=0.12,
                  label=f"Analysis window [{CONFIG['min_ply']},{CONFIG['max_ply']}]")
     ax_p.legend(**_LEGEND_KW)
     # `constrained_layout` + `axvspan` + a below-axes `legend()` on a multi-panel
@@ -312,6 +335,85 @@ def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, 
     save_figure(fig, "board", filename)
 
 
+def checks_material_interaction_heatmap(conn, table, filename: str = "checks_material_interaction_heatmap.pdf"):
+    """Checks-available (x) x material-imbalance band (y, signed, mover POV) heatmap:
+    cell color = geometric-mean RT, cell alpha = frequency (see ``plot_heatmap_with_alpha``).
+    The joint view backing ``checks_material_band_curves``' per-band lines — shows WHY
+    ``bivariate_n_checks_avail``'s pooled inverted-U flips direction with material context
+    (board.md "Why does material context flip the direction of the checks-avail effect?").
+    """
+    q = f"""
+        SELECT LEAST(n_checks_avail, 10) AS checks_bin,
+               {_MATERIAL_BAND_SQL} AS band,
+               count(*) AS n,
+               exp(avg(ln(move_time))) AS geo_rt
+        FROM {table}
+        WHERE n_checks_avail IS NOT NULL AND material_imbalance IS NOT NULL
+        GROUP BY 1, 2
+    """
+    df = conn.execute(q).df()
+    n_rows = int(df["n"].sum())
+    band_rank = {b: i for i, b in enumerate(MATERIAL_BAND_ORDER)}
+    df["band_rank"] = df["band"].map(band_rank)
+    mean_piv = df.pivot(index="band_rank", columns="checks_bin", values="geo_rt")
+    count_piv = df.pivot(index="band_rank", columns="checks_bin", values="n")
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(20, 12), constrained_layout=True)
+    plot_heatmap_with_alpha(ax, mean_piv, count_piv, get_isoluminant_cmap(),
+                            alpha_mode="log", value_label="Mean RT (geo. mean, s)",
+                            imshow_aspect="auto")
+    ax.invert_xaxis()  # plot_heatmap_with_alpha always renders columns high->low; put 0 back on the left
+    ax.set_yticks(list(band_rank.values()))
+    ax.set_yticklabels(MATERIAL_BAND_ORDER)
+    ax.set_xticks(list(range(11)))
+    ax.set_xticklabels([*map(str, range(10)), "10+"])
+    ax.set(xlabel="Checks Available (k; 10 = 10+)", ylabel="Material Imbalance (signed)")
+    _annotate_n(fig, n_rows)
+    save_figure(fig, "board", filename)
+
+
+def checks_material_band_curves(conn, table, filename: str = "checks_material_band_curves.pdf"):
+    """RT-vs-checks-available, one curve per material-imbalance band (signed, mover POV)
+    + 95% CI band — the per-band breakdown of ``checks_material_interaction_heatmap``.
+    Same quantile-trend visual language as every other board dashboard (mean +/- 1.96*SEM
+    in log(RT) space, relabeled to seconds), just colored by band instead of ply tertile."""
+    q = f"""
+        SELECT LEAST(n_checks_avail, 10) AS checks_bin,
+               {_MATERIAL_BAND_SQL} AS band,
+               count(*) AS n,
+               avg(ln(move_time)) AS mean_log_rt,
+               stddev(ln(move_time)) AS std_log_rt
+        FROM {table}
+        WHERE n_checks_avail IS NOT NULL AND material_imbalance IS NOT NULL
+        GROUP BY 1, 2
+    """
+    df = conn.execute(q).df()
+    n_rows = int(df["n"].sum())
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    for i, band in enumerate(MATERIAL_BAND_ORDER):
+        sub = df[df["band"] == band].sort_values("checks_bin")
+        if sub.empty:
+            continue
+        x = sub["checks_bin"].to_numpy()
+        y = sub["mean_log_rt"].to_numpy()
+        ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
+        color = MATERIAL_BAND_COLORS[i]
+        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=band)
+        ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    _seconds_from_log(ax.yaxis)
+    ax.set_xticks(list(range(11)))
+    ax.set_xticklabels([*map(str, range(10)), "10+"])
+    ax.set(xlabel="Checks Available (k; 10 = 10+)", ylabel="Response Time (s)")
+    ax.legend(title="Material Imbalance (signed)", fontsize=LEGEND_FONTSIZE,
+              title_fontsize=LEGEND_FONTSIZE, loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False)
+    _annotate_n(fig, n_rows)
+    save_figure(fig, "board", filename)
+
+
 def correlation_matrix(conn, features, table, filename="board_feature_corr.pdf", smoke: bool = False):
     """Spearman AND Pearson correlation matrices over log(RT), ply, and every
     covariate, computed in SQL over the full windowed table (Spearman = Pearson on
@@ -389,7 +491,8 @@ def feature_histograms(conn, features, table, filename: str = "feature_histogram
     ncol = 3
     nrow = math.ceil(len(cols) / ncol)
     apply_poster_style()
-    fig, axes = plt.subplots(nrow, ncol, figsize=(8.5 * ncol, 6.2 * nrow), constrained_layout=True)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(8.5 * ncol, 6.2 * nrow), constrained_layout=True,
+                              gridspec_kw={"wspace": 0.35})
     axes = np.atleast_1d(axes).ravel()
     for ax in axes[len(cols):]:
         ax.axis("off")
@@ -435,6 +538,37 @@ def run_plot(db: str, smoke: bool = False) -> None:
     supplements = {
         "supp_n_legal": dict(column="n_possible_moves", name="Legal Moves (Excl. In Check)",
                              kind="disc", clip=(0, 60), filter_sql="NOT in_check"),
+        # abs_material_imbalance's staggered dips at |3| and |9| (board.md "staggered
+        # dips"): the mover-behind-side is checked FIRST since it's who dominates the
+        # population there (7.2:1 / 23.2:1 behind:ahead at |3|/|9|) — restricting to
+        # that side alone (still) shows the dip, so side-mixing alone doesn't resolve it.
+        "supp_abs_material_imbalance_behind": dict(
+            column="abs_material_imbalance", name="Material Imbalance (Absolute, Mover Behind)",
+            kind="disc", clip=(0, 15), filter_sql="material_imbalance < 0"),
+        # A second, narrower composition candidate: rows reachable via a PURE one-sided
+        # material hang (the OTHER side's army is still fully intact — self_material=39
+        # or, symmetrically, opponent_material=39, computed as self_material -
+        # material_imbalance since opponent_material isn't its own column) rather than a
+        # multi-piece trade sequence that nets to the same total. |3| and |9| are exactly
+        # the totals reachable by losing ONE piece (a minor, a queen) outright, so this
+        # subpopulation's share should be structurally elevated there vs. neighbors.
+        "supp_abs_material_imbalance_excl_hangs": dict(
+            column="abs_material_imbalance", name="Material Imbalance (Absolute, Excl. One-Sided Hangs)",
+            kind="disc", clip=(0, 15),
+            filter_sql="NOT (self_material = 39 OR (self_material - material_imbalance) = 39)"),
+        # n_checks_avail's inverted-U (board.md "is the inverted-U real?"): re-test the
+        # SAME in-check exclusion that resolved legal-moves' dip, in case a mover already
+        # in check (restricted to block/capture/king-move) drags the checks-available
+        # curve the same way.
+        "supp_checks_avail_no_incheck": dict(
+            column="n_checks_avail", name="Checks Available (Excl. In Check)",
+            kind="disc", clip=(0, 8), filter_sql="NOT in_check"),
+        # Second candidate: does the inverted-U survive once decisively-ahead/behind
+        # positions (where checks-available's material-band story above shows a very
+        # different RT profile) are excluded, leaving only roughly-balanced positions?
+        "supp_checks_avail_balanced": dict(
+            column="n_checks_avail", name="Checks Available (|Imbalance| < 5)",
+            kind="disc", clip=(0, 8), filter_sql="abs_material_imbalance < 5"),
     }
     with db_connection(db, read_only=True) as conn:
         # The one canonical view every analysis reads: the windowed moves (with
@@ -482,6 +616,10 @@ def run_plot(db: str, smoke: bool = False) -> None:
             conn.execute(f"CREATE OR REPLACE TEMP VIEW {filt_view} AS SELECT * FROM {table} WHERE {cfg['filter_sql']}")
             bivariate_analysis(conn, column=cfg["column"], name=cfg["name"], filename=f"{prefix}{key}.pdf",
                                table=filt_view, kind=cfg["kind"], clip=cfg["clip"])
+
+        print("board analysis: checks-available x material-imbalance interaction views...")
+        checks_material_interaction_heatmap(conn, table, filename=f"{prefix}checks_material_interaction_heatmap.pdf")
+        checks_material_band_curves(conn, table, filename=f"{prefix}checks_material_band_curves.pdf")
 
         print("board analysis: correlation matrix...")
         correlation_matrix(conn, features, table, filename=f"{prefix}board_feature_corr.pdf", smoke=smoke)

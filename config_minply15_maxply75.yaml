@@ -104,16 +104,15 @@ mc_pack:
   maintenance_scale: 0.0
   maintenance_ref_nodes: 30.0
   maintenance_exponent: 1.1
-  time_lambda: 18.537
+  time_lambda: 10.0
   time_p: 2.8
   time_tau: 2.5
   time_delta: 1
   timeout_value: -1.0
-  time_mode: power_law
+  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md);
+                              # now matches R-EVALUATE's assessment regime (linear, lambda=10)
   samples_per_bucket: 2
-  fixed_budget: 48  # constant budget for every episode (1/tree) — see outputs/reports/normative.md;
-                    # the per-episode budget bucket sampling was found to be a hard cap that conflates
-                    # budget with episode length for the R-EVALUATE constant-cost assessment
+  fixed_budget: 96
   seed: 0
   clear: true
 
@@ -181,13 +180,14 @@ train:
   maintenance_scale: 0.0
   maintenance_ref_nodes: 30.0
   maintenance_exponent: 1.1
-  time_lambda: 18.537
+  time_lambda: 10.0
+  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md)
   time_p: 2.8
   time_tau: 2.5
   time_delta: 1
   timeout_value: -1.0
   samples_per_bucket: 2
-  fixed_budget: 48  # must match mc_pack.fixed_budget exactly, or _validate_packed_manifest_oracle
+  fixed_budget: 96  # must match mc_pack.fixed_budget exactly, or _validate_packed_manifest_oracle
                     # rejects the packed manifest
   seed: 0
 
@@ -197,6 +197,11 @@ eval:
   controller_checkpoint: ${packed_dir}/mchalt_controller.pt
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
+  time_mode: linear           # R-EVALUATE assessment regime (recorded here, not a hidden evaluate.py default)
+  time_lambda: 10.0
+  maintenance_scale: 0.0
+  maint_lambda: 10.0          # lambda held fixed while sweeping maintenance_scale (delta_mean_regret_maintenance)
+  max_episodes: 15000
 
 # --- Normative variant branches (optional; piggy-back on the base run) ---
 # A variant re-runs the model chain [from .. to] with `overrides`, reusing everything

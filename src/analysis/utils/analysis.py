@@ -30,6 +30,7 @@ from analysis.utils.plots import (
     get_isoluminant_cmap,
     plot_heatmap_with_alpha,
     plot_qbin_stats,
+    _wrap_long_label,
 )
 
 # Highlight color for an isolated value point-mass (e.g. Gain==0) on a LOWESS panel:
@@ -481,8 +482,11 @@ class Analyzer:
                 parts.append("0 isolated" if thr == 0.0 else f"|x|≤{thr:g} isolated")
             if self.edge_mass:
                 parts.append("edge mass isolated")
-            return f"{self.x.label} (bin; {', '.join(parts)})"
-        return self.x.label
+            # Newline before the qualifier: at FONT_SIZE_LABEL (52pt) the full
+            # single-line string is wider than a 1x3 dashboard panel and bleeds
+            # into the neighboring panel's own x-label.
+            return f"{self.x.label}\n(bin; {', '.join(parts)})"
+        return _wrap_long_label(self.x.label)
 
     def plot_quantile_bins_tertile_segmented(self, ax, *, min_n: int | None = None):
         """
@@ -522,10 +526,13 @@ class Analyzer:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
         if self.x.is_log and any_pos_x:
             ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
+        # A two-line x_label (zero_inflated/edge_mass qualifier, see _x_axis_label)
+        # needs the legend pushed further down or the two collide.
+        legend_y = -0.26 if "\n" in x_label else -0.16
         ax.legend(
             fontsize=LEGEND_FONTSIZE,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.16),
+            bbox_to_anchor=(0.5, legend_y),
             ncol=1,
             frameon=False,
         )

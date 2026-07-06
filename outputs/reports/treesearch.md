@@ -13,7 +13,7 @@
 ```mermaid {scale: 0.6}
 flowchart TD
   Q["<b>Q</b> When is it worth searching deeper?<br/>Do people think where an engine would?"] --> Q2
-  Q2["<b>Q2</b> How to model searching?<br/>→ PUCT, no rollouts; uniform-prior PUCT = UCB = best-first"] --> Q3
+  Q2["<b>Q2</b> How to model searching?<br/>→ started PUCT (uniform-prior = UCB = best-first); pipeline now runs explicit greedy BeFS"] --> Q3
   Q3["<b>Q3</b> Which engine?<br/>→ lc0 → Stockfish (uniform prior, WDL value); N matters, UCI_Elo no-op"] --> Q4
   Q4["<b>Q4</b> When to stop?<br/>→ budgeted oracle step*; tree-stats readout ≻ GNN-z"] --> PIV
   PIV{"<b>Pivot</b> Do the signals match human RT?"} --> H
@@ -32,14 +32,19 @@ more? Both need a model of "searching" — so we build one.
 
 ## 2 · Q2 — How do we model searching?
 
-`build_tree` grows an **AlphaZero-style PUCT tree** — **no rollouts**; a heuristic values each node and a
-selector chooses what to expand. The selector shapes the tree: **Best-First** (greedy, narrow & deep) vs **MCTS**
-(UCB + Monte-Carlo rollout) vs **PUCT** (Q + prior + exploration). Two heads are easy to conflate: the **prior**
-`P(child)` weights only *which child to visit*; the **value** is backed up from leaves.
+`build_tree` grows a tree — **no rollouts**; a heuristic values each node and a selector chooses what to expand.
+The selector shapes the tree: **Best-First** (greedy, narrow & deep) vs **MCTS** (UCB + Monte-Carlo rollout) vs
+**PUCT** (Q + prior + exploration). Two heads are easy to conflate in the PUCT framing: the **prior** `P(child)`
+weights only *which child to visit*; the **value** is backed up from leaves.
 
-> **Answer:** with **uniform priors**, PUCT reduces to **UCB** — so we are already running a heuristic
-> **best-first search with a UCT selector**, breadth-leaning early. The construal can be read off the *existing*
-> trace; the lever is the selector + cost, not "MCTS vs BeFS."
+> **Answer (superseded 2026-07-02):** originally an **AlphaZero-style PUCT tree**; with **uniform priors**, PUCT
+> reduces to **UCB**, so early trees were already a heuristic best-first search with a UCT selector,
+> breadth-leaning. **The pipeline has since moved to an explicit greedy `selection: befs`** — pure greedy descent
+> on each node's static value (native centipawns, `cp_order`), **no visit counts, no value backup, no
+> exploration term** — dropping the PUCT/UCB machinery entirely rather than merely approximating it
+> (`treegen: greedy BeFS on native centipawns`, `befs1cp_md36`). **The 5-hypotheses/umbrella results below (§5-9)
+> were computed on the earlier PUCT-uniform-prior SF trees**; current `board.md`/engine dashboards are
+> regenerated on the newer BeFS tree set — re-deriving §5-9 on BeFS trees is open work, not yet done.
 
 ## 3 · Q3 — Which engine evaluates the tree?
 
@@ -50,7 +55,8 @@ planning) · **`UCI_Elo`** (a play handicap — *no-op* for the eval; SF-1350 �
 [[sf-uci-elo-noop-for-eval]]).
 
 > **Answer:** the swap didn't change the science; the value is now **WDL/win-prob** (not centipawns) and the
-> prior went **uniform** — which is exactly why the search is breadth-leaning UCB.
+> prior went **uniform** — which is exactly why *that* search was breadth-leaning UCB. (Superseded by explicit
+> BeFS per §2's update — see there.)
 
 ## 4 · Q4 — When should the search stop?
 
@@ -164,7 +170,7 @@ Human think-time = the cost of **building the consideration set**, under a resou
 
 ## Appendix — definitions
 
-- **N / M / `UCI_Elo`**: leaf-eval nodes (the heuristic) / PUCT expansions (the planning) / play handicap (no-op).
+- **N / M / `UCI_Elo`**: leaf-eval nodes (the heuristic) / tree expansions, PUCT then BeFS (the planning) / play handicap (no-op).
 - **step\* / regret**: step\* = argmax<sub>s</sub>[V(s) − cost(s)]; regret = oracle_value − return(stop).
 - **tree-stats** = per-step `[height (deepest node), width (max nodes at a depth), n_nodes (total)]`.
 - **n_expanded / n_total / n_leaf**: internal (= n_steps) / all incl. enumerated leaves / frontier leaves.

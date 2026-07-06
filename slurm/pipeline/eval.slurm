@@ -24,9 +24,17 @@ field() { $RENDER --get "eval.$1"; }
 PACKED=$(field packed_root)
 MATVAL=$(field materialized_validation_cache)
 OUT=$(field out_dir)
+TIME_MODE=$(field time_mode)
+TIME_LAMBDA=$(field time_lambda)
+MAINTENANCE_SCALE=$(field maintenance_scale)
+MAINT_LAMBDA=$(field maint_lambda)
+MAX_EPISODES=$(field max_episodes)
 mkdir -p "$OUT"
 
 echo "eval host=$(hostname)"; date
 python -m analysis.evaluate --which all \
-  --packed-root "$PACKED" --cache "$MATVAL" --out-dir "$OUT"
+  --packed-root "$PACKED" --cache "$MATVAL" --out-dir "$OUT" \
+  --time-mode "$TIME_MODE" --time-lambda "$TIME_LAMBDA" \
+  --maintenance-scale "$MAINTENANCE_SCALE" --maint-lambda "$MAINT_LAMBDA" \
+  --max-episodes "$MAX_EPISODES"
 echo "EVAL DONE -> $OUT"; date

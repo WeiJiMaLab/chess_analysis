@@ -68,7 +68,7 @@ FONT_SIZE_LABEL = 52
 FONT_SIZE_TICKS = 42
 # Legend text size == the n= annotation size (house style: the n= label and every
 # legend should read as the same visual weight — see reference.md "Plot standards").
-LEGEND_FONTSIZE = 36
+LEGEND_FONTSIZE = 40
 
 # Standard palette for progress tertiles 1–3 (segmented dashboards). Same hue as
 # MAIN_COLOR (blue-leaning indigo) at 3 lightness steps, so every plot — base
@@ -83,6 +83,11 @@ PHASE_COLORS = {
 
 def apply_poster_style():
     """Apply global matplotlib settings for Poster Style."""
+    # Helvetica by name, falling back to "Nimbus Sans" (a free Helvetica-metric-
+    # compatible clone present on this system) or Arial, then the matplotlib default —
+    # without this, matplotlib silently falls back to DejaVu Sans everywhere.
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['Helvetica', 'Nimbus Sans', 'Arial', 'DejaVu Sans']
     plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
     plt.rcParams['ytick.labelsize'] = FONT_SIZE_TICKS
     plt.rcParams['axes.spines.top'] = False

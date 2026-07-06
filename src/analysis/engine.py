@@ -331,7 +331,8 @@ def tree_values_pipeline(
             CREATE OR REPLACE TEMP TABLE tree_rt AS
             SELECT v.gss, v.voc, v.action_gap, v.h_pi, v.n_within_epsilon,
                    v.n_acceptable, v.n_root_children, v.oss,
-                   v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction
+                   v.fen, m.gid, m.move_ply, m.move_time, m.game_fraction,
+                   m.player_clock_time
             FROM _vals v
             JOIN filtered m ON m.fen = v.fen
             WHERE m.move_time > 0
@@ -447,6 +448,55 @@ def tree_values_pipeline(
             save_tree_dashboard(a_ply, out_dir, name,
                                 hist_kind=cfg["hist_kind"], hist_clip=cfg["hist_clip"],
                                 hist_where=cfg["filter_query"])
+
+        # Supplementary confound-removed dashboards (board.py's ``supplements``
+        # pattern, generalized here since engine.py had no equivalent): identify a
+        # confound, build a filtered view excluding/isolating it, and RE-RUN THE SAME
+        # dashboard function — the dip vanishing on the plot is the evidence, not a
+        # prose claim. GSS/OSS's mid-range dip (trough ~20-27) is a clock/time-
+        # pressure composition-shift artifact: higher-GSS/OSS trees skew toward
+        # earlier game stage with MORE clock remaining, and remaining clock has its
+        # own (board.py-documented) non-monotonic relationship with RT — mixing
+        # clock regimes together reproduces a dip that is absent (or far weaker)
+        # within any single clock tertile. Verified empirically (not asserted): the
+        # pooled GSS trend dips from 6.60s (qbin~12) to 6.31s (qbin~22) then rises to
+        # 8.1s (tail); restricted to the MIDDLE clock tertile alone the same bins run
+        # 7.24 -> 7.23 -> 7.24s (essentially flat) before the same late rise — the
+        # dip's amplitude collapses by roughly an order of magnitude. (n_acceptable's
+        # and n_within_epsilon's own mid-range troughs were ALSO tested against this
+        # clock-tertile split and persisted within every tertile — clock does NOT
+        # explain those two; left as an open, honestly-unresolved wrinkle.)
+        clock_c1, clock_c2 = conn.execute(
+            "SELECT quantile_disc(player_clock_time, 1.0/3), quantile_disc(player_clock_time, 2.0/3) "
+            "FROM tree_rt WHERE player_clock_time IS NOT NULL"
+        ).fetchone()
+        clock_mid_sql = f"player_clock_time > {clock_c1} AND player_clock_time <= {clock_c2}"
+        supplements = {"supp_gss_clockmid": "gss", "supp_oss_clockmid": "oss"}
+        for supp_name, sig_name in supplements.items():
+            cfg = tree_signals[sig_name]
+            print(f"Executing engine tree analysis: {supp_name} (mid clock tertile [{clock_c1:.0f}, {clock_c2:.0f}]s)...")
+            supp_filter = f"({cfg['filter_query']}) AND ({clock_mid_sql})"
+            a_supp = _make_analyzer(
+                "tree_rt",
+                # NOT suffixed with "(mid clock tertile)" on the axis label itself: at
+                # FONT_SIZE_LABEL that text is wider than a 1x3 panel and bleeds into
+                # its neighbor (the same class of overlap bug fixed in _x_axis_label
+                # for zero_inflated/edge_mass — here the fix is simply "keep it short"
+                # since bin_mode="integer" carries no qualifier suffix at all). The
+                # supplement's nature is conveyed by the filename/title, not the axis.
+                Variable(column=cfg["column"], is_log=False, name=cfg["name"]),
+                Variable(column="move_time", is_log=True, name="RT"),
+                f"{cfg['name']} vs. log(RT), mid clock tertile",
+                filter_query=supp_filter, min_bin_count=300, tie_safe=True,
+                zero_inflated=cfg.get("zero_inflated", False),
+                zero_threshold=cfg.get("zero_threshold", 0.0),
+                bin_mode=cfg.get("bin_mode", "ntile"),
+                integer_bin_width=cfg.get("integer_bin_width", 1),
+                integer_tail_cut=cfg.get("integer_tail_cut"),
+            )
+            save_tree_dashboard(a_supp, out_dir, supp_name,
+                                hist_kind=cfg["hist_kind"], hist_clip=cfg["hist_clip"],
+                                hist_where=supp_filter)
 
         # Axes are intentionally inverted vs the other signal dashboards: RT on X,
         # MQ on Y. This panel asks "do longer thinks yield better moves?", so RT is

@@ -18,6 +18,14 @@ from analysis.utils.helpers import (
 )
 
 
+def _wrap_long_label(label: str, threshold: int = 38) -> str:
+    """Break a long axis label onto two lines at its first parenthetical.
+    At FONT_SIZE_LABEL (52pt) a single-line label past ~38 chars is wider than a
+    1x3 dashboard panel and bleeds into the neighboring panel's own label."""
+    if len(label) <= threshold or "(" not in label:
+        return label
+    head, _, tail = label.partition("(")
+    return f"{head.rstrip()}\n({tail}"
 
 
 def plot_qbin_stats(
@@ -92,16 +100,23 @@ def plot_qbin_stats(
 
 
 def _annotate_n(fig, n: int) -> None:
-    """``n = {count:,}`` above the top-left of the figure — the only headline text a
-    dashboard carries (house style omits titles/suptitles uniformly; see
-    ``outputs/reports/reference.md`` "Plot standards"). Sized to read as part of
-    the figure (close to the legend's font size), not a footnote. Placed just
-    ABOVE the axes area (y > 1 in figure fraction) rather than at y=0.99 inside
-    it — the first panel's own top y-tick label (e.g. a histogram's density axis)
-    sits right there, and with ``constrained_layout``/``tight_layout`` neither
-    knows to leave this text room, so anything at y<=1 collides with it.
-    ``bbox_inches="tight"`` on save still expands the canvas to include it."""
-    fig.text(0.01, 1.03, f"n = {n:,}", fontsize=LEGEND_FONTSIZE, ha="left", va="bottom")
+    """``n = {count:,}`` at the bottom-left of the figure, below everything else —
+    the only headline text a dashboard carries (house style omits titles/suptitles
+    uniformly; see ``outputs/reports/reference.md`` "Plot standards"). Sized to
+    read as part of the figure (same size as a legend), not a footnote. Position
+    is computed from the actual rendered tight bounding box of every axes (ticks,
+    axis labels, and any below-axes legend all included), so it clears whatever
+    sits lowest in THIS figure — a two-line x-label, a legend, both — rather than
+    a fixed guess that either collides with tall content or leaves excess
+    whitespace for short content. ``bbox_inches="tight"`` on save still expands
+    the canvas to include it, however far below y=0 it lands."""
+    fig.canvas.draw()  # force a layout pass so tight bboxes are accurate
+    renderer = fig.canvas.get_renderer()
+    min_y = min(
+        ax.get_tightbbox(renderer).transformed(fig.transFigure.inverted()).y0
+        for ax in fig.axes
+    )
+    fig.text(0.01, min_y - 0.02, f"n = {n:,}", fontsize=LEGEND_FONTSIZE, ha="left", va="top")
 
 
 def _draw_feature_histogram(
@@ -163,7 +178,7 @@ def _draw_feature_histogram(
                    color=MAIN_COLOR, alpha=0.6, edgecolor=MAIN_COLOR)
     ax.set(ylabel="Density")
     if name:
-        ax.set_xlabel(name)
+        ax.set_xlabel(_wrap_long_label(name))
 
 
 def plot_histogram_from_bins(

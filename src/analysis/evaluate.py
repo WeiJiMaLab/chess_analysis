@@ -220,6 +220,8 @@ def _train_readout(fit_feats, ev_feats, fit_curves, *, in_dim, epochs, lr, seed)
     then return greedy eval stop steps. Features are z-scored on the fit split (n_nodes ≫ steps)."""
     full = torch.cat(fit_feats, 0)
     mean, std = full.mean(0), full.std(0).clamp_min(1e-6)
+    torch.manual_seed(seed)  # must precede head construction — fit_readout_pg's own seed call is too
+                             # late to control weight init, since the head is already built by then
     head = build_advantage_head(in_dim, 64, 2)
     fit_readout_pg(head, [(f - mean) / std for f in fit_feats], fit_curves, epochs=epochs, lr=lr, seed=seed)
     head.eval()
@@ -245,15 +247,18 @@ def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed):
 def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embed, seed):
     """Fit all three stop controllers on the fit split; return eval-split per-episode stop steps.
 
-    Frac* (1 param, grid) / Stats-Controller (PG MLP, 30 ep) / Zt-Controller (PG MLP, 200 ep — the
-    R-signal is nonlinear). Returns ``{'k_frac', 'fraction', 'stats', 'zt'}``.
+    Frac* (1 param, grid) / Stats-Controller (PG MLP, 200 ep) / Zt-Controller (PG MLP, 200 ep — same
+    schedule as Zt: the original 30ep/lr=1e-2 Stats schedule was an undertrained optimization headwind,
+    not a representational gap (n_nodes carries real signal independent of steps; matching Zt's epochs/lr
+    closes the Stats-vs-Frac* gap without any feature engineering). Returns ``{'k_frac', 'fraction',
+    'stats', 'zt'}``.
     """
     return {
         "k_frac": (kf := fit_fraction_stop(fit_curves)),
         "fraction": np.full(len(ev_idx), kf, dtype=int),
         "stats": _train_readout([_steps_stats_tensor(episodes[i]) for i in fit_idx],
                                 [_steps_stats_tensor(episodes[i]) for i in ev_idx], fit_curves,
-                                in_dim=4, epochs=30, lr=1e-2, seed=seed),
+                                in_dim=4, epochs=200, lr=1e-3, seed=seed),
         "zt": _train_readout([_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in fit_idx],
                              [_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in ev_idx], fit_curves,
                              in_dim=d_embed + 1, epochs=200, lr=1e-3, seed=seed),
@@ -442,7 +447,7 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
 
 def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
                             d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
-                            lambda_grid: tuple[float, ...] = (5.0, 10.0, 40.0), maint_lambda: float = 5.0,
+                            lambda_grid: tuple[float, ...] = (5.0, 10.0, 40.0), maint_lambda: float = 10.0,
                             maint_grid: tuple[float, ...] = (0.0, 0.05, 0.10, 0.30, 1.0)):
     """(3) Δ mean regret (model − $z_t$) for {Frac*, Stats-Controller, AlwaysStop, AlwaysContinue} —
     z_t is always the baseline, so positive = z_t wins. Two horizontal-violin figures: (A) sweep the
@@ -491,6 +496,7 @@ def main() -> None:
     ap.add_argument("--time-mode", default="linear")
     ap.add_argument("--time-lambda", type=float, default=10.0)
     ap.add_argument("--maintenance-scale", type=float, default=0.0)
+    ap.add_argument("--maint-lambda", type=float, default=10.0, help="lambda held fixed in the maintenance sweep")
     args = ap.parse_args()
 
     packed_root, out = Path(args.packed_root), args.out_dir
@@ -501,7 +507,8 @@ def main() -> None:
     if args.which in ("decodability", "all"):
         plot_r_decodability(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=min(args.max_episodes, 12000))
     if args.which in ("separation", "all"):
-        plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes)
+        plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes,
+                                maint_lambda=args.maint_lambda)
 
 
 if __name__ == "__main__":
