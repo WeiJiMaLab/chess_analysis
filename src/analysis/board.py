@@ -222,18 +222,23 @@ def run_merge(db: str) -> None:
 # --plot : the four analyses (read filtered_moves ⋈ board_features)
 # =============================================================================
 
-_LEGEND_KW = dict(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=LEGEND_FONTSIZE, frameon=False)
+_LEGEND_KW = dict(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=LEGEND_FONTSIZE, frameon=False,
+                 handlelength=1.2)
 
-# The ply-tertile legend (3 lines/colors: early/mid/late) reads better docked to the
-# RIGHT of its panel than stacked below it — below-axes worked when panels were wide
-# and short (42x13), but now that dashboards are narrower, 3 legend lines stacked
-# under a narrow panel crowd the x-label. Single-column, vertically centered on the
-# panel's right edge. Used ONLY for the ply-tertile legend specifically (see
+# move_time_summary's 3 panels need more clearance below the axes than the standard
+# _LEGEND_KW offset gives them (narrower panels than most other below-axes legends in
+# this file use) -- own constant rather than changing _LEGEND_KW's offset for everyone.
+_RT_LEGEND_KW = dict(loc="upper center", bbox_to_anchor=(0.5, -0.28), fontsize=LEGEND_FONTSIZE, frameon=False,
+                     handlelength=1.2)
+
+# Docked to the RIGHT of its panel instead of stacked below (the ply-tertile legend
+# only) -- below-axes worked when panels were wide and short (42x13), but now that
+# dashboards are narrower, 3 stacked legend lines crowd the x-label. See
 # ``_plot_boolean_by_tertile`` here and ``Analyzer.plot_quantile_bins_tertile_segmented``/
-# ``plot_lowess_tertile_segmented`` in analysis.py) — every OTHER legend in this file
-# (mean/median lines, y=x reference, analysis-window shading, material-band/piece-tier/
-# queen-retention/diversity categorical legends) keeps the below-axes ``_LEGEND_KW``.
-_PLY_LEGEND_KW = dict(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=LEGEND_FONTSIZE, frameon=False)
+# ``plot_lowess_tertile_segmented`` in analysis.py. ``handlelength`` shortens the line
+# SAMPLE (not its thickness) so a right-docked legend doesn't eat much horizontal width.
+_PLY_LEGEND_KW = dict(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=LEGEND_FONTSIZE, frameon=False,
+                      handlelength=1.2)
 
 
 def move_time_summary(conn, table, *, ply_table: str | None = None, filename: str = "rt_distribution.pdf",
@@ -292,7 +297,8 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     med_log = _weighted_median(lmt_bins)
 
     apply_poster_style()
-    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(31.2, 10), constrained_layout=True)
+    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(31.2, 10), constrained_layout=True,
+                                          gridspec_kw={"wspace": 0.18})
 
     # Panel 1: RT distribution in SECONDS on a log x-axis (bins uniform in ln(RT),
     # so exponentiating the edges gives geometric bins that read evenly on a log axis).
@@ -305,7 +311,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ax_h.axvline(np.exp(mean), color="black", ls="--", lw=2.5, label=f"Mean = {mean_s}s")
     ax_h.axvline(np.exp(med_log), color="dimgray", ls=":", lw=2.5, label=f"Median = {median_s}s")
     ax_h.set(xlabel="RT (s, log axis)", ylabel="Count")
-    ax_h.legend(**_LEGEND_KW)
+    ax_h.legend(**_RT_LEGEND_KW)
 
     # Panel 2: QQ plot — theoretical Normal(mean, std) quantile vs. empirical quantile
     # of RT, both in SECONDS on a log-log scale (RT spans orders of magnitude, same
@@ -319,7 +325,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ax_q.set_xscale("log")
     ax_q.set_yscale("log")
     ax_q.set(xlabel="Theoretical Quantile (s)", ylabel="Empirical Quantile (s)", xlim=lims, ylim=lims)
-    ax_q.legend(**_LEGEND_KW)
+    ax_q.legend(**_RT_LEGEND_KW)
 
     # Panel 3: RT vs ply over the WHOLE game (unwindowed) — same quantile-binned
     # trend machinery as every other panel, so it reads with identical visual weight.
@@ -332,7 +338,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ply_analyzer.plot_quantile_bins(ax_p)
     ax_p.axvspan(int(CONFIG["min_ply"]), int(CONFIG["max_ply"]), color="gray", alpha=0.12,
                  label=f"Analysis window [{CONFIG['min_ply']},{CONFIG['max_ply']}]")
-    ax_p.legend(**_LEGEND_KW)
+    ax_p.legend(**_RT_LEGEND_KW)
     # `constrained_layout` + `axvspan` + a below-axes `legend()` on a multi-panel
     # figure corrupts this axis' tick FORMATTER into a 2-entry FixedFormatter keyed
     # off the axvspan's own (min_ply, max_ply) bounds (reproduced in isolation —
@@ -445,7 +451,8 @@ def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, 
     # now docks to its RIGHT (bbox_to_anchor=(1.02, 0.5) via _PLY_LEGEND_KW /
     # Analyzer.plot_quantile_bins_tertile_segmented) instead of stacking below, so this
     # panel no longer needs the old below-axes legend's vertical headroom.
-    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(36, 10), constrained_layout=True)
+    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(36, 10), constrained_layout=True,
+                                       gridspec_kw={"wspace": 0.18})
     _draw_feature_histogram(conn, table, column, kind, clip, ax0, name=name)
     if kind == "bin":
         _plot_boolean_overall(analyzer, ax1)

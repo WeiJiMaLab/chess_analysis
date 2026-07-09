@@ -536,6 +536,7 @@ class Analyzer:
             bbox_to_anchor=(1.02, 0.5),
             ncol=1,
             frameon=False,
+            handlelength=1.2,
         )
 
     def plot_quantile_heatmap(self, ax, *, alpha_mode: str = "log"):
@@ -682,7 +683,7 @@ class Analyzer:
         # Same right-docked placement as plot_quantile_bins_tertile_segmented's
         # ply-tertile legend (below-axes stacking crowds a narrow panel's x-label).
         ax.legend(fontsize=LEGEND_FONTSIZE, loc="center left",
-                  bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False)
+                  bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False, handlelength=1.2)
 
     def save_quantile_heatmap_figure(
         self,
