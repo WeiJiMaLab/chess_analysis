@@ -10,7 +10,7 @@
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err
 #SBATCH --partition=cpu
 #SBATCH --qos=short
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
 

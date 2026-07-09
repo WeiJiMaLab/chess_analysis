@@ -1,0 +1,150 @@
+[
+  {
+    "label": "p10",
+    "argmax": 3,
+    "node_cutoff": 110,
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees/puctvalue_md36/222851_root_222851.pt",
+    "dup": {
+      "pass": true,
+      "n_duplicates": 0,
+      "example_pairs": []
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 36,
+      "n_branching_nodes": 4
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.6272727272727273,
+      "n_unexpanded_siblings": 34,
+      "n_root_children": 36
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p50",
+    "argmax": 6,
+    "node_cutoff": 280,
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees/puctvalue_md36/110448_root_110448.pt",
+    "dup": {
+      "pass": true,
+      "n_duplicates": 0,
+      "example_pairs": []
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 51,
+      "n_branching_nodes": 7
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.7142857142857143,
+      "n_unexpanded_siblings": 49,
+      "n_root_children": 51
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p75",
+    "argmax": 11,
+    "node_cutoff": 392,
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees/puctvalue_md36/056642_root_56642.pt",
+    "dup": {
+      "pass": true,
+      "n_duplicates": 0,
+      "example_pairs": []
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 50,
+      "n_branching_nodes": 12
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.6454081632653061,
+      "n_unexpanded_siblings": 41,
+      "n_root_children": 44
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p90",
+    "argmax": 19,
+    "node_cutoff": 792,
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees/puctvalue_md36/293263_root_293263.pt",
+    "dup": {
+      "pass": true,
+      "n_duplicates": 0,
+      "example_pairs": []
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 48,
+      "n_branching_nodes": 20
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.6338383838383839,
+      "n_unexpanded_siblings": 33,
+      "n_root_children": 39
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "max",
+    "argmax": 89,
+    "node_cutoff": 2507,
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees/puctvalue_md36/198286_root_198286.pt",
+    "dup": {
+      "pass": false,
+      "n_duplicates": 133,
+      "example_pairs": [
+        [
+          109,
+          242
+        ],
+        [
+          109,
+          244
+        ],
+        [
+          114,
+          288
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 42,
+      "n_branching_nodes": 89
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.5500598324690865,
+      "n_unexpanded_siblings": 0,
+      "n_root_children": 39
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  }
+]

@@ -5,8 +5,8 @@ cost regime? Four figures answer it (:func:`plot_regret_effort_frontier`, :func:
 :func:`plot_delta_regret_vs_zt` — the latter renders both the lambda- and maintenance-sweep panels).
 
 The halt policies are stop-controller modules, fit on the train split and scored per-episode on eval:
-  * Frac*   — one parameter ``k`` (fixed stop step), fit by minimizing fit-split regret
-    (:func:`fit_fraction_stop`); the frontier of fixed-``k`` rules is its parameter space.
+  * SingleHalt* — one parameter ``k`` (fixed stop step), fit by minimizing fit-split regret
+    (:func:`fit_singlehalt_stop`); the frontier of fixed-``k`` rules is its parameter space.
   * Stats-Controller / Zt-Controller — MLP readouts (``cts.models.readout.build_advantage_head``)
     trained by the EXACT expected-return objective via the DEPLOYED trainer
     (``cts.train.pg_controller_train.fit_readout_pg``) — no bespoke training loop here.
@@ -92,6 +92,10 @@ def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None
                 "time_budgets": list(range(starting_budget, starting_budget - num_steps, -1)),
                 "oracle_stop_step": int(oracle_stop_steps[i].item()),
                 "oracle_value": float(oracle_values[i].item()), "starting_budget": starting_budget,
+                # Globally-unique source-tree id (shard-local trajectory index is NOT unique across
+                # shards) — required so `_split` can partition by tree, not by episode, and never leak
+                # a tree's other episodes across the fit/eval boundary.
+                "trajectory_key": f"{shard_path.name}#{traj}",
             })
             if max_episodes is not None and len(episodes) >= max_episodes:
                 return episodes
@@ -115,7 +119,7 @@ def _oracle_config(packed_root: Path) -> BudgetedOracleConfig:
 _INK, _MUTED, _GRID = "#2C3E50", "#7A8894", "#E3E7EB"
 _C = {"front": "#556270", "best": "#E4A11B", "stats": "#12A19A", "zt": "#3F4DA0",
       "always": "#C0392B", "never": "#8B97A3", "steps": "#B0B8C0",
-      "frac": "#F2A9A6",  # pastel red — Frac* (fixed-stop) point, distinct from the deep-red AlwaysStop endpoint
+      "singlehalt": "#F2A9A6",  # pastel red — SingleHalt* (fixed-stop) point, distinct from the deep-red AlwaysStop endpoint
       "mono": MAIN_COLOR}  # board/engine's indigo-blue — monochrome base for the decodability bars
 _HELVETICA_FAMILY: str | None = None
 
@@ -208,9 +212,9 @@ def _steps_zt_tensor(ep: dict[str, Any], z_ep: np.ndarray) -> torch.Tensor:
 # ===========================================================================
 # Stop-controller modules (fit on the train split -> per-episode eval stop steps)
 # ===========================================================================
-def fit_fraction_stop(fit_curves: list[np.ndarray]) -> int:
-    """Frac* — the ONE-parameter fixed-stop controller: the stop step ``k`` minimizing FIT-split mean
-    regret (selected on the fit split, never on the eval set it is scored over)."""
+def fit_singlehalt_stop(fit_curves: list[np.ndarray]) -> int:
+    """SingleHalt* — the ONE-parameter fixed-stop controller: the stop step ``k`` minimizing FIT-split
+    mean regret (selected on the fit split, never on the eval set it is scored over)."""
     kmax = max(len(c) for c in fit_curves)
     return int(np.argmin([_regret_at(fit_curves, [k] * len(fit_curves)).mean() for k in range(kmax)]))
 
@@ -229,33 +233,45 @@ def _train_readout(fit_feats, ev_feats, fit_curves, *, in_dim, epochs, lr, seed)
         return np.array([stop_step_from_advantages(head(((f - mean) / std)).reshape(-1)) for f in ev_feats])
 
 
-def _split(n_episodes: int, seed: int, train_frac: float = 0.7) -> tuple[np.ndarray, np.ndarray]:
-    """70/30 episode split (indices) for held-out controller fitting/eval."""
-    perm = np.random.default_rng(seed).permutation(n_episodes)
-    n_fit = int(round(train_frac * n_episodes))
-    return perm[:n_fit], perm[n_fit:]
+def _split(trajectory_keys: list[str], seed: int, train_frac: float = 0.7) -> tuple[np.ndarray, np.ndarray]:
+    """70/30 fit/eval split, partitioned by SOURCE TREE (never by raw episode index).
+
+    A tree can back multiple episodes (e.g. several truncation depths of the same trajectory); if the
+    split were over episode indices, some of a tree's episodes could land in fit and others in eval —
+    since z_t at a shared step is identical across them, that's leakage, not a held-out estimate. This
+    groups episode indices by ``trajectory_key`` first, shuffles whole TREES, and assigns each tree's
+    episodes entirely to one side.
+    """
+    keys = np.asarray(trajectory_keys)
+    unique_keys = np.unique(keys)
+    perm = np.random.default_rng(seed).permutation(len(unique_keys))
+    n_fit_trees = int(round(train_frac * len(unique_keys)))
+    fit_keys = set(unique_keys[perm[:n_fit_trees]].tolist())
+    fit_mask = np.array([k in fit_keys for k in keys])
+    all_idx = np.arange(len(keys))
+    return all_idx[fit_mask], all_idx[~fit_mask]
 
 
 def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed):
-    """Load validation episodes + aligned ``z_t`` once, plus the 70/30 fit/eval episode split."""
+    """Load validation episodes + aligned ``z_t`` once, plus the 70/30 fit/eval TREE split."""
     episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes)
     z_by_ep = _load_zt_by_episode(episodes, cache_path, d_embed)
-    fit_idx, ev_idx = _split(len(episodes), seed)
+    fit_idx, ev_idx = _split([ep["trajectory_key"] for ep in episodes], seed)
     return episodes, z_by_ep, fit_idx, ev_idx
 
 
 def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embed, seed):
     """Fit all three stop controllers on the fit split; return eval-split per-episode stop steps.
 
-    Frac* (1 param, grid) / Stats-Controller (PG MLP, 200 ep) / Zt-Controller (PG MLP, 200 ep — same
-    schedule as Zt: the original 30ep/lr=1e-2 Stats schedule was an undertrained optimization headwind,
-    not a representational gap (n_nodes carries real signal independent of steps; matching Zt's epochs/lr
-    closes the Stats-vs-Frac* gap without any feature engineering). Returns ``{'k_frac', 'fraction',
-    'stats', 'zt'}``.
+    SingleHalt* (1 param, grid) / Stats-Controller (PG MLP, 200 ep) / Zt-Controller (PG MLP, 200 ep —
+    same schedule as Zt: the original 30ep/lr=1e-2 Stats schedule was an undertrained optimization
+    headwind, not a representational gap (n_nodes carries real signal independent of steps; matching
+    Zt's epochs/lr closes the Stats-vs-SingleHalt* gap without any feature engineering). Returns
+    ``{'k_singlehalt', 'singlehalt', 'stats', 'zt'}``.
     """
     return {
-        "k_frac": (kf := fit_fraction_stop(fit_curves)),
-        "fraction": np.full(len(ev_idx), kf, dtype=int),
+        "k_singlehalt": (kf := fit_singlehalt_stop(fit_curves)),
+        "singlehalt": np.full(len(ev_idx), kf, dtype=int),
         "stats": _train_readout([_steps_stats_tensor(episodes[i]) for i in fit_idx],
                                 [_steps_stats_tensor(episodes[i]) for i in ev_idx], fit_curves,
                                 in_dim=4, epochs=200, lr=1e-3, seed=seed),
@@ -271,8 +287,74 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
 _PT_SIZE, _PT_ALPHA = 4, 0.88  # one uniform marker size/alpha for every point series — color is the only encoding
 
 
+def _to_jsonable(obj):
+    """Recursively convert numpy scalars/arrays (and tuples) to plain JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    return obj
+
+
+def _save_json(data: dict, path: Path) -> None:
+    """Save a plot's precomputed (expensive: data load + model fit) intermediate data so the figure
+    can be re-rendered later -- different padding, styling, which candidates to show -- without
+    redoing that work. See ``replot_saved``/``--replot``."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(data), f)
+
+
+def _load_json(path: Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _padded_range(lo: float, hi: float, frac: float, min_pad: float) -> tuple[float, float]:
+    """(lo, hi) padded by ``frac`` of the actual span (floored at ``min_pad`` for near-zero spans).
+
+    Proportional, not a fixed constant -- axis padding sized in absolute units (e.g. "+30") silently
+    assumes a specific reward/regret SCALE, which breaks the instant that scale changes (this is
+    exactly what happened when halt_reward went from cp-scale to win-probability-scale: hardcoded
+    +-20/25/30 padding swamped a regret spread of a few tenths). Scaling padding to the data's own
+    span makes the plot self-adjusting regardless of what scale the underlying reward is in.
+    """
+    span = hi - lo
+    pad = max(span * frac, min_pad)
+    return lo - pad, hi + pad
+
+
+def _deconflict_points(points: list[dict], x_scale: float, y_scale: float, frac: float = 0.035) -> list[dict]:
+    """Nudge points that are numerically COINCIDENT (identical x AND y -- e.g. a Stats-Controller
+    readout that converged to exactly SingleHalt*'s fixed-k policy, a real finding, not a bug: see
+    labnotebook 2026-07-07) apart by a small amount so both stay visible as distinct markers instead
+    of one hiding the other.
+
+    Pure rendering aid: shifts x/xlo/xhi and y/lo/hi by the SAME delta per point (preserving each
+    point's own CI width/shape exactly, just recentering it slightly), scaled to the plot's own
+    current axis range so the nudge stays proportionate regardless of the data's magnitude (same
+    scale-agnostic principle as ``_padded_range``). Never changes which point is "ahead" of another
+    and never used to imply a real difference that isn't in the underlying statistics -- callers that
+    need the true, un-nudged values (e.g. printed regret numbers) should keep a separate reference to
+    the original points.
+    """
+    out = [dict(p) for p in points]
+    dx, dy = x_scale * frac, y_scale * frac
+    for i in range(len(out)):
+        for j in range(i + 1, len(out)):
+            if out[i]["x"] == out[j]["x"] and out[i]["y"] == out[j]["y"]:
+                for key, delta in (("x", -dx), ("xlo", -dx), ("xhi", -dx), ("y", -dy), ("lo", -dy), ("hi", -dy)):
+                    out[i][key] += delta
+                for key, delta in (("x", dx), ("xlo", dx), ("xhi", dx), ("y", dy), ("lo", dy), ("hi", dy)):
+                    out[j][key] += delta
+    return out
+
+
 def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False):
-    """Draw the fixed-stop frontier line and every point (Frac*/Stats/z_t/AlwaysStop/AlwaysContinue) —
+    """Draw the fixed-stop frontier line and every point (SingleHalt*/Stats/z_t/AlwaysStop/AlwaysContinue) —
     all the SAME marker/size, differing only by color, each with 95% CI error bars in x AND y."""
     ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label="fixed-stop frontier" if label_line else None)
     for p in points:
@@ -298,17 +380,16 @@ def _draw_zoom_indicator(fig, ax_from, ax_to, xlim, ylim):
                                        color=_MUTED, lw=0.9, ls=(0, (6, 4)), alpha=0.7, zorder=1))
 
 
-def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
-                                d_embed: int = 32, time_mode: str = "linear", time_lambda: float = 10.0,
-                                maintenance_scale: float = 0.0, max_episodes: int = 15000, seed: int = 0):
-    """(1) The fixed-stop frontier (search effort vs regret) with the Stats-/Zt-Controllers as points.
-
-    A learned point BELOW the frontier beats every fixed stop at that effort. Left panel = full range,
-    with a boxed+dotted-line indicator of the region the right panel zooms into; right panel = zoom on
-    the controllers, each point with 95% CI error bars in both x (average stop step) and y (regret).
-    """
+def _compute_frontier_data(packed_root: Path, cache_path: str | Path, *,
+                           d_embed: int = 32, time_mode: str = "linear", time_lambda: float = 10.0,
+                           maintenance_scale: float = 0.0, maintenance_exponent: float = 1.0,
+                           max_episodes: int = 15000, seed: int = 0) -> dict:
+    """Expensive half of the frontier plot: load data, fit the stop controllers, compute every
+    plotted quantity. Returns a JSON-serializable dict consumed by ``_render_frontier`` -- kept
+    separate (and saved to disk by the caller) so the figure can be re-rendered later without
+    redoing the (slow) model fitting."""
     config = replace(_oracle_config(packed_root), time_mode=time_mode, time_lambda=time_lambda,
-                     maintenance_scale=maintenance_scale)
+                     maintenance_scale=maintenance_scale, maintenance_exponent=maintenance_exponent)
     episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed)
     curves = _return_curves(episodes, config)
     ev = [curves[i] for i in ev_idx]
@@ -317,7 +398,7 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
     kmax = max(len(c) for c in ev)
     fr = np.array([_regret_at(ev, [k] * len(ev)).mean() for k in range(kmax)])
     fr_x = np.array([np.mean([min(k, len(c) - 1) for c in ev]) for k in range(kmax)])
-    kf = min(ctrl["k_frac"], kmax - 1)
+    kf = min(ctrl["k_singlehalt"], kmax - 1)
 
     def point(stops, color, lbl, **kw):
         xs = np.array([min(int(s), len(c) - 1) for s, c in zip(stops, ev)], dtype=float)
@@ -325,19 +406,39 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
         ym, ylo, yhi = _mean_ci(_regret_at(ev, stops))
         return dict(x=xm, xlo=xlo, xhi=xhi, y=ym, lo=ylo, hi=yhi, color=color, label=lbl, **kw)
 
-    controllers = [point(ctrl["fraction"], _C["frac"], "Frac* (fixed stop)", zorder=7),
+    controllers = [point(ctrl["singlehalt"], _C["singlehalt"], "SingleHalt* (fixed stop)", zorder=7),
                   point(ctrl["stats"], _C["stats"], "Stats-Controller"),
                   point(ctrl["zt"], _C["zt"], "$z_t$-Controller")]
     ends = [point(np.zeros(len(ev_idx), dtype=int), _C["always"], "Always Stop (k=0)"),
            point(np.full(len(ev_idx), kmax - 1, dtype=int), _C["never"], "Always Continue (k=max)")]
     all_points = controllers + ends
+    d_zs = bootstrap_ci(lambda d: float(d.mean()), _regret_at(ev, ctrl["zt"]) - _regret_at(ev, ctrl["stats"]), n_boot=2000)
+
+    return {"fr_x": fr_x, "fr": fr, "controllers": controllers, "all_points": all_points, "kf": kf,
+            "d_zs": d_zs, "time_mode": time_mode, "time_lambda": time_lambda,
+            "maintenance_scale": maintenance_scale, "maintenance_exponent": maintenance_exponent}
+
+
+def _render_frontier(data: dict, out_dir: str | Path) -> dict:
+    """Cheap half of the frontier plot: build + save the figure from ``_compute_frontier_data``'s output.
+
+    A learned point BELOW the frontier beats every fixed stop at that effort. Left panel = full range,
+    with a boxed+dotted-line indicator of the region the right panel zooms into; right panel = zoom on
+    the controllers, each point with 95% CI error bars in both x (average stop step) and y (regret).
+    """
+    fr_x, fr = np.asarray(data["fr_x"]), np.asarray(data["fr"])
+    controllers, all_points, kf = data["controllers"], data["all_points"], data["kf"]
 
     _rcparams()
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 5.4), gridspec_kw={"width_ratios": [1, 1.1]})
-    ylo, yhi = min(p["lo"] for p in controllers) - 25, max(p["hi"] for p in controllers) + 30
-    zoom_xlim = (max(0, min(p["x"] for p in controllers) - 8), max(p["x"] for p in controllers) + 10)
-    zoom_ylim = (ylo, yhi)
-    full_ylim = (min(0, min(p["lo"] for p in all_points) - 20), max(p["hi"] for p in all_points) * 1.05)
+    zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
+                              frac=0.25, min_pad=1e-3)
+    zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
+                              frac=0.3, min_pad=1.0)
+    zoom_xlim = (max(0, zoom_xlim[0]), zoom_xlim[1])
+    full_lo, full_hi = _padded_range(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points),
+                                     frac=0.05, min_pad=1e-3)
+    full_ylim = (min(0, full_lo), full_hi)
     _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim)
     _frontier_panel(axR, fr_x, fr, all_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
@@ -345,18 +446,38 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
     fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.06), ncol=3,
               fontsize=10, frameon=False)
     save_pdf_png(fig, str(out_dir), "frontier", dpi=200, bbox_extra_artists=(fig.legends[0],))
-    fm, fhi_ = controllers[0]["y"], controllers[0]["hi"]
-    d_zs = bootstrap_ci(lambda d: float(d.mean()), _regret_at(ev, ctrl["zt"]) - _regret_at(ev, ctrl["stats"]), n_boot=2000)
-    print(f"[assess] frontier {time_mode} λ={time_lambda} m={maintenance_scale}: Frac*(k={kf})={fm:.1f} "
-          f"Stats={controllers[1]['y']:.1f} z_t={controllers[2]['y']:.1f}  paired z_t-Stats={d_zs}", flush=True)
-    return {"k_frac": kf, "paired_zt_minus_stats": d_zs}
+    fm = controllers[0]["y"]
+    print(f"[assess] frontier {data['time_mode']} λ={data['time_lambda']} m={data['maintenance_scale']} "
+          f"p={data['maintenance_exponent']}: SingleHalt*(k={kf})={fm:.1f} "
+          f"Stats={controllers[1]['y']:.1f} z_t={controllers[2]['y']:.1f}  "
+          f"paired z_t-Stats={tuple(data['d_zs'])}", flush=True)
+    return {"k_singlehalt": kf, "paired_zt_minus_stats": tuple(data["d_zs"])}
 
 
-def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
-                        d_embed: int = 32, max_episodes: int = 12000, seed: int = 0):
-    """(2) Can ``R(t)`` = value of continuing (``max_{s>=t} halt_reward(s) - halt_reward(t)``) be decoded,
-    and only from ``z_t``? Held-out ``R^2`` from steps / +stats / +``z_t`` vs a row-shuffle floor. ``z_t``
-    decodes R several-fold better than structure, and only NONLINEARLY (linear ``R^2`` ~ shuffle floor)."""
+def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                                d_embed: int = 32, time_mode: str = "linear", time_lambda: float = 10.0,
+                                maintenance_scale: float = 0.0, maintenance_exponent: float = 1.0,
+                                max_episodes: int = 15000, seed: int = 0):
+    """(1) The fixed-stop frontier (search effort vs regret) with the Stats-/Zt-Controllers as points.
+    ``maintenance_exponent=1.0`` makes the per-step maintenance cost EXACTLY linear in node count
+    (``scale * n / ref_nodes``); overridden here rather than left to whatever's baked into the packed
+    manifest, matching the analysis-time-cost design (see module docstring).
+
+    Saves the computed data to ``<out_dir>/frontier_data.json`` so the figure can be re-rendered later
+    (different padding/styling/candidates) without redoing the expensive model fitting -- see
+    ``replot_saved`` / ``--replot``.
+    """
+    data = _compute_frontier_data(packed_root, cache_path, d_embed=d_embed, time_mode=time_mode,
+                                  time_lambda=time_lambda, maintenance_scale=maintenance_scale,
+                                  maintenance_exponent=maintenance_exponent, max_episodes=max_episodes, seed=seed)
+    _save_json(data, Path(out_dir) / "frontier_data.json")
+    return _render_frontier(data, out_dir)
+
+
+def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
+                               d_embed: int = 32, max_episodes: int = 12000, seed: int = 0) -> dict:
+    """Expensive half of the decodability plot: load data, fit the linear/MLP R^2 probes. Returns a
+    JSON-serializable dict consumed by ``_render_decodability``."""
     from cts.analysis.zt_probe import _linear_r2, _mlp_r2, _episode_split_mask  # local: avoids circular import
     episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes)
     z_by_ep = _load_zt_by_episode(episodes, cache_path, d_embed)
@@ -374,17 +495,46 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
     R = np.concatenate(cols["R"])
     steps, heights = np.concatenate(cols["steps"]), np.concatenate(cols["heights"])
     widths, nnodes, z = np.concatenate(cols["widths"]), np.concatenate(cols["nnodes"]), np.concatenate(cols["z"], axis=0)
-    is_tr = _episode_split_mask(step_counts, total, seed=seed); is_te = ~is_tr
+    traj_keys = [ep["trajectory_key"] for ep in episodes]
+    is_tr = _episode_split_mask(step_counts, total, seed=seed, trajectory_keys=traj_keys); is_te = ~is_tr
 
+    # Each feature set is tested ALONE (not nested/cumulative): "steps" was
+    # previously baked into every row, including the one labeled "z_t" — so
+    # the reported R^2 mostly reflected R(t)'s near-tautological relationship
+    # with trajectory position (fewer remaining steps -> mechanically less
+    # room for R(t)'s forward-max to be large), not what z_t itself encodes.
+    # "all" is kept as a reference upper bound (every signal combined).
     feats = {"steps": np.column_stack([steps]),
-             "stats": np.column_stack([steps, nnodes, heights, widths]),
-             "z_t": np.column_stack([steps, z]),
-             "z_t+stats": np.column_stack([steps, nnodes, heights, widths, z])}
+             "stats": np.column_stack([nnodes, heights, widths]),
+             "z_t": np.column_stack([z]),
+             "all (steps+stats+z_t)": np.column_stack([steps, nnodes, heights, widths, z])}
     rows = [(name, _linear_r2(X[is_tr], R[is_tr], X[is_te], R[is_te]),
              _mlp_r2(X[is_tr], R[is_tr], X[is_te], R[is_te], seed=seed)) for name, X in feats.items()]
-    Xs = np.column_stack([steps, z])[np.random.default_rng(seed + 7).permutation(total)]
+    Xall = np.column_stack([steps, nnodes, heights, widths, z])
+    Xs = Xall[np.random.default_rng(seed + 7).permutation(total)]
     shuf_r2 = _linear_r2(Xs[is_tr], R[is_tr], Xs[is_te], R[is_te])
 
+    # Orthogonality check: how much does "stats" or "z_t" ALONE already
+    # decode "steps" itself? High values here mean stats/z_t are entangled
+    # with trajectory position, not independent of it — the entanglement
+    # that made the old nested-feature design misleading in the first place.
+    orthogonality = {
+        "stats_predicts_steps": _linear_r2(
+            np.column_stack([nnodes, heights, widths])[is_tr], steps[is_tr],
+            np.column_stack([nnodes, heights, widths])[is_te], steps[is_te]),
+        "z_t_predicts_steps": _linear_r2(z[is_tr], steps[is_tr], z[is_te], steps[is_te]),
+    }
+    return {"rows": rows, "shuf_r2": shuf_r2, "orthogonality": orthogonality}
+
+
+def _render_decodability(data: dict, out_dir: str | Path) -> dict:
+    """Cheap half of the decodability plot: build + save the figure from
+    ``_compute_decodability_data``'s output. Can ``R(t)`` = value of continuing
+    (``max_{s>=t} halt_reward(s) - halt_reward(t)``) be decoded from ``steps``, ``stats``, or ``z_t``
+    ALONE (each an independent probe, not nested) vs a row-shuffle floor and an "all combined"
+    reference upper bound."""
+    rows, shuf_r2 = data["rows"], data["shuf_r2"]
+    orthogonality = data.get("orthogonality", {})
     _rcparams()
     mono = _C["mono"]
     fig, ax = plt.subplots(figsize=(7.4, 4.4))
@@ -396,7 +546,9 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
         ax.text(r[2] + 0.006, i + h / 2, f"{r[2]:.2f}", va="center", fontsize=10, fontweight="bold", color=_INK)
     ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"shuffle floor ({shuf_r2:+.2f})")
     ax.axvline(0, color=_MUTED, lw=0.8)
-    ax.set_yticks(y); ax.set_yticklabels(["steps\n(C-step)", "+ stats\n(C-maint)", "+ $z_t$\n(R via GNN)", "$z_t$ + stats"], fontsize=10.5)
+    ax.set_yticks(y)
+    ax.set_yticklabels(["steps\n(alone)", "stats\n(alone, no steps)", "$z_t$\n(alone, no steps)",
+                         "all combined\n(steps+stats+$z_t$)"], fontsize=10.5)
     ax.invert_yaxis()
     ax.set_xlabel("held-out $R^2$ — predicting R(t) = value of continuing")
     ax.grid(axis="x", color=_GRID, lw=1)
@@ -404,28 +556,49 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
     save_pdf_png(fig, str(out_dir), "decodability", dpi=200)
     out = {r[0]: {"linear": r[1], "mlp": r[2]} for r in rows}
     print(f"[assess] R-decodability  " + "  ".join(f"{k}={v['mlp']:.3f}" for k, v in out.items()), flush=True)
+    if orthogonality:
+        print(f"[assess] orthogonality (R^2 predicting steps FROM each): " +
+              "  ".join(f"{k}={v:.3f}" for k, v in orthogonality.items()), flush=True)
     return out
 
 
-_DELTA_CANDIDATES = [("frac", _C["frac"], "Frac*"), ("stats", _C["stats"], "Stats-Controller"),
+def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                        d_embed: int = 32, max_episodes: int = 12000, seed: int = 0):
+    """(2) Can ``R(t)`` = value of continuing be decoded, and only from ``z_t``? See
+    ``_render_decodability`` for the full docstring. Saves computed data to
+    ``<out_dir>/decodability_data.json`` for cheap re-rendering -- see ``replot_saved``/``--replot``."""
+    data = _compute_decodability_data(packed_root, cache_path, d_embed=d_embed, max_episodes=max_episodes, seed=seed)
+    _save_json(data, Path(out_dir) / "decodability_data.json")
+    return _render_decodability(data, out_dir)
+
+
+_DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "SingleHalt*"), ("stats", _C["stats"], "Stats-Controller"),
                     ("always_stop", _C["always"], "Always Stop"), ("always_continue", _C["never"], "Always Continue")]
+# Plotted subset for _delta_ci_panel: always_stop/always_continue are frequently degenerate (huge or
+# exactly-zero delta) and, since SingleHalt* is fit by argmin over EVERY fixed stop step (including
+# k=0=Always Stop and k=kmax-1=Always Continue -- see fit_singlehalt_stop), it's guaranteed at least
+# as good as either extreme on the fit split -- plotting them alongside just forces the x-axis to
+# whatever huge/degenerate range they occupy, hiding the actual singlehalt/stats spread. Still printed
+# in the [assess] summary line (loops over the full _DELTA_CANDIDATES), just not plotted.
+_DELTA_CANDIDATES_DISPLAY = _DELTA_CANDIDATES[:2]
 
 
-def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, d_embed, seed):
-    """Per-episode paired delta = candidate_regret − z_t_regret for {frac, stats, always_stop,
-    always_continue} under one cost regime (mode/lam/mnt). Positive = z_t beats the candidate."""
-    curves = _return_curves(episodes, replace(base_cfg, time_mode=mode, time_lambda=lam, maintenance_scale=mnt))
+def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, exponent, d_embed, seed):
+    """Per-episode paired delta = candidate_regret − z_t_regret for {singlehalt, stats, always_stop,
+    always_continue} under one cost regime (mode/lam/mnt/exponent). Positive = z_t beats the candidate."""
+    curves = _return_curves(episodes, replace(base_cfg, time_mode=mode, time_lambda=lam,
+                                              maintenance_scale=mnt, maintenance_exponent=exponent))
     ev = [curves[i] for i in ev_idx]
     ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
     kmax = max(len(c) for c in ev)
     zt_regret = _regret_at(ev, ctrl["zt"])
-    stops = {"frac": ctrl["fraction"], "stats": ctrl["stats"],
+    stops = {"singlehalt": ctrl["singlehalt"], "stats": ctrl["stats"],
             "always_stop": np.zeros(len(ev_idx), dtype=int),
             "always_continue": np.full(len(ev_idx), kmax - 1, dtype=int)}
     return {name: _regret_at(ev, s) - zt_regret for name, s in stops.items()}
 
 
-def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDIDATES):
+def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDIDATES_DISPLAY):
     """Horizontal dot-and-whisker: one row per regime, one 95% CI point per candidate (offset within
     the row) — mean Δ regret vs z_t, same marker/size convention as the frontier plot's points."""
     n, m = len(regime_labels), len(candidates)
@@ -445,34 +618,52 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=len(candidates), frameon=False)
 
 
-def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
-                            d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
-                            lambda_grid: tuple[float, ...] = (5.0, 10.0, 40.0), maint_lambda: float = 10.0,
-                            maint_grid: tuple[float, ...] = (0.0, 0.05, 0.10, 0.30, 1.0)):
-    """(3) Δ mean regret (model − $z_t$) for {Frac*, Stats-Controller, AlwaysStop, AlwaysContinue} —
-    z_t is always the baseline, so positive = z_t wins. Two horizontal-violin figures: (A) sweep the
-    linear time cost λ at maintenance=0 (isolates the C-step/R edge); (B) sweep maintenance_scale at a
-    fixed λ (isolates the weaker C-maint edge). Grids match the constant-cost regime and maintenance
-    probe already reported in R-EVALUATE (see outputs/reports/normative.md)."""
+def _compute_delta_regret_data(packed_root: Path, cache_path: str | Path, *,
+                               d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
+                               lambda_grid: tuple[float, ...] = (0.003, 0.01, 0.03), maint_lambda: float = 0.01,
+                               maint_grid: tuple[float, ...] = (0.0, 0.01, 0.03, 0.1, 0.15, 0.2, 0.3),
+                               maintenance_exponent: float = 1.0) -> dict:
+    """Expensive half of the delta-regret plots: load data, fit stop controllers for every regime in
+    both grids. Returns a JSON-serializable dict consumed by ``_render_delta_regret``."""
     episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed)
     base_cfg = _oracle_config(packed_root)
 
     def regime(mode, lam, mnt):
-        return _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, d_embed, seed)
+        return _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt,
+                                    maintenance_exponent, d_embed, seed)
 
-    _rcparams()
     labels_a = [f"linear λ={lam:g}" for lam in lambda_grid]
     deltas_a = [regime("linear", lam, 0.0) for lam in lambda_grid]
+    labels_b = [f"maint={mnt:g}" for mnt in maint_grid]
+    deltas_b = [regime("linear", maint_lambda, mnt) for mnt in maint_grid]
+    return {"labels_a": labels_a, "deltas_a": deltas_a, "labels_b": labels_b, "deltas_b": deltas_b,
+            "maint_lambda": maint_lambda}
+
+
+def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
+    """Cheap half of the delta-regret plots: build + save both figures from
+    ``_compute_delta_regret_data``'s output.
+
+    (3) Δ mean regret (model − $z_t$) for {SingleHalt*, Stats-Controller} (Always Stop/Continue are
+    computed and printed but not plotted -- see ``_DELTA_CANDIDATES_DISPLAY``) — z_t is always the
+    baseline, so positive = z_t wins. Two horizontal-violin figures: (A) sweep the linear time cost λ
+    at maintenance=0 (isolates the C-step/R edge); (B) sweep maintenance_scale at a fixed λ (isolates
+    the weaker C-maint edge).
+    """
+    labels_a, labels_b = data["labels_a"], data["labels_b"]
+    # After a JSON round-trip, deltas are lists of dicts of LISTS -- convert back to arrays.
+    deltas_a = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_a"]]
+    deltas_b = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_b"]]
+
+    _rcparams()
     figA, axA = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_a)))
     _delta_ci_panel(axA, labels_a, deltas_a)
     axA.set_title("varying linear cost λ  (maintenance = 0)", fontsize=12, loc="left")
     save_pdf_png(figA, str(out_dir), "delta_mean_regret_lambda", dpi=200)
 
-    labels_b = [f"maint={mnt:g}" for mnt in maint_grid]
-    deltas_b = [regime("linear", maint_lambda, mnt) for mnt in maint_grid]
     figB, axB = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_b)))
     _delta_ci_panel(axB, labels_b, deltas_b)
-    axB.set_title(f"varying maintenance scale  (linear λ={maint_lambda:g})", fontsize=12, loc="left")
+    axB.set_title(f"varying maintenance scale  (linear λ={data['maint_lambda']:g})", fontsize=12, loc="left")
     save_pdf_png(figB, str(out_dir), "delta_mean_regret_maintenance", dpi=200)
 
     for group_label, labels, deltas in [("lambda", labels_a, deltas_a), ("maintenance", labels_b, deltas_b)]:
@@ -482,33 +673,94 @@ def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: 
     return {"lambda": dict(zip(labels_a, deltas_a)), "maintenance": dict(zip(labels_b, deltas_b))}
 
 
+def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                            d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
+                            lambda_grid: tuple[float, ...] = (0.003, 0.01, 0.03), maint_lambda: float = 0.01,
+                            maint_grid: tuple[float, ...] = (0.0, 0.01, 0.03, 0.1, 0.15, 0.2, 0.3),
+                            maintenance_exponent: float = 1.0):
+    """(3) Δ mean regret (model − $z_t$) sweeps over cost regimes -- see ``_render_delta_regret`` for
+    the full docstring.
+
+    ``lambda_grid`` and ``maint_grid``/default ``maint_lambda`` recalibrated 2026-07-07 -- both used
+    to be sized for the old cp-scale halt_reward (``lambda_grid=(5.0, 10.0, 40.0)``,
+    ``maint_grid=(0.0, 0.05, 0.10, 0.30, 1.0)`` at ``maint_lambda=10.0``). Now that halt_reward is
+    win-probability-scaled, those collapsed every episode to "stop at step 0" regardless of method
+    (verified on real PUCT data, labnotebook 2026-07-07). New values are real points from dedicated
+    sweeps on real PUCT episodes: ``lambda_grid`` spans the recommended calibration (~0.01).
+    ``maint_grid`` (at ``time_lambda`` held fixed at the same 0.01) was widened from the original
+    5-point 0-0.1 sweep to 7 points spanning 0-0.3, chosen from a retraining-free headroom sweep
+    (``fit_singlehalt_stop``'s regret vs the true per-episode oracle, no model fitting needed): the
+    fraction of achievable regret SingleHalt* already recovers falls smoothly across this grid
+    (0.84 -> 0.73 -> 0.58 -> 0.39 -> 0.15 -> 0.00 at maint 0/0.1/0.15/0.2/0.25/0.3), showing the full
+    transition from "little room for a learned halter" through the chosen sweet spot (0.1, ~73%
+    recovered -- see ``eval.maintenance_scale`` in the config, used by the frontier plot's headline
+    numbers) to full collapse. ``maintenance_exponent=1.0`` makes the per-step maintenance cost
+    exactly linear in node count (see ``oracle.maintenance_cost``).
+
+    Saves computed data to ``<out_dir>/delta_regret_data.json`` for cheap re-rendering -- see
+    ``replot_saved``/``--replot``.
+    """
+    data = _compute_delta_regret_data(packed_root, cache_path, d_embed=d_embed, max_episodes=max_episodes,
+                                      seed=seed, lambda_grid=lambda_grid, maint_lambda=maint_lambda,
+                                      maint_grid=maint_grid, maintenance_exponent=maintenance_exponent)
+    _save_json(data, Path(out_dir) / "delta_regret_data.json")
+    return _render_delta_regret(data, out_dir)
+
+
+def replot_saved(out_dir: str | Path, which: str = "all") -> None:
+    """Re-render figures from previously-saved ``<out_dir>/*_data.json`` files, skipping the expensive
+    data-load + model-fit step entirely. Use this after changing plotting-only code (axis padding,
+    which candidates to show, colors, ...) -- no need to rerun the whole eval pipeline just to fix a
+    plot. Requires an earlier non-replot run to have populated ``<out_dir>`` first."""
+    out_dir = Path(out_dir)
+    if which in ("frontier", "all"):
+        _render_frontier(_load_json(out_dir / "frontier_data.json"), out_dir)
+    if which in ("decodability", "all"):
+        _render_decodability(_load_json(out_dir / "decodability_data.json"), out_dir)
+    if which in ("separation", "all"):
+        _render_delta_regret(_load_json(out_dir / "delta_regret_data.json"), out_dir)
+
+
 # ===========================================================================
 # CLI
 # ===========================================================================
 def main() -> None:
     ap = argparse.ArgumentParser(description="R-EVALUATE meta-controller assessment plots")
-    ap.add_argument("--packed-root", required=True, help="MC packed dir with validation/ + validation_manifest.json")
-    ap.add_argument("--cache", required=True, help="validation materialized cache (.pt); MUST be shuffle=False")
+    ap.add_argument("--packed-root", help="MC packed dir with validation/ + validation_manifest.json "
+                    "(not needed with --replot)")
+    ap.add_argument("--cache", help="validation materialized cache (.pt); MUST be shuffle=False "
+                    "(not needed with --replot)")
     ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/normative")
     ap.add_argument("--which", choices=["frontier", "decodability", "separation", "all"], default="all")
+    ap.add_argument("--replot", action="store_true",
+                    help="re-render from --out-dir's saved *_data.json instead of recomputing -- "
+                    "skips data loading + model fitting entirely, use after changing plotting-only code")
     ap.add_argument("--d-embed", type=int, default=32)
     ap.add_argument("--max-episodes", type=int, default=15000)
     ap.add_argument("--time-mode", default="linear")
     ap.add_argument("--time-lambda", type=float, default=10.0)
     ap.add_argument("--maintenance-scale", type=float, default=0.0)
+    ap.add_argument("--maintenance-exponent", type=float, default=1.0,
+                    help="1.0 = maintenance cost exactly linear in node count")
     ap.add_argument("--maint-lambda", type=float, default=10.0, help="lambda held fixed in the maintenance sweep")
     args = ap.parse_args()
+
+    if args.replot:
+        replot_saved(args.out_dir, which=args.which)
+        return
+    if not args.packed_root or not args.cache:
+        ap.error("--packed-root and --cache are required unless --replot is set")
 
     packed_root, out = Path(args.packed_root), args.out_dir
     if args.which in ("frontier", "all"):
         plot_regret_effort_frontier(packed_root, args.cache, out, d_embed=args.d_embed, time_mode=args.time_mode,
                                     time_lambda=args.time_lambda, maintenance_scale=args.maintenance_scale,
-                                    max_episodes=args.max_episodes)
+                                    maintenance_exponent=args.maintenance_exponent, max_episodes=args.max_episodes)
     if args.which in ("decodability", "all"):
         plot_r_decodability(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=min(args.max_episodes, 12000))
     if args.which in ("separation", "all"):
         plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes,
-                                maint_lambda=args.maint_lambda)
+                                maint_lambda=args.maint_lambda, maintenance_exponent=args.maintenance_exponent)
 
 
 if __name__ == "__main__":

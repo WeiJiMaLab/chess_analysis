@@ -5,16 +5,24 @@
 # everything below in order, wiring `after` -> Slurm afterok on the parents' job ids.
 #
 #   preprocess ── filter_and_sample ─┬─ board_featurize[] ── (merge) ── board_analysis   (P0)
-#                (filtered_moves +    ├─ gen_trees(befs1cp) ─┬─ engine_analysis_pwin      (P1, pwin)
-#                 tree-root FENs)     │                      ├─ engine_analysis_cp        (P1, cp)
-#                                     │                      └─ pack_trees ── train_encoder ──
-#                                     │                         pack_root ── train_readout_pg ── eval  (P3)
+#                (filtered_moves +    ├─ gen_trees(puctvalue) ─┬─ engine_analysis_pwin     (P1, pwin) [DISABLED]
+#                 tree-root FENs)     │                        ├─ engine_analysis_cp       (P1, cp)   [DISABLED]
+#                                     │                        └─ argmax_filter ──
+#                                     │                           pack_trees ── train_encoder ──
+#                                     │                           pack_root ── train_readout_pg ── eval  (P3)
 #
 # filter_and_sample applies the ply window ONCE: it materializes the canonical
 # filtered_moves table (board + engine read it) and samples the tree-root FENs from
 # it. Captures/checks are a BOARD precondition (board_featurize array → merge →
-# board_features), not part of preprocess. Trees are greedy BeFS on native cp
-# (befs1cp_md36); the engine step runs twice (UNIT=pwin, UNIT=cp) off the same trees.
+# board_features), not part of preprocess. Trees are PUCT on win-probability value
+# (puctvalue_md36, labnotebook 2026-07-07 — BeFS demoted to variants.befs), generated
+# in full (100K, non-destructive — nothing is deleted). argmax_filter is a NON-
+# destructive "thinking helps" filter that only gates the P3 (meta-controller) branch
+# via split.include_list; engine_analysis_pwin/cp (P1) read the full, untouched
+# gen_trees output directly. engine_analysis_pwin/cp are currently DISABLED (commented
+# out in `steps:` below, plan.md §G item 4, 2026-07-08) -- P1 steps off the unfiltered
+# corpus with no downstream dependents; the P3 model branch does not depend on either.
+# Re-enable by uncommenting their entries below.
 steps:
   # ---- filter: window the moves (canon) + sample the tree-root FENs ----
   - name: filter_and_sample
@@ -36,21 +44,35 @@ steps:
   - name: gen_trees
     script: gen_trees.slurm
     after: [filter_and_sample]
-    array: 0-99            # 100 tasks x 2500 FENs = full 250k -> befs1cp_md36
+    array: 0-159             # 160 tasks x 2500 FENs = full 400k -> puctvalue_md36, kept in full
+                              # (labnotebook 2026-07-07: 400K raw leaves ~100K argmax>2 survivors;
+                              # non-destructive -- see argmax_filter below for the meta-controller-only filter)
 
-  # ---- P1: engine stats, two value units off the same trees ----
-  - name: engine_analysis_pwin
-    script: engine_analysis_pwin.slurm
-    after: [gen_trees]
+  # ---- P1: engine stats, off the FULL (unfiltered) tree corpus ----
+  # DISABLED (plan.md §G item 4, 2026-07-08): confirmed independent of the P3 model
+  # branch (argmax_filter -> pack_trees -> train_encoder -> pack_root ->
+  # train_readout_pg -> eval), which branches off gen_trees/argmax_filter directly.
+  # Commented out, not deleted -- uncomment to re-enable.
+  # - name: engine_analysis_pwin
+  #   script: engine_analysis_pwin.slurm
+  #   after: [gen_trees]
+  #
+  # - name: engine_analysis_cp
+  #   script: engine_analysis_cp.slurm
+  #   after: [gen_trees]
 
-  - name: engine_analysis_cp
-    script: engine_analysis_cp.slurm
+  # ---- "thinking helps" filter: non-destructive, keeps only trees where the true
+  # oracle argmax stop step exceeds 2 (labnotebook 2026-07-07 -- SingleHalt* collapses
+  # to a near-zero stop on the unfiltered population; this surfaces a genuine k*=7).
+  # Only gates the P3 (meta-controller) branch via split.include_list, not P1 above. ----
+  - name: argmax_filter
+    script: argmax_filter.slurm
     after: [gen_trees]
 
   # ---- P3: model (encoder -> readout -> eval) ----
   - name: pack_trees
     script: pack_trees.slurm
-    after: [gen_trees]
+    after: [argmax_filter]
 
   - name: train_encoder
     script: train_encoder.slurm

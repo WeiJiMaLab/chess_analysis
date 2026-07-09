@@ -34,7 +34,15 @@ source "$TINY/slurm/helpers/setup_env.sh"   # CPU: no cudatoolkit needed
 # to sidestep the multiprocessing-DataLoader deadlock that hung the validation split.
 LW=${LOADER_WORKERS:-$(( ${SLURM_CPUS_PER_TASK:-4} - 1 ))}
 
-echo "pack_root worker=$WID/$NW loader_workers=$LW host=$(hostname) device=cpu"; date
+# Default 0: materialize clears its shard directory and starts fresh (matching
+# split/gnn_pack/mc_pack's clear-and-redo semantics). Only set RESUME=1 when
+# specifically recovering a worker that was itself killed by OOM or timeout —
+# check `sacct -j <this_jobid> --format=JobID,State,ExitCode` for that exit
+# reason first, since resuming onto a stale/unrelated run is exactly the bug
+# this default is meant to prevent (labnotebook 2026-07-08).
+RESUME=${RESUME:-0}
+
+echo "pack_root worker=$WID/$NW loader_workers=$LW resume=$RESUME host=$(hostname) device=cpu"; date
 test -f "$ENC" || { echo "ERROR: encoder missing: $ENC" >&2; exit 1; }
 
 for SP in train validation; do
@@ -43,7 +51,7 @@ for SP in train validation; do
     --set command=materialize --set device=cpu \
     --set num_workers="$NW" --set worker_index="$WID" \
     --set output_dir="$MAT/${SP}_work" --set packed_data="$MCP/${SP}_manifest.json" \
-    --set loader_workers="$LW"
+    --set loader_workers="$LW" --set resume="$([ "$RESUME" = "1" ] && echo true || echo false)"
 done
 
 echo "PACK ROOT WORKER $WID/$NW DONE"; date

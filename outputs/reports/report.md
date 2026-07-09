@@ -128,9 +128,16 @@ This section carries the paper's thesis, so we state the reclaimed framing preci
 is no longer empty, but it currently holds a *related, more targeted* result rather than the full curve fit
 (below): [normative.md](normative.md) (R-EVALUATE) asks whether a *learned* value-of-continuing signal
 actually helps a resource-rational stopping rule beat naive alternatives, in a controlled MCTS-style
-setting — and finds that it does, significantly. That is evidence for a piece of this section's mechanism
-(a value-sensitive stop can genuinely outperform simple heuristics), but it does not yet close the loop
-back to human RT curves — that fit is still the open work described below.
+setting — and, **on the tree corpus and cost calibration active when it was written**, found that it does,
+significantly. That is evidence for a piece of this section's mechanism (a value-sensitive stop can
+genuinely outperform simple heuristics), but it does not yet close the loop back to human RT curves — that
+fit is still the open work described below. **Caveat (as of 2026-07-08):** that specific corpus was later
+found to have a real tree-generation bug (see `labnotebook.md`, 2026-07-06) and the cost calibration was
+subsequently corrected; a live, separate investigation re-running this exact question on the fixed corpus
+(`../plan.md`, `../hypotheses.md`) currently finds a *more* mixed picture — a hand-crafted tree-stats
+readout beats the best fixed stop, but the learned `z_t` readout does not yet confirm a win over either
+baseline. `normative.md`'s headline numbers below should be read as a historical result, not the current
+state of that question — see `../hypotheses.md` for the current one.
 
 **The reframing.** The legal-move count is the **explanandum, not a floor to beat.** A count has no
 normative content: "RT correlates with legal moves" is a fact in search of a mechanism, not a model.
@@ -178,7 +185,7 @@ result yet.
 | Searching for a signal that **beats** legal-moves | **Retired (wrong target)** | a count is the *explanandum*, not a rival model; everything correctly collapses onto it |
 | A resource-rational (per-op cost) stop **reproduces** +size and −satisfaction | **Settled (one sign)** | `/analysis/normative_curves.py` |
 | A resource-rational model **reproduces** the `size − satisfaction` *curves* with sensible cost params | **Open (the fit)** | future work; check RT-vs-{n_moves, fraction_good} |
-| A *learned* value-of-continuing signal (`z_t`) significantly beats hand-crafted tree-stats and the best fixed stop, in a controlled MCTS-style setting | **Settled** | [(R-EVALUATE)](normative.md) — paired `z_t`−Stats regret −164 [−205,−125] at λ=10 |
+| A *learned* value-of-continuing signal (`z_t`) significantly beats hand-crafted tree-stats and the best fixed stop, in a controlled MCTS-style setting | **Superseded — do not read as current** | [(R-EVALUATE)](normative.md) reported this (paired `z_t`−Stats regret −164 [−205,−125] at λ=10), but that number is from an earlier tree corpus and an uncalibrated cost regime (predates the 2026-07-06 BeFS tree-gen poisoning fix and the 2026-07-07 `time_lambda` recalibration — see `labnotebook.md`). The live investigation (`../plan.md`, `../hypotheses.md`) finds the **opposite** ranking on the current, corrected corpus: a hand-crafted tree-stats readout (Stats-Controller) *significantly beats* SingleHalt\* ([`sig_significance.md`](../sig_significance.md), SIG-S), while the frozen-encoder `z_t` does **not** yet beat either SingleHalt\* or Stats-Controller (SIG-Z). An encoder-unfrozen (end-to-end) `z_t` is closing the gap but is not yet confirmed. Treat `../hypotheses.md` as the current source of truth for this question, not this row. |
 
 > **The working conclusion.** RT tracks **decision width** with a **satisficing signature**, and that is the
 > **fingerprint of resource-rational option-consideration** — *not* "people irrationally count moves," and *not* a

@@ -59,6 +59,15 @@ _MATERIAL_BAND_SQL = (
     "ELSE '≥+5' END"
 )
 
+# The "way ahead" band checks_material_band_curves flags as the one where
+# n_checks_avail genuinely predicts RT (board.md checks-available x material
+# section) — reused as its own filter for the mechanism-isolating views below
+# (checks_queen_retention_curves / the opponent-king-edge-distance dashboard):
+# is that decline independent evidence, or a byproduct of endgame piece
+# attrition (queen retained/traded, opponent king driven toward/away from the
+# edge) that correlates with checks-available but isn't caused by it?
+WAY_AHEAD_FILTER = "material_imbalance >= 5"
+
 
 # =============================================================================
 # --featurize / --merge : the board_features precondition (captures/checks)
@@ -72,6 +81,102 @@ def calc_captures_checks(fen: str) -> tuple[int, int]:
         caps += board.is_capture(move)
         checks += board.gives_check(move)
     return caps, checks
+
+
+def is_hanging_check(board: chess.Board, move: chess.Move) -> bool:
+    """After playing checking ``move``: can the opponent immediately capture the
+    piece that just moved (the moved piece specifically — not an abstract
+    "checker", so this stays well-defined for a discovered check, where a
+    DIFFERENT, already-in-place piece delivers the actual check while the
+    moved piece itself may land somewhere completely safe), and is that piece
+    undefended by the mover? The "checks available" decomposition's core
+    primitive (board.md "Checks Available" — is a large fraction of high
+    n_checks_avail actually free, instantly-recognizable non-options, e.g. a
+    queen wandering next to the enemy king with no support and getting taken
+    for free?). Broader than an earlier queen-only/king-only exploratory pass
+    (``is_free_queen_sac_check``, not kept in this module): ANY piece type
+    delivering the check counts, and ANY opponent piece recapturing counts,
+    not just the king.
+
+    Validated against constructed positions before use (per this project's
+    standing rule against unchecked mechanism code): an undefended queen OR
+    rook check adjacent to the king both return True; a defended check
+    (recapture would remain in check) returns False; a discovered check where
+    the moved piece lands on a SAFE square returns False regardless of the
+    (different) checking piece's own safety; a discovered check where the
+    moved piece lands on an ATTACKED square returns True; double-check
+    positions resolve correctly with no special-casing — ``legal_moves``
+    already restricts replies to king moves there, so ``can_capture`` can
+    only be True if the king's own capture resolves BOTH checks at once,
+    which python-chess computes correctly on its own.
+    """
+    b = board.copy()
+    b.push(move)
+    moved_to = move.to_square
+    can_capture = any(m.to_square == moved_to and b.is_capture(m) for m in b.legal_moves)
+    if not can_capture:
+        return False
+    mover_color = not b.turn
+    return not b.is_attacked_by(mover_color, moved_to)
+
+
+def calc_n_checks_hanging(fen: str) -> int:
+    """# of this FEN's legal checking moves that are ``is_hanging_check`` — the
+    mover's checking piece can be recaptured for free next move, for free, by
+    the opponent. Same move-enumeration cost profile as
+    ``calc_captures_checks`` (measured ~2,700 FENs/sec serial, single core)."""
+    board = chess.Board(fen)
+    return sum(is_hanging_check(board, m) for m in board.legal_moves if board.gives_check(m))
+
+
+def calc_n_distinct_checking_pieces(fen: str) -> int:
+    """# of DISTINCT origin squares of pieces that can deliver check on this FEN —
+    the "redundancy" test's core primitive (board.md "Checks Available" — an extra
+    available check is usually the SAME piece finding one more geometrically-available
+    but interchangeable square, not a new threat; a prior investigation found ~4.4
+    distinct pieces behind a matched raw count of 8 available CAPTURES vs. only ~1.9
+    distinct pieces behind the same raw count of 8 available CHECKS).
+
+    Counted by the CHECKING piece's own square, not the moved piece's origin square —
+    these differ for a discovered check, where a different, already-in-place piece
+    delivers the actual check while the moved piece just steps out of its way (the
+    same distinction ``is_hanging_check`` already draws). Concretely: after pushing a
+    checking move, ``board.checkers()`` gives the post-move squares of every piece
+    actually giving check; a checker square equal to the move's destination is the
+    moved piece itself (direct check, identity = its OWN origin square, i.e.
+    ``move.from_square``); any other checker square is a discovered checker that
+    didn't move at all, so its post-move square already IS its origin square. Take
+    the union of these identities over every legal checking move, so a single piece
+    that can check via several different destination squares (e.g. a queen with 3
+    checking moves down an open file) — or several different DIFFERENT moves that
+    all unveil the SAME discovered checker (e.g. 7 different knight hops that each
+    unblock the identical rook) — both correctly collapse to 1, while genuinely
+    different pieces (a queen and a rook that can each independently check, or a
+    double-check move that reveals 2 simultaneous checkers) count as 2+. This
+    "distinct checking pieces" framing was chosen over distinct piece-TYPES (which
+    would merge two different bishops each giving check into "1 type: bishop") since
+    "redundant vs diverse" is a structural claim about how many different pieces on
+    the board can deliver a threat, not about which kinds of pieces they are.
+
+    Validated against constructed positions before use (per this project's standing
+    rule): a lone queen with 3 different checking destinations (file + diagonal +
+    rank, no other piece able to check) gives 1; a queen AND a separately-placed rook
+    that can each independently check give 2; a knight blocking a rook's file, with 7
+    different knight destinations each unveiling the SAME rook discovered check
+    (no other piece can check), gives 1 (not 7) — confirming this counts checking
+    PIECES, not checking MOVES. Same move-enumeration cost profile as
+    ``calc_n_checks_hanging`` (measured ~4,500 FENs/sec serial on FENs restricted to
+    ``n_checks_avail >= 1``, single core)."""
+    board = chess.Board(fen)
+    checkers = set()
+    for move in board.legal_moves:
+        if not board.gives_check(move):
+            continue
+        b = board.copy()
+        b.push(move)
+        for checker_sq in b.checkers():
+            checkers.add(move.from_square if checker_sq == move.to_square else checker_sq)
+    return len(checkers)
 
 
 def _shards_dir() -> str:
@@ -414,6 +519,374 @@ def checks_material_band_curves(conn, table, filename: str = "checks_material_ba
     save_figure(fig, "board", filename)
 
 
+def calc_king_features(fen: str) -> tuple[int, int]:
+    """(mover_has_queen as 0/1, opponent_king_edge_distance) for one FEN. ``mover``
+    is the FEN's own side-to-move field (``board.turn`` — consistent with the row's
+    ``player_white``); ``opponent`` is the other side. ``opponent_king_edge_distance``
+    = ``min(min(file, 7-file), min(rank, 7-rank))`` of the opponent king's square:
+    0 = on the back rank/file edge (incl. corner), 3 = the 4 fully central squares.
+
+    Validated (not just assumed correct): deriving BOTH sides' material totals
+    from ``board.pieces(...)`` via this same ``board.turn``/``not board.turn``
+    color split and comparing against the table's own ``self_material`` /
+    ``material_imbalance`` columns (standard P=1,N=3,B=3,R=5,Q=9 values, the
+    scheme already used elsewhere in this file, e.g. supp_abs_material_imbalance's
+    "a minor=3, a queen=9") matched on **100% of 1,544,741/1,544,741** distinct
+    FENs in the way-ahead band (``material_imbalance >= 5``) — see the board.md
+    checks-available mechanism section. That 100% match on the SAME turn/color
+    logic this function uses is the ground-truth check for both fields here."""
+    board = chess.Board(fen)
+    mover_has_queen = int(bool(board.pieces(chess.QUEEN, board.turn)))
+    king_sq = board.king(not board.turn)
+    f, r = chess.square_file(king_sq), chess.square_rank(king_sq)
+    edge_dist = min(min(f, 7 - f), min(r, 7 - r))
+    return mover_has_queen, edge_dist
+
+
+def _build_ahead_king_view(conn, table, view_name: str) -> tuple[str, int]:
+    """``table`` restricted to ``WAY_AHEAD_FILTER``, joined to per-FEN
+    ``mover_has_queen`` / ``opponent_king_edge_distance`` (see ``calc_king_features``).
+    The way-ahead band's distinct-FEN count is ~1.5M (small — no Slurm shard/merge
+    needed, unlike the full-table ``board_features`` precondition): computed with a
+    plain serial loop (~140s wall for the full 1.5M — a one-time cost per run_plot
+    call, well inside "a few minutes"), NOT a multiprocessing pool.
+
+    Multiprocessing was tried and reverted: ``conn`` here is a LIVE connection with
+    DuckDB's own background worker threads still running (unlike ``run_featurize``,
+    which explicitly closes its connection before forking — see its docstring). A
+    fork-based ``mp.Pool()`` duplicates that thread state into every child — the
+    classic fork+threads hazard: if a lock happened to be held by a non-forking
+    thread at fork time, every child deadlocks forever (observed in practice: workers
+    spawned, all sleeping at 0% CPU, never returning). A ``spawn``-context pool
+    avoids the deadlock but re-imports this whole module (matplotlib, duckdb, scipy,
+    ...) in every worker; at the default ~192-worker pool size on this host that
+    import fan-out itself took several minutes — slower than just running serial.
+    A smaller capped pool would likely win, but wasn't worth the complexity given
+    serial already comfortably clears the "few minutes" budget."""
+    fens = [r[0] for r in conn.execute(
+        f"SELECT DISTINCT fen FROM {table} WHERE {WAY_AHEAD_FILTER}"
+    ).fetchall()]
+    print(f"  way-ahead king features: {len(fens):,} distinct FENs (serial)...")
+    import pandas as pd
+    feats = [calc_king_features(fen) for fen in fens]
+    df = pd.DataFrame({
+        "fen": fens,
+        "mover_has_queen": [bool(m) for m, _ in feats],
+        "opponent_king_edge_distance": [e for _, e in feats],
+    })
+    conn.register(f"_{view_name}_df", df)
+    conn.execute(
+        f"CREATE OR REPLACE TEMP VIEW {view_name} AS "
+        f"SELECT t.*, k.mover_has_queen, k.opponent_king_edge_distance "
+        f"FROM {table} t JOIN _{view_name}_df k USING (fen) "
+        f"WHERE t.{WAY_AHEAD_FILTER}"
+    )
+    n = conn.execute(f"SELECT count(*) FROM {view_name}").fetchone()[0]
+    return view_name, n
+
+
+def checks_queen_retention_curves(conn, ahead_view, filename: str = "checks_queen_retention_curves.pdf"):
+    """RT-vs-checks-available, split into "mover retains queen" vs "mover has no
+    queen" (both restricted to ``WAY_AHEAD_FILTER``, via ``ahead_view`` — see
+    ``_build_ahead_king_view``) — the decisive test of whether
+    ``checks_material_band_curves``' decline in the way-ahead band is independent
+    evidence for checks-available, or a byproduct of queen-retention/endgame piece
+    attrition (population shift toward "lone queen vs bare king" positions as
+    checks-available rises). Same quantile-trend visual language as
+    ``checks_material_band_curves`` (mean +/- 1.96 SEM in log(RT) space, one point
+    per integer checks-available value, tail merged at 10), 2 lines (dark = queen
+    retained, light = no queen — same indigo-blue family as MATERIAL_BAND_COLORS/
+    PHASE_COLORS, not a new palette) instead of 5 material bands."""
+    q = f"""
+        SELECT LEAST(n_checks_avail, 10) AS checks_bin,
+               mover_has_queen,
+               count(*) AS n,
+               avg(ln(move_time)) AS mean_log_rt,
+               stddev(ln(move_time)) AS std_log_rt
+        FROM {ahead_view}
+        WHERE n_checks_avail IS NOT NULL
+        GROUP BY 1, 2
+    """
+    df = conn.execute(q).df()
+    n_rows = int(df["n"].sum())
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    for has_q, label, color in [(True, "Mover retains queen", PHASE_COLORS[3]),
+                                (False, "Mover has no queen", PHASE_COLORS[1])]:
+        sub = df[df["mover_has_queen"] == has_q].sort_values("checks_bin")
+        if sub.empty:
+            continue
+        x = sub["checks_bin"].to_numpy()
+        y = sub["mean_log_rt"].to_numpy()
+        ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
+        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    _seconds_from_log(ax.yaxis)
+    ax.set_xticks(list(range(11)))
+    ax.set_xticklabels([*map(str, range(10)), "10+"])
+    ax.set(xlabel="Checks Available (k; 10 = 10+)", ylabel="Response Time (s)")
+    ax.legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), frameon=False)
+    _annotate_n(fig, n_rows)
+    save_figure(fig, "board", filename)
+
+
+def checks_pieces_tier_curves(conn, table, filename: str = "checks_pieces_tier_curves.pdf"):
+    """RT-vs-checks-available within the MATERIAL-EVEN band (|material_imbalance| <= 2,
+    the band `checks_material_band_curves` flags as showing "the cleanest inverted-U"),
+    split into tertiles of total pieces on the board (`n_pieces_on_board_inc_pawns`) —
+    tests whether board simplification is a GATING condition for the decline (board.md
+    "Checks Available" — is the decline a general phenomenon, or does it require an
+    already-thinned board, with dense positions instead behaving like captures-available,
+    monotonic rise, no decline)? Same quantile-trend visual language as
+    `checks_material_band_curves`/`checks_queen_retention_curves`, 3 lines colored by
+    the SAME PHASE_COLORS family used for ply tertiles elsewhere (light = high-piece/
+    dense = "early-like", dark = low-piece/thinned = "late-like" — pieces-on-board and
+    game phase point the same direction, so this reuses that color convention rather
+    than inventing a new one)."""
+    q = f"""
+        WITH even AS (
+            SELECT *, n_pieces_on_board_inc_pawns AS pieces
+            FROM {table} WHERE material_imbalance BETWEEN -2 AND 2
+        ),
+        tertiles AS (
+            SELECT quantile_cont(pieces, 1.0/3) AS c1, quantile_cont(pieces, 2.0/3) AS c2 FROM even
+        )
+        SELECT
+            CASE WHEN pieces <= c1 THEN 'low' WHEN pieces <= c2 THEN 'mid' ELSE 'high' END AS tier,
+            LEAST(n_checks_avail, 10) AS checks_bin,
+            count(*) AS n,
+            avg(ln(move_time)) AS mean_log_rt,
+            stddev(ln(move_time)) AS std_log_rt
+        FROM even, tertiles
+        WHERE n_checks_avail IS NOT NULL
+        GROUP BY 1, 2
+    """
+    df = conn.execute(q).df()
+    n_rows = int(df["n"].sum())
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    for tier, label, color in [("high", "High pieces (dense)", PHASE_COLORS[1]),
+                               ("mid", "Mid pieces", PHASE_COLORS[2]),
+                               ("low", "Low pieces (thinned)", PHASE_COLORS[3])]:
+        sub = df[df["tier"] == tier].sort_values("checks_bin")
+        if sub.empty:
+            continue
+        x = sub["checks_bin"].to_numpy()
+        y = sub["mean_log_rt"].to_numpy()
+        ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
+        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    _seconds_from_log(ax.yaxis)
+    ax.set_xticks(list(range(11)))
+    ax.set_xticklabels([*map(str, range(10)), "10+"])
+    ax.set(xlabel="Checks Available (k; 10 = 10+)", ylabel="Response Time (s)")
+    ax.legend(title="Total Pieces on Board (Material-Even Band)", fontsize=LEGEND_FONTSIZE,
+              title_fontsize=LEGEND_FONTSIZE, loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False)
+    _annotate_n(fig, n_rows)
+    save_figure(fig, "board", filename)
+
+
+# Plain proportional sample size for _build_checks_real_view: large enough that
+# even the rare high-n_checks_avail tail (n_checks_avail=8 is ~0.45% of the
+# n_checks_avail>=1 population) clears min_bin_count=300 once re-binned by
+# n_checks_real, while the serial python-chess pass (~2,700 FENs/sec measured)
+# stays under ~2 minutes (measured: 400K rows -> ~10s to sample, ~100s to compute).
+CHECKS_REAL_SAMPLE_SIZE = 400_000
+
+
+def _build_checks_real_view(conn, table, view_name: str) -> tuple[str, int]:
+    """``table`` restricted to a single PLAIN PROPORTIONAL random sample of
+    ``CHECKS_REAL_SAMPLE_SIZE`` rows with ``n_checks_avail >= 1`` (sample taken
+    AFTER filtering, not before), joined to per-FEN ``n_checks_hanging``/
+    ``n_checks_real = n_checks_avail - n_checks_hanging`` (see
+    ``is_hanging_check``/``calc_n_checks_hanging``). ``n_checks_avail = 0`` rows
+    are excluded entirely — trivially ``n_checks_real = 0`` there, already
+    covered by ``bivariate_n_checks_avail``'s own k=0 point.
+
+    An EARLIER version of this function stratified separately by
+    ``n_checks_avail`` (equal-sized buckets 1..14, capped per bucket, to keep
+    the rare high-k tail well-powered) and then re-binned the result by the
+    DIFFERENT variable ``n_checks_real`` for plotting. That is a real bug, not
+    a harmless simplification: because several different raw ``n_checks_avail``
+    values can map to the same ``n_checks_real`` (e.g. n_checks_real=0 is
+    reachable from raw k=1 through k=7+), equalizing the SOURCE strata does
+    NOT equalize — and in fact systematically distorts — the composition of
+    each TARGET (``n_checks_real``) bin relative to the true population. Caught
+    empirically: a proper 400K-row proportional sample put geo-mean RT at
+    n_checks_real=0 at ~7.4s with a mild, roughly monotonic decline to ~6.0s by
+    n_checks_real≈8-11; the old stratified version showed n_checks_real=0 as
+    the curve's near-maximum (~8.2s) with a sharper decline — an artifact of
+    over-representing rare, systematically-different high-raw-k FENs relative
+    to their true frequency. Every bin in THIS version — histogram, overall
+    trend, and by-ply-tertile — is a valid, population-proportional estimate,
+    same as every other dashboard in this file (no more "left panel isn't
+    population-weighted" caveat needed).
+
+    Serial, not multiprocessing: ~2,700 FENs/sec measured (cheaper per-FEN than
+    ``calc_king_features`` — pure move enumeration, no piece-value summation).
+    The fork+thread deadlock / spawn-import-storm tradeoffs documented at
+    length in ``_build_ahead_king_view`` (this also runs against a LIVE
+    ``conn``) apply identically here, and at this sample size serial
+    comfortably clears the same "few minutes" budget that made a pool not
+    worth it there.
+
+    IMPORTANT: the same FEN recurs across many different games (common
+    openings repeat up to ~3,100 times in this table) — joining the computed
+    per-FEN feature back against the FULL ``table`` (rather than against the
+    sampled rows specifically) would fan out to EVERY row sharing that FEN,
+    not just the ones actually drawn by ``USING SAMPLE``, silently
+    re-introducing the exact over/under-representation bug this function was
+    rewritten to fix. So the sample is materialized as its own table FIRST
+    (every column, not just fen/n_checks_avail) and the feature is joined onto
+    THAT — the final row count is exactly ``CHECKS_REAL_SAMPLE_SIZE``, not an
+    expanded multiple of it.
+    """
+    conn.execute(
+        f"CREATE OR REPLACE TEMP TABLE {view_name}_sample AS "
+        f"SELECT * FROM (SELECT * FROM {table} WHERE n_checks_avail >= 1) "
+        f"USING SAMPLE {CHECKS_REAL_SAMPLE_SIZE} ROWS"
+    )
+    fens = conn.execute(f"SELECT DISTINCT fen, n_checks_avail FROM {view_name}_sample").df()
+    print(f"  checks-real sample: {conn.execute(f'SELECT count(*) FROM {view_name}_sample').fetchone()[0]:,} "
+          f"rows ({len(fens):,} distinct FENs), plain proportional, n_checks_avail >= 1 "
+          f"(serial python-chess)...")
+    fens["n_checks_hanging"] = [calc_n_checks_hanging(f) for f in fens["fen"]]
+    fens["n_checks_real"] = fens["n_checks_avail"] - fens["n_checks_hanging"]
+
+    conn.register(f"_{view_name}_df", fens[["fen", "n_checks_real"]])
+    conn.execute(
+        f"CREATE OR REPLACE TEMP VIEW {view_name} AS "
+        f"SELECT t.*, k.n_checks_real FROM {view_name}_sample t JOIN _{view_name}_df k USING (fen)"
+    )
+    n = conn.execute(f"SELECT count(*) FROM {view_name}").fetchone()[0]
+    return view_name, n
+
+
+# Plain proportional sample size for _build_checks_diversity_view: this needs to
+# support a 2-WAY split (concentrated vs diverse — see checks_diversity_curves)
+# at every checks_bin, roughly doubling the per-cell density _build_checks_real_view
+# needed for its single ungrouped curve. A 300K-row pilot (drawn with the exact same
+# subquery-then-SAMPLE pattern as _build_checks_real_view) put "concentrated"
+# (n_distinct_checking_pieces == 1, the rarer group at high raw counts) at 454/118/38
+# rows for raw n_checks_avail = 8/9/10 — the k=8+ TAIL bin here is merged at 8 (not
+# 10, unlike checks_material_band_curves/checks_queen_retention_curves/
+# checks_pieces_tier_curves — this dashboard's per-FEN python-chess feature plus its
+# group split leaves materially less density per cell than those, and 8+ already
+# matches this file's own bivariate_n_checks_avail clip), so that pilot's 454+118+38
+# = 610 concentrated rows already clear min_bin_count=300 at k=8+ even before scaling
+# up. 500K rows (this constant) leaves comfortable margin there while keeping the
+# serial python-chess pass (~4,500 FENs/sec measured, see calc_n_distinct_checking_pieces)
+# to ~2 minutes. The one cell this can't fix no matter the sample size: "diverse"
+# (2+ distinct checking pieces) at raw n_checks_avail = 1 is trivially near-empty by
+# chess construction (2+ distinct checkers with only 1 available checking move total
+# requires a double-check move — rare) — that's a real population fact, not a
+# sampling shortfall, and (like every other integer bin in this file, see
+# _binning_opts) is left to silently vanish below min_bin_count rather than forced.
+CHECKS_DIVERSITY_SAMPLE_SIZE = 500_000
+
+
+def _build_checks_diversity_view(conn, table, view_name: str) -> tuple[str, int]:
+    """``table`` restricted to a single PLAIN PROPORTIONAL random sample of
+    ``CHECKS_DIVERSITY_SAMPLE_SIZE`` rows with ``n_checks_avail >= 1`` (sample taken
+    AFTER filtering, not before — same subquery-then-``USING SAMPLE`` pattern as
+    ``_build_checks_real_view``, for the identical reason: sampling BEFORE the filter
+    would draw from the whole table and only incidentally keep ~45% of the requested
+    rows), joined to per-FEN ``n_distinct_checking_pieces`` (see
+    ``calc_n_distinct_checking_pieces``) — the "redundancy" test's decisive-plot
+    precondition (board.md "Checks Available" — is an extra available check usually
+    the SAME piece finding one more interchangeable square, or a genuinely different
+    piece?).
+
+    Same fan-out hazard ``_build_checks_real_view`` documents at length (the same FEN
+    recurs across many different games) applies identically here: the sample is
+    materialized as its own table FIRST (every column), and the computed feature is
+    joined onto THAT specifically, not onto the full ``table`` — the final row count
+    is exactly ``CHECKS_DIVERSITY_SAMPLE_SIZE``, not an expanded multiple of it. Same
+    reasoning for running serial (not multiprocessing) against this LIVE ``conn`` as
+    ``_build_checks_real_view``/``_build_ahead_king_view`` document.
+    """
+    conn.execute(
+        f"CREATE OR REPLACE TEMP TABLE {view_name}_sample AS "
+        f"SELECT * FROM (SELECT * FROM {table} WHERE n_checks_avail >= 1) "
+        f"USING SAMPLE {CHECKS_DIVERSITY_SAMPLE_SIZE} ROWS"
+    )
+    fens = conn.execute(f"SELECT DISTINCT fen FROM {view_name}_sample").df()
+    print(f"  checks-diversity sample: {conn.execute(f'SELECT count(*) FROM {view_name}_sample').fetchone()[0]:,} "
+          f"rows ({len(fens):,} distinct FENs), plain proportional, n_checks_avail >= 1 "
+          f"(serial python-chess)...")
+    fens["n_distinct_checking_pieces"] = [calc_n_distinct_checking_pieces(f) for f in fens["fen"]]
+
+    conn.register(f"_{view_name}_df", fens[["fen", "n_distinct_checking_pieces"]])
+    conn.execute(
+        f"CREATE OR REPLACE TEMP VIEW {view_name} AS "
+        f"SELECT t.*, k.n_distinct_checking_pieces FROM {view_name}_sample t "
+        f"JOIN _{view_name}_df k USING (fen)"
+    )
+    n = conn.execute(f"SELECT count(*) FROM {view_name}").fetchone()[0]
+    return view_name, n
+
+
+def checks_diversity_curves(conn, diversity_view, filename: str = "checks_diversity_curves.pdf"):
+    """RT-vs-checks-available, split into "concentrated" (``n_distinct_checking_pieces
+    == 1`` — every available check comes from the SAME single piece) vs "diverse"
+    (``>= 2`` — at least 2 genuinely different pieces can each check) — the decisive
+    test of the "redundancy" finding (board.md "Checks Available" — a prior
+    investigation's summary-statistic comparison, at a matched raw count of 8: ~4.4
+    distinct pieces behind available CAPTURES vs. only ~1.9 behind available CHECKS).
+    If the raw-count decline is driven by piece-redundancy (an extra check usually
+    being the SAME piece finding one more interchangeable square, not a new threat),
+    it should show up almost entirely in the "concentrated" line, with "diverse"
+    behaving more like ``n_captures_avail``'s own well-behaved monotonic rise.
+
+    Same quantile-trend visual language as ``checks_queen_retention_curves`` (mean
+    +/- 1.96 SEM in log(RT) space, one point per integer checks-available value), 2
+    lines in the SAME PHASE_COLORS family (dark = concentrated, light = diverse — the
+    same dark/light assignment order ``checks_queen_retention_curves`` uses for its
+    own 2-way split) instead of 5 material bands or 3 piece tiers. The tail is merged
+    at 8, not 10 (unlike the other checks-available curve dashboards in this file) —
+    see ``CHECKS_DIVERSITY_SAMPLE_SIZE``'s comment for why this dashboard's
+    per-FEN-computed, 2-way-split population needs the earlier merge point to keep
+    every displayed bin above ``min_bin_count=300``."""
+    q = f"""
+        SELECT LEAST(n_checks_avail, 8) AS checks_bin,
+               CASE WHEN n_distinct_checking_pieces = 1 THEN 'concentrated' ELSE 'diverse' END AS group_label,
+               count(*) AS n,
+               avg(ln(move_time)) AS mean_log_rt,
+               stddev(ln(move_time)) AS std_log_rt
+        FROM {diversity_view}
+        WHERE n_checks_avail IS NOT NULL
+        GROUP BY 1, 2
+    """
+    df = conn.execute(q).df()
+    n_rows = int(df["n"].sum())
+
+    apply_poster_style()
+    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    for group_label, label, color in [("concentrated", "Concentrated (1 piece)", PHASE_COLORS[3]),
+                                      ("diverse", "Diverse (2+ pieces)", PHASE_COLORS[1])]:
+        sub = df[df["group_label"] == group_label].sort_values("checks_bin")
+        if sub.empty:
+            continue
+        x = sub["checks_bin"].to_numpy()
+        y = sub["mean_log_rt"].to_numpy()
+        ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
+        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    _seconds_from_log(ax.yaxis)
+    ax.set_xticks(list(range(9)))
+    ax.set_xticklabels([*map(str, range(8)), "8+"])
+    ax.set(xlabel="Checks Available (k; 8 = 8+)", ylabel="Response Time (s)")
+    ax.legend(title="Distinct Checking Pieces", fontsize=LEGEND_FONTSIZE,
+              title_fontsize=LEGEND_FONTSIZE, loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), frameon=False)
+    _annotate_n(fig, n_rows)
+    save_figure(fig, "board", filename)
+
+
 def correlation_matrix(conn, features, table, filename="board_feature_corr.pdf", smoke: bool = False):
     """Spearman AND Pearson correlation matrices over log(RT), ply, and every
     covariate, computed in SQL over the full windowed table (Spearman = Pearson on
@@ -556,6 +1029,28 @@ def run_plot(db: str, smoke: bool = False) -> None:
             column="abs_material_imbalance", name="Material Imbalance (Absolute, Excl. One-Sided Hangs)",
             kind="disc", clip=(0, 15),
             filter_sql="NOT (self_material = 39 OR (self_material - material_imbalance) = 39)"),
+        # Neither of the above two candidates resolved the dips at |3| and |9| (both
+        # persisted). The actual driver: `prev_move_was_capture`'s population share is
+        # NOT monotonic in |imbalance| — it spikes locally exactly at 3 and 9 (49.6%/74.1%
+        # vs 30-42%/58-66% at their neighbors), because those are the only magnitudes
+        # reachable via a SINGLE clean piece-for-piece capture (a minor=3, a queen=9 —
+        # generalizes to pawn=1/rook=5 too, just swamped by the curve's early rise / a
+        # smaller dip respectively). Recapture positions are dramatically faster
+        # (bootstrapped, e.g. 6.4s vs 12.5s at k=3) — excluding them makes the dip and
+        # trough vanish entirely (verified: monotonic 66.8M-row curve, see board.md).
+        "supp_abs_material_imbalance": dict(
+            column="abs_material_imbalance", name="Material Imbalance (Absolute, Excl. Recapture)",
+            kind="disc", clip=(0, 15), filter_sql="NOT prev_move_was_capture"),
+        # The SIGNED curve's local dip at -3 (board.md, signed material imbalance section)
+        # is the same recapture mechanism, viewed from one side: a clean single-piece
+        # capture nets a signed -3/-9 for the side that just got captured FROM (mover
+        # behind) and +3/+9 for the side that just captured (mover ahead) — but the
+        # dip is only visible on the negative side because that's where the disadvantaged
+        # mover's much larger population share sits (7.2:1/23.2:1 behind:ahead at |3|/|9|,
+        # per the absolute-value section). Same exclusion, signed column, to check.
+        "supp_material_imbalance": dict(
+            column="material_imbalance", name="Material Imbalance (Excl. Recapture)",
+            kind="disc", clip=(-15, 15), filter_sql="NOT prev_move_was_capture"),
         # n_checks_avail's inverted-U (board.md "is the inverted-U real?"): re-test the
         # SAME in-check exclusion that resolved legal-moves' dip, in case a mover already
         # in check (restricted to block/capture/king-move) drags the checks-available
@@ -620,6 +1115,34 @@ def run_plot(db: str, smoke: bool = False) -> None:
         print("board analysis: checks-available x material-imbalance interaction views...")
         checks_material_interaction_heatmap(conn, table, filename=f"{prefix}checks_material_interaction_heatmap.pdf")
         checks_material_band_curves(conn, table, filename=f"{prefix}checks_material_band_curves.pdf")
+        checks_pieces_tier_curves(conn, table, filename=f"{prefix}checks_pieces_tier_curves.pdf")
+
+        print("board analysis: way-ahead checks-available mechanism (queen retention / king exposure)...")
+        ahead_view, n_ahead = _build_ahead_king_view(conn, table, view_name=f"_{table}_ahead_king")
+        print(f"  {ahead_view}: n = {n_ahead:,} (material_imbalance >= 5)")
+        checks_queen_retention_curves(conn, ahead_view, filename=f"{prefix}checks_queen_retention_curves.pdf")
+        bivariate_analysis(conn, column="opponent_king_edge_distance",
+                           name="Opponent King Edge Distance (Way Ahead)",
+                           filename=f"{prefix}bivariate_opponent_king_edge_distance.pdf",
+                           table=ahead_view, kind="disc", clip=(0, 3))
+
+        print("board analysis: checks-available decomposition (hanging-check test)...")
+        checks_real_view, n_checks_real = _build_checks_real_view(conn, table, view_name=f"_{table}_checks_real")
+        print(f"  {checks_real_view}: n = {n_checks_real:,} (plain proportional sample, n_checks_avail >= 1)")
+        bivariate_analysis(conn, column="n_checks_real",
+                           name="Checks Available, Non-Hanging (n_checks_avail ≥ 1)",
+                           filename=f"{prefix}bivariate_n_checks_real.pdf",
+                           table=checks_real_view, kind="disc", clip=(0, 10))
+
+        print("board analysis: checks-available redundancy test (concentrated-vs-diverse checking pieces)...")
+        diversity_view, n_diversity = _build_checks_diversity_view(
+            conn, table, view_name=f"_{table}_checks_diversity")
+        print(f"  {diversity_view}: n = {n_diversity:,} (plain proportional sample, n_checks_avail >= 1)")
+        checks_diversity_curves(conn, diversity_view, filename=f"{prefix}checks_diversity_curves.pdf")
+        bivariate_analysis(conn, column="n_distinct_checking_pieces",
+                           name="Distinct Checking Pieces (n_checks_avail ≥ 1)",
+                           filename=f"{prefix}bivariate_n_distinct_checking_pieces.pdf",
+                           table=diversity_view, kind="disc", clip=(1, 5))
 
         print("board analysis: correlation matrix...")
         correlation_matrix(conn, features, table, filename=f"{prefix}board_feature_corr.pdf", smoke=smoke)

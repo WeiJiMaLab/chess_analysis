@@ -178,13 +178,26 @@ def _mlp_r2(z_train, y_train, z_test, y_test, *, seed: int,
 
 
 def _episode_split_mask(episode_step_counts: list[int], total_steps: int, *,
-                        seed: int, train_frac: float = 0.7) -> np.ndarray:
-    """Per-snapshot boolean train mask from a 70/30 split BY EPISODE (no step leakage)."""
+                        seed: int, train_frac: float = 0.7,
+                        trajectory_keys: list[str] | None = None) -> np.ndarray:
+    """Per-snapshot boolean train mask from a 70/30 split BY SOURCE TREE (never by raw episode index).
+
+    A tree can back multiple episodes (different truncation depths of the same trajectory); splitting
+    by episode index alone can put some of a tree's episodes in train and others in test — since z_t at
+    a shared step is identical across them, that's leakage. ``trajectory_keys`` (one per episode, e.g.
+    ``episode["trajectory_key"]``) makes the split tree-aware; omitting it falls back to the old
+    per-episode behavior ONLY for callers that already guarantee one episode per tree.
+    """
     n_ep = len(episode_step_counts)
+    if trajectory_keys is None:
+        trajectory_keys = [str(i) for i in range(n_ep)]  # one distinct "tree" per episode -- no-op grouping
+    keys = np.asarray(trajectory_keys)
+    unique_keys = np.unique(keys)
     rng = np.random.default_rng(seed)
-    perm = rng.permutation(n_ep)
-    n_train_ep = int(round(train_frac * n_ep))
-    train_eps = set(perm[:n_train_ep].tolist())
+    perm = rng.permutation(len(unique_keys))
+    n_train_trees = int(round(train_frac * len(unique_keys)))
+    train_keys = set(unique_keys[perm[:n_train_trees]].tolist())
+    train_eps = {i for i, k in enumerate(keys) if k in train_keys}
     is_train = np.zeros(total_steps, dtype=bool)
     off = 0
     for i, num_steps in enumerate(episode_step_counts):
@@ -238,7 +251,8 @@ def run(config_path: str, limit: int | None, seed: int) -> None:
         )
 
     # 4. Held-out episode split ----------------------------------------------------------
-    is_train = _episode_split_mask(step_counts, total_steps, seed=seed)
+    traj_keys = [ep["trajectory_key"] for ep in episodes]
+    is_train = _episode_split_mask(step_counts, total_steps, seed=seed, trajectory_keys=traj_keys)
     is_test = ~is_train
     z_train, z_test = z[is_train], z[is_test]
     n_test = int(is_test.sum())

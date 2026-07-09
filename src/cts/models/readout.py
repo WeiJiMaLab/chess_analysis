@@ -14,11 +14,10 @@ surrogate MSE+sign-BCE — see ``mc_pipeline.md`` §10b):
 
   1. :class:`AlwaysStop`        -- A<=0 everywhere       (stop@0, no parameters)
   2. :class:`NeverStop`         -- A>0 everywhere        (full budget, no parameters)
-  3. :class:`FractionStop`      -- A>0 iff N_t < theta*B (one scalar theta)
-  4. :class:`StatsReadout`      -- MLP on [height, width, n_nodes, B]
-  5. :class:`GnnMetaController` -- MLP on [z, B]
+  3. :class:`StatsReadout`      -- MLP on [height, width, n_nodes, B]
+  4. :class:`GnnMetaController` -- MLP on [z, B]
 
-Tiers 4 and 5 share an IDENTICAL head architecture (:func:`build_advantage_head`)
+Tiers 3 and 4 share an IDENTICAL head architecture (:func:`build_advantage_head`)
 so the 4-vs-5 gap isolates *representation* (hand-crafted stats vs learned GNN
 embedding), not capacity.
 
@@ -103,36 +102,13 @@ class NeverStop(Readout):
         return torch.full((num_steps,), 1.0)
 
 
-class FractionStop(Readout):
-    """Tier 3: continue iff ``N_t < theta * B`` — the one-scalar budget-only baseline.
-
-    Encodes the Fraction-of-Budget rule as an advantage: ``A = theta*B - N_t``,
-    so ``A > 0`` (continue) exactly while the tree size ``N_t`` is below the
-    fraction ``theta`` of the starting budget ``B``. ``theta`` is the single
-    learnable parameter, fit on regret directly (grid search or GD).
-
-    The feature layout for this readout exposes ``n_nodes`` (``N_t``) at column
-    ``n_nodes_col``.
-    """
-
-    def __init__(self, theta: float = 0.5, n_nodes_col: int = 0) -> None:
-        super().__init__()
-        self.theta = nn.Parameter(torch.tensor(float(theta)))
-        self.n_nodes_col = int(n_nodes_col)
-
-    def advantages(self, features: torch.Tensor, starting_budget: int) -> torch.Tensor:
-        n_nodes = features[:, self.n_nodes_col]
-        return self.theta * float(starting_budget) - n_nodes
-
-
 class StatsReadout(Readout):
-    """Tier 4: MLP advantage head on hand-crafted ``[height, width, n_nodes, B]``.
+    """Tier 3: MLP advantage head on hand-crafted ``[height, width, n_nodes, B]``.
 
     The feature matrix passed in is ``[num_steps, 3]`` = ``[height, width,
     n_nodes]`` per step; ``B`` (the scalar starting budget) is broadcast and
-    concatenated here so the head sees the same budget signal the
-    ``FractionStop`` baseline keys off. Uses the shared
-    :func:`build_advantage_head` so the architecture matches tier 5.
+    concatenated here. Uses the shared :func:`build_advantage_head` so the
+    architecture matches tier 4.
     """
 
     NUM_STATS = 3  # [height, width, n_nodes]
@@ -211,11 +187,11 @@ class HaltCurveReadout(Readout):
 
 
 class GnnMetaController(Readout):
-    """Tier 5: MLP advantage head on the learned GNN root embedding ``[z, B]``.
+    """Tier 4: MLP advantage head on the learned GNN root embedding ``[z, B]``.
 
     The feature matrix is ``[num_steps, d_embed]`` = the per-step root embedding
     ``z``; ``B`` is broadcast and concatenated, mirroring ``StatsReadout``. Built
-    via the SAME :func:`build_advantage_head` so a 4-vs-5 comparison isolates the
+    via the SAME :func:`build_advantage_head` so a 3-vs-4 comparison isolates the
     representation (learned ``z`` vs hand-crafted stats), not head capacity.
     """
 

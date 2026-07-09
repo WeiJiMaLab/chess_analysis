@@ -12,8 +12,9 @@ and the tree-construction layer in the data-generation pipeline.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .common import (
     MOVE_STATS_RE,
@@ -61,6 +62,39 @@ def score_order_features(kind: str, raw_score: int) -> Dict[str, float]:
             "cp_order": sign * (MATE_CP_ORDER_BAND - float(distance)),
         }
     return {"cp": float(raw_score), "cp_order": float(raw_score)}
+
+
+def apply_tanh_cp_feature(features: Dict[str, float], temperature: Optional[float]) -> Dict[str, float]:
+    """Add a ``tanh_cp_value`` feature, a temperature-desaturated alternative to ``value``.
+
+    ``tanh_cp_value = tanh(cp_order / temperature)`` -- same formula, and same
+    intent (T3's "Related discovery": the shipped ``value`` feature saturates
+    to ``|value| >= 0.99`` for ~56% of nodes because Stockfish's WDL curve is
+    essentially a step function around ~300cp, while ``cp_order`` is
+    continuous), as ``analysis.relabel_replay.tanh_cp_value`` -- deliberately
+    NOT imported from there: ``cts`` is the lower-level package and must not
+    depend on ``analysis`` (the diagnostic layer built on top of it), so the
+    one-line formula is duplicated here rather than re-derived differently.
+    See ``cp_regen.md`` (Agent 3, plan.md) for why this exists: unlike
+    ``analysis.relabel_replay``'s shape-frozen relabel-and-replay probe, this
+    feature is computed at GENERATION time so that PUCT's own selection (not
+    just the final label) can respond to the desaturated value when
+    ``value_feature: tanh_cp_value`` is selected in ``BuildTreeConfig``.
+
+    Returns ``features`` unchanged (same dict, no copy) when ``temperature``
+    is ``None`` -- the default, zero-cost no-op path used by every existing
+    config that doesn't opt into this feature. Requires ``cp_order`` to
+    already be present in ``features`` (true for every code path that calls
+    this: ``score_order_features``/``terminal_value_features`` both always
+    emit it).
+    """
+    if temperature is None:
+        return features
+    if "cp_order" not in features:
+        raise KeyError("apply_tanh_cp_feature requires 'cp_order' in features; got keys: " + ", ".join(features))
+    features = dict(features)
+    features["tanh_cp_value"] = math.tanh(features["cp_order"] / float(temperature))
+    return features
 
 
 @dataclass

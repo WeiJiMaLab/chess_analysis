@@ -45,6 +45,14 @@ class MaterializeConfig(BaseModel):
     packed_data: Optional[str] = None
     encoder_checkpoint: Optional[str] = None
     worker_index: Optional[int] = None
+    # Default False: clear this worker's shard directory and start fresh. The
+    # expensive part of a rerun is redoing the encoder forward pass, so if
+    # you're specifically recovering from a killed/OOM'd/timed-out worker
+    # (check `sacct` for the exit reason before deciding), pass resume=True
+    # to skip already-written batches instead of redoing them. Resuming onto
+    # a DIFFERENT run's packed_data is still refused (see the mtime check
+    # below) even with resume=True.
+    resume: bool = False
     device: str = "cuda"
     episode_batch_size: int = 8
     loader_workers: int = 0
@@ -141,46 +149,78 @@ def materialize_worker(config: MaterializeConfig) -> None:
     shard_index = 0
     started = time.time()
 
-    # Resume support: shards are written atomically (write to .tmp, then
-    # os.replace) and only flushed at batch boundaries, so any shard_*.pt
-    # file on disk represents a contiguous prefix of the worker's slice.
-    # On startup, clean up leftover .tmp files (artifacts of a previous
-    # kill mid-write) and scan shards in order. If a shard fails to load
-    # — which should only happen for shards from a pre-atomic-write run,
-    # or for shards corrupted by external causes — truncate the resume
-    # point there: delete the corrupted shard plus every later one (to
-    # keep numbering contiguous) and resume from before it. The
-    # DataLoader is shuffle=False, so batch order is deterministic across
-    # runs and the truncated resume point is well-defined.
-    for tmp_leftover in shard_dir.glob("*.tmp"):
-        print(f"[materialize] cleaning up leftover {tmp_leftover}", flush=True)
-        tmp_leftover.unlink()
-    existing_shards = sorted(shard_dir.glob("shard_*.pt"))
-    for index, shard_path in enumerate(existing_shards):
-        try:
-            payload = torch.load(shard_path, weights_only=False)
-        except Exception as exc:  # noqa: BLE001 — torch.load raises a variety of errors
+    # Default behavior: clear this worker's shard directory and start fresh,
+    # matching split/gnn_pack/mc_pack's clear-and-redo semantics. Only pass
+    # resume=True when specifically recovering a killed/OOM'd/timed-out
+    # worker (check `sacct`'s exit reason first) — the expensive part of a
+    # rerun is redoing the encoder forward pass, so skipping already-written
+    # batches is worth it THERE, but trusting old shards by default is what
+    # caused a real incident: a rerun with regenerated packed_data (same
+    # path, different content) silently resumed onto the PRIOR run's
+    # leftover shards, since shard count alone can't tell a completed prefix
+    # of THIS run from a completed prefix of a DIFFERENT one.
+    if not config.resume:
+        for stale in shard_dir.glob("*"):
+            stale.unlink()
+    else:
+        # Resume support: shards are written atomically (write to .tmp, then
+        # os.replace) and only flushed at batch boundaries, so any shard_*.pt
+        # file on disk represents a contiguous prefix of the worker's slice.
+        # On startup, clean up leftover .tmp files (artifacts of a previous
+        # kill mid-write) and scan shards in order. If a shard fails to load
+        # — which should only happen for shards from a pre-atomic-write run,
+        # or for shards corrupted by external causes — truncate the resume
+        # point there: delete the corrupted shard plus every later one (to
+        # keep numbering contiguous) and resume from before it. The
+        # DataLoader is shuffle=False, so batch order is deterministic across
+        # runs and the truncated resume point is well-defined.
+        #
+        # Staleness check: even in an intentional resume, refuse to trust a
+        # shard older than packed_data's mtime — mc_pack always bumps that
+        # mtime when it regenerates, so an older shard cannot belong to the
+        # current input regardless of why resume=True was passed.
+        packed_data_mtime = Path(config.packed_data).stat().st_mtime if config.packed_data else None
+        for tmp_leftover in shard_dir.glob("*.tmp"):
+            print(f"[materialize] cleaning up leftover {tmp_leftover}", flush=True)
+            tmp_leftover.unlink()
+        existing_shards = sorted(shard_dir.glob("shard_*.pt"))
+        for index, shard_path in enumerate(existing_shards):
+            if packed_data_mtime is not None and shard_path.stat().st_mtime < packed_data_mtime:
+                print(
+                    f"[materialize] worker={config.worker_index} stale shard "
+                    f"{shard_path} predates packed_data {config.packed_data!r} "
+                    f"(regenerated since this shard was written); truncating "
+                    f"resume point here and deleting {len(existing_shards) - index} "
+                    f"shards (this one and any later)",
+                    flush=True,
+                )
+                for stale in existing_shards[index:]:
+                    stale.unlink()
+                break
+            try:
+                payload = torch.load(shard_path, weights_only=False)
+            except Exception as exc:  # noqa: BLE001 — torch.load raises a variety of errors
+                print(
+                    f"[materialize] worker={config.worker_index} corrupted shard "
+                    f"{shard_path}: {type(exc).__name__}: {exc}; truncating "
+                    f"resume point here and deleting {len(existing_shards) - index} "
+                    f"shards (this one and any later)",
+                    flush=True,
+                )
+                for stale in existing_shards[index:]:
+                    stale.unlink()
+                break
+            shard_paths.append(str(shard_path))
+            shard_sizes.append(int(payload["features"].shape[0]))
+            total_snapshots += shard_sizes[-1]
+        shard_index = len(shard_paths)
+        if shard_index:
             print(
-                f"[materialize] worker={config.worker_index} corrupted shard "
-                f"{shard_path}: {type(exc).__name__}: {exc}; truncating "
-                f"resume point here and deleting {len(existing_shards) - index} "
-                f"shards (this one and any later)",
+                f"[materialize] worker={config.worker_index} resume: "
+                f"using {shard_index} existing shards covering "
+                f"{total_snapshots} snapshots; will skip those batches",
                 flush=True,
             )
-            for stale in existing_shards[index:]:
-                stale.unlink()
-            break
-        shard_paths.append(str(shard_path))
-        shard_sizes.append(int(payload["features"].shape[0]))
-        total_snapshots += shard_sizes[-1]
-    shard_index = len(shard_paths)
-    if shard_index:
-        print(
-            f"[materialize] worker={config.worker_index} resume: "
-            f"using {shard_index} existing shards covering "
-            f"{total_snapshots} snapshots; will skip those batches",
-            flush=True,
-        )
     snapshots_to_skip = total_snapshots
     snapshots_skipped_so_far = 0
 

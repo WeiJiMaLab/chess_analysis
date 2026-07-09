@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_DEFAULT_CONFIG = _REPO_ROOT / "config_allply.yaml"
+_DEFAULT_CONFIG = _REPO_ROOT / "config_minply15_maxply75.yaml"
 
 
 def config_path() -> Path:

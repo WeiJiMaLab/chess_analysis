@@ -23,7 +23,9 @@ human_analysis:
   figures_dir: ${outputs_dir}/${run_name}
   min_ply: ${min_ply}
   max_ply: ${max_ply}
-  trees_default: ${trees_dir}/befs1cp_md36
+  trees_default: ${trees_dir}/puctvalue_md36  # gen_trees.slurm writes HERE (overrides treegen.output_dir
+  # to this field, not the other way around) -- must track the live selection algorithm or split/mc_pack
+  # silently point at an empty/stale directory. Flipped alongside treegen.selection: puct (labnotebook 2026-07-07).
   cache_default: ${run_dir}/tree_values_cache
   response_time_histogram_bins: 50
   qq_plot_quantile_probes: 200
@@ -35,7 +37,11 @@ human_analysis:
   table_filtered: filtered_moves_${run_name}          # filter stage → the windowed canon
   table_board_features: board_features_${run_name}     # board --featurize/--merge → captures/checks
   fens_sample: ${fens_sample}                          # tree-root FEN sample (treegen input)
-  tree_fens_n: 250000                                  # # distinct FENs sampled for tree generation
+  tree_fens_n: 400000                                  # # distinct FENs sampled for tree generation
+  # 250k->400k (labnotebook 2026-07-07): generate everything (non-destructive), no inline filtering --
+  # argmax>2 "thinking helps" yield is ~24.7% (900-FEN pilot), so 400K raw leaves ~100K survivors,
+  # which is plenty. argmax_filter (pipeline.yaml) non-destructively picks that subset for pack_trees
+  # via split.include_list, while engine_analysis_pwin/cp still see the FULL undeleted 400K.
   tree_fens_seed: 42
 
 # Data preprocessing (builds the shared personal.db that every run reads).
@@ -61,13 +67,19 @@ treegen:
   provider: stockfish
   engine_path: /home/hl4291/stockfish/src/stockfish
   fens: ${fens_sample}
-  output_dir: ${trees_dir}/befs1cp_md36
-  # Greedy best-first search on Stockfish's native centipawn score (cp_order =
-  # cp, with mate scores folded into a ±20000 band). No c_puct: BeFS has no
-  # exploration/value-scale coupling, and cp resolves the frontier ties that
-  # pwin saturation creates. WDL features are still stored on every node.
-  selection: befs
-  value_feature: cp_order
+  output_dir: ${trees_dir}/puctvalue_md36
+  # PUCT is the live path (BeFS demoted to variants.befs -- see labnotebook
+  # 2026-07-07: BeFS almost certainly shouldn't be the live path for a game
+  # like chess and our branching regime; PUCT is the more defensible search).
+  # Single currency end to end: value = p_win - p_loss, in [-1,1] -- PUCT's
+  # exploration formula (Q + c_puct*prior*sqrt(N)/(1+n)) assumes a bounded,
+  # roughly stationary value scale, which "value" provides and cp_order does
+  # not; oracle_final_root_q_values/halt_reward must be win-probability-scaled
+  # to match the meta-controller's actual downstream inputs and for
+  # mc_pack.min_halt_reward_range to be meaningful. Default c_puct=1.0 is
+  # already correctly calibrated for this scale, so no override is needed.
+  selection: puct
+  value_feature: value
   search_budget: ${search_budget}
   min_nodes: 96
   max_nodes: 96
@@ -78,8 +90,13 @@ treegen:
   log_interval: 50
 
 split:
-  source_root: ${trees_dir}/befs1cp_md36
-  include_list: null
+  source_root: ${trees_dir}/puctvalue_md36
+  # Populated by argmax_filter.slurm (pipeline.yaml: gen_trees -> argmax_filter ->
+  # pack_trees), non-destructively -- gen_trees keeps every generated tree (100K,
+  # ~17GB, not worth deleting anything), and this just picks the "thinking helps"
+  # subset (argmax>2, ~24.7% -- see labnotebook 2026-07-07) for the meta-controller
+  # branch only. engine_analysis_pwin/cp read source_root directly (unaffected).
+  include_list: ${split_dir}/argmax_gt2_include_list.txt
   split_root: ${split_dir}
   validation_fraction: 0.2
   seed: 0
@@ -103,14 +120,18 @@ mc_pack:
   max_depth: 36
   maintenance_scale: 0.0
   maintenance_ref_nodes: 30.0
-  maintenance_exponent: 1.1
-  time_lambda: 10.0
+  maintenance_exponent: 1.0    # exactly linear in node count (was 1.1, slightly superlinear)
+  # time_lambda is NOT baked into anything the live path (pg_controller_train.py) reads --
+  # oracle_value/target_advantages get recomputed fresh at train time from raw halt_rewards
+  # (see train.time_lambda comment). It only still matters here for min_decision_margin
+  # (currently 0.0/disabled), so this doesn't gate a repack -- kept at 0.01 purely so it's
+  # not misleadingly stale if that filter is ever turned on. See labnotebook 2026-07-07.
+  time_lambda: 0.01
   time_p: 2.8
   time_tau: 2.5
   time_delta: 1
   timeout_value: -1.0
-  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md);
-                              # now matches R-EVALUATE's assessment regime (linear, lambda=10)
+  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md)
   samples_per_bucket: 2
   fixed_budget: 96
   seed: 0
@@ -179,16 +200,26 @@ train:
   metrics_log_interval: 20
   maintenance_scale: 0.0
   maintenance_ref_nodes: 30.0
-  maintenance_exponent: 1.1
-  time_lambda: 10.0
-  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md)
+  maintenance_exponent: 1.0    # exactly linear in node count (was 1.1, slightly superlinear)
+  # time_lambda=10.0 was ~1000-3000x too large once value_feature became win-probability-scaled
+  # (was cp-scale) -- recalibrated to 0.01 via a real data sweep on PUCT (the live path; see
+  # labnotebook 2026-07-07). This field is NOT baked into packed data and needs no repack to
+  # change: pg_controller_train.py's _episode_returns derives oracle_value fresh as max(g) at
+  # train time (verified byte-identical to the old baked-in value on real data at matched
+  # lambda), so mc_pack never needs to know about the cost model at all.
+  time_lambda: 0.01
+  time_mode: linear           # shipped regime replaces power_law (degenerate — see normative.md);
+                              # convex shapes (quadratic/power_law) tested, no benefit over linear
+                              # once calibrated (labnotebook 2026-07-07)
   time_p: 2.8
   time_tau: 2.5
   time_delta: 1
   timeout_value: -1.0
   samples_per_bucket: 2
-  fixed_budget: 96  # must match mc_pack.fixed_budget exactly, or _validate_packed_manifest_oracle
-                    # rejects the packed manifest
+  fixed_budget: 96  # NOTE: the comment this used to have ("must match mc_pack.fixed_budget or
+                    # _validate_packed_manifest_oracle rejects the manifest") described the
+                    # deprecated controller_train.py path; pg_controller_train.py (live) never
+                    # calls that validation. Still keep these matched for clarity/sanity.
   seed: 0
 
 eval:
@@ -198,9 +229,19 @@ eval:
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
   time_mode: linear           # R-EVALUATE assessment regime (recorded here, not a hidden evaluate.py default)
-  time_lambda: 10.0
-  maintenance_scale: 0.0
-  maint_lambda: 10.0          # lambda held fixed while sweeping maintenance_scale (delta_mean_regret_maintenance)
+  time_lambda: 0.01          # recalibrated from 10.0 -- see train.time_lambda comment above
+  maintenance_scale: 0.0     # reverted from 0.1 (labnotebook 2026-07-08): that "sweet spot" was chosen
+                              # BEFORE the maintenance re-sweep found no nonzero scale beats 0.0 for a
+                              # non-degenerate global k*, and before the argmax>2 tree filter became the
+                              # real fix for SingleHalt*'s collapse -- never reset after that pivot, so
+                              # last night's real eval run collapsed all three controllers to identical,
+                              # degenerate k*=0 results (frontier showed byte-identical SingleHalt*/
+                              # Stats-Controller/z_t-Controller points). 0.0 is the validated regime where
+                              # the argmax-filtered population gives a genuine k*=10 (see labnotebook).
+  maintenance_exponent: 1.0   # exactly linear in node count (overridden here regardless of what mc_pack baked in)
+  maint_lambda: 0.01          # lambda held fixed while sweeping maintenance_scale (delta_mean_regret_maintenance);
+                              # recalibrated from 10.0, same fix as time_lambda above -- I missed this sibling
+                              # field in the first pass (labnotebook 2026-07-07)
   max_episodes: 15000
 
 # --- Normative variant branches (optional; piggy-back on the base run) ---
@@ -210,11 +251,47 @@ eval:
 # NB the tail is the path from `from` to `to`, so board/engine (off other branches,
 # and analysis-config anyway) are NOT forked.
 variants:
-  pruned:
-    from: gen_trees                 # RE-RUN BeFS tree generation WITH pruning ...
+  # `pruned` and `befs` variants removed 2026-07-08 (plan.md): both only overrode
+  # `treegen.output_dir`, never `human_analysis.trees_default`/`split.source_root` (independent
+  # hardcoded duplicates of the same path, not derived from it) -- so `argmax_filter`/`split`
+  # would silently read from the un-forked base directory instead of either variant's actual
+  # output if ever driven through RUN_VARIANTS end-to-end. Neither was confirmed to have been
+  # run that way (found while wiring up `cp_regen` below, which overrides all three fields
+  # correctly). Deleted rather than patched -- BeFS is already demoted to non-live (labnotebook
+  # 2026-07-07) and pruning-alone is superseded by `cp_regen`, which bakes pruning in alongside
+  # the value-function fix. Re-add properly (all three path fields) if either is needed again.
+  cp_regen:
+    # plan.md Agent 3 -- "CP done for real": regenerate under tanh(cp_order/300) instead of
+    # the WDL-derived "value" column, PLUS pruning baked in from the start (T3's already-
+    # validated relative/0.1 knobs), then run the REAL pipeline (not CP's shape-frozen
+    # relabel-and-replay) end to end. See cp_regen.md for the full writeup.
+    from: gen_trees                 # RE-RUN tree generation with the new value function + pruning ...
     to: eval                        # ... through the normative model, to eval
-    share: [fens_sample]            # reuse the base tree-root FENs (grow pruned trees on the same roots)
-    overrides:                      # <section>.<field> — BuildTreeConfig's real prune fields
-      treegen.prune_mode: relative       # keep child iff value <= best + prune_epsilon
-      treegen.prune_epsilon: 50.0        # cp; = UNITS["cp"]["frac_good_eps"] (the existing
-                                          # "near-best" epsilon used for n_within_epsilon)
+    share: [fens_sample]            # reuse the base tree-root FENs (grow the new trees on the same roots)
+    overrides:                      # <section>.<field> — BuildTreeConfig's real fields
+      treegen.value_feature: tanh_cp_value     # desaturated tanh(cp_order/T) instead of WDL "value"
+      treegen.tanh_cp_temperature: 300.0       # T=300 (arbitrary per direct instruction; CP's null,
+                                                # not negative, replay-test result -- see cp_recalibration.md)
+      treegen.prune_mode: relative             # keep child iff value <= best + prune_epsilon
+      treegen.prune_epsilon: 0.1               # T3-validated: cuts median width 1099->425, no yield cost.
+                                                # tanh_cp_value is also bounded [-1,1] like "value", so this
+                                                # threshold's scale reasoning (see `pruned` variant above)
+                                                # still applies unchanged.
+      treegen.output_dir: ${trees_dir}/cp_regen_tanh300_pruned
+      # argmax_filter.slurm reads human_analysis.trees_default (NOT treegen.output_dir), and
+      # pack_trees.slurm's split stage reads split.source_root (NOT treegen.output_dir either)
+      # -- both are independent, hardcoded-duplicate anchors in the base config (see their own
+      # comments), so BOTH must be overridden here too or argmax_filter/split would silently
+      # look in the (non-existent, un-forked) puctvalue_md36 leaf under this variant's forked
+      # trees_dir. Confirmed by reading argmax_filter.slurm + preprocess_gnn/split.py directly
+      # (neither the `pruned` nor `befs` variant above overrides these -- plausibly never
+      # actually driven through the full RUN_VARIANTS path end-to-end; not touching those,
+      # this is cp_regen-local).
+      human_analysis.trees_default: ${trees_dir}/cp_regen_tanh300_pruned
+      split.source_root: ${trees_dir}/cp_regen_tanh300_pruned
+      # NOT run at full production scale via submit_all.sh's fixed gen_trees array (0-159, full
+      # 400K) -- smoke-scale generation is submitted manually (slurm/cp_regen_gen_trees.slurm,
+      # VARIANT=cp_regen exported, small --array) at a scale similar to CP's ~16K-raw sample,
+      # per plan.md's "smoke-scale first" instruction. Downstream steps (argmax_filter onward)
+      # DO use the normal submit_all.sh RUN_VARIANTS=cp_regen path -- their array sizes just
+      # process fewer real shards/episodes on a smaller corpus, no correctness issue.

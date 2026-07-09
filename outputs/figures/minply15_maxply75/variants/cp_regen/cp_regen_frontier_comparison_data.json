@@ -1,0 +1,29 @@
+[
+  {
+    "label": "SingleHalt* (fixed stop)",
+    "baseline_regret": 0.12039361420088344,
+    "baseline_lo": 0.11286967314146769,
+    "baseline_hi": 0.1286023779672196,
+    "cp_regen_regret": 0.19225724022332077,
+    "cp_regen_lo": 0.13315234626109737,
+    "cp_regen_hi": 0.2581990579610085
+  },
+  {
+    "label": "Stats-Controller",
+    "baseline_regret": 0.11373478835389858,
+    "baseline_lo": 0.10608485951185587,
+    "baseline_hi": 0.1215827118545356,
+    "cp_regen_regret": 0.2302502156421542,
+    "cp_regen_lo": 0.16576801286894524,
+    "cp_regen_hi": 0.2944435272525391
+  },
+  {
+    "label": "$z_t$-Controller",
+    "baseline_regret": 0.12072469618129181,
+    "baseline_lo": 0.11303963229041017,
+    "baseline_hi": 0.12870935939624023,
+    "cp_regen_regret": 0.1744479056669248,
+    "cp_regen_lo": 0.12269675628443225,
+    "cp_regen_hi": 0.23772638314323047
+  }
+]

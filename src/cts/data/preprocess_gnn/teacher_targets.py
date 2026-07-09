@@ -27,6 +27,7 @@ import json
 import math
 import os
 import random
+from abc import ABC, abstractmethod
 from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
@@ -58,15 +59,22 @@ class TeacherSearchConfig:
     (drives the post-hoc backup pass in ``compute_teacher_targets``).
 
     ``selection`` picks the generation-time leaf-selection rule:
-      - ``"puct"`` (default): AlphaZero PUCT, ``Q + c_puct * P * sqrt(N)/(1+n)``.
-      - ``"befs"``: greedy best-first descent on the STATIC per-node
-        ``value_feature`` (see ``_select_leaf_by_befs``). No exploration
-        constant, no visit counts — tree topology depends only on the stored
-        child values, so the expansion order is exactly replayable from the
-        saved tree. NOTE: ``c_puct=0`` is NOT equivalent — with c_puct=0 the
-        PUCT rule greedily follows edge Q (a visit-mean of backed-up values,
-        0 for unvisited children, ties broken by insertion order), not the
-        static child value.
+      - ``"puct"`` (only option, default): AlphaZero PUCT, ``Q + c_puct * P *
+        sqrt(N)/(1+n)``. An unvisited child (``visit_count == 0``) uses a
+        first-play-urgency fallback of ``-static_value_of_child`` (sign-flipped
+        to the parent's POV) instead of a hardcoded ``Q=0`` — informed by that
+        child's own static eval rather than treating it like a known draw.
+        This value is seeded once into ``EdgeStats.fpu_value`` when the edge
+        is created and read by every consumer of ``q_value`` (selection, the
+        oracle trace, etc.); visited children's ``Q`` is always the genuine
+        visit-mean, never diluted by the seed.
+
+      A ``"befs"`` best-first-minimax alternative existed but was removed
+      2026-07-08: its selection rule tunnel-visioned (committed an entire
+      96-expansion budget to a single root move, never reconsidering any
+      alternative — see ``labnotebook.md``), the rewrite meant to fix that
+      never did, and PUCT was already the only live path, so the
+      permanently-broken alternative was deleted rather than kept unreachable.
     """
 
     max_depth: int  # plies-from-root cap; deeper nodes are treated as terminal during search
@@ -78,7 +86,7 @@ class TeacherSearchConfig:
     search_config_id: str = "default"  # short label identifying this config in metadata
     prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); meaning set by prune_mode. None = no prune.
     prune_mode: Optional[str] = None       # None/"relative" (eps) | "absolute" (win-prob floor) | "rank" (top-k)
-    selection: str = "puct"  # generation-time leaf selection: "puct" | "befs"
+    selection: str = "puct"  # generation-time leaf selection: "puct" (BeFS removed 2026-07-08, unfixed tunnel-vision bug, see labnotebook.md)
 
     def __post_init__(self) -> None:
         if self.max_depth < 0:
@@ -91,7 +99,7 @@ class TeacherSearchConfig:
             raise ValueError("prune_epsilon must be non-negative.")
         if self.prune_mode not in (None, "relative", "absolute", "rank"):
             raise ValueError(f"unknown prune_mode {self.prune_mode!r}")
-        if self.selection not in ("puct", "befs"):
+        if self.selection != "puct":
             raise ValueError(f"unknown selection {self.selection!r}")
 
 
@@ -146,11 +154,16 @@ class EdgeStats:
     visit_count: int = 0  # number of PUCT visits that traversed this edge
     total_value: float = 0.0  # sum of side-corrected leaf values backed up through this edge
     total_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # sum of side-corrected leaf WDLs
+    fpu_value: float = 0.0  # first-play-urgency seed: child's own static value, sign-flipped to
+    # the parent's POV, set once when the edge is created (see PUCTSearch.on_expand). Used as the
+    # q_value fallback only — never folded into total_value/visit_count, so it can never dilute a
+    # real backup average the way seeding visit_count=1 (BeFS's trick) would for PUCT's accumulating
+    # backup.
 
     @property
     def q_value(self) -> float:
-        """Action-value estimate: ``total_value / visit_count`` (0 when unvisited)."""
-        return self.total_value / self.visit_count if self.visit_count > 0 else 0.0
+        """Action-value estimate: ``total_value / visit_count`` if visited, else the FPU seed."""
+        return self.total_value / self.visit_count if self.visit_count > 0 else self.fpu_value
 
     @property
     def mean_wdl(self) -> Tuple[float, float, float]:
@@ -267,12 +280,22 @@ class PretrainExample:
 # ``v5`` carries optional per-edge child-WDL targets (opt-in at generation);
 # the node-target/topology supervision fields (value_gap/policy_drift) that
 # earlier v5 records stored have been removed and are ignored on load.
-RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v5"
+# ``v6`` (labnotebook 2026-07-07): drops the ``cp``/``mate`` node-feature
+# columns from disk (verified unused by every consumer — gnn_pack, mc_pack,
+# tree_loader.py) and stores ``node_features``/``edge_wdl_targets`` as
+# float16 instead of float32 (~35% smaller files; both are bounded
+# win-probability/WDL-scale values, so the precision loss is a one-time
+# storage rounding, not a compounding error — accepted tradeoff, not free).
+# All columns are still looked up by name (``feature_names.index(...)``), so
+# v5 files (9 cols, float32) keep loading fine alongside v6 (7 cols, float16).
+RAW_PRETRAIN_FORMAT = "cts_raw_pretrain_example_v6"
+_RAW_PRETRAIN_EXCLUDED_FEATURES = frozenset({"cp", "mate"})
 RAW_PRETRAIN_LEGACY_FORMATS = frozenset(
     {
         "cts_raw_pretrain_example_v2",
         "cts_raw_pretrain_example_v3",
         "cts_raw_pretrain_example_v4",
+        "cts_raw_pretrain_example_v5",
         RAW_PRETRAIN_FORMAT,
     }
 )
@@ -283,17 +306,19 @@ VALUE_SCALAR_TO_CENTIPAWNS = 100.0
 
 
 def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
-    """Collect every feature name observed in the tree, in first-seen order.
+    """Collect every persisted feature name observed in the tree, in first-seen order.
 
     Used when serializing a tree to disk so the column order is recorded in
     the file rather than implicit. Consumers project this back onto the
-    encoder schema at load time.
+    encoder schema at load time. Excludes ``_RAW_PRETRAIN_EXCLUDED_FEATURES``
+    (computed in-memory during generation/pruning but never read back from a
+    saved file by any consumer — see RAW_PRETRAIN_FORMAT v6 comment).
     """
     ordered: List[str] = []
     seen = set()
     for node in tree.iter_nodes():
         for name in node.scalar_features:
-            if name not in seen:
+            if name not in seen and name not in _RAW_PRETRAIN_EXCLUDED_FEATURES:
                 seen.add(name)
                 ordered.append(str(name))
     return tuple(ordered)
@@ -325,7 +350,11 @@ def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -
     """Materialize the per-node feature matrix in ``feature_names`` column order.
 
     Missing features become NaN rather than 0 so consumers can distinguish
-    "feature absent from this node" from "feature is exactly zero".
+    "feature absent from this node" from "feature is exactly zero". Stored as
+    float16 (RAW_PRETRAIN_FORMAT v6): all persisted features are bounded
+    win-probability/WDL-scale values, so this is a one-time storage rounding,
+    not a compounding error — callers that need full precision arithmetic
+    already upcast via ``float(...)`` when reading individual values out.
     """
     rows: List[List[float]] = []
     for node in tree.iter_nodes():
@@ -335,8 +364,8 @@ def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -
             row.append(float(value))
         rows.append(row)
     if not rows:
-        return torch.empty((0, len(feature_names)), dtype=torch.float32)
-    return torch.tensor(rows, dtype=torch.float32)
+        return torch.empty((0, len(feature_names)), dtype=torch.float16)
+    return torch.tensor(rows, dtype=torch.float16)
 
 
 def _child_ptr_and_children_index(tree: SearchTree) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -368,7 +397,10 @@ def _edge_wdl_target_tensor_for_tree(
     tree: SearchTree,
     edge_wdl_targets: Optional[Mapping[Tuple[int, int], Sequence[float]]],
 ) -> torch.Tensor:
-    """Stack per-edge WDL targets in canonical edge order, or NaN rows when absent."""
+    """Stack per-edge WDL targets in canonical edge order, or NaN rows when absent.
+
+    float16 (RAW_PRETRAIN_FORMAT v6) — see _dense_node_feature_tensor.
+    """
     rows: List[Tuple[float, float, float]] = []
     for node in tree.iter_nodes():
         for child_id in tree.child_ids(node.node_id):
@@ -378,8 +410,8 @@ def _edge_wdl_target_tensor_for_tree(
             else:
                 rows.append((float("nan"), float("nan"), float("nan")))
     if not rows:
-        return torch.empty((0, 3), dtype=torch.float32)
-    return torch.tensor(rows, dtype=torch.float32)
+        return torch.empty((0, 3), dtype=torch.float16)
+    return torch.tensor(rows, dtype=torch.float16)
 
 
 def _record_has_edge_wdl_targets(edge_wdl_targets: torch.Tensor) -> bool:
@@ -457,7 +489,9 @@ class RawPretrainExampleRecord:
         # of mutable fields (lists, dicts) after construction.
         object.__setattr__(self, "incoming_moves", [None if move is None else str(move) for move in self.incoming_moves])
         object.__setattr__(self, "feature_names", tuple(str(name) for name in self.feature_names))
-        object.__setattr__(self, "node_features", self.node_features.to(dtype=torch.float32, device="cpu"))
+        # float16 (RAW_PRETRAIN_FORMAT v6): bounded win-probability/WDL-scale values,
+        # ~35% smaller on disk; consumers upcast via .to(dtype=schema.dtype) at pack time.
+        object.__setattr__(self, "node_features", self.node_features.to(dtype=torch.float16, device="cpu"))
         object.__setattr__(self, "parent_index", self.parent_index.to(dtype=torch.int32, device="cpu"))
         object.__setattr__(self, "child_ptr", self.child_ptr.to(dtype=torch.int32, device="cpu"))
         object.__setattr__(self, "children_index", self.children_index.to(dtype=torch.int32, device="cpu"))
@@ -465,7 +499,7 @@ class RawPretrainExampleRecord:
         object.__setattr__(self, "is_terminal", self.is_terminal.to(dtype=torch.bool, device="cpu"))
         object.__setattr__(self, "is_expanded", self.is_expanded.to(dtype=torch.bool, device="cpu"))
         object.__setattr__(self, "node_targets", self.node_targets.to(dtype=torch.float32, device="cpu"))
-        object.__setattr__(self, "edge_wdl_targets", self.edge_wdl_targets.to(dtype=torch.float32, device="cpu"))
+        object.__setattr__(self, "edge_wdl_targets", self.edge_wdl_targets.to(dtype=torch.float16, device="cpu"))
         object.__setattr__(self, "metadata", dict(self.metadata))
         object.__setattr__(
             self,
@@ -1239,6 +1273,16 @@ def _select_leaf_by_puct(
     Returns the leaf node id and the path of (parent_id, child_id) edges
     taken to reach it. PUCT score is ``Q + c_puct * prior * sqrt(N) / (1+n)``,
     the AlphaZero formulation.
+
+    First-play-urgency fix: an unvisited child (``visit_count == 0``) has no
+    real ``Q`` estimate yet. Rather than treating it as a known draw
+    (``Q=0``), ``EdgeStats.q_value`` falls back to ``fpu_value`` — that
+    child's own static eval, sign-flipped to the parent's POV, seeded once
+    when the edge is created (see ``PUCTSearch.on_expand``) — so selection is
+    informed by whatever one-ply information is already sitting on the child
+    instead of a fake neutral value. The moment a child gets its first real
+    visit, ``q_value`` is the genuine ``total_value / visit_count``; the seed
+    is never folded into that average.
     """
     if tree.root_id is None:
         raise ValueError("Tree must contain a root.")
@@ -1268,90 +1312,15 @@ def _select_leaf_by_puct(
         best_child_id = child_ids[0]
         best_score = float("-inf")
         for child_id, stats in keyed_child_stats:
+            q_value = stats.q_value
             child = tree.get_node(child_id)
             prior = float(child.scalar_features.get(config.prior_feature, 0.0))
-            q_value = stats.q_value if stats.visit_count > 0 else 0.0
             exploration = prior * parent_visit_scale / (1.0 + stats.visit_count)
             score = q_value + exploration
             if score > best_score:
                 best_score = score
                 best_child_id = child_id
 
-        path.append((node_id, best_child_id))
-        node_id = best_child_id
-
-
-def _befs_open_map(tree: SearchTree, config: TeacherSearchConfig) -> Dict[int, bool]:
-    """Per-node flag: does this node's subtree still contain an expandable leaf?
-
-    A leaf is *open* iff it is non-terminal, unexpanded, and under the depth
-    cap; an internal node is open iff any child is open. Computed bottom-up in
-    one pass — children always carry larger ids than their parent (ids are
-    insertion-ordered), so a reverse sweep sees every child before its parent.
-    """
-    open_map: Dict[int, bool] = {}
-    for node in reversed(list(tree.iter_nodes())):
-        if node.is_terminal:
-            open_map[node.node_id] = False
-        elif not node.is_expanded:
-            open_map[node.node_id] = node.depth < config.max_depth
-        else:
-            open_map[node.node_id] = any(
-                open_map[child_id] for child_id in tree.child_ids(node.node_id)
-            )
-    return open_map
-
-
-def _select_leaf_by_befs(
-    tree: SearchTree,
-    config: TeacherSearchConfig,
-) -> Tuple[int, List[Tuple[int, int]]]:
-    """Greedy best-first descent on STATIC child values (no c_puct, no visits).
-
-    At every expanded node, follow the child with the best static
-    ``config.value_feature`` among children whose subtree still contains an
-    expandable leaf, until reaching an unexpanded leaf. Returns the leaf id
-    and the (parent_id, child_id) edge path, like ``_select_leaf_by_puct``.
-
-    Perspective (NEGAMAX, same convention as ``_prune_children`` and
-    ``_backpropagate_path``): a child's value is from the *child's* mover's
-    perspective, so the best child for the parent is the MIN-value child.
-
-    Determinism: ties are broken by (incoming move UCI, child id), so given
-    the stored static values the expansion order of a saved tree is exactly
-    reproducible — the property the cp-greedy replay validation checks.
-
-    Closed subtrees (all leaves terminal or at ``max_depth``) are skipped
-    rather than re-selected, so — unlike PUCT — a selected leaf is always
-    expandable and every simulation produces exactly one expansion.
-    """
-    if tree.root_id is None:
-        raise ValueError("Tree must contain a root.")
-    open_map = _befs_open_map(tree, config)
-    if not open_map.get(tree.root_id, False):
-        raise ValueError("BeFS selection called with no expandable frontier.")
-
-    path: List[Tuple[int, int]] = []
-    node_id = tree.root_id
-    while True:
-        node = tree.get_node(node_id)
-        if not node.is_expanded:
-            return node_id, path
-        open_children = [
-            child_id for child_id in tree.child_ids(node_id) if open_map[child_id]
-        ]
-        if not open_children:
-            raise ValueError(
-                f"BeFS invariant violated: node {node_id} is open but has no open children."
-            )
-        best_child_id = min(
-            open_children,
-            key=lambda child_id: (
-                _static_node_value(tree, child_id, config.value_feature),
-                tree.get_node(child_id).incoming_move_uci or "",
-                child_id,
-            ),
-        )
         path.append((node_id, best_child_id))
         node_id = best_child_id
 
@@ -1377,6 +1346,211 @@ def _backpropagate_path(
         if wdl is not None:
             wdl = _flip_wdl_target(wdl)
             stats.total_wdl = tuple(stats.total_wdl[index] + wdl[index] for index in range(3))
+
+
+class TreeSearch(ABC):
+    """Shared harness for teacher tree generation.
+
+    Owns everything that is identical between selection strategies: sampling
+    the node budget, the simulation loop, depth-cap/already-terminal leaf
+    handling, provider-driven expansion (pruning + prior normalization), and
+    oracle-trace recording. Subclasses only decide (a) which leaf to visit
+    next (``select_leaf``) and (b) how ``edge_stats`` is seeded/backed-up
+    once a node is expanded or found to be a dead end (``on_expand`` /
+    ``on_terminal_leaf``).
+    """
+
+    def __init__(self, config: TeacherSearchConfig) -> None:
+        self.config = config
+
+    @abstractmethod
+    def select_leaf(
+        self,
+        tree: SearchTree,
+        edge_stats: Dict[Tuple[int, int], EdgeStats],
+    ) -> Tuple[int, List[Tuple[int, int]]]:
+        """Pick the next leaf to visit and the root-to-leaf edge path taken."""
+
+    @abstractmethod
+    def on_expand(
+        self,
+        tree: SearchTree,
+        edge_stats: Dict[Tuple[int, int], EdgeStats],
+        path: Sequence[Tuple[int, int]],
+        node_id: int,
+        child_ids: Sequence[int],
+    ) -> None:
+        """Called right after ``node_id``'s ``child_ids`` were added to the tree.
+
+        Responsible for seeding the new children's ``edge_stats`` and/or
+        backing up ``path`` however this search variant requires.
+        """
+
+    @abstractmethod
+    def on_terminal_leaf(
+        self,
+        tree: SearchTree,
+        edge_stats: Dict[Tuple[int, int], EdgeStats],
+        path: Sequence[Tuple[int, int]],
+        node_id: int,
+    ) -> None:
+        """Called when the selected leaf turns out to be terminal, past the
+        depth cap, or childless (the provider yielded nothing) — no
+        expansion happens this simulation, but some search variants still
+        need to back up the leaf's static value."""
+
+    def generate(
+        self,
+        root_fen: str,
+        provider: TreeExpansionProvider,
+        node_budget_distribution: NodeBudgetDistribution,
+        rng: Optional[random.Random] = None,
+    ) -> GeneratedTree:
+        """Build a tree by running this search's leaf selection until a
+        sampled expansion budget is hit.
+
+        This is the standard generation path: draw a node budget from
+        ``node_budget_distribution``, then alternate leaf selection,
+        provider-driven expansion of that leaf, and backup. The oracle trace
+        is captured after each expansion so we have the teacher's decision
+        evolution recorded alongside the final tree.
+        """
+        rng = rng or random.Random()
+        config = self.config
+        sampled_node_budget = node_budget_distribution.sample(rng)
+
+        # --- Initialize tree with just the root ---
+        tree = SearchTree(
+            root_fen=root_fen,
+            root_scalar_features=provider.root_features(root_fen),
+            root_metadata=provider.root_metadata(root_fen),
+        )
+        edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
+        num_expansions = 0
+        oracle_trace_expansion_counts: List[int] = []
+        oracle_root_moves: List[str] = []
+        oracle_root_q_trace: List[List[float]] = []
+        oracle_best_move_trace: List[str] = []
+        oracle_root_visits_trace: List[List[int]] = []
+
+        def _record_oracle_root_trace() -> None:
+            """Snapshot the root's current per-move Q-values after each expansion."""
+            nonlocal oracle_root_moves
+            if tree.root_id is None:
+                return
+            root_children = tree.root_children()
+            if not root_children:
+                return
+            # On the first call, freeze the canonical move ordering used for
+            # every subsequent trace row.
+            if not oracle_root_moves:
+                oracle_root_moves = []
+                for child_id in root_children:
+                    move_uci = tree.get_node(child_id).incoming_move_uci
+                    if move_uci is None:
+                        raise ValueError(f"Root child {child_id} is missing an incoming move.")
+                    oracle_root_moves.append(str(move_uci))
+            root_q_values = _root_q_values_from_edge_stats(tree, edge_stats)
+            row = [float(root_q_values[move]) for move in oracle_root_moves]
+            # Break ties RANDOMLY across all moves tied at the max, not just the first in list
+            # order — with an unvisited (q_value=0.0) root, e.g. at the very first snapshot,
+            # every move ties and a plain `max` would always "pick" the same arbitrary
+            # first-listed move, silently treating list order as a real preference. Uses the
+            # tree's own seeded `rng` so the choice is still reproducible per tree.
+            best_value = max(row)
+            tied_indices = [i for i, value in enumerate(row) if value == best_value]
+            best_move = oracle_root_moves[rng.choice(tied_indices)]
+            oracle_trace_expansion_counts.append(num_expansions)
+            oracle_root_q_trace.append(row)
+            oracle_best_move_trace.append(best_move)
+
+            visits_row = [int(edge_stats.get((tree.root_id, child_id), EdgeStats()).visit_count) for child_id in root_children]
+            oracle_root_visits_trace.append(visits_row)
+
+        # --- Main search loop: pick a leaf, expand or terminate, backprop ---
+        simulations = 0
+        max_simulations = sampled_node_budget * 50
+        while num_expansions < sampled_node_budget and _has_expandable_frontier(tree, config):
+            simulations += 1
+            if simulations > max_simulations:
+                break
+            node_id, path = self.select_leaf(tree, edge_stats)
+            node = tree.get_node(node_id)
+
+            # Depth-capped or already-terminal leaves don't expand.
+            if node.is_terminal or node.depth >= config.max_depth:
+                node.is_terminal = True
+                self.on_terminal_leaf(tree, edge_stats, path, node_id)
+                continue
+
+            raw_children = provider.expand_node(node.fen, node.depth)
+            # Value-prune the look-ahead (depth>=1) so the freed budget drives deeper on the
+            # plausible lines; the root keeps all legal moves (the decision-width floor).
+            if node.depth >= 1:
+                _mode = config.prune_mode or ("relative" if config.prune_epsilon is not None else None)
+                raw_children = _prune_children(
+                    raw_children, config.value_feature, _mode, config.prune_epsilon
+                )
+            children = _prepare_children(
+                raw_children,
+                prior_feature=config.prior_feature,
+            )
+            # Provider yielded nothing (real mate/stalemate or engine quirk):
+            # treat as a true terminal and back up the static value.
+            if not children:
+                node.is_terminal = True
+                self.on_terminal_leaf(tree, edge_stats, path, node_id)
+                continue
+
+            child_ids = tree.add_children(node_id, children)
+            self.on_expand(tree, edge_stats, path, node_id, child_ids)
+            num_expansions += 1
+            _record_oracle_root_trace()
+
+        return GeneratedTree(
+            tree=tree,
+            edge_stats=edge_stats,
+            sampled_node_budget=sampled_node_budget,
+            num_expansions=num_expansions,
+            oracle_trace_expansion_counts=oracle_trace_expansion_counts,
+            oracle_root_moves=oracle_root_moves,
+            oracle_root_q_trace=oracle_root_q_trace,
+            oracle_best_move_trace=oracle_best_move_trace,
+            oracle_root_visits_trace=oracle_root_visits_trace,
+        )
+
+
+class PUCTSearch(TreeSearch):
+    """AlphaZero PUCT with a corrected first-play-urgency fallback.
+
+    Backup is the standard visit-accumulating running mean
+    (``_backpropagate_path``), unchanged from before. The fix is that every
+    edge is seeded at creation (``on_expand``) with ``EdgeStats.fpu_value``
+    set to the child's own sign-flipped static value, instead of a bare
+    zero-init ``EdgeStats()``. ``q_value`` falls back to that seed until the
+    edge gets its first real visit — this is what ``_select_leaf_by_puct``
+    reads for selection, but critically it is also what the oracle trace
+    (``_root_q_values_from_edge_stats``) reads, so an unvisited root move no
+    longer reports a fake ``Q=0`` there either. ``total_value``/
+    ``visit_count`` are never touched by the seed, so real backups are exact
+    running means, not diluted by it.
+    """
+
+    def select_leaf(self, tree, edge_stats):
+        return _select_leaf_by_puct(tree, edge_stats, self.config)
+
+    def on_expand(self, tree, edge_stats, path, node_id, child_ids):
+        for child_id in child_ids:
+            fpu_value = -_static_node_value(tree, child_id, self.config.value_feature)
+            edge_stats[(node_id, child_id)] = EdgeStats(fpu_value=fpu_value)
+        leaf_value = _static_node_value(tree, node_id, self.config.value_feature)
+        leaf_wdl = _maybe_static_node_wdl(tree, node_id)
+        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
+
+    def on_terminal_leaf(self, tree, edge_stats, path, node_id):
+        leaf_value = _static_node_value(tree, node_id, self.config.value_feature)
+        leaf_wdl = _maybe_static_node_wdl(tree, node_id)
+        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
 
 
 def _backup_target_from_child_q(
@@ -1481,122 +1655,14 @@ def generate_partial_tree_from_provider(
 ) -> GeneratedTree:
     """Build a tree by running leaf selection until a sampled expansion budget is hit.
 
-    This is the standard generation path: draw a node budget from
-    ``node_budget_distribution``, then alternate leaf selection
-    (``config.selection``: PUCT or greedy BeFS on static values),
-    provider-driven expansion of that leaf, and full-path backprop. The
-    oracle trace is captured after each expansion so we have the teacher's
-    decision evolution recorded alongside the final tree.
+    Thin dispatcher onto ``PUCTSearch`` — see ``TreeSearch.generate`` for the shared
+    harness and that class's docstring for the selection/backup semantics. (BeFS was
+    removed 2026-07-08: its selection rule had an unfixed tunnel-vision bug — see
+    ``labnotebook.md`` — and PUCT was already the only live path, so the dead,
+    permanently-broken alternative was deleted rather than kept around unreachable.)
     """
-    rng = rng or random.Random()
-    sampled_node_budget = node_budget_distribution.sample(rng)
-
-    # --- Initialize tree with just the root ---
-    tree = SearchTree(
-        root_fen=root_fen,
-        root_scalar_features=provider.root_features(root_fen),
-        root_metadata=provider.root_metadata(root_fen),
-    )
-    root_id = tree.root_id
-    edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
-    num_expansions = 0
-    oracle_trace_expansion_counts: List[int] = []
-    oracle_root_moves: List[str] = []
-    oracle_root_q_trace: List[List[float]] = []
-    oracle_best_move_trace: List[str] = []
-    oracle_root_visits_trace: List[List[int]] = []
-
-    def _record_oracle_root_trace() -> None:
-        """Snapshot the root's current per-move Q-values after each expansion."""
-        nonlocal oracle_root_moves
-        if tree.root_id is None:
-            return
-        root_children = tree.root_children()
-        if not root_children:
-            return
-        # On the first call, freeze the canonical move ordering used for
-        # every subsequent trace row.
-        if not oracle_root_moves:
-            oracle_root_moves = []
-            for child_id in root_children:
-                move_uci = tree.get_node(child_id).incoming_move_uci
-                if move_uci is None:
-                    raise ValueError(f"Root child {child_id} is missing an incoming move.")
-                oracle_root_moves.append(str(move_uci))
-        root_q_values = _root_q_values_from_edge_stats(tree, edge_stats)
-        row = [float(root_q_values[move]) for move in oracle_root_moves]
-        best_move = oracle_root_moves[max(range(len(row)), key=row.__getitem__)]
-        oracle_trace_expansion_counts.append(num_expansions)
-        oracle_root_q_trace.append(row)
-        oracle_best_move_trace.append(best_move)
-        
-        visits_row = [int(edge_stats.get((tree.root_id, child_id), EdgeStats()).visit_count) for child_id in root_children]
-        oracle_root_visits_trace.append(visits_row)
-
-    # --- Main search loop: pick a leaf, expand or terminate, backprop ---
-    simulations = 0
-    max_simulations = sampled_node_budget * 50
-    while num_expansions < sampled_node_budget and _has_expandable_frontier(tree, config):
-        simulations += 1
-        if simulations > max_simulations:
-            break
-        if config.selection == "befs":
-            # Greedy best-first on static values: no exploration term, and a
-            # selected leaf is always expandable (closed subtrees are skipped),
-            # so every simulation yields exactly one expansion. Backprop still
-            # runs so edge Q/visit stats and the oracle trace stay populated.
-            node_id, path = _select_leaf_by_befs(tree, config)
-        else:
-            node_id, path = _select_leaf_by_puct(tree, edge_stats, config)
-        node = tree.get_node(node_id)
-        leaf_value = _static_node_value(tree, node_id, config.value_feature)
-        leaf_wdl = _maybe_static_node_wdl(tree, node_id)
-
-        # Depth-capped or already-terminal leaves don't expand: we just
-        # backprop their static value and mark them terminal so future
-        # selections won't visit them.
-        if node.is_terminal or node.depth >= config.max_depth:
-            node.is_terminal = True
-            _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
-            continue
-
-        raw_children = provider.expand_node(node.fen, node.depth)
-        # Value-prune the look-ahead (depth>=1) so the freed budget drives deeper on the
-        # plausible lines; the root keeps all legal moves (the decision-width floor).
-        if node.depth >= 1:
-            _mode = config.prune_mode or ("relative" if config.prune_epsilon is not None else None)
-            raw_children = _prune_children(
-                raw_children, config.value_feature, _mode, config.prune_epsilon
-            )
-        children = _prepare_children(
-            raw_children,
-            prior_feature=config.prior_feature,
-        )
-        # Provider yielded nothing (real mate/stalemate or engine quirk):
-        # treat as a true terminal and back up the static value.
-        if not children:
-            node.is_terminal = True
-            _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
-            continue
-
-        child_ids = tree.add_children(node_id, children)
-        for child_id in child_ids:
-            edge_stats[(node_id, child_id)] = EdgeStats()
-        num_expansions += 1
-        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
-        _record_oracle_root_trace()
-
-    return GeneratedTree(
-        tree=tree,
-        edge_stats=edge_stats,
-        sampled_node_budget=sampled_node_budget,
-        num_expansions=num_expansions,
-        oracle_trace_expansion_counts=oracle_trace_expansion_counts,
-        oracle_root_moves=oracle_root_moves,
-        oracle_root_q_trace=oracle_root_q_trace,
-        oracle_best_move_trace=oracle_best_move_trace,
-        oracle_root_visits_trace=oracle_root_visits_trace,
-    )
+    search: TreeSearch = PUCTSearch(config)
+    return search.generate(root_fen, provider, node_budget_distribution, rng)
 
 
 def consolidate_generated_tree(
@@ -1680,11 +1746,12 @@ def compute_teacher_targets(
     if tree.root_id is None:
         raise ValueError("Tree must contain a root.")
 
-    # Initialize zero-stats for every existing edge.
+    # Initialize FPU-seeded stats for every existing edge (see EdgeStats.fpu_value).
     edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
     for node in tree.iter_nodes():
         for child_id in tree.child_ids(node.node_id):
-            edge_stats[(node.node_id, child_id)] = EdgeStats()
+            fpu_value = -_static_node_value(tree, child_id, config.value_feature)
+            edge_stats[(node.node_id, child_id)] = EdgeStats(fpu_value=fpu_value)
 
     # Standard PUCT: select a leaf, evaluate its static features, backprop.
     for _ in range(config.search_budget):

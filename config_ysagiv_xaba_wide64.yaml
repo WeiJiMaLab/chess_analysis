@@ -1,0 +1,201 @@
+# Phase 2 capacity sweep, Arm B ("wide64") -- Agent 5. Tests whether DOUBLING the tiny GNN
+# encoder's embedding width (d_embed 32->64, k UNCHANGED at 1) changes z_t's performance on the
+# SAME already-packed ysagiv xaba-filtered population Agent 1 built for config_ysagiv_xaba.yaml
+# (see ysagiv_trees.md, "Results -- xaba branch (COMPLETE)"). Companion arm: Arm C
+# (config_ysagiv_xaba_deep_k2.yaml, k=2 instead). See ysagiv_xaba_capacity_sweep.md for the
+# full writeup, methodology, and results table (NOT ysagiv_trees.md, which Agent 1 owns).
+#
+# Isolation: every OUTPUT this config produces (encoder checkpoint, materialized z_t cache,
+# controller checkpoint, figures) lives under a NEW scratch subdir
+# (${scratch_dir}/ysagiv_xaba_wide64/), never touching Agent 1's ysagiv_xaba/ artifacts.
+# split/gnn_pack/mc_pack are NOT re-run (filter/data operations, independent of encoder
+# architecture -- coordinator instruction) -- `split_dir`/`mc_packed_dir` below point DIRECTLY
+# at Agent 1's original ysagiv_xaba paths (confirmed read-only-safe: cts.data.preprocess_mc.
+# materialize only ever READS packed_data/manifest_path from mc_packed_dir, all its writes go
+# to output_dir=${materialized_dir}, which IS new/isolated here -- see materialize.py
+# materialize_worker/merge_workers). Only `encoder.train_dir`/`validation_dir` (gnn_pack's
+# output, also read-only reused) and `packed_dir` (this arm's OWN new encoder checkpoint output)
+# diverge from the ${run_dir} default interpolation for that reason.
+globals:
+  run_name: ysagiv_xaba_wide64
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  search_budget: 96                                    # matches ysagiv trees' own oracle_trace budget (96 root expansions)
+  run_dir: ${scratch_dir}/${run_name}
+  split_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba/split       # REUSED from Agent 1 (read-only; split stage not re-run)
+  packed_dir: ${run_dir}/packed                        # NEW, isolated: this arm's own encoder checkpoint + gnn_pack-shaped outputs
+  mc_packed_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba/mc_packed   # REUSED from Agent 1 (read-only; mc_pack not re-run)
+  materialized_dir: ${run_dir}/materialized             # NEW, isolated: this arm's own z_t cache (architecture-dependent)
+  config_dir: ${run_dir}/pack_configs
+  log_dir: ${run_dir}/pack_logs
+  figures_dir: ${outputs_dir}/ysagiv/xaba_wide64        # separate folder from Agent 1's ysagiv/xaba and Agent 4's regime sweep
+
+# analysis.evaluate imports analysis.utils.helpers, which unconditionally reads a
+# `human_analysis` section at MODULE IMPORT TIME (db_connection()'s default arg reads
+# CONFIG["selected_db_default"] at def-time) -- irrelevant to this pipeline (no DuckDB use
+# anywhere in the ysagiv chain) but required to be present or the import crashes. Points at
+# the SAME shared, read-only personal.db production uses; never opened/written by anything
+# in this config's chain. (Verified with `import analysis.evaluate` before submitting -- see
+# ysagiv_xaba_capacity_sweep.md.)
+human_analysis:
+  selected_db_default: ${scratch_dir}/personal.db
+
+# split/gnn_pack/mc_pack sections kept for provenance/documentation ONLY -- these stages are
+# NOT invoked by this arm's job chain (train_encoder -> pack_root -> pack_root_merge ->
+# train_readout_pg -> eval); split_dir/mc_packed_dir above already point at Agent 1's finished
+# outputs. Left byte-identical to config_ysagiv_xaba.yaml so the values are traceable to their
+# origin if anyone re-derives them.
+split:
+  source_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample
+  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/xaba/include_list.txt
+  split_root: ${split_dir}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+gnn_pack:
+  split_root: ${split_dir}
+  output_root: ${packed_dir}
+  shard_size: 2000
+  clear: true
+
+mc_pack:
+  split_root: ${split_dir}
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 8
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  exclude_xaba: false
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: linear
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+  clear: true
+
+# ARM B ("wide64"): d_embed 32->64, k UNCHANGED at 1. train_dir/validation_dir point directly
+# at Agent 1's already-packed gnn_pack manifests (encoder pretraining data is architecture-
+# independent, no need to re-run gnn_pack) -- output_checkpoint alone goes to this arm's NEW
+# packed_dir. d_message/node_embed_hidden/decoder_hidden/d_att are scaled 2x IN LOCKSTEP with
+# d_embed: the baseline config sets d_embed=d_message=node_embed_hidden=decoder_hidden=32 AND
+# n_heads*d_att=2*16=32 -- i.e. every width knob in the baseline is tied to the SAME value by
+# convention (confirmed not code-required: cts/models/gnn.py's TreeEncoder and
+# cts/models/tree_mha.py's TreeAttMsgLayer both accept independent d_embed/d_message/d_att via
+# plain nn.Linear/nn.GRUCell -- nothing in the forward pass requires them to match). Doubling
+# ONLY d_embed while leaving the others at 32 would introduce an uncontrolled internal
+# bottleneck (message/attention capacity unchanged while embedding width doubles) rather than a
+# clean "wider encoder" test, so all four are doubled together to preserve the baseline's own
+# uniform-width design and keep this a single, interpretable capacity manipulation.
+encoder:
+  command: pretrain-child-wdl-encoder
+  train_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba/packed/train_manifest.json
+  validation_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba/packed/validation_manifest.json
+  output_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  k: 1
+  d_embed: 64
+  d_message: 64
+  node_embed_hidden: 64
+  n_heads: 2
+  d_att: 32
+  decoder_hidden: 64
+  batch_size: 256
+  learning_rate: 1.0e-3
+  epochs: 6
+  loss_weight_by_subtree_size: true
+  num_workers: 0
+  log_interval: 20
+
+materialize:
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 32              # readout HEAD width -- kept identical to baseline (discarded random weights, only the encoder forward is used here; see materialize.py)
+  hidden_layers: 2
+
+# train: architecture fields MUST mirror `encoder:` exactly -- cts.train.controller_train.
+# _build_model_and_optimizer (used by pg_controller_train, the trainer train_readout_pg.slurm
+# invokes) reconstructs a MetaController from THESE fields and then load_state_dict()s
+# encoder_checkpoint into it; a mismatch vs. the checkpoint's actual saved shapes raises
+# immediately. hidden_dim/hidden_layers (the READOUT head) are deliberately left at baseline
+# (32/2) in every arm -- only encoder capacity is the manipulated variable here, not readout
+# capacity. packed_train_data/packed_validation_data resolve via ${mc_packed_dir}, which is
+# REUSED from Agent 1 above.
+train:
+  metrics_run_name: mchalt_ysagiv_xaba_wide64
+  packed_train_data: ${mc_packed_dir}/train_manifest.json
+  packed_validation_data: ${mc_packed_dir}/validation_manifest.json
+  materialized_train_cache: ${materialized_dir}/train_cache.pt
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  output_checkpoint: ${packed_dir}/mchalt_controller.pt
+  device: cuda
+  controller_inputs: ['z_t', 'T_t']
+  k: 1
+  node_embed_hidden: 64
+  d_embed: 64
+  d_message: 64
+  n_heads: 2
+  d_att: 32
+  hidden_dim: 32
+  hidden_layers: 2
+  unfreeze_encoder: false
+  separate_sign_head: false
+  batch_size: 18000
+  learning_rate: 3.0e-4
+  stop_temperature: 4.0
+  stop_temperature_final: 1.0
+  weight_decay: 0.0
+  sign_loss_weight: 0.1
+  sign_pos_weight: 1.0
+  nontrivial_loss_weight: 1.0
+  inverse_freq_weights: false
+  epochs: 3
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  metrics_log_interval: 20
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_mode: linear
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+
+# eval: packed_root resolves via ${mc_packed_dir} (REUSED, Agent 1's). d_embed=64 is NOT the
+# analysis.evaluate/ysagiv_sig CLI default (32) -- both scripts' --d-embed defaults to 32 and
+# is only correct for the baseline width, so slurm/pipeline/ysagiv_eval_multi_capacity.slurm
+# (this track's own copy of ysagiv_eval_multi.slurm) reads THIS field and passes it explicitly
+# as --d-embed on every invocation. Getting this wrong would silently misread the T_t column
+# out of the wrong index of the raw feature array (see analysis/evaluate.py _load_zt_by_episode)
+# -- not a crash, a silent corruption, so it is spelled out here rather than left implicit.
+eval:
+  packed_root: ${mc_packed_dir}
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  controller_checkpoint: ${packed_dir}/mchalt_controller.pt
+  results_json: ${figures_dir}/results.json
+  out_dir: ${figures_dir}
+  d_embed: 64
+  time_mode: linear
+  time_lambda: 0.01
+  maintenance_scale: 0.0
+  maintenance_exponent: 1.0
+  maint_lambda: 0.01
+  max_episodes: 15000

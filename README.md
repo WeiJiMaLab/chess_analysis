@@ -4,6 +4,16 @@ This directory is the merge of the former **`human_analytics/`** and **`lmcos_ti
 trees into one place that shares a **single config** (`config.yaml`). It holds the two
 halves of the small-scale chess meta-reasoning work:
 
+> **The active research question.** We have a metacontroller (a GNN encoder `z_t` + a readout
+> head) that is trying to predict when continued tree search ("planning") is worth it. The
+> AlwaysHalt/AlwaysContinue/FixedHalt\* (SingleHalt\*) baselines exist only to show that isn't a
+> trivial problem — which, so far, it appears not to have been. Whether a *learned* representation
+> (`z_t`) can beat simpler baselines (a fixed threshold, or a few hand-crafted tree statistics) is
+> the open question the `cts/` half of this repo is chasing. Current status, evidence, and a
+> hypothesis-by-hypothesis accounting of what's been tried (tree-side vs. training-side) live in
+> **[`hypotheses.md`](hypotheses.md)**; the live, frequently-updated status dashboard is
+> **[`plan.md`](plan.md)**.
+
 - **`src/analysis/`** — the human-RT-vs-feature analysis. Board features + engine signals
   (Gain / MQ / GSS / action-gap / H(π)) computed from Stockfish search trees, regressed against
   human response time. Entry points: `src/analysis/board.py`, `src/analysis/engine.py`; library in

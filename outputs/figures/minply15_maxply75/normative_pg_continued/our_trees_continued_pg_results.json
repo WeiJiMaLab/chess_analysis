@@ -1,0 +1,2048 @@
+[
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/mchalt_controller.pt",
+    "epoch": 20,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12034671313358589,
+      "lo": 0.11293238586654529,
+      "hi": 0.12859960950022775
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06144912188984191,
+        "lo": 0.053031191674169656,
+        "hi": 0.07034422147916508,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7285846703323511,
+        "lo": 0.7177613325814183,
+        "hi": 0.7384446494297838,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": 4.6901067297552205e-05,
+        "lo": -0.0012593763058921974,
+        "hi": 0.0012682315365555488,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006505318002195997,
+        "lo": -0.011009996235258645,
+        "hi": -0.002198259029337795,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch001.pt",
+    "epoch": 21,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12062219085640526,
+      "lo": 0.11317574402959246,
+      "hi": 0.12901768885592454
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.061173644167022555,
+        "lo": 0.052712973666601555,
+        "hi": 0.0701122112434267,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7283091926095319,
+        "lo": 0.7172579762313714,
+        "hi": 0.7380876434631664,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.00022857665552180996,
+        "lo": -0.001617744411936117,
+        "hi": 0.001076756848513504,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006780795725015359,
+        "lo": -0.011318025163068202,
+        "hi": -0.002502608326971498,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch010.pt",
+    "epoch": 30,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12118610674808895,
+      "lo": 0.11363661033627122,
+      "hi": 0.12957156682590892
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06060972827533886,
+        "lo": 0.05183158175904051,
+        "hi": 0.06946339946170778,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7277452767178479,
+        "lo": 0.7170117022549825,
+        "hi": 0.7376484834677369,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0007924925472055151,
+        "lo": -0.002783196480001233,
+        "hi": 0.0010701379770005589,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.0073447116166990645,
+        "lo": -0.011935379229013944,
+        "hi": -0.0030208988045832795,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch020.pt",
+    "epoch": 40,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12101046535355824,
+      "lo": 0.11347925160565026,
+      "hi": 0.12937058625799935
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06078536966986958,
+        "lo": 0.05197340057516567,
+        "hi": 0.06947565895273623,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7279209181123788,
+        "lo": 0.7170972972435748,
+        "hi": 0.7379093948384962,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0006168511526747826,
+        "lo": -0.0026138034641105183,
+        "hi": 0.0012726905518078374,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007169070222168333,
+        "lo": -0.011816013017117656,
+        "hi": -0.002775755281780544,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch030.pt",
+    "epoch": 50,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12038198246259982,
+      "lo": 0.11274757966723795,
+      "hi": 0.12862711597188883
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06141385256082799,
+        "lo": 0.052448320174535996,
+        "hi": 0.07032966773012782,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7285494010033372,
+        "lo": 0.7176118916531893,
+        "hi": 0.7384216673109927,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": 1.163173828362766e-05,
+        "lo": -0.0023512632580548853,
+        "hi": 0.002280930736600801,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006540587331209924,
+        "lo": -0.011193870177223699,
+        "hi": -0.0022426695512288873,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch050.pt",
+    "epoch": 70,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12067532969267004,
+      "lo": 0.11304466375271541,
+      "hi": 0.1289788214526655
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06112050533075778,
+        "lo": 0.05225952237282779,
+        "hi": 0.0699335956067358,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7282560537732669,
+        "lo": 0.7172244628399777,
+        "hi": 0.7381236347775721,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.00028171549178659873,
+        "lo": -0.0026267297790865305,
+        "hi": 0.0020015915068606503,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006833934561280148,
+        "lo": -0.011505756313772103,
+        "hi": -0.002494549291332971,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch070.pt",
+    "epoch": 90,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12092049732042329,
+      "lo": 0.11340482146309401,
+      "hi": 0.1289868013107374
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.060875337703004524,
+        "lo": 0.05203279411601312,
+        "hi": 0.06956985520394,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7280108861455138,
+        "lo": 0.7171751717230567,
+        "hi": 0.7377703147252277,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0005268831195398455,
+        "lo": -0.002802859983256453,
+        "hi": 0.0016614995078563439,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007079102189033396,
+        "lo": -0.011874805945949621,
+        "hi": -0.0026501214869765893,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch090.pt",
+    "epoch": 110,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12062649093116797,
+      "lo": 0.11306146640737796,
+      "hi": 0.12889132760120067
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06116934409225985,
+        "lo": 0.052167281430823734,
+        "hi": 0.06981538780864631,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.728304892534769,
+        "lo": 0.7175752531318437,
+        "hi": 0.7379202663755874,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.00023287673028452,
+        "lo": -0.0031314909443783106,
+        "hi": 0.0025259605581121006,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.00678509579977807,
+        "lo": -0.011865312384700651,
+        "hi": -0.0019440872289463466,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch110.pt",
+    "epoch": 130,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12035176986829275,
+      "lo": 0.11290063369605678,
+      "hi": 0.12830228813963354
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.061444065155135064,
+        "lo": 0.052510038502563645,
+        "hi": 0.07029947940358001,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7285796135976443,
+        "lo": 0.7179822748365684,
+        "hi": 0.7382070344440643,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": 4.184433259069924e-05,
+        "lo": -0.0025187982842226377,
+        "hi": 0.0028295725485667513,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.0065103747369028514,
+        "lo": -0.011473043629274506,
+        "hi": -0.0015029344315410555,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch130.pt",
+    "epoch": 150,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12102805041380701,
+      "lo": 0.11349140673044227,
+      "hi": 0.129025392836496
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.060767784609620824,
+        "lo": 0.05192874164523166,
+        "hi": 0.06936050326828133,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7279033330521301,
+        "lo": 0.7173130405682638,
+        "hi": 0.7376934847447651,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0006344362129235546,
+        "lo": -0.003683192319088127,
+        "hi": 0.002311937950496899,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.0071866552824171055,
+        "lo": -0.012279240646809362,
+        "hi": -0.0022361263240319555,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch150.pt",
+    "epoch": 170,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.12118628587184326,
+      "lo": 0.11362147096298394,
+      "hi": 0.12920077703690214
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.18179583502342783,
+        "lo": 0.173240094826613,
+        "hi": 0.19155791455372892
+      },
+      "always_continue": {
+        "mean": 0.848931383465937,
+        "lo": 0.8445007655894221,
+        "hi": 0.8530358893829094
+      },
+      "singlehalt": {
+        "mean": 0.12039361420088344,
+        "lo": 0.11286967314146769,
+        "hi": 0.1286023779672196
+      },
+      "stats": {
+        "mean": 0.1138413951313899,
+        "lo": 0.10610137069181029,
+        "hi": 0.12177861352761798
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.06060954915158455,
+        "lo": 0.051709939490499304,
+        "hi": 0.06922956919859694,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 0.7277450975940938,
+        "lo": 0.7171251403010998,
+        "hi": 0.7374818949666807,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0007926716709598182,
+        "lo": -0.0038449380820689137,
+        "hi": 0.002098363412647797,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007344890740453367,
+        "lo": -0.012428543685474481,
+        "hi": -0.0024233790602767066,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.0,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/mchalt_controller.pt",
+    "epoch": 20,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1368317975809344,
+      "lo": 0.13054547025081878,
+      "hi": 0.14337064299289068
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0009286853819053925,
+        "lo": -0.007632076842837031,
+        "hi": 0.00986950538421215,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.835190245729176,
+        "lo": 5.788668888135416,
+        "hi": 5.88510437079642,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.021455377294801722,
+        "lo": -0.02863140438081345,
+        "hi": -0.014202761540963208,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.02213670406638607,
+        "lo": -0.028875775369136405,
+        "hi": -0.015311093229121919,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch001.pt",
+    "epoch": 21,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13692098562121405,
+      "lo": 0.13079390637102598,
+      "hi": 0.1434055009018166
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0008394973416257136,
+        "lo": -0.007685664502423912,
+        "hi": 0.009814677225101369,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.835101057688896,
+        "lo": 5.788405850314267,
+        "hi": 5.8848874314938735,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.021544565335081405,
+        "lo": -0.02872814197578555,
+        "hi": -0.014326402408792287,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.02222589210666575,
+        "lo": -0.028975504636452543,
+        "hi": -0.015516947249975337,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch010.pt",
+    "epoch": 30,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13567537770337396,
+      "lo": 0.12950957343093625,
+      "hi": 0.14227863144196506
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.002085105259465818,
+        "lo": -0.006737743898210187,
+        "hi": 0.010975502961911812,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.836346665606737,
+        "lo": 5.789807481811369,
+        "hi": 5.886576949778016,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0202989574172413,
+        "lo": -0.02723261595537801,
+        "hi": -0.013167063502718528,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.020980284188825644,
+        "lo": -0.027811064285691876,
+        "hi": -0.014136712825501321,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch020.pt",
+    "epoch": 40,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13535995456281147,
+      "lo": 0.1292767403532947,
+      "hi": 0.14193700880824894
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.002400528400028299,
+        "lo": -0.006448603318269401,
+        "hi": 0.011140835537470363,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.8366620887473,
+        "lo": 5.790016213218263,
+        "hi": 5.886803820687129,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.01998353427667882,
+        "lo": -0.026900316198125024,
+        "hi": -0.012888951641539078,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.020664861048263164,
+        "lo": -0.027378850976243426,
+        "hi": -0.013852439320309325,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch030.pt",
+    "epoch": 50,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1324733169099483,
+      "lo": 0.1262321222839815,
+      "hi": 0.13921637804547846
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.00528716605289147,
+        "lo": -0.0037448582824114603,
+        "hi": 0.014300512897674597,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.839548726400162,
+        "lo": 5.7930022182834,
+        "hi": 5.8898682841856775,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.017096896623815652,
+        "lo": -0.024338628468533297,
+        "hi": -0.009967056807239711,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.017778223395399993,
+        "lo": -0.024734824187887874,
+        "hi": -0.010747750329532771,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch050.pt",
+    "epoch": 70,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13348535461620897,
+      "lo": 0.12732258392143428,
+      "hi": 0.14028337076286684
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.004275128346630767,
+        "lo": -0.00457686533971055,
+        "hi": 0.01325436689346018,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.838536688693901,
+        "lo": 5.791916070413318,
+        "hi": 5.88852508202446,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.018108934330076352,
+        "lo": -0.025357289312505422,
+        "hi": -0.010998008217640876,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.018790261101660693,
+        "lo": -0.025773152075366977,
+        "hi": -0.01184859910016103,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch070.pt",
+    "epoch": 90,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13498240716459714,
+      "lo": 0.12865966739155332,
+      "hi": 0.1416531989537908
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0027780757982426,
+        "lo": -0.00597380519572569,
+        "hi": 0.01143634399972326,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.837039636145513,
+        "lo": 5.790564824483345,
+        "hi": 5.8868389474962814,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.019605986878464522,
+        "lo": -0.02682246556641672,
+        "hi": -0.012491275347710178,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.02028731365004886,
+        "lo": -0.02713382152710741,
+        "hi": -0.013659256738655753,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch090.pt",
+    "epoch": 110,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1331461190293101,
+      "lo": 0.12680884480581503,
+      "hi": 0.1397474223037535
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.004614363933529671,
+        "lo": -0.004398768623492478,
+        "hi": 0.013175846475562258,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.838875924280799,
+        "lo": 5.792344165311527,
+        "hi": 5.888825181550751,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.01776969874317745,
+        "lo": -0.024979652074449077,
+        "hi": -0.010652165559317523,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.01845102551476179,
+        "lo": -0.025289860512714788,
+        "hi": -0.011397742895782225,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch110.pt",
+    "epoch": 130,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13447610034738725,
+      "lo": 0.12831829299277994,
+      "hi": 0.1409255528750363
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0032843826154525095,
+        "lo": -0.005637071882374777,
+        "hi": 0.01209485669532059,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.8375459429627234,
+        "lo": 5.791242525410143,
+        "hi": 5.887443302248276,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.019099680061254606,
+        "lo": -0.0264734739553105,
+        "hi": -0.011937550449293115,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.019781006832838954,
+        "lo": -0.026761724514236376,
+        "hi": -0.012870366929500911,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch130.pt",
+    "epoch": 150,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1345491070833777,
+      "lo": 0.12835140756354027,
+      "hi": 0.14099551072537356
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0032113758794620646,
+        "lo": -0.005796993124642727,
+        "hi": 0.011780911124694914,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.837472936226733,
+        "lo": 5.790772324072407,
+        "hi": 5.887833288772905,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.019172686797245056,
+        "lo": -0.026382975369752006,
+        "hi": -0.01211226549332739,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.019854013568829397,
+        "lo": -0.026568650085358657,
+        "hi": -0.013104932804934254,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch150.pt",
+    "epoch": 170,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.13505442587474728,
+      "lo": 0.12886140180914465,
+      "hi": 0.14146277714995492
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.13776048296283974,
+        "lo": 0.12917983178326034,
+        "hi": 0.14717684514961155
+      },
+      "always_continue": {
+        "mean": 5.97202204331011,
+        "lo": 5.9265135978683015,
+        "hi": 6.0215069572301285
+      },
+      "singlehalt": {
+        "mean": 0.11537642028613264,
+        "lo": 0.10749832291022872,
+        "hi": 0.12333691750114796
+      },
+      "stats": {
+        "mean": 0.11469509351454829,
+        "lo": 0.10736991984310514,
+        "hi": 0.12263697084174313
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.0027060570880924665,
+        "lo": -0.006233192453317059,
+        "hi": 0.011287307427715032,
+        "confirmed": false
+      },
+      "always_continue": {
+        "mean": 5.836967617435364,
+        "lo": 5.790342203114217,
+        "hi": 5.887296174066094,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.019678005588614652,
+        "lo": -0.026924599660397598,
+        "hi": -0.012579297130039269,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.020359332360198993,
+        "lo": -0.027215529220693903,
+        "hi": -0.013551929385108918,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.01,
+    "maintenance_scale": 0.001,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/mchalt_controller.pt",
+    "epoch": 20,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.09960780765527522,
+      "lo": 0.09190042856082566,
+      "hi": 0.10768366850143743
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11922283220730222,
+        "lo": 0.11075766718491349,
+        "hi": 0.12812290042354907,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.514921386602192,
+        "lo": 2.4894206197052924,
+        "hi": 2.5409269564213868,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0006749540914326076,
+        "lo": -0.001988071840412175,
+        "hi": 0.0005645591327290286,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006320836990245964,
+        "lo": -0.011787303121464336,
+        "hi": -0.0010034431763221024,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch001.pt",
+    "epoch": 21,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.09996156910825332,
+      "lo": 0.0922918782378831,
+      "hi": 0.10813893908290821
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11886907075432412,
+        "lo": 0.11048077783130668,
+        "hi": 0.1277401214255971,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.514567625149214,
+        "lo": 2.4889944608973344,
+        "hi": 2.540683025282383,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0010287155444107005,
+        "lo": -0.002415715582727322,
+        "hi": 0.00027696977888352155,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.006674598443224056,
+        "lo": -0.012166761871971679,
+        "hi": -0.0013531070402741496,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch010.pt",
+    "epoch": 30,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10108858023803226,
+      "lo": 0.09340014478492291,
+      "hi": 0.1090560528280845
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11774205962454518,
+        "lo": 0.10896299588665045,
+        "hi": 0.12659718355638944,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.513440614019435,
+        "lo": 2.4882390728611603,
+        "hi": 2.5399096897478666,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0021557266741896435,
+        "lo": -0.004157677107738449,
+        "hi": -0.00033812843645525116,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.0078016095730029985,
+        "lo": -0.013502653569043314,
+        "hi": -0.0022941535417106544,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch020.pt",
+    "epoch": 40,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10095554797048566,
+      "lo": 0.09325758000984645,
+      "hi": 0.10890482334808117
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11787509189209179,
+        "lo": 0.1090617142203033,
+        "hi": 0.12655405710104006,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.5135736462869818,
+        "lo": 2.4883471728362068,
+        "hi": 2.5402809211460045,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0020226944066430367,
+        "lo": -0.004015460026266014,
+        "hi": -0.0001415514159186318,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007668577305456393,
+        "lo": -0.013435173918702081,
+        "hi": -0.002154483471231888,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch030.pt",
+    "epoch": 50,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1010140591271463,
+      "lo": 0.09341370199302784,
+      "hi": 0.10896953707700273
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11781658073543116,
+        "lo": 0.10886785486101674,
+        "hi": 0.1267487932207083,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.51351513513032,
+        "lo": 2.4881491156578024,
+        "hi": 2.5402277550325056,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.002081205563303675,
+        "lo": -0.004426519599702464,
+        "hi": 0.00021545531770039085,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007727088462117032,
+        "lo": -0.013606651372920005,
+        "hi": -0.00208091697635783,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch050.pt",
+    "epoch": 70,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10113103730959747,
+      "lo": 0.09344201433636887,
+      "hi": 0.10910264979209557
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11769960255297997,
+        "lo": 0.10885453370337951,
+        "hi": 0.12655329990002273,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.51339815694787,
+        "lo": 2.4880319288257398,
+        "hi": 2.540176817894704,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.002198183745754853,
+        "lo": -0.004540676223285868,
+        "hi": 7.270221868900484e-05,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007844066644568206,
+        "lo": -0.013820018005620152,
+        "hi": -0.002296011190944566,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch070.pt",
+    "epoch": 90,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1010164331119539,
+      "lo": 0.09319528675370603,
+      "hi": 0.10889783140421662
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11781420675062355,
+        "lo": 0.10903432431795408,
+        "hi": 0.1265724467944142,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.513512761145513,
+        "lo": 2.488169031257335,
+        "hi": 2.540153520283286,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0020835795481112737,
+        "lo": -0.004400786852416208,
+        "hi": 9.996920258578539e-05,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.00772946244692463,
+        "lo": -0.013470649879955386,
+        "hi": -0.002176314790929101,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch090.pt",
+    "epoch": 110,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10118342870682555,
+      "lo": 0.09355319293730346,
+      "hi": 0.10924554048424663
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.1176472111557519,
+        "lo": 0.10869061463584397,
+        "hi": 0.12627854928920768,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.5133457655506417,
+        "lo": 2.487990073549725,
+        "hi": 2.540077977718731,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.002250575142982933,
+        "lo": -0.005195595759783624,
+        "hi": 0.0005535704294049973,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.00789645804179629,
+        "lo": -0.014006973250666672,
+        "hi": -0.0019601606014917053,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch110.pt",
+    "epoch": 130,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.1004574874058551,
+      "lo": 0.09264892206483338,
+      "hi": 0.10834215690916302
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11837315245672235,
+        "lo": 0.1094507871231795,
+        "hi": 0.12727220874614634,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.514071706851612,
+        "lo": 2.4887843711412487,
+        "hi": 2.541030921702765,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0015246338420124752,
+        "lo": -0.004110371150600532,
+        "hi": 0.001274761057241284,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.007170516740825831,
+        "lo": -0.01299060385467694,
+        "hi": -0.0013344265986303813,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch130.pt",
+    "epoch": 150,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10130355961803601,
+      "lo": 0.09358448099361764,
+      "hi": 0.10912938100566338
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.11752708024454143,
+        "lo": 0.10864790833758714,
+        "hi": 0.1261050045643571,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.513225634639431,
+        "lo": 2.4876932932262292,
+        "hi": 2.540009001075088,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.0023707060541933956,
+        "lo": -0.005452841282871087,
+        "hi": 0.0006102806942075092,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.008016588953006753,
+        "lo": -0.014019756368125677,
+        "hi": -0.002191454226394241,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  },
+  {
+    "checkpoint": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/diagnosis/agent2_pg_continued/mchalt_controller_continued_epoch150.pt",
+    "epoch": 170,
+    "n_eval": 1680,
+    "checkpoint_regret": {
+      "mean": 0.10138355102845323,
+      "lo": 0.09372549502185128,
+      "hi": 0.10927204692903611
+    },
+    "baseline_regret": {
+      "always_stop": {
+        "mean": 0.21883063986257742,
+        "lo": 0.20954262126288747,
+        "hi": 0.22844697251445548
+      },
+      "always_continue": {
+        "mean": 2.614529194257467,
+        "lo": 2.5920123583803005,
+        "hi": 2.639098002848882
+      },
+      "singlehalt": {
+        "mean": 0.09893285356384263,
+        "lo": 0.09119131916126555,
+        "hi": 0.10692968299714269
+      },
+      "stats": {
+        "mean": 0.09328697066502926,
+        "lo": 0.08645112177203321,
+        "hi": 0.10064560797598292
+      }
+    },
+    "paired_diff": {
+      "always_stop": {
+        "mean": 0.1174470888341242,
+        "lo": 0.1085343917486828,
+        "hi": 0.12603548956412006,
+        "confirmed": true
+      },
+      "always_continue": {
+        "mean": 2.5131456432290142,
+        "lo": 2.4876814088571217,
+        "hi": 2.5398616828380676,
+        "confirmed": true
+      },
+      "singlehalt": {
+        "mean": -0.002450697464610612,
+        "lo": -0.005483870917546502,
+        "hi": 0.0004627425496571696,
+        "confirmed": false
+      },
+      "stats": {
+        "mean": -0.008096580363423969,
+        "lo": -0.014047769203668051,
+        "hi": -0.0023016105041727126,
+        "confirmed": false
+      }
+    },
+    "time_mode": "linear",
+    "time_lambda": 0.001,
+    "maintenance_scale": 0.0005,
+    "maintenance_exponent": 1.0
+  }
+]

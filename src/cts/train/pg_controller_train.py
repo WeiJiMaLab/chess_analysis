@@ -264,16 +264,27 @@ def main(config: ControllerTrainConfig) -> None:
                         "val_greedy_regret": m.average_regret,
                         "val_stop_acc": m.exact_stop_step_accuracy,
                         "val_expansions": m.average_expansions})
-        if m.average_regret < best_regret:
-            best_regret = m.average_regret
-            torch.save({"model_state_dict": model.state_dict(), "metadata": {
+        def _payload(regret: float) -> dict:
+            return {"model_state_dict": model.state_dict(), "metadata": {
                 "controller_inputs": list(config.controller_inputs),
                 "separate_sign_head": bool(config.separate_sign_head),
                 "encoder_checkpoint": str(config.encoder_checkpoint),
                 "objective": "pg_expected_return",
-                "best_val_greedy_regret": best_regret,
-            }}, out_path)
+                "epoch": int(epoch),
+                "val_greedy_regret": float(m.average_regret),
+                "best_val_greedy_regret": float(regret),
+            }}
+
+        if m.average_regret < best_regret:
+            best_regret = m.average_regret
+            torch.save(_payload(best_regret), out_path)
             print(f"[pg] saved best val_greedy_regret={best_regret:.4f} -> {out_path}", flush=True)
+        if config.save_every_epoch:
+            # plan.md Agent 2 -- per-epoch snapshot (not just on best-regret improvement) so a
+            # continued run can be paired-significance-evaluated at several points along its
+            # curve, mirroring e2e_controller_train.py's existing always-save-every-epoch policy.
+            epoch_path = out_path.with_name(f"{out_path.stem}_epoch{epoch:03d}{out_path.suffix}")
+            torch.save(_payload(best_regret), epoch_path)
 
     _save_training_curves(history, out_path)
     print(f"[pg] DONE best_val_greedy_regret={best_regret:.4f}", flush=True)

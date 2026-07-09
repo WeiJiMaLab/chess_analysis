@@ -84,17 +84,24 @@ class BuildTreeConfig(BaseModel):
     max_depth: int = 4
     search_budget: int = 64
     c_puct: float = 1.0
-    # Generation-time leaf selection rule. "puct" is the historical default;
-    # "befs" is greedy best-first descent on the static per-node value_feature
-    # (no c_puct — see TeacherSearchConfig.selection for why c_puct=0 is NOT
-    # equivalent). Pair selection="befs" with value_feature="cp_order" for
-    # native-centipawn tree building.
-    selection: Literal["puct", "befs"] = "puct"
+    # Generation-time leaf selection rule. "puct" (only option): AlphaZero
+    # PUCT. A "befs" best-first-minimax alternative existed but was removed
+    # 2026-07-08: its selection rule tunnel-visioned (confirmed, unfixed bug)
+    # and it was already unreachable from the live pipeline -- see
+    # TeacherSearchConfig.selection in teacher_targets.py and labnotebook.md.
+    selection: Literal["puct"] = "puct"
     # Per-node scalar feature used as the search value (selection priority +
     # backup targets). "value" = win-loss in [-1,1] from WDL; "cp_order" =
     # Stockfish-native centipawns with mate scores folded into a ±20000 band
-    # (see cts.core.providers.parsers.score_order_features).
+    # (see cts.core.providers.parsers.score_order_features); "tanh_cp_value" =
+    # tanh(cp_order / tanh_cp_temperature), a desaturated alternative to
+    # "value" computed at generation time (see cp_regen.md, Agent 3) --
+    # requires tanh_cp_temperature to be set (stockfish provider only).
     value_feature: str = "value"
+    # Temperature for the "tanh_cp_value" value_feature (ignored otherwise).
+    # None (default) leaves every node's features exactly as before -- a
+    # zero-cost no-op for every existing config.
+    tanh_cp_temperature: Optional[float] = None
     min_nodes: int = 16
     max_nodes: int = 128
     prune_epsilon: Optional[float] = None  # value-prune knob (depth>=1); None = no prune. See R-PRUNING.
@@ -188,8 +195,10 @@ def _build_quality_config(
             examples so downstream consumers can detect format drift.
         search_config_id: short label identifying this search config in
             saved examples (e.g. ``"supervised_branch_v1"``). A non-default
-            selection rule is appended (e.g. ``"..._befs"``) so saved trees
-            self-describe how they were built.
+            selection rule would be appended so saved trees self-describe how
+            they were built; dead in practice now that ``selection`` only
+            accepts ``"puct"`` (the alternative, ``"befs"``, was removed
+            2026-07-08), kept as a harmless no-op rather than ripped out.
     """
     if config.selection != "puct":
         search_config_id = f"{search_config_id}_{config.selection}"
@@ -365,6 +374,12 @@ def generate_dataset_stockfish_command(config: BuildTreeConfig) -> None:
             f"({STOCKFISH_MIN_ELO}); the engine segfaults below it. "
             f"Use sf_elo>={STOCKFISH_MIN_ELO} or full strength (omit sf_elo)."
         )
+    if config.value_feature == "tanh_cp_value" and config.tanh_cp_temperature is None:
+        raise ValueError(
+            "value_feature='tanh_cp_value' requires tanh_cp_temperature to be set "
+            "(e.g. 300.0) -- it selects the desaturated tanh(cp_order/T) feature, "
+            "which the provider only computes when a temperature is configured."
+        )
 
     node_budget_distribution = NodeBudgetDistribution(config.min_nodes, config.max_nodes)
     rng = random.Random(config.seed)
@@ -391,6 +406,7 @@ def generate_dataset_stockfish_command(config: BuildTreeConfig) -> None:
             search_limit_depth=config.sf_search_limit_depth,
             elo=config.sf_elo,
             metadata={"value_source": "stockfish_wdl", "prior_source": "uniform"},
+            tanh_cp_temperature=config.tanh_cp_temperature,
         )
         saved_paths = _generate_and_save_examples(
             root_records,

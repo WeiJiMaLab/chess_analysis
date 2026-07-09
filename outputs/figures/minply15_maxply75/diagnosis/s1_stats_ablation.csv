@@ -1,0 +1,7 @@
+subset,stats,n_features,regret_mean,regret_lo,regret_hi
+all,"n_nodes,height,width,current_value",5,0.106764,0.099261,0.114093
+all − n_nodes,"height,width,current_value",4,0.107941,0.100438,0.11569
+all − height,"n_nodes,width,current_value",4,0.107421,0.100412,0.114986
+all − width,"n_nodes,height,current_value",4,0.107879,0.099642,0.115734
+all − current_value,"n_nodes,height,width",4,0.113841,0.106101,0.121779
+SingleHalt*,,1,0.120394,0.11287,0.128602

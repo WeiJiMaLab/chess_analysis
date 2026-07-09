@@ -1,0 +1,99 @@
+# Probe X (plan.md "External expert input" section, 2026-07-08): apply exclude_xaba to our OWN
+# puctvalue_md36 corpus (never tried before -- exclude_xaba was only ever used on ysagiv's
+# human_trees). NEW, additive config -- does NOT touch config_minply15_maxply75.yaml. Scope
+# confirmed by reading src/cts/data/preprocess_mc/pack.py + slurm/pipeline/{pack_trees,pack_root,
+# mcpack_only}.slurm: exclude_xaba is a mc_pack (controller-level packing) field only, entirely
+# absent from preprocess_gnn/pack.py (encoder pretraining data). So this probe REUSES the
+# already-trained frozen encoder and the already-built split (both read-only, absolute paths into
+# the base run's scratch tree below) and only reruns mc_pack (with exclude_xaba: true) + a fresh
+# materialize of the validation split against the new packed episodes. No encoder retrain, no
+# split rerun, no gen_trees rerun.
+#
+# Driven directly (NOT via submit_all.sh / RUN_VARIANTS, which would require editing the shared
+# config_minply15_maxply75.yaml's `variants:` block -- avoided per the "don't touch the base
+# config" constraint) using the SAME underlying stage scripts:
+#   python -m cts.data.preprocess_mc.pack --config config_probe_x_xaba.yaml --stage mc_pack ...
+#   python -m cts.data.preprocess_mc.materialize --config config_probe_x_xaba.yaml --stage materialize ...
+globals:
+  run_name: minply15_maxply75_probe_x_xaba
+  min_ply: 15
+  max_ply: 75
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  fens_pool: ${scratch_dir}/fens.txt
+  search_budget: 64
+  run_dir: ${scratch_dir}/minply15_maxply75/probe_x_xaba   # ISOLATED — never collides with the base run
+  fens_sample: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/fens_sample.txt   # base run's, unused by this probe (see human_analysis stub note below)
+  trees_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees              # base run's, unused by this probe
+  mc_packed_dir: ${run_dir}/mc_packed
+  materialized_dir: ${run_dir}/materialized
+  config_dir: ${run_dir}/pack_configs
+  log_dir: ${run_dir}/pack_logs
+  figures_dir: ${outputs_dir}/minply15_maxply75/diagnosis
+
+# NOTE: analysis/utils/helpers.py eagerly does `CONFIG = load_config_section("human_analysis")`
+# at import time (bites any `import analysis.evaluate` etc. against whatever config $CONFIG
+# points at) and `db_connection`'s default arg reads CONFIG["selected_db_default"] at
+# *function-definition* time -- so this section must exist and carry that key even though this
+# probe's eval scripts never touch a database. Stub, copied from config_minply15_maxply75.yaml's
+# human_analysis block so every field a downstream helper might reference resolves cleanly; genuinely
+# unused by this probe (mc_pack/materialize/eval below don't read `human_analysis.*` at all).
+human_analysis:
+  figures_dir: ${outputs_dir}/minply15_maxply75
+  min_ply: ${min_ply}
+  max_ply: ${max_ply}
+  trees_default: ${trees_dir}/puctvalue_md36
+  cache_default: ${run_dir}/tree_values_cache
+  response_time_histogram_bins: 50
+  qq_plot_quantile_probes: 200
+  selected_db_default: ${scratch_dir}/personal.db
+  table_moves: moves
+  table_processed_moves: processed_moves
+  table_processed_moves_nonzero: processed_moves_nonzero
+  table_filtered: filtered_moves_minply15_maxply75
+  table_board_features: board_features_minply15_maxply75
+  fens_sample: ${fens_sample}
+  tree_fens_n: 400000
+  tree_fens_seed: 42
+
+# --- Reused, read-only inputs from the BASE run (absolute paths, not re-derived) ---
+# split_root: the SAME train/val partition + argmax>2 include_list the base run uses (already
+# built; exclude_xaba is an independent per-tree filter applied ON TOP of it at mc_pack time, not
+# a replacement for it — matches how mc_pack.exclude_xaba is documented/used elsewhere).
+mc_pack:
+  split_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/split
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 16
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  exclude_xaba: true            # <-- THE probe: never applied to our own corpus before
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: linear
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+  clear: true
+
+# encoder.output_checkpoint: the base run's ALREADY-TRAINED frozen child-WDL encoder — reused
+# as-is, never retrained (confirmed unnecessary: exclude_xaba doesn't touch gnn_pack/encoder).
+encoder:
+  output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/tiny_encoder.pt
+
+materialize:
+  encoder_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/tiny_encoder.pt
+  device: cpu
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 32
+  hidden_layers: 2

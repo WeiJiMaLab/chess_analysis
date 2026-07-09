@@ -22,6 +22,7 @@ from .common import (
     terminal_value_from_position_spec,
 )
 from .parsers import (
+    apply_tanh_cp_feature,
     parse_root_value_features_from_lines,
     terminal_value_features,
 )
@@ -43,6 +44,7 @@ class StockfishDirectEvalProvider(TreeExpansionProvider):
         search_limit_depth: Optional[int] = None,
         elo: Optional[int] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        tanh_cp_temperature: Optional[float] = None,
     ) -> None:
         """
         Args:
@@ -52,11 +54,19 @@ class StockfishDirectEvalProvider(TreeExpansionProvider):
             elo: Optional playing strength limit in Elo (e.g., 1800).
                 Configures UCI_LimitStrength and UCI_Elo on startup.
             metadata: Free-form provider tags surfaced via ``provider_metadata``.
+            tanh_cp_temperature: when set, every node's feature dict also gets
+                a ``tanh_cp_value = tanh(cp_order / tanh_cp_temperature)``
+                feature (see ``apply_tanh_cp_feature``) -- a desaturated
+                alternative to the WDL-derived ``value`` column. ``None``
+                (default) is a zero-cost no-op; existing configs are
+                unaffected. Select it for search/backup via
+                ``BuildTreeConfig.value_feature = "tanh_cp_value"``.
         """
         self.engine = engine
         self.search_limit_nodes = search_limit_nodes
         self.search_limit_depth = search_limit_depth
         self.elo = elo
+        self.tanh_cp_temperature = tanh_cp_temperature
         self._metadata = dict(metadata or {})
 
         # Always enable WDL output for Stockfish since the parser requires it
@@ -78,6 +88,7 @@ class StockfishDirectEvalProvider(TreeExpansionProvider):
             features = terminal_value_features(terminal_value)
         else:
             features = self._value_features_for_fen(fen)
+        features = apply_tanh_cp_feature(features, self.tanh_cp_temperature)
         return {**features, "prior": 1.0}
 
     def expand_node(
@@ -113,6 +124,7 @@ class StockfishDirectEvalProvider(TreeExpansionProvider):
             else:
                 scalar_features.update(self._value_features_for_fen(child_fen))
                 is_terminal = False
+            scalar_features = apply_tanh_cp_feature(scalar_features, self.tanh_cp_temperature)
 
             children.append(
                 ExpansionChild(

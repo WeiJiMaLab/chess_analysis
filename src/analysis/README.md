@@ -170,7 +170,12 @@ There is **no live-UCI evaluation** on the human side: the former `engine_eval.p
 
 ## 7. Search-tree visuals (`lmcos`)
 
-Tree tensorization and encoding live under **`lmcos/src/`** (`cts.core`, `cts.models`). There is no standalone visualization script in this repo.
+Tree tensorization and encoding live under **`src/cts/`** (`cts.core`, `cts.models`) — the former
+standalone `lmcos/` tree was merged into this repo (see repo-root `README.md`); `lmcos/src/` no
+longer exists as a path. There is no standalone visualization script in this repo. The active
+metacontroller (`z_t` encoder + readout) research question that `cts/` exists to answer is tracked
+in the repo-root **[`hypotheses.md`](../../hypotheses.md)** and **[`plan.md`](../../plan.md)**, not
+here — this file's scope is the human-RT analysis pipeline (`board.py`/`engine.py`) only.
 
 ---
 

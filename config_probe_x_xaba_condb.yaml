@@ -1,0 +1,102 @@
+# Probe X, condition B (added per coordinator/user follow-up 2026-07-08): exclude_xaba used
+# ALONE, entirely REPLACING our own argmax>2 filter -- not stacked with it (that stacked version
+# is condition A, config_probe_x_xaba.yaml, already computed and UNTOUCHED by this file). Mirrors
+# Agent 1's argmax-filter-vs-xaba-filter head-to-head design on the ysagiv corpus, applied to our
+# own puctvalue_md36 corpus instead.
+#
+# Mechanism confirmed via slurm/pipeline/pack_trees.slurm's own comment ("split.include_list is
+# null, so every generated tree is packed (no pre-filter)"): condition B = skip argmax_filter
+# entirely, set mc_pack.exclude_xaba=true. The ONLY thing this config's `split.include_list`
+# below encodes is a RANDOM 30,000-tree subsample (seed=0, uniform over the full 400,000
+# generated trees, no argmax/quality criterion whatsoever) purely for compute tractability --
+# condition A's materialize step (single CPU worker, no argmax pre-filter's ~4x reduction) ran at
+# ~0.38s/episode, so the full 400K population's validation split (~80K trees before any per-tree
+# filter) would take >6h single-worker; 30K raw trees keees total scale close to condition A's
+# 28,548 (so results are computed at comparable statistical power/cost) while staying tractable.
+# exclude_xaba remains the ONLY quality/motif filter applied on top of this random subsample.
+#
+# Reuses the SAME frozen encoder as condition A and the base run (no retrain -- exclude_xaba is a
+# mc_pack-only field, confirmed by reading preprocess_mc/pack.py; see config_probe_x_xaba.yaml's
+# top comment for the full scope justification, unchanged here).
+globals:
+  run_name: minply15_maxply75_probe_x_xaba_condb
+  min_ply: 15
+  max_ply: 75
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  fens_pool: ${scratch_dir}/fens.txt
+  search_budget: 64
+  run_dir: ${scratch_dir}/minply15_maxply75/probe_x_xaba_condb   # ISOLATED — own scratch tree, condition A untouched
+  fens_sample: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/fens_sample.txt   # base run's, unused by this probe
+  trees_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/trees              # base run's generated trees, REUSED (read-only)
+  split_dir: ${run_dir}/split
+  mc_packed_dir: ${run_dir}/mc_packed
+  materialized_dir: ${run_dir}/materialized
+  config_dir: ${run_dir}/pack_configs
+  log_dir: ${run_dir}/pack_logs
+  figures_dir: ${outputs_dir}/minply15_maxply75/diagnosis
+
+human_analysis:
+  figures_dir: ${outputs_dir}/minply15_maxply75
+  min_ply: ${min_ply}
+  max_ply: ${max_ply}
+  trees_default: ${trees_dir}/puctvalue_md36
+  cache_default: ${run_dir}/tree_values_cache
+  response_time_histogram_bins: 50
+  qq_plot_quantile_probes: 200
+  selected_db_default: ${scratch_dir}/personal.db
+  table_moves: moves
+  table_processed_moves: processed_moves
+  table_processed_moves_nonzero: processed_moves_nonzero
+  table_filtered: filtered_moves_minply15_maxply75
+  table_board_features: board_features_minply15_maxply75
+  fens_sample: ${fens_sample}
+  tree_fens_n: 400000
+  tree_fens_seed: 42
+
+# split: NO argmax filter -- include_list is a pure random 30K subsample (see header), NOT a
+# quality/motif criterion. This is the "no pre-filter" path pack_trees.slurm's own comment
+# describes, just capped in size for tractability.
+split:
+  source_root: ${trees_dir}/puctvalue_md36
+  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/probe_x_xaba_condb/random_sample_include_list.txt
+  split_root: ${split_dir}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+mc_pack:
+  split_root: ${split_dir}
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 16
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  exclude_xaba: true            # <-- the ONLY filter in this condition (no argmax pre-filter)
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: linear
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+  clear: true
+
+encoder:
+  output_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/tiny_encoder.pt
+
+materialize:
+  encoder_checkpoint: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/minply15_maxply75/packed/tiny_encoder.pt
+  device: cpu
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 32
+  hidden_layers: 2

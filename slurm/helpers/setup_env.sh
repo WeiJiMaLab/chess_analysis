@@ -21,7 +21,7 @@ export TINY=/home/hl4291/chess_analysis
 # Active config = whichever run you're driving. Override by exporting CONFIG
 # before sourcing (e.g. CONFIG=$TINY/config_minply10_maxply80.yaml); defaults to
 # the canonical run.
-export CONFIG="${CONFIG:-$TINY/config_allply.yaml}"
+export CONFIG="${CONFIG:-$TINY/config_minply15_maxply75.yaml}"
 export RENDER="python $TINY/render_stage.py $CONFIG"
 export WORK=$($RENDER --get globals.config_dir)
 export MCP=$($RENDER --get globals.mc_packed_dir)

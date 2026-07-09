@@ -1,0 +1,207 @@
+[
+  {
+    "label": "p10",
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample/29608562_root_29608562.pt",
+    "argmax": 0,
+    "num_nodes": 3896,
+    "node_cutoff": 3896,
+    "dup": {
+      "pass": false,
+      "n_duplicates": 164,
+      "example_pairs": [
+        [
+          500,
+          916
+        ],
+        [
+          504,
+          918
+        ],
+        [
+          508,
+          919
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 50,
+      "n_branching_nodes": 96
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.37089322381930184,
+      "n_unexpanded_siblings": 30,
+      "n_root_children": 47
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p50",
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample/94510531_root_94510531.pt",
+    "argmax": 1,
+    "num_nodes": 3965,
+    "node_cutoff": 3965,
+    "dup": {
+      "pass": false,
+      "n_duplicates": 35,
+      "example_pairs": [
+        [
+          213,
+          1021
+        ],
+        [
+          170,
+          1065
+        ],
+        [
+          103,
+          1067
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 49,
+      "n_branching_nodes": 96
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.8799495586380832,
+      "n_unexpanded_siblings": 40,
+      "n_root_children": 45
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p75",
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample/94510531_root_94510531.pt",
+    "argmax": 1,
+    "num_nodes": 3965,
+    "node_cutoff": 3965,
+    "dup": {
+      "pass": false,
+      "n_duplicates": 35,
+      "example_pairs": [
+        [
+          213,
+          1021
+        ],
+        [
+          170,
+          1065
+        ],
+        [
+          103,
+          1067
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 49,
+      "n_branching_nodes": 96
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.8799495586380832,
+      "n_unexpanded_siblings": 40,
+      "n_root_children": 45
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "p90",
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample/81417645_root_81417645.pt",
+    "argmax": 16,
+    "num_nodes": 2602,
+    "node_cutoff": 2602,
+    "dup": {
+      "pass": false,
+      "n_duplicates": 346,
+      "example_pairs": [
+        [
+          377,
+          595
+        ],
+        [
+          409,
+          652
+        ],
+        [
+          441,
+          716
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 34,
+      "n_branching_nodes": 96
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.1840891621829362,
+      "n_unexpanded_siblings": 0,
+      "n_root_children": 32
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  },
+  {
+    "label": "max",
+    "src": "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample/058193_root_58193.pt",
+    "argmax": 95,
+    "num_nodes": 1405,
+    "node_cutoff": 1405,
+    "dup": {
+      "pass": false,
+      "n_duplicates": 461,
+      "example_pairs": [
+        [
+          180,
+          203
+        ],
+        [
+          196,
+          214
+        ],
+        [
+          204,
+          217
+        ]
+      ]
+    },
+    "linear": {
+      "pass": true,
+      "max_children": 20,
+      "n_branching_nodes": 96
+    },
+    "dominance": {
+      "pass": true,
+      "max_child_frac": 0.09181494661921709,
+      "n_unexpanded_siblings": 0,
+      "n_root_children": 16
+    },
+    "illegal": {
+      "pass": true,
+      "n_bad": 0,
+      "examples": []
+    }
+  }
+]

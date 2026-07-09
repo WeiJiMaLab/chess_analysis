@@ -1,0 +1,29 @@
+[
+  {
+    "maintenance_scale": 0.0,
+    "singlehalt": 0.12039361420088344,
+    "stats": 0.11373478835389858,
+    "orig_zt": 0.12072469618129181,
+    "e2e_zt": 0.11614737622346312,
+    "beats_singlehalt": true,
+    "beats_stats": false
+  },
+  {
+    "maintenance_scale": 0.05,
+    "singlehalt": 0.0090272944994596,
+    "stats": 0.0090272944994596,
+    "orig_zt": 0.0090272944994596,
+    "e2e_zt": 0.0090272944994596,
+    "beats_singlehalt": false,
+    "beats_stats": false
+  },
+  {
+    "maintenance_scale": 0.1,
+    "singlehalt": 0.002324935265801965,
+    "stats": 0.002324935265801965,
+    "orig_zt": 0.002324935265801965,
+    "e2e_zt": 0.002324935265801965,
+    "beats_singlehalt": false,
+    "beats_stats": false
+  }
+]

@@ -56,6 +56,22 @@ class ControllerTrainConfig(BaseModel):
     packed_validation_data: str
     encoder_checkpoint: str
     output_checkpoint: Optional[str] = None
+    # plan.md Agent 2 (our_trees_continued) -- warm-start the FULL model (encoder + head)
+    # from a previously-trained checkpoint's ``model_state_dict``, instead of the usual
+    # fresh-head-on-top-of-``encoder_checkpoint`` init. Loaded AFTER ``encoder_checkpoint``
+    # in ``_build_model_and_optimizer`` (so it takes precedence), which means
+    # ``encoder_checkpoint`` can safely stay pointed at the ORIGINAL base encoder --
+    # ``resume_checkpoint``'s full state dict overwrites those weights anyway. Neither
+    # ``pg_controller_train.py`` nor ``e2e_controller_train.py`` otherwise supports
+    # continuing a run; this is the single shared hook both use.
+    resume_checkpoint: Optional[str] = None
+    # Dump a checkpoint EVERY epoch (not just on val-regret improvement), named
+    # ``<output_checkpoint stem>_epoch{N:03d}<suffix>`` -- lets a continued run be
+    # paired-significance-evaluated at several points along its curve, not just the
+    # final/best epoch. Mirrors ``e2e_controller_train.py``'s existing per-epoch save
+    # (that script always saves every epoch); ``pg_controller_train.py`` previously only
+    # saved on improvement, so this flag opt-in extends it without changing default behavior.
+    save_every_epoch: bool = False
     materialized_train_cache: Optional[str] = None
     materialized_validation_cache: Optional[str] = None
     materialized_cache_shard_snapshots: int = 250000
@@ -2024,6 +2040,17 @@ def _build_model_and_optimizer(
         controller_inputs=config.controller_inputs,
     )
     load_encoder_checkpoint(config.encoder_checkpoint, model.encoder)
+    if config.resume_checkpoint:
+        # Warm-start the WHOLE model (encoder + head) from a prior run's checkpoint --
+        # overwrites the encoder weights ``load_encoder_checkpoint`` just loaded above (by
+        # design: resume_checkpoint is authoritative when set). Checkpoint format is the
+        # shared ``{"model_state_dict": ..., "metadata": {...}}`` both pg_controller_train.py
+        # and e2e_controller_train.py already save (see each module's save call), so this one
+        # loader works for resuming either lineage, frozen or unfrozen.
+        payload = torch.load(config.resume_checkpoint, map_location=config.device, weights_only=False)
+        model.load_state_dict(payload["model_state_dict"])
+        print(f"[compute_advantage] resumed full model state (encoder+head) from "
+              f"{config.resume_checkpoint}", flush=True)
     if not config.unfreeze_encoder:
         model.freeze_encoder()
 
