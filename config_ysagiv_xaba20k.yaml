@@ -82,6 +82,7 @@ encoder:
   train_dir: ${packed_dir}/train_manifest.json
   validation_dir: ${packed_dir}/validation_manifest.json
   output_checkpoint: ${packed_dir}/tiny_encoder.pt
+  curves_out_dir: ${figures_dir}/curves
   device: cuda
   k: 1
   d_embed: 32

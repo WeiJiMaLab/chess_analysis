@@ -141,13 +141,14 @@ def _render_heatmap(results: list[dict[str, Any]], out_dir: str | Path,
     label_fs = min(tick_fs, 9.5)
 
     _rcparams()
-    fig, ax = plt.subplots(figsize=(0.5 * ncol + 2.0, 0.42 * nrow + 1.6))
+    fig, ax = plt.subplots(figsize=(0.38 * ncol + 1.5, 0.32 * nrow + 1.2))
     cmap = plt.get_cmap("RdBu")
     norm = plt.Normalize(vmin=0, vmax=1)
     im = ax.imshow(frac, cmap=cmap, norm=norm, aspect="auto")
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-    cbar.set_label("$k^*$ / ceiling  (0 = instant-stop collapse, 1 = always-continue pileup)",
-                   fontsize=label_fs)
+    cbar.set_label("Steps (% Max)", fontsize=label_fs)
+    cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    cbar.set_ticklabels(["0", "20", "40", "60", "80", "100"])
     cbar.ax.tick_params(labelsize=label_fs)
 
     for i, lam in enumerate(lambda_grid):
@@ -174,13 +175,15 @@ def _render_heatmap(results: list[dict[str, Any]], out_dir: str | Path,
     ax.set_ylabel("time_lambda", fontsize=tick_fs + 1.5)
     if scale_label:
         # A small unit tag anchored ON each axis (not folded into the axis title text, and not a
-        # figure title) -- mirrors matplotlib's own scientific-notation offset-text convention,
-        # which this categorical/imshow axis doesn't get for free since its ticks are strings, not
-        # real scaled numeric values.
-        ax.text(1.0, -0.22, scale_label, transform=ax.transAxes, fontsize=tick_fs - 1,
-                ha="right", va="top", color=_MUTED)
-        ax.text(-0.22, 1.0, scale_label, transform=ax.transAxes, fontsize=tick_fs - 1,
-                ha="right", va="bottom", rotation=90, color=_MUTED)
+        # figure title) -- mirrors matplotlib's own scientific-notation offset-text convention: the
+        # Y axis's multiplier sits directly ABOVE it (horizontal, top-left corner); the X axis's
+        # sits flush with / just below the axis line, at its right end (horizontal) -- NOT at y=0
+        # exactly, which collides with the colorbar's "0" tick (the colorbar occupies that exact
+        # height immediately to the right of the main axes), and NOT pushed up to the top either.
+        ax.text(1.01, -0.05, scale_label, transform=ax.transAxes, fontsize=tick_fs - 1,
+                ha="left", va="top", color="black")
+        ax.text(0.0, 1.01, scale_label, transform=ax.transAxes, fontsize=tick_fs - 1,
+                ha="left", va="bottom", color="black")
     fig.tight_layout()
     save_pdf_png(fig, str(out_dir), "regime_select", dpi=200)
 
@@ -214,6 +217,24 @@ def main() -> None:
     if args.results_json:
         Path(args.results_json).write_text(json.dumps(results, indent=2))
         print(f"[regime] wrote {args.results_json}", flush=True)
+    # Cached separately from --results-json's coarse diagnostic grid: the zoom grid's points mostly
+    # DON'T overlap it (ZOOM_LAMBDA_GRID/ZOOM_MAINT_GRID are their own hand-picked values), so a
+    # cosmetic-only replot (font/size/color tweaks -- the kind this heatmap gets a lot of) can skip
+    # the expensive episode-load + full sweep entirely via `replot_zoom` below.
+    zoom_json = Path(args.out_dir) / "regime_select_zoom_results.json"
+    zoom_json.parent.mkdir(parents=True, exist_ok=True)
+    zoom_json.write_text(json.dumps(zoom_results, indent=2))
+    print(f"[regime] wrote {zoom_json}", flush=True)
+
+
+def replot_zoom(out_dir: str | Path) -> None:
+    """Re-render ONLY the zoom heatmap from `<out_dir>/regime_select_zoom_results.json` (written by
+    `main()`) -- for cosmetic-only tweaks (figsize, fonts, colorbar, tick formatting, ...) that don't
+    need the episodes reloaded or the grids re-swept."""
+    out_dir = Path(out_dir)
+    zoom_results = json.loads((out_dir / "regime_select_zoom_results.json").read_text())
+    _render_heatmap(zoom_results, out_dir, lambda_grid=ZOOM_LAMBDA_GRID, maint_grid=ZOOM_MAINT_GRID,
+                    scale=1e4, scale_label=r"$\times 10^{-4}$")
 
 
 if __name__ == "__main__":

@@ -349,26 +349,22 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         # are picked to be legible on that scale instead of overflowing it.
         from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
         apply_poster_style()
+        # Board-plot sizing convention: a SMALLER figure at these font sizes reads as bigger,
+        # more legible text (same reasoning as the board dashboards) -- no title (board plots
+        # don't carry one either; the filename/caption is the title), fewer ticks.
         plt.rcParams['xtick.labelsize'] = 11
         plt.rcParams['ytick.labelsize'] = 11
         plt.rcParams['axes.labelsize'] = 13
-        plt.rcParams['axes.titlesize'] = 14
         plt.rcParams['legend.fontsize'] = 11
         train_color = PHASE_COLORS[1]  # light indigo
         val_color = PHASE_COLORS[3]    # dark indigo
         ep = [h["epoch"] for h in history]
-        fig, ax = plt.subplots(figsize=(9, 6))
-        ax.plot(ep, [h["train_E_regret"] for h in history], "-o", color=train_color,
-                label="train E[regret] (soft)", markersize=4)
-        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-s", color=val_color,
-                label="val regret (hard greedy)", markersize=4)
-        ax.set_xlabel("epoch"); ax.set_ylabel("regret"); ax.legend(loc="upper right")
-        ax2 = ax.twinx()
-        ax2.plot(ep, [h["tau"] for h in history], ":", color="gray", lw=1.2,
-                 label="temperature τ", zorder=1)
-        ax2.set_ylabel("temperature τ")
-        ax2.spines["top"].set_visible(False)
-        ax.set_title("PG readout — regret over epochs")
+        fig, ax = plt.subplots(figsize=(3.6, 2.6))
+        ax.plot(ep, [h["train_E_regret"] for h in history], "-", color=train_color, label="Train")
+        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-", color=val_color, label="Val")
+        ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
+        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+        ax.set_xlabel("Epoch"); ax.set_ylabel("Regret"); ax.legend(loc="upper right")
         fig.tight_layout()
         fig.savefig(f"{base}_training_curve.png", dpi=150)
         plt.close(fig)

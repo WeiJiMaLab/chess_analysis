@@ -153,6 +153,11 @@ class BuildTreeConfig(BaseModel):
     # rolling ``encoder_latest.pt`` are written each epoch with the current encoder weights.
     checkpoint_dir: Optional[str] = None
     checkpoint_every_epochs: int = 1
+    # When set, the encoder training-curve CSV+PNG land here (matching the eval pipeline's own
+    # `curves_out_dir` convention for the readout heads) instead of next to the checkpoint in
+    # scratch -- so all training curves for a run (encoder + both readouts) end up in the same
+    # place: <run's figures_dir>/curves/, alongside everything else that run's outputs live.
+    curves_out_dir: Optional[str] = None
 
 
 def _feature_schema() -> NodeFeatureSchema:
@@ -517,19 +522,35 @@ def generate_dataset_command(config: BuildTreeConfig) -> None:
     )
 
 
-def _save_encoder_training_curves(history: list[dict], output_checkpoint: str) -> None:
-    """Write the per-epoch train/val loss trajectory (CSV) and a curve figure next to the
-    checkpoint — ``loss_gap`` (total_loss minus target_entropy; "the real KL we're driving toward
-    zero", per ``ChildWdlMetrics``) is the primary metric plotted, since ``total_loss`` alone isn't
-    comparable across batches with different target-entropy floors. Same CSV+PNG convention as
+def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
+                                  curves_out_dir: str | None = None,
+                                  fine_train_history: list[dict] | None = None) -> None:
+    """Write the per-epoch train/val loss trajectory (CSV) and a curve figure — ``loss_gap``
+    (total_loss minus target_entropy; "the real KL we're driving toward zero", per
+    ``ChildWdlMetrics``) is the primary metric plotted, since ``total_loss`` alone isn't comparable
+    across batches with different target-entropy floors. Same CSV+PNG convention as
     ``cts.train.pg_controller_train._save_training_curves`` (the readout-fit curves), kept as a
     separate, simpler implementation here since ``history`` entries are ``ChildWdlMetrics``
-    dataclasses (train/validation pair), not plain dicts."""
+    dataclasses (train/validation pair), not plain dicts.
+
+    ``curves_out_dir``, if given, writes to ``<curves_out_dir>/encoder_training_curve.*`` (alongside
+    the readout heads' own curves under the same eval-pipeline output dir) instead of next to
+    ``output_checkpoint`` in scratch.
+
+    ``fine_train_history``, if given, is a list of ``{"frac_epoch": float, "loss_gap": float}`` rows
+    (one per logged batch, ``frac_epoch = (epoch - 1) + batch_index / total_batches``) -- plotted as
+    the TRAIN line instead of the coarse one-point-per-epoch series, since 6-10 epoch points reads as
+    far too sparse to see the actual early-training dynamics (val stays coarse: it's only computed
+    once per epoch, so there's no finer series to draw for it)."""
     if not history:
         return
     import csv
     from pathlib import Path
-    base = Path(output_checkpoint).with_suffix("")
+    if curves_out_dir:
+        base = Path(curves_out_dir) / "encoder"
+        base.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        base = Path(output_checkpoint).with_suffix("")
     base.parent.mkdir(parents=True, exist_ok=True)
     rows = [
         {
@@ -551,20 +572,45 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str) -
         w.writeheader()
         w.writerows(rows)
     print(f"[child-wdl-pretrain] training curve -> {csv_path}", flush=True)
+    if fine_train_history:
+        fine_csv_path = Path(f"{base}_training_curve_fine.csv")
+        with open(fine_csv_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["frac_epoch", "loss_gap"])
+            w.writeheader()
+            w.writerows(fine_train_history)
+        print(f"[child-wdl-pretrain] fine training curve -> {fine_csv_path}", flush=True)
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        # Same visual language as cts.train.pg_controller_train._save_training_curves' readout-fit
+        # curves: Helvetica house style, light/dark indigo for train/val, small circle markers (no
+        # square val marker), single metric (loss_gap) -- the total_loss overlay lines this used to
+        # also draw are dropped for the same "just epoch vs the one metric" reason.
+        from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
+        apply_poster_style()
+        # Board-plot sizing convention: a SMALLER figure at these font sizes reads as bigger,
+        # more legible text -- no title, fewer ticks, no per-point markers (a plain line).
+        plt.rcParams['xtick.labelsize'] = 11
+        plt.rcParams['ytick.labelsize'] = 11
+        plt.rcParams['axes.labelsize'] = 13
+        plt.rcParams['legend.fontsize'] = 11
+        train_color = PHASE_COLORS[1]  # light indigo
+        val_color = PHASE_COLORS[3]    # dark indigo
         ep = [r["epoch"] for r in rows]
-        fig, ax = plt.subplots(figsize=(9, 6))
-        ax.plot(ep, [r["train_loss_gap"] for r in rows], "-o", label="train loss_gap (KL)")
-        ax.plot(ep, [r["val_loss_gap"] for r in rows], "-s", label="val loss_gap (KL)")
-        ax.plot(ep, [r["train_total_loss"] for r in rows], ":", color="tab:blue", alpha=0.5,
-               label="train total_loss")
-        ax.plot(ep, [r["val_total_loss"] for r in rows], ":", color="tab:orange", alpha=0.5,
-               label="val total_loss")
-        ax.set_xlabel("epoch"); ax.set_ylabel("loss"); ax.legend(loc="upper right")
-        ax.set_title("Child-WDL encoder pretrain — loss over epochs")
+        fig, ax = plt.subplots(figsize=(3.6, 2.6))
+        if fine_train_history:
+            # Sub-epoch resolution train curve (one point per logged batch) instead of the coarse
+            # one-point-per-epoch series.
+            fx = [r["frac_epoch"] for r in fine_train_history]
+            fy = [r["loss_gap"] for r in fine_train_history]
+            ax.plot(fx, fy, "-", color=train_color, label="Train")
+        else:
+            ax.plot(ep, [r["train_loss_gap"] for r in rows], "-", color=train_color, label="Train")
+        ax.plot(ep, [r["val_loss_gap"] for r in rows], "-", color=val_color, label="Val")
+        ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
+        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+        ax.set_xlabel("Epoch"); ax.set_ylabel("Loss"); ax.legend(loc="upper right")
         fig.tight_layout()
         fig.savefig(f"{base}_training_curve.png", dpi=150)
         plt.close(fig)
@@ -644,6 +690,11 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
     # batch-count interval rather than firing every step. Mutating dict
     # (not int) so the closures below can update it in place.
     last_logged_batch = {"train": 0, "validation": 0}
+    # Sub-epoch (fractional-epoch) train loss, one row per logged batch -- lets the final curve plot
+    # show real within-epoch dynamics instead of just one point per epoch (which for a short run,
+    # e.g. 6 epochs, is far too coarse to see anything but the coarsest trend). Same log-interval
+    # throttling as the print line below, so this doesn't grow unboundedly on a many-epoch run.
+    fine_train_history: list[dict] = []
 
     def _log_batch_progress(
         epoch_index,
@@ -666,6 +717,11 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
         if not should_log:
             return
         last_logged_batch[phase] = batch_index
+        if phase == "train":
+            fine_train_history.append({
+                "frac_epoch": (epoch_index - 1) + batch_index / total_batches,
+                "loss_gap": loss_gap,
+            })
         print(
             f"[child-wdl-pretrain] epoch={epoch_index}/{config.epochs} phase={phase} "
             f"batch={batch_index}/{total_batches} seen_examples={seen_examples} "
@@ -743,7 +799,8 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
         },
     )
     print(f"[child-wdl-pretrain] stage=save_decoder path={decoder_path}", flush=True)
-    _save_encoder_training_curves(history, config.output_checkpoint)
+    _save_encoder_training_curves(history, config.output_checkpoint, curves_out_dir=config.curves_out_dir,
+                                  fine_train_history=fine_train_history)
     final_validation = history[-1]["validation"]
     print(
         f"validation_total_loss={final_validation.total_loss:.6f} "

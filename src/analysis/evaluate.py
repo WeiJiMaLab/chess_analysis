@@ -64,9 +64,40 @@ def _derive_step_stats(traj_depth: torch.Tensor, node_cutoffs: list[int]) -> tup
     return heights, widths
 
 
-def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None = None) -> list[dict[str, Any]]:
+def _action_gaps_for_trajectory(source_path: str, first_decision_expansion_count: int, num_steps: int) -> list[float]:
+    """Per-step action gap (top1 − top2 of the root's candidate-move Q values) for one trajectory,
+    read directly from the RAW tree snapshot — NOT from the packed shard (mc_pack never propagates
+    ``oracle_root_q_trace`` into the packed format; see AGController investigation, 2026-07-09).
+
+    Alignment: the packed trajectory's step 0 is the raw record's row
+    ``first_decision_expansion_count - 1`` (mirrors ``pack.py::_build_compact_trajectory``'s own
+    ``expansion_parent_ids[root_rank]`` convention) — verified against real packed/raw data
+    (packed ``num_steps`` exactly spans ``raw_step ∈ [fdec-1, fdec-1+num_steps-1]``).
+    """
+    from cts.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
+    record = RawPretrainExampleRecord.load(source_path)
+    trace = record.oracle_root_q_trace.float()
+    start = first_decision_expansion_count - 1
+    window = trace[start:start + num_steps]
+    if window.shape[0] < num_steps:  # pad short trailing steps (shouldn't normally happen) with the last row
+        pad = window[-1:].expand(num_steps - window.shape[0], -1) if window.shape[0] else torch.zeros(num_steps, trace.shape[1])
+        window = torch.cat([window, pad], dim=0)
+    k = min(2, window.shape[1])
+    top2 = torch.topk(window, k=k, dim=1).values
+    gap = (top2[:, 0] - top2[:, 1]) if k > 1 else torch.zeros(num_steps)
+    return gap.tolist()
+
+
+def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None = None,
+                         load_action_gaps: bool = False) -> list[dict[str, Any]]:
     """Walk one split's packed shards -> per-episode dicts (halt_rewards / tree_sizes / time_budgets /
-    oracle_value / oracle_stop_step / starting_budget + derived per-step heights / widths)."""
+    oracle_value / oracle_stop_step / starting_budget + derived per-step heights / widths).
+
+    ``load_action_gaps``, if set, additionally re-opens each episode's RAW tree snapshot (path
+    recovered from the packed shard's own ``trajectory_source_paths`` — see
+    ``_action_gaps_for_trajectory``) to compute a per-step action-gap trace for AGController. Off by
+    default since it's extra I/O the other two callers (decodability's steps/stats path, and any
+    caller that doesn't need AG) don't need."""
     shard_paths = sorted((packed_root / split).glob("shard_*.pt"))
     if not shard_paths:
         raise FileNotFoundError(f"no shard_*.pt under {packed_root / split}")
@@ -78,6 +109,9 @@ def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None
         step_node_cutoffs, trajectory_halt_rewards = p["step_node_cutoffs"], p["trajectory_halt_rewards"]
         oracle_stop_steps, oracle_values = p["oracle_stop_steps"], p["oracle_values"]
         starting_budgets, depth = p["starting_budgets"], p["depth"]
+        source_paths = p.get("trajectory_source_paths")
+        first_decision_counts = p.get("first_decision_expansion_counts")
+        gap_cache: dict[int, list[float]] = {}  # keyed by traj -- several episodes/budget-buckets can share one tree
         for i in range(int(p["num_episodes"])):
             num_steps = int(episode_step_ptr[i + 1].item()) - int(episode_step_ptr[i].item())
             traj = int(episode_trajectory_index[i].item())
@@ -86,7 +120,7 @@ def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None
             starting_budget = int(starting_budgets[i].item())
             node_cutoffs = step_node_cutoffs[traj_step_begin:traj_step_begin + num_steps].tolist()
             heights, widths = _derive_step_stats(depth[node_begin:node_end], node_cutoffs)
-            episodes.append({
+            ep = {
                 "halt_rewards": trajectory_halt_rewards[traj_step_begin:traj_step_begin + num_steps].tolist(),
                 "tree_sizes": node_cutoffs, "heights": heights, "widths": widths,
                 "time_budgets": list(range(starting_budget, starting_budget - num_steps, -1)),
@@ -96,7 +130,16 @@ def _load_split_episodes(packed_root: Path, split: str, max_episodes: int | None
                 # shards) — required so `_split` can partition by tree, not by episode, and never leak
                 # a tree's other episodes across the fit/eval boundary.
                 "trajectory_key": f"{shard_path.name}#{traj}",
-            })
+            }
+            if load_action_gaps:
+                if traj not in gap_cache:
+                    full_gaps = _action_gaps_for_trajectory(
+                        source_paths[traj], int(first_decision_counts[traj].item()),
+                        int(trajectory_step_ptr[traj + 1].item() - trajectory_step_ptr[traj].item()))
+                    gap_cache[traj] = full_gaps
+                # this episode's own steps are the trajectory's FIRST num_steps (budget-truncated view)
+                ep["action_gaps"] = gap_cache[traj][:num_steps]
+            episodes.append(ep)
             if max_episodes is not None and len(episodes) >= max_episodes:
                 return episodes
     return episodes
@@ -118,8 +161,10 @@ def _oracle_config(packed_root: Path) -> BudgetedOracleConfig:
 # ===========================================================================
 _INK, _MUTED, _GRID = "#2C3E50", "#7A8894", "#E3E7EB"
 _C = {"front": "#556270", "best": "#E4A11B", "stats": "#12A19A", "zt": "#3F4DA0",
-      "always": "#CD6155", "never": "#8B97A3", "steps": "#B0B8C0",
-      "singlehalt": "#F2A9A6",  # pastel pink — SingleHalt* (fixed-stop) point, distinct from the softer-red AlwaysStop endpoint
+      "always": "#5580CC",  # monkey_4iar CORNFLOWER — Always Stop (k=0) endpoint
+      "never": "#8B97A3", "steps": "#B0B8C0",
+      "singlehalt": "#EEA35B",  # monkey_4iar ORANGE — SingleHalt* (fixed-stop) point
+      "ag": "#8E6BAF",  # AGController (action-gap + steps) — distinct purple, 2026-07-09
       "mono": MAIN_COLOR}  # board/engine's indigo-blue — monochrome base for the decodability bars
 _HELVETICA_FAMILY: str | None = None
 
@@ -215,6 +260,14 @@ def _steps_zt_tensor(ep: dict[str, Any], z_ep: np.ndarray) -> torch.Tensor:
     return torch.tensor(np.column_stack([np.arange(len(ep["halt_rewards"])), z_ep]), dtype=torch.float32)
 
 
+def _steps_ag_tensor(ep: dict[str, Any]) -> torch.Tensor:
+    """``[steps_taken, action_gap]`` per step — AGController: the 2-feature "is the greedy-best root
+    move separated from the runner-up" readout (2026-07-09 investigation). ``action_gap`` is read
+    from the raw tree snapshot at load time (``_load_split_episodes(..., load_action_gaps=True)``),
+    not from the packed shard — see ``_action_gaps_for_trajectory``."""
+    return torch.tensor(np.column_stack([np.arange(len(ep["halt_rewards"])), ep["action_gaps"]]), dtype=torch.float32)
+
+
 # ===========================================================================
 # Stop-controller modules (fit on the train split -> per-episode eval stop steps)
 # ===========================================================================
@@ -267,13 +320,16 @@ def _split(trajectory_keys: list[str], seed: int, train_frac: float = 0.7) -> tu
     return all_idx[fit_mask], all_idx[~fit_mask]
 
 
-def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed, train_frac=0.7):
+def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed, train_frac=0.7,
+                          load_action_gaps=False):
     """Load validation episodes + aligned ``z_t`` once, plus the fit/eval TREE split (70/30 by
     default; ``train_frac`` is exposed so the split ratio can be swept without repacking, e.g. to
     check whether a fit/eval SingleHalt* k* discrepancy is genuine finite-sample noise (shrinks as
     the eval split grows) rather than a split bug (see outputs/reports/ysagiv.md's regime-select
-    threads for the same "confirm before trusting" convention)."""
-    episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes)
+    threads for the same "confirm before trusting" convention). ``load_action_gaps`` opts into the
+    extra raw-tree-snapshot I/O AGController needs (off by default — see ``_load_split_episodes``)."""
+    episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes,
+                                    load_action_gaps=load_action_gaps)
     z_by_ep = _load_zt_by_episode(episodes, cache_path, d_embed)
     fit_idx, ev_idx = _split([ep["trajectory_key"] for ep in episodes], seed, train_frac=train_frac)
     return episodes, z_by_ep, fit_idx, ev_idx
@@ -287,12 +343,15 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
     same schedule as Zt: the original 30ep/lr=1e-2 Stats schedule was an undertrained optimization
     headwind, not a representational gap (n_nodes carries real signal independent of steps; matching
     Zt's epochs/lr closes the Stats-vs-SingleHalt* gap without any feature engineering). Returns
-    ``{'k_singlehalt', 'singlehalt', 'stats', 'zt'}``.
+    ``{'k_singlehalt', 'singlehalt', 'stats', 'zt'}``, plus ``'ag'`` (AGController, PG MLP, same
+    200-epoch schedule) IF ``episodes`` carry an ``action_gaps`` field (i.e. were loaded with
+    ``_load_split_episodes(..., load_action_gaps=True)``) — silently omitted otherwise, so this
+    function still works unchanged for callers that don't need it.
 
-    ``ev_curves``/``curves_out_dir`` are optional: when given, the Stats/Zt PG fits track per-epoch
-    held-out regret and save it (CSV + PNG) under ``<curves_out_dir>/{stats,zt}_training_curve.*``.
+    ``ev_curves``/``curves_out_dir`` are optional: when given, the PG fits track per-epoch held-out
+    regret and save it (CSV + PNG) under ``<curves_out_dir>/{stats,zt,ag}_training_curve.*``.
     """
-    return {
+    out = {
         "k_singlehalt": (kf := fit_singlehalt_stop(fit_curves)),
         "singlehalt": np.full(len(ev_idx), kf, dtype=int),
         "stats": _train_readout([_steps_stats_tensor(episodes[i]) for i in fit_idx],
@@ -304,6 +363,12 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
                              in_dim=d_embed + 1, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
                              out_path=(Path(curves_out_dir) / "zt") if curves_out_dir else None),
     }
+    if episodes and "action_gaps" in episodes[fit_idx[0]]:
+        out["ag"] = _train_readout([_steps_ag_tensor(episodes[i]) for i in fit_idx],
+                                   [_steps_ag_tensor(episodes[i]) for i in ev_idx], fit_curves,
+                                   in_dim=2, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
+                                   out_path=(Path(curves_out_dir) / "ag") if curves_out_dir else None)
+    return out
 
 
 # ===========================================================================
@@ -378,14 +443,14 @@ def _deconflict_points(points: list[dict], x_scale: float, y_scale: float, frac:
     return out
 
 
-def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False):
+def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsize=3.5, frontier_label="Frontier"):
     """Draw the fixed-stop frontier line and every point (SingleHalt*/Stats/z_t/AlwaysStop/AlwaysContinue) —
     all the SAME marker/size, differing only by color, each with 95% CI error bars in x AND y."""
-    ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label="fixed-stop frontier" if label_line else None)
+    ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label=frontier_label if label_line else None)
     for p in points:
         ax.errorbar([p["x"]], [p["y"]], xerr=[[p["x"] - p["xlo"]], [p["xhi"] - p["x"]]],
                     yerr=[[p["y"] - p["lo"]], [p["hi"] - p["y"]]], fmt="o", ms=_PT_SIZE, color=p["color"],
-                    ecolor=p["color"], elinewidth=1.5, capsize=3.5, mec="none", alpha=_PT_ALPHA,
+                    ecolor=p["color"], elinewidth=1.5, capsize=capsize, mec="none", alpha=_PT_ALPHA,
                     zorder=p.get("zorder", 6), label=p["label"] if label_line else None)
     ax.set_xlim(*xlim); ax.set_ylim(*ylim)
     ax.set_xlabel("Stop Step"); ax.set_ylabel("Regret")
@@ -417,13 +482,16 @@ def _compute_frontier_data(packed_root: Path, cache_path: str | Path, *,
     separate (and saved to disk by the caller) so the figure can be re-rendered later without
     redoing the (slow) model fitting.
 
-    ``curves_out_dir``, if given, saves the Stats-/Zt-Controller PG training curves (train loss +
+    ``curves_out_dir``, if given, saves the Stats-/Zt-/AG-Controller PG training curves (train loss +
     held-out regret per epoch, CSV + PNG) here — see ``_fit_stop_controllers``. ``train_frac``
-    overrides the default 70/30 fit/eval split (see ``_load_assessment_data``)."""
+    overrides the default 70/30 fit/eval split (see ``_load_assessment_data``). Also fits AGController
+    (action-gap + steps, 2026-07-09) — its extra per-episode raw-tree read is requested unconditionally
+    here since this is the one place per run these controllers are fit at the headline regime (mirrors
+    ``curves_out_dir``'s own scoping rationale)."""
     config = replace(_oracle_config(packed_root), time_mode=time_mode, time_lambda=time_lambda,
                      maintenance_scale=maintenance_scale, maintenance_exponent=maintenance_exponent)
     episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
-                                                                train_frac=train_frac)
+                                                                train_frac=train_frac, load_action_gaps=True)
     curves = _return_curves(episodes, config)
     ev = [curves[i] for i in ev_idx]
     ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed,
@@ -443,14 +511,29 @@ def _compute_frontier_data(packed_root: Path, cache_path: str | Path, *,
     controllers = [point(ctrl["singlehalt"], _C["singlehalt"], "SingleHalt* (fixed stop)", zorder=7),
                   point(ctrl["stats"], _C["stats"], "Stats-Controller"),
                   point(ctrl["zt"], _C["zt"], "$z_t$-Controller")]
+    if "ag" in ctrl:
+        controllers.append(point(ctrl["ag"], _C["ag"], "AG-Controller"))
     ends = [point(np.zeros(len(ev_idx), dtype=int), _C["always"], "Always Stop (k=0)"),
            point(np.full(len(ev_idx), kmax - 1, dtype=int), _C["never"], "Always Continue (k=max)")]
     all_points = controllers + ends
     d_zs = bootstrap_ci(lambda d: float(d.mean()), _regret_at(ev, ctrl["zt"]) - _regret_at(ev, ctrl["stats"]), n_boot=2000)
 
+    # Per-episode stop steps for MC(zt)/TS(stats)/AG(if fit)/FS(singlehalt) -- the raw distributions
+    # behind each `point()` summary above, kept separately so `_render_frontier` can draw a violin of
+    # each (the x-error bars stay a 95% CI on the MEAN; this is the actual per-episode spread instead
+    # -- FS's is a single fixed k, so its "violin" is a degenerate spike, which is the accurate picture).
+    stop_steps_by_controller = {
+        name: np.array([min(int(s), len(c) - 1) for s, c in zip(ctrl[key], ev)], dtype=float).tolist()
+        for name, key in (("MC", "zt"), ("TS", "stats"), ("FS", "singlehalt"))
+    }
+    if "ag" in ctrl:
+        stop_steps_by_controller["AG"] = np.array(
+            [min(int(s), len(c) - 1) for s, c in zip(ctrl["ag"], ev)], dtype=float).tolist()
+
     return {"fr_x": fr_x, "fr": fr, "controllers": controllers, "all_points": all_points, "kf": kf,
             "d_zs": d_zs, "time_mode": time_mode, "time_lambda": time_lambda,
-            "maintenance_scale": maintenance_scale, "maintenance_exponent": maintenance_exponent}
+            "maintenance_scale": maintenance_scale, "maintenance_exponent": maintenance_exponent,
+            "stop_steps_by_controller": stop_steps_by_controller}
 
 
 def _render_frontier(data: dict, out_dir: str | Path) -> dict:
@@ -463,8 +546,38 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     fr_x, fr = np.asarray(data["fr_x"]), np.asarray(data["fr"])
     controllers, all_points, kf = data["controllers"], data["all_points"], data["kf"]
 
+    # Colors AND labels are baked into the CACHED json (frozen at the time `_compute_frontier_data`
+    # ran), so a later edit to `_C` or to the display text has no effect on an already-computed
+    # frontier_data.json unless re-applied here at render time -- refresh every point's color/label
+    # from the ORIGINAL label it was built with, in both lists (a JSON round-trip means
+    # `controllers`/`all_points` are independent copies, not the same dict objects `all_points =
+    # controllers + ends` originally shared). `rank` orders the legend: Frontier(0) is the line,
+    # handled separately in `_frontier_panel`'s `frontier_label`.
+    _legend_info = {
+        "SingleHalt* (fixed stop)": ("Fixed Stop", "singlehalt", 4),
+        "Stats-Controller": ("Tree Stats", "stats", 2),
+        "$z_t$-Controller": ("Meta-Control (Ours)", "zt", 1),
+        "AG-Controller": ("Action Gap", "ag", 3),
+        "Always Stop (k=0)": ("Always Stop", "always", 5),
+        "Always Continue (k=max)": ("Always Continue", "never", 6),
+    }
+    for p in controllers + all_points:
+        info = _legend_info.get(p.get("label"))
+        if info:
+            new_label, ckey, rank = info
+            p["label"], p["color"], p["_rank"] = new_label, _C[ckey], rank
+
     _rcparams()
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(9.2, 4.0), gridspec_kw={"width_ratios": [1, 1.1]})
+    # Explicit rects (not a single shared gridspec) so the histogram row's vertical space and the
+    # legend's gap below it are both under direct control, independent of the frontier row's own
+    # layout. Histogram sits at the TOP (the bimodal stop-step spread it reveals is the headline
+    # finding), frontier panels in the middle, shared legend at the bottom.
+    fig = plt.figure(figsize=(9.2, 6.4))
+    axH = fig.add_axes([0.09, 0.76, 0.89, 0.20])
+    gs_mid = fig.add_gridspec(1, 2, width_ratios=[1, 1.1], left=0.09, right=0.98, top=0.66, bottom=0.16,
+                              wspace=0.28)
+    axL = fig.add_subplot(gs_mid[0, 0])
+    axR = fig.add_subplot(gs_mid[0, 1])
     zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
                               frac=0.25, min_pad=1e-3)
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
@@ -473,12 +586,48 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     full_lo, full_hi = _padded_range(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points),
                                      frac=0.05, min_pad=1e-3)
     full_ylim = (min(0, full_lo), full_hi)
-    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim)
-    _frontier_panel(axR, fr_x, fr, all_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True)
+    # Order for the LEGEND only (axR is the one that actually collects labels) — Frontier, Meta-
+    # Control (Ours), Tree Stats, Fixed Stop, Always Stop, Always Continue; axL's draw order is
+    # unaffected (it shows no legend) since it still plots the untouched `all_points`.
+    legend_points = sorted(all_points, key=lambda p: p["_rank"])
+    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0)
+    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=2.5)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
     handles, labels = axR.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.22), ncol=3,
+    # 4 columns (not 3): with AG-Controller present this is 7 entries -- ncol=3 makes a 3rd row that
+    # collides with the frontier panels' "Stop Step" xlabel just above it. ncol=4 keeps it to 2 rows
+    # for both the 6-entry (no AG) and 7-entry (with AG) case.
+    fig.legend(handles, labels, loc="center", bbox_to_anchor=(0.5, 0.045), ncol=4,
               fontsize=10, frameon=False)
+
+    # Secondary panel: the ACTUAL per-episode stop-step distribution for each controller (MC/TS/AG/
+    # FS) — the x-error bars above stay a 95% CI on the MEAN (comparable across controllers); this
+    # shows the real per-episode spread the mean summarizes. FS (SingleHalt*, one fixed k for every
+    # episode) renders as a degenerate spike — that IS its distribution, not a plotting artifact.
+    by_ctrl = data.get("stop_steps_by_controller")
+    if by_ctrl:
+        order = [n for n in ("MC", "TS", "AG", "FS") if n in by_ctrl]
+        ckey_by_name = {"MC": "zt", "TS": "stats", "AG": "ag", "FS": "singlehalt"}
+        series = [np.asarray(by_ctrl[n]) for n in order]
+        parts = axH.violinplot(series, positions=range(len(order)), vert=False, widths=0.8,
+                               showmeans=True, showextrema=True)
+        for body, name in zip(parts["bodies"], order):
+            body.set_facecolor(_C[ckey_by_name[name]]); body.set_edgecolor(_C[ckey_by_name[name]])
+            body.set_alpha(0.75)
+        for key in ("cmeans", "cmaxes", "cmins", "cbars"):
+            parts[key].set_color([_C[ckey_by_name[n]] for n in order])
+            parts[key].set_linewidth(1.2)
+        axH.set_yticks(range(len(order))); axH.set_yticklabels(order)
+        axH.set_xlabel("Stop Step")
+        axH.grid(axis="x", color=_GRID, lw=1)
+        axH.xaxis.set_major_locator(plt.MaxNLocator(nbins=8))
+    else:
+        axH.text(0.5, 0.5, "stop-step distributions unavailable (re-run to populate)",
+                 transform=axH.transAxes, ha="center", va="center", fontsize=9, color=_MUTED)
+        axH.set_xticks([]); axH.set_yticks([])
+        for spine in axH.spines.values():
+            spine.set_visible(False)
+
     save_pdf_png(fig, str(out_dir), "frontier", dpi=200, bbox_extra_artists=(fig.legends[0],))
     fm = controllers[0]["y"]
     print(f"[assess] frontier {data['time_mode']} λ={data['time_lambda']} m={data['maintenance_scale']} "
@@ -579,15 +728,15 @@ def _render_decodability(data: dict, out_dir: str | Path) -> dict:
     fig, ax = plt.subplots(figsize=(7.4, 3.0))
     y, h = np.arange(len(rows)), 0.30
     ax.barh(y - h / 2, [r[1] for r in rows], h, color=mono, alpha=0.5,
-           edgecolor="none", linewidth=0, label="linear (Ridge)")
+           edgecolor="none", linewidth=0, label="Linear (Ridge)")
     ax.barh(y + h / 2, [r[2] for r in rows], h, color=mono, edgecolor="none", linewidth=0, label="MLP (2×64)")
-    ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"shuffle floor ({shuf_r2:+.2f})")
+    ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"Shuffle Floor ({shuf_r2:+.2f})")
     ax.axvline(0, color=_MUTED, lw=0.8)
     ax.set_yticks(y)
     ax.set_yticklabels(["steps", "stats", "$z_t$", "combined"], fontsize=10.5)
     ax.invert_yaxis()
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
-    ax.set_xlabel(r"R(t) variance explained (held-out $R^2$)")
+    ax.set_xlabel(r"R(t) Variance Explained (held-out $R^2$)")
     ax.grid(axis="x", color=_GRID, lw=1)
     ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False)
     save_pdf_png(fig, str(out_dir), "decodability", dpi=200)
@@ -610,6 +759,7 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
 
 
 _DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "SingleHalt*"), ("stats", _C["stats"], "Stats-Controller"),
+                    ("ag", _C["ag"], "AG-Controller"),
                     ("always_stop", _C["always"], "Always Stop"), ("always_continue", _C["never"], "Always Continue")]
 # Plotted subset for _delta_ci_panel: always_stop/always_continue are frequently degenerate (huge or
 # exactly-zero delta) and, since SingleHalt* is fit by argmin over EVERY fixed stop step (including
@@ -617,12 +767,14 @@ _DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "SingleHalt*"), ("stats", 
 # as good as either extreme on the fit split -- plotting them alongside just forces the x-axis to
 # whatever huge/degenerate range they occupy, hiding the actual singlehalt/stats spread. Still printed
 # in the [assess] summary line (loops over the full _DELTA_CANDIDATES), just not plotted.
-_DELTA_CANDIDATES_DISPLAY = _DELTA_CANDIDATES[:2]
+_DELTA_CANDIDATES_DISPLAY = _DELTA_CANDIDATES[:3]
 
 
 def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt, exponent, d_embed, seed):
-    """Per-episode paired delta = candidate_regret − z_t_regret for {singlehalt, stats, always_stop,
-    always_continue} under one cost regime (mode/lam/mnt/exponent). Positive = z_t beats the candidate."""
+    """Per-episode paired delta = candidate_regret − z_t_regret for {singlehalt, stats, ag,
+    always_stop, always_continue} under one cost regime (mode/lam/mnt/exponent). Positive = z_t
+    beats the candidate. ``ag`` is included only if ``episodes`` carry ``action_gaps`` (see
+    ``_fit_stop_controllers``) — silently omitted otherwise."""
     curves = _return_curves(episodes, replace(base_cfg, time_mode=mode, time_lambda=lam,
                                               maintenance_scale=mnt, maintenance_exponent=exponent))
     ev = [curves[i] for i in ev_idx]
@@ -632,6 +784,8 @@ def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam
     stops = {"singlehalt": ctrl["singlehalt"], "stats": ctrl["stats"],
             "always_stop": np.zeros(len(ev_idx), dtype=int),
             "always_continue": np.full(len(ev_idx), kmax - 1, dtype=int)}
+    if "ag" in ctrl:
+        stops["ag"] = ctrl["ag"]
     return {name: _regret_at(ev, s) - zt_regret for name, s in stops.items()}
 
 
@@ -667,8 +821,10 @@ def _compute_delta_regret_data(packed_root: Path, cache_path: str | Path, *,
                                maint_grid: tuple[float, ...] = (0.0, 0.01, 0.03, 0.1, 0.15, 0.2, 0.3),
                                maintenance_exponent: float = 1.0) -> dict:
     """Expensive half of the delta-regret plots: load data, fit stop controllers for every regime in
-    both grids. Returns a JSON-serializable dict consumed by ``_render_delta_regret``."""
-    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed)
+    both grids. Returns a JSON-serializable dict consumed by ``_render_delta_regret``. Loads action
+    gaps unconditionally (``_DELTA_CANDIDATES_DISPLAY`` includes ``ag``, 2026-07-09)."""
+    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
+                                                                load_action_gaps=True)
     base_cfg = _oracle_config(packed_root)
 
     def regime(mode, lam, mnt):
