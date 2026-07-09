@@ -1,21 +1,8 @@
-"""Diagnostics, evaluation, and plotting tools for trained CTS models.
+"""Diagnostics tools for trained CTS models.
 
-Main tools:
-
-- ``analyze_budgeted_controller_run`` — the end-of-run dashboard for one
-  trained controller: 25+ plots, ``summary.json``, ``report.md``. Body
-  lives in themed sub-modules under ``analysis/``.
-- ``analyze_compute_advantage_training_log`` — parse a training ``.out``
-  log into per-epoch metrics.
-- ``analyze_oversearch_preference_evolution`` — track the controller's
-  preferred move as a function of how long it has been searching.
-- ``analyze_tree_stratification`` — bucket source trees by stratification
-  axes (stop-depth excess, budget-action variance).
-- ``compare_controller_diagnostics`` — diff two trained controllers'
-  per-episode diagnostics.
-- ``evaluate_controller`` — closed-loop replay of a trained controller
-  against the budgeted oracle on held-out data.
-- ``plot_advantage_loss_from_log`` — quick visualization helper.
-
-Shared regex/parse/decomposition helpers live in ``cts.analysis._common``.
+- ``zt_probe`` — full-split topology decodability probe for the materialized
+  ``z_t`` encoder cache (linear + small-MLP R^2 against tree-stats targets).
+  Invoked directly (``python -m cts.analysis.zt_probe``) and by
+  ``slurm/pipeline/zt_probe.slurm``; its helpers (``_linear_r2``, ``_mlp_r2``,
+  ``_episode_split_mask``) are also imported by ``analysis.evaluate``.
 """
