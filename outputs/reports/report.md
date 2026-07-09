@@ -139,6 +139,18 @@ readout beats the best fixed stop, but the learned `z_t` readout does not yet co
 baseline. `normative.md`'s headline numbers below should be read as a historical result, not the current
 state of that question — see `../hypotheses.md` for the current one.
 
+**Update (2026-07-08, cross-corpus check).** A closed-out, robustness-checked replication asks the same
+question on a *second*, independently-generated tree corpus (Yotam Sagiv's `human_trees` — Leela/lc0
+search on real human-game positions) rather than a repaired version of our own. Under a churn-motif
+quality filter (`exclude_xaba`), a learned `z_t` head there significantly beats **both** the best fixed
+stop and a hand-crafted tree-stats readout, across a >10x range of the fixed-stop optimum `k*`, and the
+win is not an artifact of comparing against a right-censored baseline (ruled out by an 8-point cost-regime
+sweep). The same filter, applied to our own corpus, corroborates the same direction at a smaller margin.
+This is the strongest confirmed positive `z_t` result in the whole investigation — see `normative.md`'s
+"Results — cross-corpus robustness check" section for the full numbers and caveats (it is specific to the
+`exclude_xaba` filter — the standard argmax filter on the identical ysagiv corpus shows the *opposite*
+ranking — and has not yet been checked on a from-scratch regeneration of our own corpus).
+
 **The reframing.** The legal-move count is the **explanandum, not a floor to beat.** A count has no
 normative content: "RT correlates with legal moves" is a fact in search of a mechanism, not a model.
 The goal is therefore **not** to find a value signal that *beats* legal-moves in magnitude (we
@@ -186,6 +198,7 @@ result yet.
 | A resource-rational (per-op cost) stop **reproduces** +size and −satisfaction | **Settled (one sign)** | `/analysis/normative_curves.py` |
 | A resource-rational model **reproduces** the `size − satisfaction` *curves* with sensible cost params | **Open (the fit)** | future work; check RT-vs-{n_moves, fraction_good} |
 | A *learned* value-of-continuing signal (`z_t`) significantly beats hand-crafted tree-stats and the best fixed stop, in a controlled MCTS-style setting | **Superseded — do not read as current** | [(R-EVALUATE)](normative.md) reported this (paired `z_t`−Stats regret −164 [−205,−125] at λ=10), but that number is from an earlier tree corpus and an uncalibrated cost regime (predates the 2026-07-06 BeFS tree-gen poisoning fix and the 2026-07-07 `time_lambda` recalibration — see `labnotebook.md`). The live investigation (`../plan.md`, `../hypotheses.md`) finds the **opposite** ranking on the current, corrected corpus: a hand-crafted tree-stats readout (Stats-Controller) *significantly beats* SingleHalt\* ([`sig_significance.md`](../sig_significance.md), SIG-S), while the frozen-encoder `z_t` does **not** yet beat either SingleHalt\* or Stats-Controller (SIG-Z). An encoder-unfrozen (end-to-end) `z_t` is closing the gap but is not yet confirmed. Treat `../hypotheses.md` as the current source of truth for this question, not this row. |
+| A learned `z_t` stopping head significantly beats **both** a hand-crafted tree-stats readout and the best fixed stop, on an independently-generated tree corpus under a churn-motif quality filter | **Confirmed — new corpus, filter-specific** | ysagiv `human_trees` (Leela/lc0 search, real human-game positions), filtered with `exclude_xaba`: `z_t` beats SingleHalt\* by up to +0.0672 [+0.0513,+0.0837] (CI excludes 0) across a >10x range of the fixed-stop optimum `k*` (95→7), ruled out as a right-censoring artifact by an 8-point `time_lambda` sweep; directionally corroborated (+0.0049 [+0.0005,+0.0101], smaller) by stacking the identical filter on our own corpus. **Caveats:** fades to a tie (not a loss) once `k*≤4` (unexplained); the standard `argmax>2` filter on the *same* ysagiv corpus shows the opposite ranking (`z_t` significantly worse, 1.4–2.2x SingleHalt\*'s regret); not yet checked on a from-scratch regeneration of our own corpus under our own pipeline. See [normative.md](normative.md), "Results — cross-corpus robustness check". |
 
 > **The working conclusion.** RT tracks **decision width** with a **satisficing signature**, and that is the
 > **fingerprint of resource-rational option-consideration** — *not* "people irrationally count moves," and *not* a
