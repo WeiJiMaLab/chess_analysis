@@ -19,10 +19,14 @@ from analysis.utils.helpers import (
 )
 
 
-def _wrap_long_label(label: str, threshold: int = 38) -> str:
+def _wrap_long_label(label: str, threshold: int = 29) -> str:
     """Break a long axis label onto two lines at its first parenthetical.
-    At FONT_SIZE_LABEL (52pt) a single-line label past ~38 chars is wider than a
-    1x3 dashboard panel and bleeds into the neighboring panel's own label."""
+    At FONT_SIZE_LABEL (52pt) a single-line label past ~29 chars is wider than a
+    1x3 dashboard panel and bleeds into the neighboring panel's own label (re-measured
+    2026-07-09 against the panels' current, narrower-than-original figsize — e.g.
+    "Checks Available (|Imbalance| < 5)" at 34 chars and "Material Imbalance (Excl.
+    Recapture)" at 36 chars both visibly collided with their neighbors at the old
+    38-char threshold; "Material Imbalance (Absolute)" at 29 chars did not)."""
     if len(label) <= threshold or "(" not in label:
         return label
     head, _, tail = label.partition("(")

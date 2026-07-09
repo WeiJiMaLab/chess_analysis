@@ -143,6 +143,12 @@ def _rcparams() -> None:
         "font.size": 12, "text.color": _INK, "axes.edgecolor": "#B7C0C9",
         "axes.spines.top": False, "axes.spines.right": False, "axes.axisbelow": True,
         "figure.facecolor": "white", "axes.facecolor": "white",
+        # Mathtext ($z_t$, $k^*$, $R^2$, ...) ignores font.family entirely and defaults to its own
+        # "dejavusans" fontset -- every math-mode label was silently rendering in DejaVu Sans right
+        # next to Helvetica Neue plain text without this, which is what actually read as "not
+        # Helvetica" even though the regular text genuinely was.
+        "mathtext.fontset": "custom",
+        "mathtext.rm": sans[0], "mathtext.it": f"{sans[0]}:italic", "mathtext.bf": f"{sans[0]}:bold",
     })
 
 

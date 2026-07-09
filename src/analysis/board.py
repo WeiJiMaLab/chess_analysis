@@ -1028,7 +1028,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
         "game_fraction":         ("Game Fraction", "cont", (0.0, 1.0)),
         "n_captures_avail":      ("Captures Available", "disc", (0, 10)),
         "n_checks_avail":        ("Checks Available", "disc", (0, 8)),
-        "self_material":         ("Self Material", "disc", (14, 40)),
+        "self_material":         ("Player Material", "disc", (14, 40)),
         "material_imbalance":    ("Material Imbalance", "disc", (-15, 15)),
         "abs_material_imbalance": ("Material Imbalance (Absolute)", "disc", (0, 15)),
     }
