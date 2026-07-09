@@ -3,8 +3,9 @@
 # time_lambda=0.0005 (ysagiv_trees.md xaba-branch table) is a real per-episode-adaptivity
 # advantage or an artifact of SingleHalt* sitting at k*=95/96 (near-ceiling, right-censored)
 # at that ONE regime. Reuses the SAME already-packed/materialized ysagiv xaba population Agent
-# 1 built (config_ysagiv_xaba.yaml's eval.packed_root / eval.materialized_validation_cache) --
-# no repacking, no new tree generation, no GPU. Two phases in one job:
+# 1 built ($CONFIG's eval.packed_root / eval.materialized_validation_cache -- e.g.
+# config_ysagiv_xaba20k.yaml or config_ysagiv_xaba100k.yaml) -- no repacking, no new tree
+# generation, no GPU. Two phases in one job:
 #   (1) analysis.regime_select's existing sweep() at maintenance_scale=0.0 fixed, over its own
 #       already-tuned LAMBDA_GRID (22 log-spaced points, 5e-5..0.3) -- maps k* vs time_lambda on
 #       THIS population (own data-derived ceiling, not assumed 96) using the exact same
@@ -14,7 +15,7 @@
 #       fresh re-run of the nonzero-maintenance 0.001/0.001 point) and runs the full 3-way
 #       paired-bootstrap significance test (analysis.ysagiv_sig) at each.
 #
-#   CONFIG=config_ysagiv_xaba.yaml sbatch slurm/pipeline/ysagiv_xaba_regime_sweep.slurm
+#   CONFIG=config_ysagiv_xaba20k.yaml sbatch slurm/pipeline/ysagiv_xaba_regime_sweep.slurm
 #SBATCH --job-name=ysagiv-xaba-regime-sweep
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err

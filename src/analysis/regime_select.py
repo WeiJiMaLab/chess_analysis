@@ -54,11 +54,28 @@ from analysis.utils.plots import save_pdf_png
 # between 0.017 (k*=6) and 0.02 (k*=0) at maintenance=0; and the LOW-lambda side pileup (right-
 # censoring at k*=ceiling-1=95) sets in below ~lambda=0.0001. These grids are shaped around those
 # empirical boundaries so the sweep doesn't skip the narrow meaningful bands the way the naive grid did.
-LAMBDA_GRID: tuple[float, ...] = (0.00005, 0.0001, 0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.005,
-                                  0.007, 0.01, 0.011, 0.012, 0.013, 0.014, 0.015, 0.017, 0.02, 0.03,
-                                  0.05, 0.1, 0.3)
-MAINT_GRID: tuple[float, ...] = (0.0, 0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.005, 0.01, 0.02,
-                                 0.03, 0.05, 0.1, 0.15, 0.2, 0.3)
+LAMBDA_GRID: tuple[float, ...] = (0.00005, 0.0001, 0.0005, 0.00075, 0.001, 0.0015, 0.002, 0.0025, 0.003,
+                                  0.0035, 0.004, 0.0045, 0.005, 0.007, 0.01, 0.011, 0.012, 0.013, 0.014,
+                                  0.015, 0.017, 0.02, 0.03, 0.05, 0.1, 0.3)
+MAINT_GRID: tuple[float, ...] = (0.0, 0.00025, 0.0005, 0.00075, 0.001, 0.0015, 0.002, 0.0025, 0.003,
+                                 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3)
+
+# The heatmap PLOT (not the underlying sweep(), which still runs the full grids above) only
+# renders this sub-range: everything past ~lambda=0.015 or maintenance=0.003 is uniform
+# instant-stop-collapse (k_frac->0) AND hatched-not-meaningful, i.e. wasted plot area — the only
+# band worth a human's eyes is where k* actually varies. Confirmed against the xaba20k sweep
+# (2026-07-09): every point in this sub-range is "meaningful", so zooming here doesn't hide any
+# non-degenerate cell. Densified (2026-07-09, second pass) with extra LAMBDA_GRID/MAINT_GRID
+# points inside the range itself (0.00075; 0.0035/0.004/0.0045; 0.00025/0.00075) — the first zoom
+# pass only filtered the ALREADY-existing coarse diagnostic grid down to 21 points, which read as
+# too sparse once rendered on its own axes.
+ZOOM_LAMBDA_RANGE: tuple[float, float] = (0.0005, 0.005)
+ZOOM_MAINT_RANGE: tuple[float, float] = (0.0, 0.001)
+
+
+def _zoom_grid(grid: tuple[float, ...], lo: float, hi: float) -> tuple[float, ...]:
+    """Sub-tuple of `grid` within `[lo, hi]` inclusive, preserving order."""
+    return tuple(v for v in grid if lo <= v <= hi)
 
 
 def sweep(packed_root: Path, *, lambda_grid: tuple[float, ...] = LAMBDA_GRID,
@@ -94,13 +111,31 @@ def _render_heatmap(results: list[dict[str, Any]], out_dir: str | Path,
     nrow, ncol = len(lambda_grid), len(maint_grid)
     frac = np.array([[by_key[(lam, mnt)]["k_frac"] for mnt in maint_grid] for lam in lambda_grid])
 
-    txt_fs = 9.5 if ncol * nrow <= 60 else 6.3
+    # Small grids (e.g. the zoomed-in "meaningful band" view) get far fewer, much bigger cells, so
+    # scale text/tick size up accordingly rather than using the dense-grid size everywhere — a tiny
+    # grid rendered with the dense-grid's small fonts looks empty and cramped-looking-small, not
+    # "much smaller and more legible".
+    ncell = ncol * nrow
+    if ncell <= 25:
+        txt_fs, tick_fs = 17, 13.5
+    elif ncell <= 60:
+        txt_fs, tick_fs = 9.5, 9.5
+    else:
+        txt_fs, tick_fs = 6.3, 8.0
+
+    # The colorbar label and title are fixed-length descriptive text, not per-cell content, so
+    # their font size is capped independent of `tick_fs` — scaling them up with a narrow (few-
+    # column) zoomed grid the way `tick_fs` scales makes the rotated colorbar label overrun its
+    # own axis and collide with the title above it.
+    label_fs = min(tick_fs, 9.5)
 
     _rcparams()
     fig, ax = plt.subplots(figsize=(0.72 * ncol + 2.8, 0.6 * nrow + 2.2))
     im = ax.imshow(frac, cmap="RdYlGn_r", vmin=0, vmax=1, aspect="auto")
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-    cbar.set_label("$k^*$ / ceiling  (0 = instant-stop collapse, 1 = always-continue pileup)", fontsize=9.5)
+    cbar.set_label("$k^*$ / ceiling  (0 = instant-stop collapse, 1 = always-continue pileup)",
+                   fontsize=label_fs)
+    cbar.ax.tick_params(labelsize=label_fs)
 
     for i, lam in enumerate(lambda_grid):
         for j, mnt in enumerate(maint_grid):
@@ -113,11 +148,13 @@ def _render_heatmap(results: list[dict[str, Any]], out_dir: str | Path,
                     color=txt_color, fontweight="bold")
 
     ax.set_xticks(range(ncol))
-    ax.set_xticklabels([f"{m:g}" for m in maint_grid], fontsize=9.5, rotation=45, ha="right")
-    ax.set_yticks(range(nrow)); ax.set_yticklabels([f"{l:g}" for l in lambda_grid], fontsize=9.5)
-    ax.set_xlabel("maintenance_scale"); ax.set_ylabel("time_lambda")
+    ax.set_xticklabels([f"{m:g}" for m in maint_grid], fontsize=tick_fs, rotation=45, ha="right")
+    ax.set_yticks(range(nrow)); ax.set_yticklabels([f"{l:g}" for l in lambda_grid], fontsize=tick_fs)
+    ax.set_xlabel("maintenance_scale", fontsize=tick_fs + 1.5)
+    ax.set_ylabel("time_lambda", fontsize=tick_fs + 1.5)
     ax.set_title("REGIME sweep: SingleHalt*'s own $k^*$ (cell text) across cost regimes\n"
-                 "hatched = NOT meaningful (k* collapsed to <=1 or pinned at ceiling-1)", fontsize=11)
+                 "hatched = NOT meaningful (k* collapsed to <=1 or pinned at ceiling-1)",
+                 fontsize=label_fs + 1.5)
     fig.tight_layout()
     save_pdf_png(fig, str(out_dir), "regime_select", dpi=200)
 
@@ -138,7 +175,14 @@ def main() -> None:
         print(f"[regime] lambda={r['time_lambda']:<6g} maint={r['maintenance_scale']:<5g} "
               f"k*={r['k_star']:>3d}  ceiling={r['ceiling']:>3d}  k*/ceiling={r['k_frac']:.3f}  {flag}",
               flush=True)
-    _render_heatmap(results, args.out_dir)
+    # The PLOT only zooms into the meaningful sub-range (ZOOM_LAMBDA_RANGE/ZOOM_MAINT_RANGE) — the
+    # full grids above are still swept and printed (and dumped to --results-json) in full, since
+    # that full search is what pins down the collapse boundaries in the first place.
+    zoom_lambda_grid = _zoom_grid(LAMBDA_GRID, *ZOOM_LAMBDA_RANGE)
+    zoom_maint_grid = _zoom_grid(MAINT_GRID, *ZOOM_MAINT_RANGE)
+    zoom_results = [r for r in results
+                    if r["time_lambda"] in zoom_lambda_grid and r["maintenance_scale"] in zoom_maint_grid]
+    _render_heatmap(zoom_results, args.out_dir, lambda_grid=zoom_lambda_grid, maint_grid=zoom_maint_grid)
     if args.results_json:
         Path(args.results_json).write_text(json.dumps(results, indent=2))
         print(f"[regime] wrote {args.results_json}", flush=True)

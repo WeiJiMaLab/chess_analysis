@@ -20,6 +20,7 @@ import argparse
 import math
 import multiprocessing as mp
 import os
+import textwrap
 
 import numpy as np
 from scipy import stats
@@ -223,6 +224,17 @@ def run_merge(db: str) -> None:
 
 _LEGEND_KW = dict(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=LEGEND_FONTSIZE, frameon=False)
 
+# The ply-tertile legend (3 lines/colors: early/mid/late) reads better docked to the
+# RIGHT of its panel than stacked below it — below-axes worked when panels were wide
+# and short (42x13), but now that dashboards are narrower, 3 legend lines stacked
+# under a narrow panel crowd the x-label. Single-column, vertically centered on the
+# panel's right edge. Used ONLY for the ply-tertile legend specifically (see
+# ``_plot_boolean_by_tertile`` here and ``Analyzer.plot_quantile_bins_tertile_segmented``/
+# ``plot_lowess_tertile_segmented`` in analysis.py) — every OTHER legend in this file
+# (mean/median lines, y=x reference, analysis-window shading, material-band/piece-tier/
+# queen-retention/diversity categorical legends) keeps the below-axes ``_LEGEND_KW``.
+_PLY_LEGEND_KW = dict(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=LEGEND_FONTSIZE, frameon=False)
+
 
 def move_time_summary(conn, table, *, ply_table: str | None = None, filename: str = "rt_distribution.pdf",
                       smoke: bool = False):
@@ -280,7 +292,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     med_log = _weighted_median(lmt_bins)
 
     apply_poster_style()
-    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(34, 12), constrained_layout=True)
+    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(31.2, 10), constrained_layout=True)
 
     # Panel 1: RT distribution in SECONDS on a log x-axis (bins uniform in ln(RT),
     # so exponentiating the edges gives geometric bins that read evenly on a log axis).
@@ -398,7 +410,7 @@ def _plot_boolean_by_tertile(analyzer, ax):
     ax.set_xticks([0.0, 1.0]); ax.set_xticklabels(["False", "True"])
     _seconds_from_log(ax.yaxis)
     ax.set(ylabel="Response Time (s)")
-    ax.legend(**_LEGEND_KW)
+    ax.legend(**_PLY_LEGEND_KW)
 
 
 def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, *,
@@ -425,7 +437,15 @@ def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, 
     )
     analyzer = Analyzer(**kw)
 
-    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(42, 13), constrained_layout=True)
+    # Narrower/shorter than the original (42, 13): at the fixed absolute font sizes
+    # from apply_poster_style() (labels/ticks/legend all set in POINTS, not relative
+    # to figure size), a smaller canvas makes the same text read visually larger and
+    # leaves less room for tick clutter — see plot_qbin_stats'/_draw_feature_histogram's
+    # MaxNLocator calls for the tick-count side of that. The ply-tertile legend on ax2
+    # now docks to its RIGHT (bbox_to_anchor=(1.02, 0.5) via _PLY_LEGEND_KW /
+    # Analyzer.plot_quantile_bins_tertile_segmented) instead of stacking below, so this
+    # panel no longer needs the old below-axes legend's vertical headroom.
+    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(36, 10), constrained_layout=True)
     _draw_feature_histogram(conn, table, column, kind, clip, ax0, name=name)
     if kind == "bin":
         _plot_boolean_overall(analyzer, ax1)
@@ -497,7 +517,7 @@ def checks_material_band_curves(conn, table, filename: str = "checks_material_ba
     n_rows = int(df["n"].sum())
 
     apply_poster_style()
-    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(19.2, 11), constrained_layout=True)
     for i, band in enumerate(MATERIAL_BAND_ORDER):
         sub = df[df["band"] == band].sort_values("checks_bin")
         if sub.empty:
@@ -506,8 +526,9 @@ def checks_material_band_curves(conn, table, filename: str = "checks_material_ba
         y = sub["mean_log_rt"].to_numpy()
         ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
         color = MATERIAL_BAND_COLORS[i]
-        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=band)
+        ax.plot(x, y, marker="o", lw=3, markersize=6, color=color, label=band)
         ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
     _seconds_from_log(ax.yaxis)
     ax.set_xticks(list(range(11)))
     ax.set_xticklabels([*map(str, range(10)), "10+"])
@@ -611,7 +632,7 @@ def checks_queen_retention_curves(conn, ahead_view, filename: str = "checks_quee
     n_rows = int(df["n"].sum())
 
     apply_poster_style()
-    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(19.2, 11), constrained_layout=True)
     for has_q, label, color in [(True, "Mover retains queen", PHASE_COLORS[3]),
                                 (False, "Mover has no queen", PHASE_COLORS[1])]:
         sub = df[df["mover_has_queen"] == has_q].sort_values("checks_bin")
@@ -620,8 +641,9 @@ def checks_queen_retention_curves(conn, ahead_view, filename: str = "checks_quee
         x = sub["checks_bin"].to_numpy()
         y = sub["mean_log_rt"].to_numpy()
         ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
-        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.plot(x, y, marker="o", lw=3, markersize=6, color=color, label=label)
         ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
     _seconds_from_log(ax.yaxis)
     ax.set_xticks(list(range(11)))
     ax.set_xticklabels([*map(str, range(10)), "10+"])
@@ -667,7 +689,7 @@ def checks_pieces_tier_curves(conn, table, filename: str = "checks_pieces_tier_c
     n_rows = int(df["n"].sum())
 
     apply_poster_style()
-    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(19.2, 11), constrained_layout=True)
     for tier, label, color in [("high", "High pieces (dense)", PHASE_COLORS[1]),
                                ("mid", "Mid pieces", PHASE_COLORS[2]),
                                ("low", "Low pieces (thinned)", PHASE_COLORS[3])]:
@@ -677,8 +699,9 @@ def checks_pieces_tier_curves(conn, table, filename: str = "checks_pieces_tier_c
         x = sub["checks_bin"].to_numpy()
         y = sub["mean_log_rt"].to_numpy()
         ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
-        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.plot(x, y, marker="o", lw=3, markersize=6, color=color, label=label)
         ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
     _seconds_from_log(ax.yaxis)
     ax.set_xticks(list(range(11)))
     ax.set_xticklabels([*map(str, range(10)), "10+"])
@@ -865,7 +888,7 @@ def checks_diversity_curves(conn, diversity_view, filename: str = "checks_divers
     n_rows = int(df["n"].sum())
 
     apply_poster_style()
-    fig, ax = plt.subplots(figsize=(20, 14), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(19.2, 11), constrained_layout=True)
     for group_label, label, color in [("concentrated", "Concentrated (1 piece)", PHASE_COLORS[3]),
                                       ("diverse", "Diverse (2+ pieces)", PHASE_COLORS[1])]:
         sub = df[df["group_label"] == group_label].sort_values("checks_bin")
@@ -874,8 +897,9 @@ def checks_diversity_curves(conn, diversity_view, filename: str = "checks_divers
         x = sub["checks_bin"].to_numpy()
         y = sub["mean_log_rt"].to_numpy()
         ci = 1.96 * sub["std_log_rt"].to_numpy() / np.sqrt(sub["n"].to_numpy())
-        ax.plot(x, y, marker="o", lw=3, markersize=9, color=color, label=label)
+        ax.plot(x, y, marker="o", lw=3, markersize=6, color=color, label=label)
         ax.fill_between(x, y - ci, y + ci, color=color, alpha=0.15)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
     _seconds_from_log(ax.yaxis)
     ax.set_xticks(list(range(9)))
     ax.set_xticklabels([*map(str, range(8)), "8+"])
@@ -933,6 +957,11 @@ def correlation_matrix(conn, features, table, filename="board_feature_corr.pdf",
             if col == "log_rt":
                 continue
             pgf_set(f"board/corr/pearson/{col}", pearson_m[log_rt_row, j], "{:+.3f}")
+    # Wrapped onto multiple lines instead of rotated: at this many columns squeezed
+    # into a fixed-width matrix, a 30°-rotated single-line label (e.g. "Material
+    # Imbalance (Absolute)") is wider than one column and crashes into its neighbor.
+    # Horizontal, word-wrapped labels stay within their own column instead.
+    wrapped_display = ["\n".join(textwrap.wrap(lbl, width=12)) for lbl in display]
     for mlabel, suffix, m in matrices:
         n = len(cols)
         apply_poster_style()
@@ -940,8 +969,8 @@ def correlation_matrix(conn, features, table, filename="board_feature_corr.pdf",
         fig, ax = plt.subplots(figsize=(side, side * 0.83))
         ax.grid(False)
         im = ax.imshow(m, cmap="RdBu", vmin=-1, vmax=1, aspect="auto")
-        ax.set_xticks(range(n)); ax.set_xticklabels(display, fontsize=18, rotation=30, ha="right")
-        ax.set_yticks(range(n)); ax.set_yticklabels(display, fontsize=18)
+        ax.set_xticks(range(n)); ax.set_xticklabels(wrapped_display, fontsize=15, rotation=0, ha="center")
+        ax.set_yticks(range(n)); ax.set_yticklabels(wrapped_display, fontsize=15, va="center")
         for i in range(n):
             for j in range(n):
                 ax.text(j, i, f"{m[i, j]:.2f}", ha="center", va="center", fontsize=15,

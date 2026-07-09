@@ -118,8 +118,8 @@ def _oracle_config(packed_root: Path) -> BudgetedOracleConfig:
 # ===========================================================================
 _INK, _MUTED, _GRID = "#2C3E50", "#7A8894", "#E3E7EB"
 _C = {"front": "#556270", "best": "#E4A11B", "stats": "#12A19A", "zt": "#3F4DA0",
-      "always": "#C0392B", "never": "#8B97A3", "steps": "#B0B8C0",
-      "singlehalt": "#F2A9A6",  # pastel red — SingleHalt* (fixed-stop) point, distinct from the deep-red AlwaysStop endpoint
+      "always": "#CD6155", "never": "#8B97A3", "steps": "#B0B8C0",
+      "singlehalt": "#F2A9A6",  # pastel pink — SingleHalt* (fixed-stop) point, distinct from the softer-red AlwaysStop endpoint
       "mono": MAIN_COLOR}  # board/engine's indigo-blue — monochrome base for the decodability bars
 _HELVETICA_FAMILY: str | None = None
 
@@ -219,18 +219,27 @@ def fit_singlehalt_stop(fit_curves: list[np.ndarray]) -> int:
     return int(np.argmin([_regret_at(fit_curves, [k] * len(fit_curves)).mean() for k in range(kmax)]))
 
 
-def _train_readout(fit_feats, ev_feats, fit_curves, *, in_dim, epochs, lr, seed) -> np.ndarray:
+def _train_readout(fit_feats, ev_feats, fit_curves, *, in_dim, epochs, lr, seed,
+                   ev_curves=None, out_path=None) -> np.ndarray:
     """Instantiate a native readout head (``build_advantage_head``) and PG-train it (``fit_readout_pg``),
-    then return greedy eval stop steps. Features are z-scored on the fit split (n_nodes ≫ steps)."""
+    then return greedy eval stop steps. Features are z-scored on the fit split (n_nodes ≫ steps).
+
+    ``ev_curves``/``out_path`` are optional passthroughs to ``fit_readout_pg``: when given, the eval
+    split doubles as a per-epoch validation set (tracked, not fit on) and its regret curve is saved
+    alongside the train loss — see ``fit_readout_pg``'s own docstring.
+    """
     full = torch.cat(fit_feats, 0)
     mean, std = full.mean(0), full.std(0).clamp_min(1e-6)
     torch.manual_seed(seed)  # must precede head construction — fit_readout_pg's own seed call is too
                              # late to control weight init, since the head is already built by then
     head = build_advantage_head(in_dim, 64, 2)
-    fit_readout_pg(head, [(f - mean) / std for f in fit_feats], fit_curves, epochs=epochs, lr=lr, seed=seed)
+    ev_feats_norm = [(f - mean) / std for f in ev_feats]
+    fit_readout_pg(head, [(f - mean) / std for f in fit_feats], fit_curves, epochs=epochs, lr=lr, seed=seed,
+                   ev_feats=ev_feats_norm if ev_curves is not None else None,
+                   ev_curves=ev_curves, out_path=out_path)
     head.eval()
     with torch.no_grad():
-        return np.array([stop_step_from_advantages(head(((f - mean) / std)).reshape(-1)) for f in ev_feats])
+        return np.array([stop_step_from_advantages(head(f).reshape(-1)) for f in ev_feats_norm])
 
 
 def _split(trajectory_keys: list[str], seed: int, train_frac: float = 0.7) -> tuple[np.ndarray, np.ndarray]:
@@ -252,15 +261,20 @@ def _split(trajectory_keys: list[str], seed: int, train_frac: float = 0.7) -> tu
     return all_idx[fit_mask], all_idx[~fit_mask]
 
 
-def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed):
-    """Load validation episodes + aligned ``z_t`` once, plus the 70/30 fit/eval TREE split."""
+def _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed, train_frac=0.7):
+    """Load validation episodes + aligned ``z_t`` once, plus the fit/eval TREE split (70/30 by
+    default; ``train_frac`` is exposed so the split ratio can be swept without repacking, e.g. to
+    check whether a fit/eval SingleHalt* k* discrepancy is genuine finite-sample noise (shrinks as
+    the eval split grows) rather than a split bug (see outputs/reports/ysagiv.md's regime-select
+    threads for the same "confirm before trusting" convention)."""
     episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes)
     z_by_ep = _load_zt_by_episode(episodes, cache_path, d_embed)
-    fit_idx, ev_idx = _split([ep["trajectory_key"] for ep in episodes], seed)
+    fit_idx, ev_idx = _split([ep["trajectory_key"] for ep in episodes], seed, train_frac=train_frac)
     return episodes, z_by_ep, fit_idx, ev_idx
 
 
-def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embed, seed):
+def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embed, seed, *,
+                          ev_curves=None, curves_out_dir=None):
     """Fit all three stop controllers on the fit split; return eval-split per-episode stop steps.
 
     SingleHalt* (1 param, grid) / Stats-Controller (PG MLP, 200 ep) / Zt-Controller (PG MLP, 200 ep —
@@ -268,16 +282,21 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
     headwind, not a representational gap (n_nodes carries real signal independent of steps; matching
     Zt's epochs/lr closes the Stats-vs-SingleHalt* gap without any feature engineering). Returns
     ``{'k_singlehalt', 'singlehalt', 'stats', 'zt'}``.
+
+    ``ev_curves``/``curves_out_dir`` are optional: when given, the Stats/Zt PG fits track per-epoch
+    held-out regret and save it (CSV + PNG) under ``<curves_out_dir>/{stats,zt}_training_curve.*``.
     """
     return {
         "k_singlehalt": (kf := fit_singlehalt_stop(fit_curves)),
         "singlehalt": np.full(len(ev_idx), kf, dtype=int),
         "stats": _train_readout([_steps_stats_tensor(episodes[i]) for i in fit_idx],
                                 [_steps_stats_tensor(episodes[i]) for i in ev_idx], fit_curves,
-                                in_dim=4, epochs=200, lr=1e-3, seed=seed),
+                                in_dim=4, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
+                                out_path=(Path(curves_out_dir) / "stats") if curves_out_dir else None),
         "zt": _train_readout([_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in fit_idx],
                              [_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in ev_idx], fit_curves,
-                             in_dim=d_embed + 1, epochs=200, lr=1e-3, seed=seed),
+                             in_dim=d_embed + 1, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
+                             out_path=(Path(curves_out_dir) / "zt") if curves_out_dir else None),
     }
 
 
@@ -363,8 +382,10 @@ def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False):
                     ecolor=p["color"], elinewidth=1.5, capsize=3.5, mec="none", alpha=_PT_ALPHA,
                     zorder=p.get("zorder", 6), label=p["label"] if label_line else None)
     ax.set_xlim(*xlim); ax.set_ylim(*ylim)
-    ax.set_xlabel("average stop step"); ax.set_ylabel("Regret")
+    ax.set_xlabel("Stop Step"); ax.set_ylabel("Regret")
     ax.grid(axis="both", color=_GRID, lw=1)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
 
 
 def _draw_zoom_indicator(fig, ax_from, ax_to, xlim, ylim):
@@ -383,17 +404,24 @@ def _draw_zoom_indicator(fig, ax_from, ax_to, xlim, ylim):
 def _compute_frontier_data(packed_root: Path, cache_path: str | Path, *,
                            d_embed: int = 32, time_mode: str = "linear", time_lambda: float = 10.0,
                            maintenance_scale: float = 0.0, maintenance_exponent: float = 1.0,
-                           max_episodes: int = 15000, seed: int = 0) -> dict:
+                           max_episodes: int = 15000, seed: int = 0, curves_out_dir=None,
+                           train_frac: float = 0.7) -> dict:
     """Expensive half of the frontier plot: load data, fit the stop controllers, compute every
     plotted quantity. Returns a JSON-serializable dict consumed by ``_render_frontier`` -- kept
     separate (and saved to disk by the caller) so the figure can be re-rendered later without
-    redoing the (slow) model fitting."""
+    redoing the (slow) model fitting.
+
+    ``curves_out_dir``, if given, saves the Stats-/Zt-Controller PG training curves (train loss +
+    held-out regret per epoch, CSV + PNG) here — see ``_fit_stop_controllers``. ``train_frac``
+    overrides the default 70/30 fit/eval split (see ``_load_assessment_data``)."""
     config = replace(_oracle_config(packed_root), time_mode=time_mode, time_lambda=time_lambda,
                      maintenance_scale=maintenance_scale, maintenance_exponent=maintenance_exponent)
-    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed)
+    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
+                                                                train_frac=train_frac)
     curves = _return_curves(episodes, config)
     ev = [curves[i] for i in ev_idx]
-    ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
+    ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed,
+                                 ev_curves=ev, curves_out_dir=curves_out_dir)
 
     kmax = max(len(c) for c in ev)
     fr = np.array([_regret_at(ev, [k] * len(ev)).mean() for k in range(kmax)])
@@ -430,7 +458,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     controllers, all_points, kf = data["controllers"], data["all_points"], data["kf"]
 
     _rcparams()
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 5.4), gridspec_kw={"width_ratios": [1, 1.1]})
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(9.2, 4.0), gridspec_kw={"width_ratios": [1, 1.1]})
     zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
                               frac=0.25, min_pad=1e-3)
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
@@ -443,7 +471,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     _frontier_panel(axR, fr_x, fr, all_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
     handles, labels = axR.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.06), ncol=3,
+    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.22), ncol=3,
               fontsize=10, frameon=False)
     save_pdf_png(fig, str(out_dir), "frontier", dpi=200, bbox_extra_artists=(fig.legends[0],))
     fm = controllers[0]["y"]
@@ -465,11 +493,16 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
 
     Saves the computed data to ``<out_dir>/frontier_data.json`` so the figure can be re-rendered later
     (different padding/styling/candidates) without redoing the expensive model fitting -- see
-    ``replot_saved`` / ``--replot``.
+    ``replot_saved`` / ``--replot``. Also saves the Stats-/Zt-Controller PG training curves (train loss
+    + held-out regret per epoch) to ``<out_dir>/curves/{stats,zt}_training_curve.{csv,png}`` -- the one
+    place per run these controllers are fit at the headline regime, so this is where the curves are
+    captured (not the delta-regret sweep's many extra regime fits, or the decodability probe, which
+    trains different, non-PG models).
     """
     data = _compute_frontier_data(packed_root, cache_path, d_embed=d_embed, time_mode=time_mode,
                                   time_lambda=time_lambda, maintenance_scale=maintenance_scale,
-                                  maintenance_exponent=maintenance_exponent, max_episodes=max_episodes, seed=seed)
+                                  maintenance_exponent=maintenance_exponent, max_episodes=max_episodes, seed=seed,
+                                  curves_out_dir=Path(out_dir) / "curves")
     _save_json(data, Path(out_dir) / "frontier_data.json")
     return _render_frontier(data, out_dir)
 
@@ -537,22 +570,20 @@ def _render_decodability(data: dict, out_dir: str | Path) -> dict:
     orthogonality = data.get("orthogonality", {})
     _rcparams()
     mono = _C["mono"]
-    fig, ax = plt.subplots(figsize=(7.4, 4.4))
+    fig, ax = plt.subplots(figsize=(7.4, 3.0))
     y, h = np.arange(len(rows)), 0.30
-    ax.barh(y - h / 2, [r[1] for r in rows], h, color=mono, alpha=0.5, hatch="///",
-           edgecolor=_INK, linewidth=0.3, label="linear (Ridge)")
+    ax.barh(y - h / 2, [r[1] for r in rows], h, color=mono, alpha=0.5,
+           edgecolor="none", linewidth=0, label="linear (Ridge)")
     ax.barh(y + h / 2, [r[2] for r in rows], h, color=mono, edgecolor="none", linewidth=0, label="MLP (2×64)")
-    for i, r in enumerate(rows):
-        ax.text(r[2] + 0.006, i + h / 2, f"{r[2]:.2f}", va="center", fontsize=10, fontweight="bold", color=_INK)
     ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"shuffle floor ({shuf_r2:+.2f})")
     ax.axvline(0, color=_MUTED, lw=0.8)
     ax.set_yticks(y)
-    ax.set_yticklabels(["steps\n(alone)", "stats\n(alone, no steps)", "$z_t$\n(alone, no steps)",
-                         "all combined\n(steps+stats+$z_t$)"], fontsize=10.5)
+    ax.set_yticklabels(["steps", "stats", "$z_t$", "combined"], fontsize=10.5)
     ax.invert_yaxis()
-    ax.set_xlabel("held-out $R^2$ — predicting R(t) = value of continuing")
+    ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+    ax.set_xlabel(r"R(t) variance explained (held-out $R^2$)")
     ax.grid(axis="x", color=_GRID, lw=1)
-    ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False)
+    ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False)
     save_pdf_png(fig, str(out_dir), "decodability", dpi=200)
     out = {r[0]: {"linear": r[1], "mlp": r[2]} for r in rows}
     print(f"[assess] R-decodability  " + "  ".join(f"{k}={v['mlp']:.3f}" for k, v in out.items()), flush=True)
@@ -600,7 +631,13 @@ def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam
 
 def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDIDATES_DISPLAY):
     """Horizontal dot-and-whisker: one row per regime, one 95% CI point per candidate (offset within
-    the row) — mean Δ regret vs z_t, same marker/size convention as the frontier plot's points."""
+    the row) — mean Δ regret vs z_t, same marker/size convention as the frontier plot's points.
+
+    Does NOT draw its own legend -- an axes-fraction ``bbox_to_anchor`` legend scales its absolute gap
+    with the axes' height, which blows up on the many-row (maintenance) panel and cramps the few-row
+    (lambda) panel. The caller (``_render_delta_regret``) builds one shared ``fig.legend`` per figure
+    instead, matching the frontier plot's figure-level legend convention (gap sized off the whole
+    figure, not the axes)."""
     n, m = len(regime_labels), len(candidates)
     step = 0.68 / m
     for ci, (key, color, lbl) in enumerate(candidates):
@@ -614,8 +651,8 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.set_yticks(np.arange(n)); ax.set_yticklabels(regime_labels, fontsize=10)
     ax.invert_yaxis()
     ax.set_xlabel("Δ regret  (model − $z_t$)", fontsize=11)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.grid(axis="both", color=_GRID, lw=1)
-    ax.legend(fontsize=9.5, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=len(candidates), frameon=False)
 
 
 def _compute_delta_regret_data(packed_root: Path, cache_path: str | Path, *,
@@ -655,16 +692,32 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     deltas_a = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_a"]]
     deltas_b = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_b"]]
 
-    _rcparams()
-    figA, axA = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_a)))
-    _delta_ci_panel(axA, labels_a, deltas_a)
-    axA.set_title("varying linear cost λ  (maintenance = 0)", fontsize=12, loc="left")
-    save_pdf_png(figA, str(out_dir), "delta_mean_regret_lambda", dpi=200)
+    def _finish(fig, ax, title, base):
+        # A fixed bbox_to_anchor FRACTION scales its absolute gap with the figure's height, which
+        # overlapped the x-axis label on the short (3-row) lambda figure while looking fine on the
+        # tall (7-row) maintenance one. Target a constant ~0.5in gap in every figure instead by
+        # dividing that inch target by this particular figure's height.
+        gap_frac = 0.5 / fig.get_size_inches()[1]
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -gap_frac), ncol=len(handles),
+                  fontsize=9.5, frameon=False)
+        ax.set_title(title, fontsize=12, loc="left")
+        save_pdf_png(fig, str(out_dir), base, dpi=200, bbox_extra_artists=(fig.legends[0],))
 
-    figB, axB = plt.subplots(figsize=(9.5, 1.9 + 1.05 * len(labels_b)))
+    _rcparams()
+    # Constant + per-row height shrunk (and made a fixed-per-figure fig.legend below take the place of
+    # the old axes-fraction legend) so the many-row maintenance sweep doesn't render with a huge
+    # vertical gap of empty gridline rows above/below the data and before the legend -- an
+    # axes-fraction bbox_to_anchor scales its absolute gap with the axes' height, which is fine for the
+    # 3-row lambda panel but balloons on the 7-row maintenance panel.
+    figA, axA = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_a)))
+    _delta_ci_panel(axA, labels_a, deltas_a)
+    _finish(figA, axA, "varying linear cost λ  (maintenance = 0)", "delta_mean_regret_lambda")
+
+    figB, axB = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_b)))
     _delta_ci_panel(axB, labels_b, deltas_b)
-    axB.set_title(f"varying maintenance scale  (linear λ={data['maint_lambda']:g})", fontsize=12, loc="left")
-    save_pdf_png(figB, str(out_dir), "delta_mean_regret_maintenance", dpi=200)
+    _finish(figB, axB, f"varying maintenance scale  (linear λ={data['maint_lambda']:g})",
+           "delta_mean_regret_maintenance")
 
     for group_label, labels, deltas in [("lambda", labels_a, deltas_a), ("maintenance", labels_b, deltas_b)]:
         for lbl, d in zip(labels, deltas):

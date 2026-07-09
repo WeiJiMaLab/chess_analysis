@@ -174,8 +174,24 @@ def _pg_train_epoch(advantage_fn, feats, g_pad, mask, lengths, oracle_values, op
     return epoch_loss / max(seen, 1)
 
 
+def _greedy_regret_from_curves(head, ev_feats, ev_curves) -> float:
+    """Mean greedy-stop regret of ``head`` on a held-out set of (already-normalized) per-episode
+    feature tensors + matching return curves — the same stop rule (``stop_step_from_advantages``)
+    and regret definition (``oracle_value - g(stop_step)``) used everywhere else in this
+    investigation (e.g. ``analysis.evaluate._regret_at``), just recomputed once per epoch here
+    rather than once at the end of training."""
+    from cts.models.readout import stop_step_from_advantages
+    regrets = []
+    for feats, curve in zip(ev_feats, ev_curves):
+        adv = head(feats).reshape(-1)
+        s = min(stop_step_from_advantages(adv), len(curve) - 1)
+        regrets.append(float(curve.max()) - float(curve[s]))
+    return sum(regrets) / len(regrets) if regrets else float("nan")
+
+
 def fit_readout_pg(head, ep_feats, ep_curves, *, epochs, lr, seed=0, episode_batch=512,
-                   weight_decay=0.0, temperature=1.0, temperature_final=1.0, max_grad_norm=1.0):
+                   weight_decay=0.0, temperature=1.0, temperature_final=1.0, max_grad_norm=1.0,
+                   ev_feats=None, ev_curves=None, out_path=None):
     """Train a STANDALONE readout head by exact expected-return over per-episode RETURN CURVES.
 
     The ``analysis.evaluate`` path — no encoder / cache / checkpointing. ``ep_feats`` is a list of
@@ -183,6 +199,12 @@ def fit_readout_pg(head, ep_feats, ep_curves, *, epochs, lr, seed=0, episode_bat
     (``g(s)=curve[s]``, ``oracle_value=max(curve)``). Shares the exact training loop
     (:func:`_pg_train_epoch`) the deployed controller uses, so the assessment fits and the deployed
     controller optimize the identical objective. Returns the trained ``head``.
+
+    If ``ev_feats``/``ev_curves`` (held-out, already-normalized features + matching curves) are also
+    given, tracks per-epoch greedy validation regret (:func:`_greedy_regret_from_curves`) alongside the
+    train loss. If ``out_path`` is further given, the resulting history is saved via
+    :func:`_save_training_curves` (CSV + PNG) — same convention as the deployed controller's
+    checkpoint-adjacent curve (:func:`main`), just for these standalone assessment-time fits.
     """
     torch.manual_seed(seed)
     g_list = [torch.tensor(c, dtype=torch.float32) for c in ep_curves]
@@ -190,13 +212,24 @@ def fit_readout_pg(head, ep_feats, ep_curves, *, epochs, lr, seed=0, episode_bat
     g_pad, mask, lengths, ov = _pad_scalars(g_list, ov_list, torch.device("cpu"))
     opt = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
     params = list(head.parameters())
+    track_val = ev_feats is not None and ev_curves is not None
+    history = []
     for epoch in range(1, epochs + 1):
         tau = (temperature_final if epochs <= 1 else
                temperature + (temperature_final - temperature) * (epoch - 1) / (epochs - 1))
         head.train()
-        _pg_train_epoch(head, ep_feats, g_pad, mask, lengths, ov, opt, perm=torch.randperm(len(ep_feats)),
-                        episode_batch=episode_batch, temperature=tau, max_grad_norm=max_grad_norm,
-                        trainable_params=params)
+        mean_train_loss = _pg_train_epoch(
+            head, ep_feats, g_pad, mask, lengths, ov, opt, perm=torch.randperm(len(ep_feats)),
+            episode_batch=episode_batch, temperature=tau, max_grad_norm=max_grad_norm,
+            trainable_params=params)
+        if track_val:
+            head.eval()
+            with torch.no_grad():
+                val_regret = _greedy_regret_from_curves(head, ev_feats, ev_curves)
+            history.append({"epoch": epoch, "tau": tau, "train_E_regret": mean_train_loss,
+                            "val_greedy_regret": val_regret})
+    if out_path is not None and history:
+        _save_training_curves(history, Path(out_path))
     return head
 
 
@@ -298,6 +331,7 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         return
     import csv
     base = out_path.with_suffix("")
+    base.parent.mkdir(parents=True, exist_ok=True)
     csv_path = Path(f"{base}_training_curve.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(history[0].keys()))
@@ -308,14 +342,32 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        # Match the repo's board-plot house style (analysis.utils.helpers.apply_poster_style):
+        # sans-serif font, no top/right spines, light grid. The poster style's own font-size
+        # constants (FONT_SIZE_LABEL=52 etc.) are calibrated for 40+-inch board dashboards, so
+        # they're not reused verbatim here — this is a small (9,6) figure, so font sizes below
+        # are picked to be legible on that scale instead of overflowing it.
+        from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
+        apply_poster_style()
+        plt.rcParams['xtick.labelsize'] = 11
+        plt.rcParams['ytick.labelsize'] = 11
+        plt.rcParams['axes.labelsize'] = 13
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['legend.fontsize'] = 11
+        train_color = PHASE_COLORS[1]  # light indigo
+        val_color = PHASE_COLORS[3]    # dark indigo
         ep = [h["epoch"] for h in history]
         fig, ax = plt.subplots(figsize=(9, 6))
-        ax.plot(ep, [h["train_E_regret"] for h in history], "-o", label="train E[regret] (soft)")
-        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-s", label="val regret (hard greedy)")
+        ax.plot(ep, [h["train_E_regret"] for h in history], "-o", color=train_color,
+                label="train E[regret] (soft)", markersize=4)
+        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-s", color=val_color,
+                label="val regret (hard greedy)", markersize=4)
         ax.set_xlabel("epoch"); ax.set_ylabel("regret"); ax.legend(loc="upper right")
         ax2 = ax.twinx()
-        ax2.plot(ep, [h["tau"] for h in history], ":", color="gray", label="temperature τ")
+        ax2.plot(ep, [h["tau"] for h in history], ":", color="gray", lw=1.2,
+                 label="temperature τ", zorder=1)
         ax2.set_ylabel("temperature τ")
+        ax2.spines["top"].set_visible(False)
         ax.set_title("PG readout — regret over epochs")
         fig.tight_layout()
         fig.savefig(f"{base}_training_curve.png", dpi=150)

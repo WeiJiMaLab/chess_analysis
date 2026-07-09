@@ -10,6 +10,7 @@ import os
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
@@ -78,7 +79,7 @@ def plot_qbin_stats(
     # Fixed marker/line weight: every quantile-binned trend should read with the same
     # visual weight regardless of how many bins THIS covariate happens to produce
     # (a boolean collapses to 2 bins; a continuous covariate keeps ~10).
-    ax.plot(x_vals[interior], y_mean, marker='o', color=color, lw=3, markersize=9, label=label)
+    ax.plot(x_vals[interior], y_mean, marker='o', color=color, lw=3, markersize=6, label=label)
     fb_kwargs = {"color": color, "alpha": 0.2}
     if ci_legend_label is not None:
         fb_kwargs["label"] = ci_legend_label
@@ -93,6 +94,14 @@ def plot_qbin_stats(
         ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
     if y_label:
         ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
+    # Fewer, cleaner ticks — matters more now that dashboards render at a smaller
+    # figsize (see board.py's bivariate_analysis/move_time_summary): a locator set
+    # here is transparently replaced by the scale's own default (e.g. LogLocator) if
+    # the caller applies set_xscale("log")/set_yscale("log") afterward, so this is
+    # safe regardless of which axis ends up log-scaled. Mirrors the MaxNLocator
+    # convention already used in plot_heatmap_with_alpha (this module) below.
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
     if show_legend:
         ax.legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
                   bbox_to_anchor=(0.5, -0.16), frameon=False)
@@ -179,6 +188,12 @@ def _draw_feature_histogram(
     ax.set(ylabel="Density")
     if name:
         ax.set_xlabel(_wrap_long_label(name))
+    # Fewer ticks — same reasoning as plot_qbin_stats' MaxNLocator calls (this
+    # histogram panel shares the same smaller-figsize dashboards). Skip the "bin"
+    # (boolean False/True) case: its 2 explicit xticks above are already minimal.
+    if kind != "bin":
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
 
 
 def plot_histogram_from_bins(

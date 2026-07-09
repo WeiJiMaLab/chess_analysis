@@ -526,13 +526,14 @@ class Analyzer:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
         if self.x.is_log and any_pos_x:
             ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
-        # A two-line x_label (zero_inflated/edge_mass qualifier, see _x_axis_label)
-        # needs the legend pushed further down or the two collide.
-        legend_y = -0.26 if "\n" in x_label else -0.16
+        # Docked to the RIGHT of the panel (not stacked below): a below-axes legend
+        # needed extra vertical push for a two-line x_label (zero_inflated/edge_mass
+        # qualifier, see _x_axis_label) to avoid colliding with it — a right-side
+        # legend has no such interaction with the x-label at all.
         ax.legend(
             fontsize=LEGEND_FONTSIZE,
-            loc="upper center",
-            bbox_to_anchor=(0.5, legend_y),
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
             ncol=1,
             frameon=False,
         )
@@ -678,8 +679,10 @@ class Analyzer:
                              grid_n=grid_n, color=PHASE_COLORS.get(t, MAIN_COLOR), tertile=t,
                              show_band=True, band_alpha=0.12, show_mass=False,
                              label_prefix=self._ply_tertile_legend_label(t) + ": ")
-        ax.legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
-                  bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)
+        # Same right-docked placement as plot_quantile_bins_tertile_segmented's
+        # ply-tertile legend (below-axes stacking crowds a narrow panel's x-label).
+        ax.legend(fontsize=LEGEND_FONTSIZE, loc="center left",
+                  bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False)
 
     def save_quantile_heatmap_figure(
         self,

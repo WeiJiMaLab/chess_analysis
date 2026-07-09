@@ -1,0 +1,171 @@
+# Phase 2 Agent 1 (ysagiv human_trees, Filter B: xaba-exclusion). NEW, additive config -- does
+# NOT touch config_minply15_maxply75.yaml or any of our own puctvalue_md36 corpus. Every
+# output/split/pack path here lives under hl4291's own scratch (never under
+# /scratch/gpfs/GRIFFITHS/ysagiv/, which is read-only source data owned by someone else --
+# see ysagiv_trees.md "Corrections applied" section). Reuses the SAME pipeline scripts
+# (slurm/pipeline/{pack_trees,train_encoder,pack_root,pack_root_merge,train_readout_pg}.slurm)
+# as our own corpus, driven by CONFIG=config_ysagiv_xaba100k.yaml.
+#
+# Only split/gnn_pack/mc_pack/encoder/materialize/train/eval sections are needed: the
+# ysagiv trees already exist (no filter_and_sample/board/gen_trees stage), and the
+# xaba-exclusion include_list was already produced by
+# slurm/pipeline/ysagiv_xaba_filter.slurm, independent of this config.
+#
+# The 100K-raw-tree real run (2026-07-08 evening), forked from config_ysagiv_xaba20k.yaml (the
+# validated 20K dry run, preserved separately -- see that config + outputs/reports/ysagiv.md).
+# Requires `N=100000 sbatch slurm/pipeline/ysagiv_sample.slurm` (its committed default) and
+# `sbatch slurm/pipeline/ysagiv_xaba_filter.slurm` to be re-run first, since raw_sample/ and the
+# xaba include-list are shared, transient staging paths reused across run_names, not scoped by
+# run_name themselves.
+globals:
+  run_name: ysagiv_xaba100k
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  search_budget: 96                                    # matches ysagiv trees' own oracle_trace budget (96 root expansions)
+  run_dir: ${scratch_dir}/${run_name}
+  split_dir: ${run_dir}/split
+  packed_dir: ${run_dir}/packed
+  mc_packed_dir: ${run_dir}/mc_packed
+  materialized_dir: ${run_dir}/materialized
+  config_dir: ${run_dir}/pack_configs
+  log_dir: ${run_dir}/pack_logs
+  figures_dir: ${outputs_dir}/ysagiv/xaba100k         # separate folder per filter (coordinator correction)
+
+# analysis.evaluate imports analysis.utils.helpers, which unconditionally reads a
+# `human_analysis` section at MODULE IMPORT TIME (db_connection()'s default arg reads
+# CONFIG["selected_db_default"] at def-time) -- irrelevant to this pipeline (no DuckDB use
+# anywhere in the ysagiv chain) but required to be present or the import crashes. Points at
+# the SAME shared, read-only personal.db production uses; never opened/written by anything
+# in this config's chain.
+human_analysis:
+  selected_db_default: ${scratch_dir}/personal.db
+
+split:
+  source_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample   # our own seeded 20K symlink sample (read-only links INTO human_trees, never writes there)
+  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/xaba/include_list.txt  # written by ysagiv_xaba_filter.slurm
+  split_root: ${split_dir}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+gnn_pack:
+  split_root: ${split_dir}
+  output_root: ${packed_dir}
+  shard_size: 2000
+  clear: true
+
+mc_pack:
+  split_root: ${split_dir}
+  output_root: ${mc_packed_dir}
+  shard_size: 500
+  num_workers: 8
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  exclude_xaba: false           # filtering already done upstream via split.include_list -- no double-filtering
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: linear
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+  clear: true
+
+encoder:
+  command: pretrain-child-wdl-encoder
+  train_dir: ${packed_dir}/train_manifest.json
+  validation_dir: ${packed_dir}/validation_manifest.json
+  output_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  k: 1
+  d_embed: 32
+  d_message: 32
+  node_embed_hidden: 32
+  n_heads: 2
+  d_att: 16
+  decoder_hidden: 32
+  batch_size: 256
+  learning_rate: 1.0e-3
+  epochs: 6
+  loss_weight_by_subtree_size: true
+  num_workers: 0
+  log_interval: 20
+
+materialize:
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  device: cuda
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 32
+  hidden_layers: 2
+
+train:
+  metrics_run_name: mchalt_ysagiv_xaba
+  packed_train_data: ${mc_packed_dir}/train_manifest.json
+  packed_validation_data: ${mc_packed_dir}/validation_manifest.json
+  materialized_train_cache: ${materialized_dir}/train_cache.pt
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  encoder_checkpoint: ${packed_dir}/tiny_encoder.pt
+  output_checkpoint: ${packed_dir}/mchalt_controller.pt
+  device: cuda
+  controller_inputs: ['z_t', 'T_t']
+  k: 1
+  node_embed_hidden: 32
+  d_embed: 32
+  d_message: 32
+  n_heads: 2
+  d_att: 16
+  hidden_dim: 32
+  hidden_layers: 2
+  unfreeze_encoder: false
+  separate_sign_head: false
+  batch_size: 18000
+  learning_rate: 3.0e-4
+  stop_temperature: 4.0
+  stop_temperature_final: 1.0
+  weight_decay: 0.0
+  sign_loss_weight: 0.1
+  sign_pos_weight: 1.0
+  nontrivial_loss_weight: 1.0
+  inverse_freq_weights: false
+  epochs: 3
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  metrics_log_interval: 20
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_mode: linear
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+
+eval:
+  packed_root: ${mc_packed_dir}
+  materialized_validation_cache: ${materialized_dir}/validation_cache.pt
+  controller_checkpoint: ${packed_dir}/mchalt_controller.pt
+  results_json: ${figures_dir}/results.json
+  out_dir: ${figures_dir}
+  time_mode: linear
+  time_lambda: 0.0015  # targets the sweep-confirmed strongest non-degenerate regime (jordan branch
+                        # ysagiv_xaba_regime_sweep.md / outputs/reports/ysagiv.md): k*=47, dead-center
+                        # of the meaningful band, z_t's largest margin over SingleHalt*/Stats of the
+                        # whole sweep, no right-censoring caveat (was 0.01, a non-significant "tie" point;
+                        # the original discovery point was 0.0005, which sits at a right-censored ceiling)
+  maintenance_scale: 0.0
+  maintenance_exponent: 1.0
+  maint_lambda: 0.0015
+  max_episodes: 15000

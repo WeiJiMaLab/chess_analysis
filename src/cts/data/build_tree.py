@@ -517,6 +517,62 @@ def generate_dataset_command(config: BuildTreeConfig) -> None:
     )
 
 
+def _save_encoder_training_curves(history: list[dict], output_checkpoint: str) -> None:
+    """Write the per-epoch train/val loss trajectory (CSV) and a curve figure next to the
+    checkpoint — ``loss_gap`` (total_loss minus target_entropy; "the real KL we're driving toward
+    zero", per ``ChildWdlMetrics``) is the primary metric plotted, since ``total_loss`` alone isn't
+    comparable across batches with different target-entropy floors. Same CSV+PNG convention as
+    ``cts.train.pg_controller_train._save_training_curves`` (the readout-fit curves), kept as a
+    separate, simpler implementation here since ``history`` entries are ``ChildWdlMetrics``
+    dataclasses (train/validation pair), not plain dicts."""
+    if not history:
+        return
+    import csv
+    from pathlib import Path
+    base = Path(output_checkpoint).with_suffix("")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "epoch": i + 1,
+            "train_total_loss": h["train"].total_loss,
+            "train_target_entropy": h["train"].target_entropy,
+            "train_loss_gap": h["train"].loss_gap,
+            "train_num_supervised_edges": h["train"].num_supervised_edges,
+            "val_total_loss": h["validation"].total_loss,
+            "val_target_entropy": h["validation"].target_entropy,
+            "val_loss_gap": h["validation"].loss_gap,
+            "val_num_supervised_edges": h["validation"].num_supervised_edges,
+        }
+        for i, h in enumerate(history)
+    ]
+    csv_path = Path(f"{base}_training_curve.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[child-wdl-pretrain] training curve -> {csv_path}", flush=True)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        ep = [r["epoch"] for r in rows]
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.plot(ep, [r["train_loss_gap"] for r in rows], "-o", label="train loss_gap (KL)")
+        ax.plot(ep, [r["val_loss_gap"] for r in rows], "-s", label="val loss_gap (KL)")
+        ax.plot(ep, [r["train_total_loss"] for r in rows], ":", color="tab:blue", alpha=0.5,
+               label="train total_loss")
+        ax.plot(ep, [r["val_total_loss"] for r in rows], ":", color="tab:orange", alpha=0.5,
+               label="val total_loss")
+        ax.set_xlabel("epoch"); ax.set_ylabel("loss"); ax.legend(loc="upper right")
+        ax.set_title("Child-WDL encoder pretrain — loss over epochs")
+        fig.tight_layout()
+        fig.savefig(f"{base}_training_curve.png", dpi=150)
+        plt.close(fig)
+        print(f"[child-wdl-pretrain] training curve figure -> {base}_training_curve.png", flush=True)
+    except Exception as e:  # plotting is best-effort; the CSV is the source of truth
+        print(f"[child-wdl-pretrain] curve plot skipped: {e}", flush=True)
+
+
 def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
     """Entry point for ``pretrain-child-wdl-encoder``: load examples, fit, save.
 
@@ -687,6 +743,7 @@ def pretrain_child_wdl_encoder_command(config: BuildTreeConfig) -> None:
         },
     )
     print(f"[child-wdl-pretrain] stage=save_decoder path={decoder_path}", flush=True)
+    _save_encoder_training_curves(history, config.output_checkpoint)
     final_validation = history[-1]["validation"]
     print(
         f"validation_total_loss={final_validation.total_loss:.6f} "

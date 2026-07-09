@@ -1,0 +1,49 @@
+{
+  "k_singlehalt": 53,
+  "n_fit": 7262,
+  "n_eval": 3112,
+  "marginal": {
+    "singlehalt": {
+      "mean": 0.09055780374435617,
+      "lo": 0.08593431074561267,
+      "hi": 0.09548224537965432
+    },
+    "stats": {
+      "mean": 0.06653188021444477,
+      "lo": 0.06258927609990886,
+      "hi": 0.07040761348825561
+    },
+    "zt": {
+      "mean": 0.032370865994814986,
+      "lo": 0.0298952502964645,
+      "hi": 0.03499074762275057
+    }
+  },
+  "paired": {
+    "singlehalt_minus_stats": {
+      "mean": 0.024025923529911404,
+      "lo": 0.018459540726499545,
+      "hi": 0.029869302433089627,
+      "b_significantly_beats_a": true,
+      "a_significantly_beats_b": false
+    },
+    "singlehalt_minus_zt": {
+      "mean": 0.05818693774954118,
+      "lo": 0.05345629460312617,
+      "hi": 0.0630255846091961,
+      "b_significantly_beats_a": true,
+      "a_significantly_beats_b": false
+    },
+    "stats_minus_zt": {
+      "mean": 0.034161014219629776,
+      "lo": 0.030216807667554007,
+      "hi": 0.038292646671279365,
+      "b_significantly_beats_a": true,
+      "a_significantly_beats_b": false
+    }
+  },
+  "time_mode": "linear",
+  "time_lambda": 0.0015,
+  "maintenance_scale": 0.0,
+  "maintenance_exponent": 1.0
+}
