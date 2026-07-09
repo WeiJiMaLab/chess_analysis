@@ -14,11 +14,15 @@
 #SBATCH --qos=short
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=6G
-#SBATCH --time=06:00:00
-# --time 3:00->6:00: a few materialize workers hung early in the VALIDATION split
-# (train finished, second DataLoader deadlocked — the classic torch multiprocessing
-# loader hang) and were killed at 3h. Re-run stragglers with LOADER_WORKERS=0 (a
-# synchronous loader can't deadlock); the longer wall is headroom.
+#SBATCH --time=01:30:00
+# --time 3:00->6:00->1:30 (2026-07-08 evening): the 6h version was headroom against a
+# DataLoader multiprocessing deadlock a few workers hit on the 400K-tree/40-worker
+# own-corpus (minply15_maxply75) run (train finished, validation-split loader hung, killed
+# at the old 3h cap) -- re-run stragglers with LOADER_WORKERS=0 (a synchronous loader can't
+# deadlock). That's not the live path right now: the ysagiv/xaba chain at 100K raw trees /
+# 20 workers (~3300 trees/worker) observed 20s-3m05s/worker at a smaller scale, so 1:30
+# leaves ample margin while failing a hang fast instead of blocking the chain for hours. If
+# this script is next driven against the much larger own-corpus scale, bump back toward 6h.
 
 set -euo pipefail
 WID=${SLURM_ARRAY_TASK_ID:?must be submitted as an array (--array=0-N)}

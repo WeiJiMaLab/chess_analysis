@@ -20,7 +20,10 @@
 > margin) by applying the same filter to our own corpus, but it is **filter-specific**: the standard
 > argmax filter on the same independent corpus shows the *opposite* ranking, and the effect fades to a tie
 > once the fitted fixed-stop optimum `k*` drops to 4 or below. This has not yet been checked end-to-end on
-> a from-scratch regeneration of our own corpus under our own pipeline.
+> a from-scratch regeneration of our own corpus under our own pipeline. **Full writeup, sanity checks, and
+> the regime-sweep robustness methodology: [ysagiv.md](ysagiv.md) (`R-YSAGIV-XABA`)** — that report also
+> recommends targeting `λ=0.0015` (not `λ=0.0005`) going forward, the sweep's strongest, ceiling-artifact-free
+> point.
 
 ## Overview
 

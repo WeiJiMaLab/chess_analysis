@@ -13,7 +13,11 @@
 #SBATCH --qos=short
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
-#SBATCH --time=04:00:00
+#SBATCH --time=01:30:00
+# --time 4:00->1:30 (2026-07-08 evening): 4h was sized for the 400K-tree own-corpus
+# (minply15_maxply75) config; the live path is now the ysagiv/xaba chain (100K raw trees,
+# ~65.7K post-filter), observed 4m04s at the prior 20K-tree scale -> ~20min est. here. Bump
+# back up if this script is next driven against a much larger corpus again.
 
 set -euo pipefail
 TINY=/home/hl4291/chess_analysis

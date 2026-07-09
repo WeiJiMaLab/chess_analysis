@@ -153,8 +153,12 @@ eval:
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
   time_mode: linear
-  time_lambda: 0.01
+  time_lambda: 0.0015  # targets the sweep-confirmed strongest non-degenerate regime (jordan branch
+                        # ysagiv_xaba_regime_sweep.md / outputs/reports/ysagiv.md): k*=47, dead-center
+                        # of the meaningful band, z_t's largest margin over SingleHalt*/Stats of the
+                        # whole sweep, no right-censoring caveat (was 0.01, a non-significant "tie" point;
+                        # the original discovery point was 0.0005, which sits at a right-censored ceiling)
   maintenance_scale: 0.0
   maintenance_exponent: 1.0
-  maint_lambda: 0.01
+  maint_lambda: 0.0015
   max_episodes: 15000
