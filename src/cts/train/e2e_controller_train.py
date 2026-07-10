@@ -375,7 +375,19 @@ def main(config: ControllerTrainConfig) -> None:
     if not config.output_checkpoint:
         raise ValueError("output_checkpoint is required (point it at a SCRATCH path, not the production checkpoint).")
 
-    device, _train_cache_path, _val_cache_path, oracle_config, schema = _seed_and_resolve_paths(config)
+    # require_packed_oracle_match=False: this script's loss (forward_batch_loss ->
+    # build_regret_targets, above) recomputes BOTH the return curve g(s) and oracle_value
+    # fresh from raw halt_rewards/tree_sizes/time_budgets under the CURRENT oracle_config on
+    # every batch -- it never reads the packed manifest's baked target_advantages/oracle_values.
+    # So a packed-vs-requested maintenance_scale/time_lambda/etc. mismatch (e.g. training at
+    # maintenance_scale=0.2 against a manifest packed at the default maintenance_scale=0.0) is
+    # harmless here and shouldn't block the run -- see _seed_and_resolve_paths' docstring and
+    # 2026-07-09 e2e-probe notebook entry for the full trace (this is NOT the same bug class as
+    # the already-fixed pg_controller_train.py oracle_value staleness: this script never had a
+    # staleness bug, the packed-manifest check was just stricter than this loss requires).
+    device, _train_cache_path, _val_cache_path, oracle_config, schema = _seed_and_resolve_paths(
+        config, require_packed_oracle_match=False
+    )
     print(
         f"[e2e-controller] device={device} k={config.k} node_embed_hidden={config.node_embed_hidden} "
         f"d_embed={config.d_embed} d_message={config.d_message} hidden_dim={config.hidden_dim} "

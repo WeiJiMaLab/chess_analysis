@@ -1997,8 +1997,24 @@ def _validate_packed_manifest_oracle(manifest_path: str, oracle_config: Budgeted
 
 def _seed_and_resolve_paths(
     config: ControllerTrainConfig,
+    *,
+    require_packed_oracle_match: bool = True,
 ) -> Tuple[torch.device, str, str, BudgetedOracleConfig, NodeFeatureSchema]:
-    """Seed RNGs, resolve cache paths, validate the packed manifests against the requested oracle."""
+    """Seed RNGs, resolve cache paths, validate the packed manifests against the requested oracle.
+
+    ``require_packed_oracle_match`` gates ``_validate_packed_manifest_oracle`` (default True,
+    matching every caller before 2026-07-09). It exists only for callers whose training loss
+    never reads the manifest's baked cost-dependent fields (``target_advantages``,
+    ``oracle_values``) and instead recomputes the equivalent quantities fresh from raw
+    ``halt_rewards``/``tree_sizes``/``time_budgets`` under the CURRENT ``oracle_config`` --
+    for those callers a packed-vs-requested cost-param mismatch is harmless (the manifest's
+    baked oracle metadata is simply never consulted), so gating on it would only block runs
+    that reuse an existing manifest under new cost params for no correctness reason.
+    ``controller_train.py``'s own MSE trainer (regresses directly against baked
+    ``target_advantages``) and ``pg_controller_train.py`` (its ``_episode_returns`` still
+    trusts the baked ``em.oracle_value``, see 2026-07-09 e2e-probe notebook entry) both still
+    depend on the manifest matching, so they must keep the default True.
+    """
     random.seed(config.seed)
     torch.manual_seed(config.seed)
     device = torch.device(config.device)
@@ -2013,8 +2029,9 @@ def _seed_and_resolve_paths(
         "validation",
     )
     oracle_config = _oracle_config(config)
-    _validate_packed_manifest_oracle(config.packed_train_data, oracle_config)
-    _validate_packed_manifest_oracle(config.packed_validation_data, oracle_config)
+    if require_packed_oracle_match:
+        _validate_packed_manifest_oracle(config.packed_train_data, oracle_config)
+        _validate_packed_manifest_oracle(config.packed_validation_data, oracle_config)
     schema = _feature_schema()
     return device, train_cache_path, validation_cache_path, oracle_config, schema
 
