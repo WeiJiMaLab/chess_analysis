@@ -25,6 +25,16 @@
 > that report also recommends targeting `λ=0.0015` (not `λ=0.0005`) going forward, the sweep's strongest,
 > ceiling-artifact-free point.
 >
+> **`action_gap` baseline added (2026-07-10).** A hand-crafted, zero-training statistic — the root's
+> top1-minus-top2 backed-up Q-value gap, read directly off the tree with no encoder — is now fit
+> alongside SingleHalt\*/Stats-Controller/`z_t` in the evaluation harness (`analysis.evaluate`'s
+> `AG-Controller`). On the ysagiv (Leela-evaluator) corpus, it **significantly beats `z_t` at 2 of 3
+> populations tested and ties at the third** — see [ysagiv.md](ysagiv.md)'s "Does a hand-crafted 'action
+> gap' statistic do just as well..." for the full numbers. This has **not yet** been regenerated on our
+> own (`puctvalue_md36`) corpus — the frontier/decodability/delta-regret figures in this report below
+> still reflect `z_t`/Stats-Controller/SingleHalt\* only. Whether `action_gap` also beats `z_t` here is
+> open.
+
 > **Correction (2026-07-09).** This section and the "cross-corpus robustness check" below previously
 > described the second corpus as "independently generated," by "a different engine, a different search
 > algorithm, and a different population of root positions." Confirmed with Yotam Sagiv that this was
@@ -543,6 +553,11 @@ reuses the already-trained frozen encoder (no retrain); `src/analysis/evaluate_p
   `z_t`'s raw decodability (R²=0.448) is the *highest* of any branch/corpus tested anywhere in this
   investigation, yet that same branch's `z_t`-Controller is its worst-performing controller by regret —
   the same lesson as the `z_t`+stats decodability result above, from an independent population.
+- **A hand-crafted, zero-training `action_gap` statistic significantly beats `z_t` at 2 of 3 ysagiv
+  populations and ties at the third** (see [ysagiv.md](ysagiv.md), added 2026-07-10) — the strongest
+  hand-crafted baseline tested anywhere in this investigation is not clearly beaten by the learned
+  embedding. Not yet checked on our own corpus; every `z_t`-beats-hand-crafted-baseline claim in this
+  report used tree-stats, a categorically weaker baseline, as the comparison point.
 
 ### Reproduce
 

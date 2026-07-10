@@ -1077,6 +1077,13 @@ def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
         manifest_format = manifest.get("format")
         if manifest_format == "cts_tensorized_pretrain_manifest_v1":
             return PackedTensorizedShardDataset(path)
+        if manifest_format == "cts_tensorized_futurewdl_manifest_v1":
+            # packhistory_GNNpretrain's output (history.md's k-steps-ahead objective) --
+            # local import to avoid a module-load-order dependency between the two
+            # preprocess_gnn packing modules (pack_history.py doesn't import this module).
+            from cts.data.preprocess_gnn.pack_history import PackedFutureWdlShardDataset
+
+            return PackedFutureWdlShardDataset(path)
         raise ValueError(f"Unsupported pretrain manifest format: {manifest_format!r}")
 
     with open(path, "r", encoding="utf-8") as handle:

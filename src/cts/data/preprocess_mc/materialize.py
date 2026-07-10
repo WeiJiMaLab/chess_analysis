@@ -87,6 +87,19 @@ def materialize_worker(config: MaterializeConfig) -> None:
     # it always matches the saved weights. The head is configurable here
     # (we throw away its random weights after this run — only the encoder
     # outputs are consumed).
+    #
+    # ``config.encoder_checkpoint`` is a plain config field (no hardcoded
+    # fallback in ``MaterializeConfig`` above) — the only thing that has to
+    # change to run this stage against the history.md pipeline's retrained,
+    # partial-tree-aware encoder (Task 1/3/4's `packhistory_GNNpretrain` +
+    # `train_encoder`) instead of today's Child-WDL-pretrained one is the
+    # *config value* passed in, not this code. history.md's "Directory
+    # layout" convention: the new checkpoint lives at
+    # ``${gnnpack_history_dir}/tiny_encoder.pt`` (mirrors today's
+    # ``${packed_dir}/tiny_encoder.pt``, config_ysagiv_xaba20k.yaml:84,101) —
+    # Task 6 owns wiring `materialize.encoder_checkpoint` to that path in the
+    # new `config_ysagiv_xaba20k_history.yaml`. Nothing in this file should
+    # ever hardcode either path.
     architecture = load_encoder_architecture(config.encoder_checkpoint)
     model = MetaController(
         k=architecture["k"],

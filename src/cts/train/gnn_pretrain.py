@@ -117,6 +117,10 @@ class ChildWdlPretrainConfig:
     log_bucketed_kl: bool = False
     bucket_max_depth_bin: int = 12
     bucket_subtree_size_log_max: int = 10  # ≥1024 top bin; covers chess trees up to ~2000 nodes
+    # What BucketedKLState's size axis bins: subtree size (default, matches the
+    # audit module) or, for the k-steps-ahead objective, Delta-visits
+    # (TreeBatch.edge_visit_weights) -- see BucketedKLState.update's bucket_by.
+    bucket_by: Literal["subtree_size", "visit_weight"] = "subtree_size"
     # When True, each edge's cross-entropy is weighted by its child's subtree
     # size before averaging. Principle: each "node summarized" gets equal
     # voice in the loss, instead of each edge prediction. Without this,
@@ -125,6 +129,16 @@ class ChildWdlPretrainConfig:
     # children — the predictions that actually require summarization
     # capacity — with little optimization budget.
     loss_weight_by_subtree_size: bool = False
+    # k-steps-ahead ("packhistory_GNNpretrain") packed batches carry a
+    # per-edge Delta-visits weight (TreeBatch.edge_visit_weights) instead of
+    # subtree size. When present and loss_weight_by_subtree_size is False,
+    # it's used the same way: each edge's cross-entropy weighted before
+    # averaging. "identity" uses Delta-visits directly; "log1p" applies
+    # log1p(Delta-visits) first, for use if a handful of high-visit edges
+    # (e.g. root children) end up dominating the batch loss under "identity"
+    # — check empirically (BucketedKLState's visit-weight bucketing below),
+    # don't assume either is right a priori.
+    visit_weight_transform: Literal["identity", "log1p"] = "identity"
 
 
 @dataclass
@@ -154,6 +168,12 @@ class BucketedKLState:
     count: torch.Tensor  # [num_size_bins, num_depth_bins] long
     overall_sum_kl: torch.Tensor  # scalar float64
     overall_count: int = 0
+    # "subtree_size" (default) bins the child's subtree size, matching the
+    # post-hoc audit module. "visit_weight" bins TreeBatch.edge_visit_weights
+    # (Delta-visits) instead, for the k-steps-ahead ("packhistory_GNNpretrain")
+    # objective, where subtree size isn't the quantity that determines an
+    # edge's loss weight.
+    bucket_by: Literal["subtree_size", "visit_weight"] = "subtree_size"
 
     @classmethod
     def empty(
@@ -161,6 +181,7 @@ class BucketedKLState:
         max_depth_bin: int,
         subtree_size_log_max: int,
         device: torch.device,
+        bucket_by: Literal["subtree_size", "visit_weight"] = "subtree_size",
     ) -> "BucketedKLState":
         """Allocate zeroed accumulators sized to the given bin grid."""
         num_size_bins = subtree_size_log_max + 1
@@ -172,25 +193,34 @@ class BucketedKLState:
             count=torch.zeros((num_size_bins, num_depth_bins), dtype=torch.long, device=device),
             overall_sum_kl=torch.zeros((), dtype=torch.float64, device=device),
             overall_count=0,
+            bucket_by=bucket_by,
         )
 
     def update(self, tree_batch: Any, per_edge_kl: torch.Tensor) -> None:
-        """Bucket ``per_edge_kl`` by (child_subtree_size, parent_depth) and accumulate.
+        """Bucket ``per_edge_kl`` by (child_subtree_size_or_visit_weight, parent_depth) and accumulate.
 
-        Uses the same bucketing helpers the audit module uses, so the per-bin
-        numbers are directly comparable across the audit and the pretraining
-        time series.
+        Uses the same ``size_bin``/``depth_bin`` floor(log2(x)) bucketing helpers
+        the audit module uses (subtree size and Delta-visits are both non-negative
+        counts spanning orders of magnitude, so the same bucketing mechanism
+        applies to either), so the per-bin numbers stay comparable across runs
+        that use the same ``bucket_by``.
         """
         if per_edge_kl.numel() == 0:
             return
         device = self.sum_kl.device
         edge_parent = tree_batch.edge_parent.to(device)
-        edge_child = tree_batch.edge_child.to(device)
         depth_all = tree_batch.depth.to(device)
-        parent_index_all = tree_batch.parent_index.to(device)
 
-        subtree_sizes = compute_subtree_sizes(parent_index_all, depth_all)
-        child_size_bin = size_bin(subtree_sizes[edge_child], self.subtree_size_log_max)
+        if self.bucket_by == "visit_weight":
+            edge_visit_weights = getattr(tree_batch, "edge_visit_weights", None)
+            if edge_visit_weights is None:
+                raise ValueError("bucket_by='visit_weight' requires tree_batch.edge_visit_weights to be set.")
+            child_size_bin = size_bin(edge_visit_weights.to(device), self.subtree_size_log_max)
+        else:
+            edge_child = tree_batch.edge_child.to(device)
+            parent_index_all = tree_batch.parent_index.to(device)
+            subtree_sizes = compute_subtree_sizes(parent_index_all, depth_all)
+            child_size_bin = size_bin(subtree_sizes[edge_child], self.subtree_size_log_max)
         parent_depth_bin = depth_bin(depth_all[edge_parent], self.max_depth_bin)
         num_size_bins = self.subtree_size_log_max + 1
         num_depth_bins = self.max_depth_bin + 1
@@ -255,6 +285,16 @@ class ChildWdlPretrainer:
         validation_examples: Sequence[PretrainExample],
         config: ChildWdlPretrainConfig,
     ) -> None:
+        """For the k-steps-ahead ("packhistory_GNNpretrain") objective, ``model``
+        is a ``ChildWdlModel`` applied to a T_n snapshot instead of a complete
+        tree -- unmodified, no new head (see history.md's "Stage:
+        packhistory_GNNpretrain", revised: `ChildWdlHead`'s existing
+        ``concat(parent_states, slot_states)`` already carries each child's
+        disambiguating signal via the encoder's bottom-up message passing, on
+        a partial tree exactly as it does on a complete one). Everything else
+        in this trainer (the loss, the weighting branch, the batch loop) is
+        unchanged for this objective too.
+        """
         self.model = model
         self.schema = schema
         self.device = torch.device(device)
@@ -391,6 +431,7 @@ class ChildWdlPretrainer:
                 target_log_probs = edge_targets.clamp_min(1e-12).log()
                 per_edge_target_entropy = -(edge_targets * target_log_probs).sum(dim=-1)
 
+                edge_visit_weights = getattr(tree_batch, "edge_visit_weights", None)
                 if self.config.loss_weight_by_subtree_size:
                     # Weight each edge by its child's subtree size: the encoder's
                     # job is to summarize subtrees into the parent state, and
@@ -405,6 +446,18 @@ class ChildWdlPretrainer:
                     subtree_sizes = compute_subtree_sizes(parent_index_all, depth_all)
                     edge_weights = subtree_sizes[edge_child].to(per_edge_loss.dtype)
                     weight_sum = edge_weights.sum()
+                    total_loss = (edge_weights * per_edge_loss).sum() / weight_sum
+                    target_entropy = (edge_weights * per_edge_target_entropy).sum() / weight_sum
+                elif edge_visit_weights is not None:
+                    # k-steps-ahead ("packhistory_GNNpretrain") packed batches:
+                    # weight by Delta-visits instead of subtree size. Delta-visits=0
+                    # edges are still present in the batch (never filtered out
+                    # upstream) but contribute exactly zero to both sums below —
+                    # a weight, not a filter, per history.md.
+                    edge_weights = edge_visit_weights.to(per_edge_loss.dtype).to(self.model.encoder.device)
+                    if self.config.visit_weight_transform == "log1p":
+                        edge_weights = torch.log1p(edge_weights)
+                    weight_sum = edge_weights.sum().clamp_min(1e-12)
                     total_loss = (edge_weights * per_edge_loss).sum() / weight_sum
                     target_entropy = (edge_weights * per_edge_target_entropy).sum() / weight_sum
                 else:
@@ -596,6 +649,7 @@ class ChildWdlPretrainer:
                     max_depth_bin=self.config.bucket_max_depth_bin,
                     subtree_size_log_max=self.config.bucket_subtree_size_log_max,
                     device=self.model.encoder.device,
+                    bucket_by=self.config.bucket_by,
                 )
                 if log_buckets
                 else None

@@ -297,7 +297,12 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     med_log = _weighted_median(lmt_bins)
 
     apply_poster_style()
-    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(31.2, 10), constrained_layout=True,
+    # Extra figure height (10 -> 11.5): at FONT_SIZE_LABEL=52, ax_q's rotated
+    # "Empirical Quantile (s)" ylabel (the longest of the three panel ylabels) is
+    # taller than a 10-inch-tall figure can fit without clipping its top edge --
+    # this is a content-vs-available-space issue, not a margin/padding one, so
+    # padding around the axes (tried first, didn't help) can't fix it.
+    fig, (ax_h, ax_q, ax_p) = plt.subplots(1, 3, figsize=(31.2, 11.5), constrained_layout=True,
                                           gridspec_kw={"wspace": 0.18})
 
     # Panel 1: RT distribution in SECONDS on a log x-axis (bins uniform in ln(RT),

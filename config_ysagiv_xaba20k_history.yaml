@@ -1,0 +1,215 @@
+# Phase 2 Agent 1 (ysagiv human_trees, Filter B: xaba-exclusion), FROZEN-VALUE-FIX branch.
+# See history.md (repo root) for the full plan this config implements Task 6 of.
+#
+# This is a FULL COPY of config_ysagiv_xaba20k.yaml with every stage's output-directory /
+# checkpoint global repointed at NEW, parallel "_history" scratch paths. It is NOT a patch or
+# variant of the old config -- it is an independent config that happens to point at the SAME
+# `split/` (shared, deterministic -- same seed, same trees, same train/validation assignment)
+# and the same underlying ysagiv trees. Every stage from packhistory_trees (rewrite of mc_pack)
+# through train_readout_pg runs under THIS config exactly as it runs under the old one; the two
+# configs' outputs never collide and BOTH are retained indefinitely as separate, permanent runs
+# -- xaba20k's old (`mc_packed/`, `packed/`, `materialized/`) outputs are a permanent regression
+# baseline, not something this config ever reads from or overwrites.
+#
+# New directory globals introduced here (mirror the old ones 1:1, written fresh):
+#   pack_history_dir         mirrors mc_packed_dir    (mc_pack -> packhistory_trees output)
+#   gnnpack_history_dir      mirrors packed_dir        (gnn_pack -> packhistory_GNNpretrain output;
+#                                                        also where the trained encoder checkpoint
+#                                                        lands, same convention as today)
+#   materialize_history_dir  mirrors materialized_dir  (materialize -> packhistory_MCmaterialize
+#                                                        output; also where the trained readout
+#                                                        controller checkpoint lands)
+#
+# `split_dir` is deliberately NOT repointed -- history.md is explicit that split/ is shared
+# between the old and new pipelines (preprocess_gnn/split.py seeds its shuffle from
+# config.seed, so the same config reproduces the identical train/validation assignment either
+# way; no reason to regenerate or duplicate it).
+#
+# `figures_dir` IS repointed (to a sibling `xaba20k_history` folder under outputs/figures/ysagiv/)
+# so this run's curves/results never land in the same folder as the old run's -- same
+# "nothing overwritten" principle applied to figures as to packed data/checkpoints.
+#
+# packhistory_GNNpretrain (Task 4) lives in its OWN new section, `gnn_pack_history:` -- NOT
+# `gnn_pack:` (that old section/stage is left untouched, unused by this config, reserved for
+# the old cts.data.preprocess_gnn.pack module). New fields there:
+#   lookahead_k          (v1 default: 12 -- see history.md "Parameters: k and dataset")
+#   snapshots_per_tree   (v1 default: 1  -- see same section)
+#
+# Stage --stage names for the UNCHANGED stages (split/mc_pack/encoder/materialize/train/eval)
+# are the same as the old config -- "packhistory_trees" etc. are history.md's human-readable
+# names for the rewritten *logic* behind mc_pack/materialize (in-place rewrites of the same
+# modules), not new CLI --stage values; those section keys stay as they always were. The one
+# exception is packhistory_GNNpretrain: it's a wholly NEW module (pack_history.py, not a
+# modification of preprocess_gnn/pack.py), so it needs its own --stage name (gnn_pack_history)
+# and its own slurm script (pack_trees_history.slurm), not the old pack_trees.slurm.
+globals:
+  run_name: ysagiv_xaba20k
+  scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
+  outputs_dir: /home/hl4291/chess_analysis/outputs/figures
+  search_budget: 96                                    # matches ysagiv trees' own oracle_trace budget (96 root expansions)
+  run_dir: ${scratch_dir}/${run_name}
+  split_dir: ${run_dir}/split                           # SHARED with config_ysagiv_xaba20k.yaml -- not repointed, see header
+  pack_history_dir: ${run_dir}/pack_history              # NEW -- mirrors mc_packed_dir
+  gnnpack_history_dir: ${run_dir}/gnnpack_history        # NEW -- mirrors packed_dir
+  materialize_history_dir: ${run_dir}/materialize_history # NEW -- mirrors materialized_dir
+  config_dir: ${run_dir}/pack_configs_history
+  log_dir: ${run_dir}/pack_logs_history
+  figures_dir: ${outputs_dir}/ysagiv/xaba20k_history      # separate from xaba20k's figures_dir -- never overwritten
+
+# analysis.evaluate imports analysis.utils.helpers, which unconditionally reads a
+# `human_analysis` section at MODULE IMPORT TIME (db_connection()'s default arg reads
+# CONFIG["selected_db_default"] at def-time) -- irrelevant to this pipeline (no DuckDB use
+# anywhere in the ysagiv chain) but required to be present or the import crashes. Points at
+# the SAME shared, read-only personal.db production uses; never opened/written by anything
+# in this config's chain.
+human_analysis:
+  selected_db_default: ${scratch_dir}/personal.db
+
+split:
+  source_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample   # our own seeded 20K symlink sample (read-only links INTO human_trees, never writes there)
+  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/xaba/include_list.txt  # written by ysagiv_xaba_filter.slurm
+  split_root: ${split_dir}
+  validation_fraction: 0.2
+  seed: 0
+  clear: true
+
+# --- packhistory_GNNpretrain (rewrite of gnn_pack; separate stage/section from the old
+# `gnn_pack:`, NOT a repoint of it -- pack_history.py's own PackHistoryGNNPretrainConfig
+# (extra="forbid") reads from packhistory_trees' output, not raw trees, so it needs a
+# different field (`pack_history_dir`, not `split_root`) and its own section name
+# (`gnn_pack_history`, per that class's own docstring) so `--stage gnn_pack_history`
+# routes here while `--stage gnn_pack` (unused by this config, but still valid syntax)
+# stays reserved for the old cts.data.preprocess_gnn.pack module untouched. Invoked via
+# `python -m cts.data.preprocess_gnn.pack_history --config ... --stage gnn_pack_history`
+# (slurm/pipeline/pack_trees_history.slurm), not the old pack_trees.slurm, which still
+# correctly drives config_ysagiv_xaba20k.yaml's `gnn_pack:` unmodified. ---------------------
+gnn_pack_history:
+  pack_history_dir: ${pack_history_dir}
+  output_root: ${gnnpack_history_dir}
+  search_budget: ${search_budget}
+  shard_size: 2000
+  seed: 0
+  clear: true
+  # k-step-ahead lookahead window and number of (n, n+k) snapshot draws per tree. See
+  # history.md "Parameters: k and dataset" for the rationale behind both defaults -- not
+  # tuned, a v1 starting point.
+  lookahead_k: 12
+  snapshots_per_tree: 1
+
+# --- packhistory_trees (rewrite of mc_pack) ---------------------------------------------------
+mc_pack:
+  split_root: ${split_dir}
+  output_root: ${pack_history_dir}
+  shard_size: 500
+  num_workers: 8
+  reward_scale: 1.0
+  min_halt_reward_range: 0.05
+  min_decision_margin: 0.0
+  exclude_xaba: false           # filtering already done upstream via split.include_list -- no double-filtering
+  search_budget: ${search_budget}
+  max_depth: 36
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  time_mode: linear
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+  clear: true
+
+encoder:
+  command: pretrain-child-wdl-encoder
+  train_dir: ${gnnpack_history_dir}/train_manifest.json
+  validation_dir: ${gnnpack_history_dir}/validation_manifest.json
+  output_checkpoint: ${gnnpack_history_dir}/tiny_encoder.pt
+  curves_out_dir: ${figures_dir}/curves
+  device: cuda
+  k: 1
+  d_embed: 32
+  d_message: 32
+  node_embed_hidden: 32
+  n_heads: 2
+  d_att: 16
+  decoder_hidden: 32
+  batch_size: 256
+  learning_rate: 1.0e-3
+  epochs: 6
+  loss_weight_by_subtree_size: true
+  num_workers: 0
+  log_interval: 20
+
+# --- packhistory_MCmaterialize (rewrite of pack_root/materialize.py) --------------------------
+materialize:
+  encoder_checkpoint: ${gnnpack_history_dir}/tiny_encoder.pt
+  device: cuda
+  episode_batch_size: 8
+  max_snapshots_per_shard: 250000
+  hidden_dim: 32
+  hidden_layers: 2
+
+train:
+  metrics_run_name: mchalt_ysagiv_xaba_history
+  packed_train_data: ${pack_history_dir}/train_manifest.json
+  packed_validation_data: ${pack_history_dir}/validation_manifest.json
+  materialized_train_cache: ${materialize_history_dir}/train_cache.pt
+  materialized_validation_cache: ${materialize_history_dir}/validation_cache.pt
+  encoder_checkpoint: ${gnnpack_history_dir}/tiny_encoder.pt
+  output_checkpoint: ${materialize_history_dir}/mchalt_controller.pt
+  device: cuda
+  controller_inputs: ['z_t', 'T_t']
+  k: 1
+  node_embed_hidden: 32
+  d_embed: 32
+  d_message: 32
+  n_heads: 2
+  d_att: 16
+  hidden_dim: 32
+  hidden_layers: 2
+  unfreeze_encoder: false
+  separate_sign_head: false
+  batch_size: 18000
+  learning_rate: 3.0e-4
+  stop_temperature: 4.0
+  stop_temperature_final: 1.0
+  weight_decay: 0.0
+  sign_loss_weight: 0.1
+  sign_pos_weight: 1.0
+  nontrivial_loss_weight: 1.0
+  inverse_freq_weights: false
+  epochs: 3
+  validation_step_interval: 100
+  greedy_eval_step_interval: 100
+  metrics_log_interval: 20
+  maintenance_scale: 0.0
+  maintenance_ref_nodes: 30.0
+  maintenance_exponent: 1.0
+  time_lambda: 0.01
+  time_mode: linear
+  time_p: 2.8
+  time_tau: 2.5
+  time_delta: 1
+  timeout_value: -1.0
+  samples_per_bucket: 2
+  fixed_budget: 96
+  seed: 0
+
+eval:
+  packed_root: ${pack_history_dir}
+  materialized_validation_cache: ${materialize_history_dir}/validation_cache.pt
+  controller_checkpoint: ${materialize_history_dir}/mchalt_controller.pt
+  results_json: ${figures_dir}/results.json
+  out_dir: ${figures_dir}
+  time_mode: linear
+  time_lambda: 0.0015  # same regime pointer as config_ysagiv_xaba20k.yaml -- see that file's
+                        # comment for the sweep this targets (k*=47, non-degenerate band). Not
+                        # re-derived for the history pipeline; carried over as the same starting
+                        # point until/unless the fix changes what regime is optimal.
+  maintenance_scale: 0.0
+  maintenance_exponent: 1.0
+  maint_lambda: 0.0015
+  max_episodes: 15000

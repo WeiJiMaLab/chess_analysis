@@ -50,6 +50,7 @@ class TreeBatch:
     num_nodes: int  # N
     num_edges: int  # E
     edge_wdl_targets: Optional[torch.Tensor] = None  # [E, 3] normalized per-edge WDL targets when training the edge head
+    edge_visit_weights: Optional[torch.Tensor] = None  # [E] per-edge loss weight (e.g. Delta-visits for k-steps-ahead pretraining)
 
 
 @dataclass
@@ -71,6 +72,7 @@ class TensorizedTreeExample:
     node_targets: torch.Tensor  # [n_nodes] training targets aligned to node order
     feature_names: Tuple[str, ...]  # mirrors the schema's column order
     edge_wdl_targets: Optional[torch.Tensor] = None  # [n_edges, 3] normalized WDL targets, when provided
+    edge_visit_weights: Optional[torch.Tensor] = None  # [n_edges] per-edge loss weight (e.g. Delta-visits), when provided
 
 
 @dataclass
@@ -369,6 +371,7 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
     depth_parts = []
     target_parts = []
     edge_target_parts = []
+    edge_visit_weight_parts = []
     tree_index_parts = []
     root_index = []
 
@@ -400,6 +403,8 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
             edge_slot_parts.append(example.edge_slot)
             if example.edge_wdl_targets is not None:
                 edge_target_parts.append(example.edge_wdl_targets)
+            if example.edge_visit_weights is not None:
+                edge_visit_weight_parts.append(example.edge_visit_weights)
 
         node_offset += num_nodes
 
@@ -451,6 +456,14 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
             # rows, which would misalign with edge_parent / edge_child.
             torch.cat(edge_target_parts, dim=0)
             if edge_target_parts and len(edge_target_parts) == len(edge_parent_parts)
+            else None
+        ),
+        edge_visit_weights=(
+            # Same all-or-nothing rule as edge_wdl_targets above, for the
+            # same reason: partial coverage would misalign with edge_parent
+            # / edge_child once concatenated.
+            torch.cat(edge_visit_weight_parts, dim=0)
+            if edge_visit_weight_parts and len(edge_visit_weight_parts) == len(edge_parent_parts)
             else None
         ),
     )

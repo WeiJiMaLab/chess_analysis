@@ -34,6 +34,15 @@ which excerpts this report's headline numbers in its own "cross-corpus robustnes
 > ~10,400 validation episodes — comfortably under `eval.max_episodes=15000`) is staged and ready, not yet
 > submitted.
 
+> **AG-Controller added (2026-07-10).** A hand-crafted, zero-training baseline — `action_gap`, the root's
+> top1-minus-top2 backed-up Q-value gap, read directly off the tree — is now fit alongside SingleHalt\*/
+> Stats-Controller/`z_t` in the frontier, decodability, and delta-regret figures for all three
+> populations (`xaba20k`, `xaba100k`, `xaba100k_minply15_maxply75`). It **significantly beats `z_t` at 2
+> of 3 populations** and ties at the third — despite 2 input dimensions and no learned encoder at all. See
+> "Does a hand-crafted 'action gap' statistic do just as well..." below. This reframes, but does not
+> overturn, the headline: `z_t` still significantly beats SingleHalt\*/Stats-Controller everywhere, but
+> the *strongest* hand-crafted baseline available (as opposed to tree-stats) is not clearly beaten by it.
+
 ## Overview
 
 `normative.md` (`R-EVALUATE`) established, on our own Stockfish/PUCT-generated corpus, that a learned
@@ -235,6 +244,79 @@ entangled) — the embedding carries a genuinely distinct signal here, not a rel
 > on our own corpus — consistent with, and part of the explanation for, why the regret win shows up here
 > at all.
 
+### Does a hand-crafted "action gap" statistic do just as well as the learned `z_t` embedding — without any training at all?
+
+**What `action_gap` is.** At every step of a trajectory, `action_gap` is the gap between the root's
+current best and second-best move by *backed-up* Q-value — `top1(Q) − top2(Q)`, read directly off
+`oracle_root_q_trace` (`src/analysis/evaluate.py::_action_gaps_for_trajectory`), the same per-expansion
+snapshot of the tree's own root-child statistics that generation already records for every tree
+(`_record_oracle_root_trace`, `teacher_targets.py`). It needs **no encoder and no training** — it is a
+pure, hand-computed function of the tree's own PUCT backup (`total_value / visit_count` on the root's two
+most-favored children), read at the same expansion count `z_t` is encoded at. Where `z_t` has to *learn*
+(via an indirect child-WDL pretraining objective, then a PG-trained readout) to represent something like
+"how decided is this position," `action_gap` reads it off directly: a wide gap means one root move is
+clearly ahead in the search so far; a gap near zero means the top two are still statistically tied.
+
+**Frontier comparison** (headline regime, `λ=0.0015`, `maintenance=0`, identical architecture/recipe to
+the rest of this report; `AG-Controller` trained by the same 200-epoch PG objective as `z_t`, on
+`[steps, action_gap]` — 2 input dimensions vs. `z_t`'s 33):
+
+| population | SingleHalt\* | Stats-Controller | `z_t`-Controller | **AG-Controller** |
+|---|---:|---:|---:|---:|
+| xaba20k | 0.0924 | 0.0682 | 0.0462 | **0.0305** |
+| xaba100k | 0.0906 | 0.0665 | **0.0324** | 0.0343 |
+| xaba100k_minply15_maxply75 | 0.0904 | 0.0702 | 0.0309 | **0.0251** |
+
+![ysagiv xaba frontier with AG-Controller: a 2-input hand-crafted statistic sits below the z_t-Controller at 2 of 3 populations](../figures/ysagiv/xaba20k/png/frontier.png)
+
+A paired bootstrap (`cts.stats.bootstrap_ci`, percentile, `n_boot=2000` — same convention as every other
+significance claim in this report) on `action_gap − z_t` at this exact regime, computed directly from the
+per-episode deltas already saved in each population's `delta_regret_data.json`:
+
+| population | AG − `z_t` (paired, 95% CI) |
+|---|---|
+| xaba20k | **−0.0157 [−0.0231, −0.0086]** — AG wins |
+| xaba100k | +0.0019 [−0.0005, +0.0042] — ns (tie) |
+| xaba100k_minply15_maxply75 | **−0.0058 [−0.0076, −0.0038]** — AG wins |
+
+`action_gap` significantly **beats** `z_t` at 2 of 3 populations and ties at the third — despite being a
+2-dimensional, zero-training statistic read directly off the tree, against a 33-dimensional learned
+embedding trained through 200 PG epochs.
+
+**Decodability** (same regime-independent `R(t)` probe as above, `action_gap` added as a fourth
+candidate feature):
+
+| population | steps | stats | `z_t` | **action_gap** | all combined |
+|---|---:|---:|---:|---:|---:|
+| xaba20k | 0.123 | 0.274 | 0.257 | **0.303** | 0.630 |
+| xaba100k | 0.132 | 0.272 | **0.451** | 0.279 | 0.757 |
+| xaba100k_minply15_maxply75 | 0.136 | 0.319 | **0.439** | 0.351 | 0.764 |
+
+![ysagiv xaba decodability with action_gap added: z_t leads at the two larger populations, action_gap leads at xaba20k](../figures/ysagiv/xaba20k/png/decodability.png)
+
+`action_gap`'s own orthogonality to trajectory position is consistently low (R² predicting `steps` from
+`action_gap` alone: 0.022–0.026 across all three populations) — as clean as `z_t` (0.092–0.119) and far
+below tree-stats' entanglement with step count (0.760–0.874).
+
+> **Result:** `action_gap` is a genuinely strong, essentially free baseline — not dominated by `z_t` on
+> regret (it wins outright at 2 of 3 populations tested here), even though `z_t` has substantially higher
+> raw decodability at the two larger-scale populations. This is the same "decodability is not a reliable
+> proxy for control quality" pattern this report and `normative.md` already document for `z_t`+stats and
+> for the argmax-filtered branch — now cutting the other way: a *simple* statistic with modest
+> decodability can still out-control a *complex* one with higher decodability. The right reading is not
+> that `z_t` is redundant with `action_gap` — a companion investigation (concatenating both into one
+> readout) found they carry mostly overlapping, not complementary, information at the one regime with
+> enough power to tell — but that a hand-crafted statistic reading the tree's own already-computed
+> backed-up Q-values is a categorically harder baseline to beat than tree-stats (`n_nodes`, `height`,
+> `width`) ever was. Every `z_t`-beats-hand-crafted-baseline claim elsewhere in this investigation used
+> tree-stats as "the hand-crafted baseline" — `action_gap` is a stronger one, and `z_t` does not clearly
+> beat it.
+
+> **Caveat.** Single seed (`seed=0`). The `xaba100k` tie is one point estimate, not yet replicated. These
+> numbers are on the pre-2026-07-10 tree generation (PUCT with a first-play-urgency fallback for unvisited
+> children, later reverted to match `main`'s factory settings — see `labnotebook.md` 2026-07-10) — not yet
+> re-run on trees generated under the reverted code.
+
 ## Methods
 
 **Corpus.** `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees` (read-only throughout),
@@ -343,6 +425,10 @@ run (`pack_trees` 5m08s, `pack_root` max 6m49s/worker over a 10-way array).
   "Does this corroborate on our own corpus too?" section; not reproduced here.
 - **Decodability is not a reliable proxy for control quality** — `argmax>2`'s `z_t` has the highest raw
   R² of any branch tested (0.448) yet is that branch's worst controller by regret.
+- **`action_gap`, a zero-training hand-crafted statistic, significantly beats `z_t` at 2 of 3 populations
+  and ties at the third** (paired bootstrap, see "Does a hand-crafted 'action gap' statistic do just as
+  well..." above) — computed on the pre-2026-07-10 tree generation, not yet re-run under the reverted
+  (factory-PUCT, no FPU-fallback) tree-gen code.
 - **Corpus-independence claims were corrected 2026-07-09.** Every "independently generated / different
   engine / different search algorithm / different root positions" claim in earlier versions of this
   report was wrong — confirmed with Yotam Sagiv that `human_trees` uses our own PUCT pipeline and our
@@ -368,7 +454,10 @@ CONFIG=config_ysagiv_xaba20k.yaml sbatch --dependency=afterok:<5> slurm/pipeline
 
 Figures/data: `outputs/figures/ysagiv/xaba20k/{pdf,png}/{frontier,decodability}.*`,
 `outputs/figures/ysagiv/xaba20k/{frontier,decodability}_data.json`,
-`outputs/figures/ysagiv/xaba20k/regime_sweep/{pdf,png}/regime_select.*`.
+`outputs/figures/ysagiv/xaba20k/regime_sweep/{pdf,png}/regime_select.*`. AG-Controller regeneration
+(2026-07-10, `--which all` at `λ=0.0015, maintenance=0`, `d_embed=32`) additionally produced
+`outputs/figures/ysagiv/{xaba20k,xaba100k,xaba100k_minply15_maxply75}/{pdf,png}/delta_mean_regret_{lambda,maintenance}.*`
+and refreshed `{frontier,decodability,delta_regret}_data.json` in all three population directories.
 
 **100K (staged, not yet submitted):**
 

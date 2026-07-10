@@ -20,7 +20,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 import torch
@@ -28,8 +28,12 @@ from pydantic import BaseModel, ConfigDict
 
 from cts.core.schema import NodeFeatureSchema, tree_encoder_feature_schema
 from cts.data.preprocess_gnn.teacher_targets import (
+    EdgeStats,
     RawPretrainExampleRecord,
     TeacherSearchConfig,
+    _backpropagate_path,
+    _flip_wdl_target,
+    _maybe_static_node_wdl,
     load_raw_pretrain_record,
 )
 from cts.data.preprocess_mc.oracle import (
@@ -620,6 +624,229 @@ def _ordered_expansion_parent_ids(record: RawPretrainExampleRecord) -> List[int]
     return [node_id for _, node_id in expansion_parents]
 
 
+# The static per-node value feature backed up at leaves during PUCT search
+# (matches ``TeacherSearchConfig.value_feature``'s default in teacher_targets.py).
+_VALUE_FEATURE_NAME = "value"
+
+
+class _RecordFeatureNode:
+    """Duck-typed stand-in for ``teacher_targets.SearchNode`` exposing only ``scalar_features``."""
+
+    __slots__ = ("scalar_features",)
+
+    def __init__(self, scalar_features: Dict[str, float]) -> None:
+        self.scalar_features = scalar_features
+
+
+class _RecordFeatureTree:
+    """Duck-typed stand-in for ``teacher_targets.SearchTree`` exposing only ``get_node``.
+
+    ``_maybe_static_node_wdl`` (imported from ``teacher_targets.py``) only ever calls
+    ``tree.get_node(node_id).scalar_features`` -- this adapter supplies exactly that,
+    read straight off the raw record's own dense feature matrix, without paying for a
+    full ``RawPretrainExampleRecord.to_pretrain_example()`` rehydration (FEN replay via
+    python-chess, metadata, one ``SearchNode`` per node) just to read four scalars per
+    expansion event. Relies on ``RawPretrainExampleRecord._node_scalar_feature_dicts``
+    (a "private" cross-module attribute access, same coupling-risk category as the
+    ``teacher_targets._*`` imports at the top of this file -- see history.md's Deferred
+    section).
+    """
+
+    def __init__(self, record: RawPretrainExampleRecord) -> None:
+        self._nodes = [_RecordFeatureNode(features) for features in record._node_scalar_feature_dicts()]
+
+    def get_node(self, node_id: int) -> _RecordFeatureNode:
+        return self._nodes[node_id]
+
+
+def _ancestor_edge_path(parent_index: List[int], node_id: int) -> List[Tuple[int, int]]:
+    """Return the root-to-``node_id`` ancestor edge path, in root-to-leaf order.
+
+    This is exactly the ``path`` that ``TreeSearch.generate``'s PUCT leaf selection
+    takes when ``node_id`` gets picked as the leaf to expand: a leaf's root-to-leaf
+    path is nothing more than its own ancestor chain, which ``parent_index`` already
+    fixes uniquely regardless of *how* PUCT scoring chose it. That is precisely what
+    makes retroactive replay of a *real expansion's* own backup possible without
+    re-running leaf selection at all -- see ``_replay_backprop_history``'s docstring
+    for the one category of backprop event this does NOT recover (repeat visits to an
+    already-terminal node) and why that is an acceptable, small, well-characterized gap
+    rather than something worth chasing with a full PUCT re-simulation.
+    """
+    path: List[Tuple[int, int]] = []
+    current = node_id
+    while parent_index[current] != -1:
+        parent = parent_index[current]
+        path.append((parent, current))
+        current = parent
+    path.reverse()
+    return path
+
+
+def _replay_backprop_history(
+    record: RawPretrainExampleRecord,
+    expansion_parent_ids: List[int],
+    value_feature: str = _VALUE_FEATURE_NAME,
+) -> Dict[str, np.ndarray]:
+    """Retroactively replay a tree's own PUCT backprop history from data already on disk.
+
+    This is the core of ``packhistory_trees``: the fix for the frozen-per-step-value bug
+    described in history.md. No re-generation is needed because every *real* PUCT
+    expansion event's backup is fully determined by information the final tree already
+    carries:
+
+      - *which* node got expanded, and in what order (``expansion_parent_ids``, from
+        ``_ordered_expansion_parent_ids``);
+      - the root-to-that-node ancestor path being backed up, which is fixed by
+        ``parent_index`` alone (``_ancestor_edge_path``) -- PUCT's leaf-selection
+        scoring only decided *which* leaf to expand next, never what path a given
+        leaf's own backup takes, since a leaf's path back to root is unique in a tree;
+      - the leaf's own static value/WDL (a per-node feature baked in at node creation
+        and never mutated afterward -- see ``PUCTSearch.on_expand`` in
+        teacher_targets.py -- read via ``_maybe_static_node_wdl``, imported not
+        duplicated).
+
+    Reuses ``EdgeStats``/``_backpropagate_path`` (imported from teacher_targets.py, not
+    duplicated) to replay the exact same running-mean bookkeeping generation itself used.
+
+    Root/creation order fix: newly created children are seeded into ``edge_stats`` in
+    ASCENDING NODE ID order (via ``parent_index`` directly), not
+    ``children_index[child_ptr[...]]`` CSR order -- CSR order is sorted by UCI move
+    string in this raw format, not creation order, and node ids are assigned
+    sequentially at creation time, so ascending id is the one true creation order.
+
+    What this does NOT recover, and why that is the right tradeoff: PUCT leaf selection
+    (``_select_leaf_by_puct`` in teacher_targets.py) can, and empirically does,
+    repeatedly re-select an already-permanently-terminal node as the best leaf (e.g. a
+    discovered forced mate) without ever expanding it again. Each such repeat visit
+    still runs a full backprop up its ancestor path but creates no new node, so it
+    leaves no trace in the final tree structure or in ``expansion_parent_ids`` -- this
+    function does not attempt to recover those "wasted" backprop events. Doing so would
+    require re-running the exact same deterministic PUCT leaf-selection procedure that
+    produced them, using each node's *static* ``prior`` feature -- but that feature is
+    only available post-hoc as float16 (this raw format's on-disk dtype, see
+    ``RawPretrainExampleRecord.__post_init__``), a precision loss the live search itself
+    never had. An earlier version of this function did attempt the full PUCT
+    re-simulation and was found, via this module's own validation against real
+    ``human_trees``, to occasionally (on ~1/40 sampled trees) diverge onto a *completely
+    different* branch after a near-tied PUCT score got decided the other way by float16
+    rounding -- a large, unbounded, hard-to-predict error, strictly worse than the
+    small gap from just not chasing terminal-revisit backprop mass. Measured directly
+    (40 sampled ``human_trees``, every step x every root child, ~94k comparisons against
+    the tree's own stored ``oracle_root_q_trace``) for the simpler approach implemented
+    here: median error 0.0, p95 = 1.5e-4, p99 = 2.2e-4, only 0.16% of comparisons above
+    1e-3, concentrated in a small number of terminal-revisit-heavy trees (one outlier
+    tree reached 0.056; every other sampled tree's worst step was <= 0.004). This
+    matches, and gives fuller context for, the "~1e-4 residual" already flagged in
+    history.md's Deferred section. See this stage's Progress Log entry in history.md
+    for the full measurement and the schema-deviation note (this function ended up
+    NOT needing a direct call to ``_flip_wdl_target``, since ``_backpropagate_path``
+    already applies it internally).
+
+    Returns a dict of parallel numpy arrays for the sparse update-log schema
+    (``step_index``, ``node_id``, ``visit_count``, ``q_value``, ``wdl``), already sorted
+    by ``(node_id, step_index)`` ascending (achieved for free by iterating node ids in
+    order, since each node's own update history is already time-ordered by
+    construction), plus the CSR ``node_update_ptr`` index and each node's *final*
+    (as of the last replayed step) value/WDL for convenience.
+
+    ``step_index`` convention -- read this before querying "value as of step t" from
+    the log, it is a common off-by-one trap: ``step_index`` is the 0-indexed position
+    of an expansion event within ``expansion_parent_ids`` (i.e. within
+    ``record.oracle_trace_expansion_counts``, whose values are the 1-indexed
+    ``num_expansions`` count). A log row with ``step_index == k`` reflects the state
+    immediately after the ``(k + 1)``-th real expansion -- i.e. it lines up with
+    ``record.oracle_root_q_trace[k]`` / ``record.oracle_trace_expansion_counts[k]``
+    (== ``k + 1``) directly, at the *same* 0-indexed row ``k``, not ``k + 1``. A
+    forward-fill "value as of step t" query into this log should therefore be called
+    with ``t = k`` to reproduce oracle row ``k`` -- calling it with ``t = k + 1``
+    (e.g. by mistakenly treating ``step_index`` as 1-indexed, matching
+    ``oracle_trace_expansion_counts``' own values instead of its *index*) silently
+    includes one extra expansion's worth of backprop and can produce spurious,
+    sometimes large, mismatches against ``oracle_root_q_trace`` that look like a
+    replay-accuracy bug but are actually a caller-side indexing bug. (Confirmed
+    directly against one such apparent mismatch during this stage's own validation:
+    error 0.0058 querying with the off-by-one convention at a step where the correctly
+    -indexed query gives error 0.0 exactly -- see this stage's Progress Log entry in
+    history.md.)
+    """
+    num_nodes = int(record.parent_index.shape[0])
+    parent_index = record.parent_index.tolist()
+
+    # Children in ascending node id order -- see the "Root/creation order fix" note
+    # above. Iterating node_id ascending and appending yields exactly this order.
+    children_by_parent: Dict[int, List[int]] = {}
+    for node_id in range(1, num_nodes):
+        children_by_parent.setdefault(parent_index[node_id], []).append(node_id)
+
+    feature_tree = _RecordFeatureTree(record)
+    edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
+    updates_by_node: Dict[int, List[Tuple[int, int, float, Tuple[float, float, float]]]] = {}
+
+    for step_index, parent_id in enumerate(expansion_parent_ids):
+        # Seed the newly created children's edges, mirroring PUCTSearch.on_expand.
+        # These do not themselves get a log row: a freshly-born edge has
+        # visit_count == 0 until some later expansion backs a value up through it.
+        for child_id in children_by_parent.get(parent_id, []):
+            edge_stats[(parent_id, child_id)] = EdgeStats()
+
+        path = _ancestor_edge_path(parent_index, parent_id)
+        if not path:
+            # The root's own expansion event: no incoming edge, nothing to back up.
+            continue
+
+        leaf_value = float(feature_tree.get_node(parent_id).scalar_features[value_feature])
+        leaf_wdl = _maybe_static_node_wdl(feature_tree, parent_id)
+        _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
+
+        for ancestor_id, descendant_id in path:
+            stats = edge_stats[(ancestor_id, descendant_id)]
+            updates_by_node.setdefault(descendant_id, []).append(
+                (step_index, stats.visit_count, stats.q_value, stats.mean_wdl)
+            )
+
+    step_index_col: List[int] = []
+    node_id_col: List[int] = []
+    visit_count_col: List[int] = []
+    q_value_col: List[float] = []
+    wdl_col: List[Tuple[float, float, float]] = []
+    node_update_ptr = [0]
+    final_value = np.zeros(num_nodes, dtype=np.float32)
+    final_wdl = np.zeros((num_nodes, 3), dtype=np.float32)
+    for node_id in range(num_nodes):
+        rows = updates_by_node.get(node_id, [])
+        for step, visit_count, q_value, wdl in rows:
+            step_index_col.append(step)
+            node_id_col.append(node_id)
+            visit_count_col.append(visit_count)
+            q_value_col.append(q_value)
+            wdl_col.append(wdl)
+        if rows:
+            _, _, last_q_value, last_wdl = rows[-1]
+            final_value[node_id] = last_q_value
+            final_wdl[node_id] = last_wdl
+        # Nodes with no update-log rows (never visited by any backprop event --
+        # 88.8%/97.7% of nodes on the two trees measured during planning) keep the
+        # EdgeStats()-zero default here, exactly matching what a live query against
+        # generation's own edge_stats would have returned for an unvisited edge (see
+        # teacher_targets._root_q_values_from_edge_stats's explicit 0.0 fallback).
+        node_update_ptr.append(len(step_index_col))
+
+    return {
+        "update_log_step_index": np.asarray(step_index_col, dtype=np.int32),
+        "update_log_node_id": np.asarray(node_id_col, dtype=np.int32),
+        "update_log_visit_count": np.asarray(visit_count_col, dtype=np.int32),
+        "update_log_q_value": np.asarray(q_value_col, dtype=np.float32),
+        "update_log_wdl": (
+            np.asarray(wdl_col, dtype=np.float32).reshape(-1, 3)
+            if wdl_col
+            else np.zeros((0, 3), dtype=np.float32)
+        ),
+        "node_update_ptr": np.asarray(node_update_ptr, dtype=np.int32),
+        "final_value": final_value,
+        "final_wdl": final_wdl,
+    }
+
+
 def build_compact_trajectory(
     record: RawPretrainExampleRecord,
     schema: NodeFeatureSchema | None = None,
@@ -684,10 +911,48 @@ def _build_compact_trajectory(
     trimmed_best_move_index = record.oracle_best_move_index.to(dtype=torch.long)[root_rank:]
     trimmed_halt_rewards = record.oracle_final_root_q_values.to(dtype=torch.float32)[trimmed_best_move_index]
 
+    # Retroactively replay this tree's own backprop history (the actual bug fix --
+    # see _replay_backprop_history's docstring). ``full_tree.node_features`` as
+    # returned by ``to_tensorized_tree_example`` carries the STATIC, one-shot
+    # per-node provider features (each node's own network eval, baked in at node
+    # creation and never mutated -- see teacher_targets.value_features_from_wdl);
+    # packing that directly, unchanged, for every step is exactly the bug this
+    # stage fixes. The "value"/"wdl_win"/"wdl_draw"/"wdl_loss" columns are
+    # overwritten below with each node's *final* replayed backed-up value/WDL
+    # (its own incoming edge's EdgeStats, i.e. the same quantity
+    # oracle_root_q_trace records for root children) so that even a consumer that
+    # ignores the sparse update log below gets the converged, correct value
+    # rather than the never-updated static eval. "wdl_var" is left untouched: the
+    # update-log schema (per history.md) tracks only visit_count/q_value/wdl, not
+    # a variance term, and wdl_var is a property of the node's own static WDL
+    # distribution, not something backprop revises.
+    #
+    # Per-STEP (not just final) values are not densely materialized here -- doing
+    # so would be an O(steps * nodes * features) blow-up per tree. Instead this
+    # function packs (a) this static/final-state feature matrix and (b) the full
+    # sparse update log (below), so downstream per-step consumption
+    # (packhistory_MCmaterialize / packhistory_GNNpretrain) does an O(log M)
+    # forward-fill lookup into the log rather than reading a pre-materialized
+    # dense per-step tensor. See this stage's Progress Log entry in history.md for
+    # this interpretation note.
+    replay = _replay_backprop_history(record, expansion_parent_ids, value_feature=_VALUE_FEATURE_NAME)
+    node_features = full_tree.node_features.clone()
+    feature_columns = {name: index for index, name in enumerate(schema.feature_names)}
+    if _VALUE_FEATURE_NAME in feature_columns:
+        node_features[:, feature_columns[_VALUE_FEATURE_NAME]] = torch.from_numpy(replay["final_value"]).to(
+            dtype=node_features.dtype
+        )
+    wdl_feature_names = ("wdl_win", "wdl_draw", "wdl_loss")
+    if all(name in feature_columns for name in wdl_feature_names):
+        for wdl_index, name in enumerate(wdl_feature_names):
+            node_features[:, feature_columns[name]] = torch.from_numpy(replay["final_wdl"][:, wdl_index]).to(
+                dtype=node_features.dtype
+            )
+
     return {
         "num_steps": len(trimmed_node_cutoffs),
         "source_path": path_str,
-        "node_features": full_tree.node_features.numpy(),
+        "node_features": node_features.numpy(),
         "parent_index": full_tree.parent_index.numpy(),
         "depth": full_tree.depth.numpy(),
         "child_ptr": record.child_ptr.numpy(),
@@ -698,6 +963,18 @@ def _build_compact_trajectory(
         "step_node_cutoffs": np.asarray(trimmed_node_cutoffs, dtype=np.int32),
         "halt_rewards": trimmed_halt_rewards.numpy(),
         "tree_sizes": np.asarray(trimmed_node_cutoffs, dtype=np.int64),
+        # Sparse per-edge backprop update log (packhistory_GNNpretrain's only
+        # input, per history.md) -- full untrimmed history (0-indexed by position
+        # in ``expansion_parent_ids``, NOT re-based to ``root_rank`` the way the
+        # step_node_cutoffs/tree_sizes above are), since GNN pretraining samples
+        # over the full 96-step search budget, not just the controller's
+        # post-root-expansion decision window.
+        "update_log_step_index": replay["update_log_step_index"],
+        "update_log_node_id": replay["update_log_node_id"],
+        "update_log_visit_count": replay["update_log_visit_count"],
+        "update_log_q_value": replay["update_log_q_value"],
+        "update_log_wdl": replay["update_log_wdl"],
+        "node_update_ptr": replay["node_update_ptr"],
     }
 
 
@@ -1014,6 +1291,13 @@ def _accumulate_shard_buffers(
     trajectory_child_ptr_ptr = [0]
     trajectory_expansion_parent_ptr = [0]
     trajectory_step_ptr = [0]
+    # CSR offsets into the shard-level concatenated update-log arrays (mirrors
+    # trajectory_edge_ptr's role for edge_child) and into the shard-level
+    # concatenated node_update_ptr array (mirrors trajectory_child_ptr_ptr's role
+    # for child_ptr, since node_update_ptr, like child_ptr, has length N_tree + 1
+    # per tree and stores LOCAL per-tree offsets).
+    trajectory_update_log_ptr = [0]
+    trajectory_node_update_ptr_ptr = [0]
     all_node_features: List[torch.Tensor] = []
     all_parent_index: List[torch.Tensor] = []
     all_edge_child: List[torch.Tensor] = []
@@ -1024,6 +1308,12 @@ def _accumulate_shard_buffers(
     all_step_node_cutoffs: List[torch.Tensor] = []
     all_trajectory_halt_rewards: List[torch.Tensor] = []
     all_first_decision_expansion_counts: List[int] = []
+    all_update_log_step_index: List[torch.Tensor] = []
+    all_update_log_node_id: List[torch.Tensor] = []
+    all_update_log_visit_count: List[torch.Tensor] = []
+    all_update_log_q_value: List[torch.Tensor] = []
+    all_update_log_wdl: List[torch.Tensor] = []
+    all_node_update_ptr: List[torch.Tensor] = []
     trajectory_source_paths: List[str] = []
     episode_step_ptr = [0]
     episode_trajectory_index: List[int] = []
@@ -1064,6 +1354,12 @@ def _accumulate_shard_buffers(
             trajectory_expansion_parent_ptr[-1] + int(trajectory_data["expansion_parent_ids"].shape[0])
         )
         trajectory_step_ptr.append(trajectory_step_ptr[-1] + int(trajectory_data["step_node_cutoffs"].shape[0]))
+        trajectory_update_log_ptr.append(
+            trajectory_update_log_ptr[-1] + int(trajectory_data["update_log_step_index"].shape[0])
+        )
+        trajectory_node_update_ptr_ptr.append(
+            trajectory_node_update_ptr_ptr[-1] + int(trajectory_data["node_update_ptr"].shape[0])
+        )
 
         all_node_features.append(trajectory_data["node_features"])
         all_parent_index.append(trajectory_data["parent_index"])
@@ -1075,6 +1371,12 @@ def _accumulate_shard_buffers(
         all_step_node_cutoffs.append(trajectory_data["step_node_cutoffs"])
         all_trajectory_halt_rewards.append(trajectory_data["halt_rewards"])
         all_first_decision_expansion_counts.append(int(trajectory_data["first_decision_expansion_count"]))
+        all_update_log_step_index.append(trajectory_data["update_log_step_index"])
+        all_update_log_node_id.append(trajectory_data["update_log_node_id"])
+        all_update_log_visit_count.append(trajectory_data["update_log_visit_count"])
+        all_update_log_q_value.append(trajectory_data["update_log_q_value"])
+        all_update_log_wdl.append(trajectory_data["update_log_wdl"])
+        all_node_update_ptr.append(trajectory_data["node_update_ptr"])
 
         # Append each episode that survived filtering, recording which
         # trajectory it came from so the cache materializer can join them.
@@ -1099,6 +1401,8 @@ def _accumulate_shard_buffers(
         "trajectory_child_ptr_ptr": trajectory_child_ptr_ptr,
         "trajectory_expansion_parent_ptr": trajectory_expansion_parent_ptr,
         "trajectory_step_ptr": trajectory_step_ptr,
+        "trajectory_update_log_ptr": trajectory_update_log_ptr,
+        "trajectory_node_update_ptr_ptr": trajectory_node_update_ptr_ptr,
         "all_node_features": all_node_features,
         "all_parent_index": all_parent_index,
         "all_edge_child": all_edge_child,
@@ -1109,6 +1413,12 @@ def _accumulate_shard_buffers(
         "all_step_node_cutoffs": all_step_node_cutoffs,
         "all_trajectory_halt_rewards": all_trajectory_halt_rewards,
         "all_first_decision_expansion_counts": all_first_decision_expansion_counts,
+        "all_update_log_step_index": all_update_log_step_index,
+        "all_update_log_node_id": all_update_log_node_id,
+        "all_update_log_visit_count": all_update_log_visit_count,
+        "all_update_log_q_value": all_update_log_q_value,
+        "all_update_log_wdl": all_update_log_wdl,
+        "all_node_update_ptr": all_node_update_ptr,
         "trajectory_source_paths": trajectory_source_paths,
         "episode_step_ptr": episode_step_ptr,
         "episode_trajectory_index": episode_trajectory_index,
@@ -1134,7 +1444,12 @@ def _serialize_shard_payload(
 ) -> None:
     """Concat buffered tensors and write the shard's ``.pt`` payload to disk."""
     payload = {
-        "format": "cts_budgeted_controller_episode_shard_v4",
+        # New format for the packhistory_trees stage (rewrite of mc_pack): adds the
+        # sparse per-edge backprop update log fields below. Bumped from
+        # "cts_budgeted_controller_episode_shard_v4" (the old mc_pack format, still
+        # used by pre-existing mc_packed/ shards, untouched by this stage) so
+        # consumers can tell the two apart.
+        "format": "cts_packhistory_trees_shard_v1",
         "num_trajectories": len(buffers["trajectory_source_paths"]),
         "num_episodes": shard_episodes,
         "feature_names": list(schema.feature_names),
@@ -1144,6 +1459,10 @@ def _serialize_shard_payload(
         "trajectory_child_ptr_ptr": torch.tensor(buffers["trajectory_child_ptr_ptr"], dtype=torch.long),
         "trajectory_expansion_parent_ptr": torch.tensor(buffers["trajectory_expansion_parent_ptr"], dtype=torch.long),
         "trajectory_step_ptr": torch.tensor(buffers["trajectory_step_ptr"], dtype=torch.long),
+        # CSR offsets for the sparse update log -- see _accumulate_shard_buffers's
+        # comment for how these relate to the (per-tree-local) node_update_ptr values.
+        "trajectory_update_log_ptr": torch.tensor(buffers["trajectory_update_log_ptr"], dtype=torch.long),
+        "trajectory_node_update_ptr_ptr": torch.tensor(buffers["trajectory_node_update_ptr_ptr"], dtype=torch.long),
         "episode_step_ptr": torch.tensor(buffers["episode_step_ptr"], dtype=torch.long),
         "episode_trajectory_index": torch.tensor(buffers["episode_trajectory_index"], dtype=torch.long),
         "node_features": torch.cat(buffers["all_node_features"], dim=0),
@@ -1158,6 +1477,32 @@ def _serialize_shard_payload(
         if buffers["all_trajectory_halt_rewards"]
         else torch.empty(0, dtype=torch.float32),
         "first_decision_expansion_counts": torch.tensor(buffers["all_first_decision_expansion_counts"], dtype=torch.long),
+        # Sparse per-edge backprop update log, concatenated across every tree in
+        # this shard. Sorted within each tree's own slice by (node_id, step_index)
+        # ascending; node_update_ptr entries are LOCAL per-tree CSR offsets (mirrors
+        # child_ptr's convention) -- use trajectory_update_log_ptr /
+        # trajectory_node_update_ptr_ptr (above) to find a given tree's slice of
+        # these concatenated arrays. See _replay_backprop_history's docstring for
+        # the full schema and history.md's "Stage: packhistory_trees" section for
+        # the source-of-truth spec.
+        "update_log_step_index": torch.cat(buffers["all_update_log_step_index"], dim=0)
+        if buffers["all_update_log_step_index"]
+        else torch.empty(0, dtype=torch.int32),
+        "update_log_node_id": torch.cat(buffers["all_update_log_node_id"], dim=0)
+        if buffers["all_update_log_node_id"]
+        else torch.empty(0, dtype=torch.int32),
+        "update_log_visit_count": torch.cat(buffers["all_update_log_visit_count"], dim=0)
+        if buffers["all_update_log_visit_count"]
+        else torch.empty(0, dtype=torch.int32),
+        "update_log_q_value": torch.cat(buffers["all_update_log_q_value"], dim=0)
+        if buffers["all_update_log_q_value"]
+        else torch.empty(0, dtype=torch.float32),
+        "update_log_wdl": torch.cat(buffers["all_update_log_wdl"], dim=0)
+        if buffers["all_update_log_wdl"]
+        else torch.empty((0, 3), dtype=torch.float32),
+        "node_update_ptr": torch.cat(buffers["all_node_update_ptr"], dim=0)
+        if buffers["all_node_update_ptr"]
+        else torch.empty(0, dtype=torch.int32),
         "target_advantages": torch.cat(buffers["all_target_advantages"], dim=0),
         "oracle_stop_steps": torch.tensor(buffers["all_oracle_stop_steps"], dtype=torch.long),
         "oracle_values": torch.tensor(buffers["all_oracle_values"], dtype=torch.float32),
@@ -1572,6 +1917,12 @@ def _numpy_to_torch(result: dict) -> dict:
                 "step_node_cutoffs": torch.from_numpy(result["step_node_cutoffs"]),
                 "halt_rewards": torch.from_numpy(result["halt_rewards"]),
                 "tree_sizes": torch.from_numpy(result["tree_sizes"]),
+                "update_log_step_index": torch.from_numpy(result["update_log_step_index"]),
+                "update_log_node_id": torch.from_numpy(result["update_log_node_id"]),
+                "update_log_visit_count": torch.from_numpy(result["update_log_visit_count"]),
+                "update_log_q_value": torch.from_numpy(result["update_log_q_value"]),
+                "update_log_wdl": torch.from_numpy(result["update_log_wdl"]),
+                "node_update_ptr": torch.from_numpy(result["node_update_ptr"]),
             }
         )
     if "target_advantages" in result:

@@ -786,11 +786,20 @@ class ControllerEpisodeDataset(Dataset):
     def __len__(self) -> int:
         return self.cumulative_sizes[-1]
 
+    # Shard formats this dataset can read: the original one-shot-frozen-value
+    # format, and packhistory_trees' (Task 1's) format, which adds the sparse
+    # per-edge update log (see history.md "Stage: packhistory_trees"). Both are
+    # accepted so this dataset keeps working against pre-Task-1 packed data too.
+    _SUPPORTED_SHARD_FORMATS = (
+        "cts_budgeted_controller_episode_shard_v4",
+        "cts_packhistory_trees_shard_v1",
+    )
+
     def _load_shard(self, shard_index: int) -> Dict[str, Any]:
         """Return the shard payload, loading from disk only on a cache miss."""
         if self._loaded_shard_index != shard_index:
             payload = torch.load(self.shard_paths[shard_index], weights_only=False)
-            if payload.get("format") != "cts_budgeted_controller_episode_shard_v4":
+            if payload.get("format") not in self._SUPPORTED_SHARD_FORMATS:
                 raise ValueError(f"Unexpected shard format: {self.shard_paths[shard_index]}")
             self._loaded_shard_index = shard_index
             self._loaded_payload = payload
@@ -834,6 +843,72 @@ class ControllerEpisodeDataset(Dataset):
         full_parent_index = payload["parent_index"][node_begin:node_end]
         full_depth = payload["depth"][node_begin:node_end]
 
+        # --- history.md "Stage: packhistory_MCmaterialize" (Task 5) ---
+        # ``full_node_features`` above is the pre-existing one-shot, frozen
+        # tensorization (each node's own raw leaf eval, baked once from the
+        # complete tree — see history.md "What's wrong with the current code").
+        # If this shard was produced by the new packhistory_trees stage (Task 1),
+        # it also carries a sparse per-edge update log recording each node's real
+        # backed-up value/WDL as backprop revised it during search (schema fixed
+        # in history.md "Stage: packhistory_trees" > "Update log schema":
+        # step_index/node_id/visit_count/q_value/wdl[3], sorted by
+        # (node_id, step_index), node ids LOCAL to this trajectory — same
+        # convention as ``parent_index``/``edge_child`` above).
+        #
+        # Field names below (``update_log_step_index``, ``update_log_node_id``,
+        # ``update_log_q_value``, ``update_log_wdl``, ``trajectory_update_log_ptr``)
+        # were this task's own guess, made before Task 1 landed, mirroring the
+        # existing ``trajectory_edge_ptr`` / ``trajectory_child_ptr_ptr``
+        # pointer-array convention used elsewhere in this same method.
+        # Reconciled 2026-07-10 against Task 1's actual, landed implementation
+        # (preprocess_mc/pack.py's ``_serialize_shard_payload``): every one of
+        # these field names matches exactly — no renaming needed. (Task 1 also
+        # ships ``update_log_visit_count``, ``node_update_ptr``, and
+        # ``trajectory_node_update_ptr_ptr`` for CSR point-lookups, which this
+        # method doesn't need — its access pattern is a single forward sweep
+        # over steps, not random-access per-node queries — see
+        # ``packhistory_GNNpretrain``/``pack_history.py`` for where those are
+        # actually used.) The step-index convention was NOT a correct guess —
+        # see the fixed off-by-one in the per-step loop below and the Task 5
+        # Progress Log entry in history.md for the reconciliation. Falls back
+        # to the old frozen-slice behavior below when these fields are absent
+        # (older shard format, or Task 1 not yet run),
+        # so this dataset keeps working against today's packed data too.
+        update_log_step_index_all = payload.get("update_log_step_index")
+        has_update_log = update_log_step_index_all is not None
+        if has_update_log:
+            trajectory_update_log_ptr = payload["trajectory_update_log_ptr"]
+            log_begin = int(trajectory_update_log_ptr[trajectory_index].item())
+            log_end = int(trajectory_update_log_ptr[trajectory_index + 1].item())
+            log_step_index = update_log_step_index_all[log_begin:log_end]
+            log_node_id = payload["update_log_node_id"][log_begin:log_end]
+            log_q_value = payload["update_log_q_value"][log_begin:log_end]
+            log_wdl = payload["update_log_wdl"][log_begin:log_end]
+            # The packed log is sorted by (node_id, step_index) — the layout
+            # that gives O(log M) per-node lookup, per history.md — not by
+            # step_index alone. Re-sort by step_index (stable, so entries that
+            # share a step keep their node_id-ascending relative order) so the
+            # per-step loop below can apply updates with one linear sweep
+            # instead of re-scanning per node at every step.
+            step_order = torch.argsort(log_step_index, stable=True)
+            log_step_index = log_step_index[step_order].tolist()
+            log_node_id = log_node_id[step_order].tolist()
+            log_q_value = log_q_value[step_order]
+            log_wdl = log_wdl[step_order]
+            num_log_entries = len(log_step_index)
+            log_cursor = 0
+            # Running per-node state, forward-filled step by step. Starts from
+            # the same baseline the old code used unconditionally (each node's
+            # pre-backprop static value) and is overwritten in place as log
+            # entries are applied — this IS the fix: node ROWS now carry
+            # step-accurate values, not just a longer/shorter prefix of one
+            # static tensor. Column layout is TREE_ENCODER_FEATURE_NAMES =
+            # ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
+            # (cts/core/schema.py); wdl_var (column 4) has no corresponding
+            # field in the update-log schema and is left at its baseline value
+            # throughout — variance-over-visits isn't tracked by replay.
+            running_node_features = full_node_features.clone()
+
         trajectory_edge_ptr = payload["trajectory_edge_ptr"]
         edge_begin = int(trajectory_edge_ptr[trajectory_index].item())
         edge_end = int(trajectory_edge_ptr[trajectory_index + 1].item())
@@ -876,7 +951,52 @@ class ControllerEpisodeDataset(Dataset):
         for local_step in range(num_steps):
             node_cutoff = int(step_node_cutoffs[local_step].item())
             expansion_count = first_decision_expansion_count + local_step
-            step_nf.append(full_node_features[:node_cutoff])
+
+            if has_update_log:
+                # Advance the log cursor to absorb every update whose
+                # step_index has already happened as of this step (cumulative
+                # values, per schema — a later entry for the same node simply
+                # overwrites, no accumulation needed here).
+                #
+                # Reconciled against Task 1's actual implementation
+                # (preprocess_mc/pack.py, ``_replay_backprop_history`` /
+                # ``_build_compact_trajectory``): ``step_index`` is the
+                # 0-indexed position of an expansion event within
+                # ``expansion_parent_ids`` (tagged BEFORE increment — a log row
+                # with ``step_index == k`` reflects the state immediately after
+                # the ``(k+1)``-th real expansion). ``step_node_cutoffs[local_step]``
+                # (this method's structural cutoff) is built the same way: it
+                # reflects the tree after processing
+                # ``expansion_parent_ids[0 : first_decision_expansion_count + local_step]``,
+                # i.e. after the expansion event at 0-indexed position
+                # ``expansion_count - 1`` (== ``first_decision_expansion_count
+                # + local_step - 1``) was just processed. So the update-log
+                # query that matches this step's structural cutoff must use
+                # ``step_index <= expansion_count - 1``, not ``<= expansion_count``
+                # — this is the exact same before/after-increment off-by-one
+                # Task 4 found and fixed in ``pack_history.py:_build_tree_n``
+                # (see history.md, Task 4 Progress Log, "Off-by-one fixed").
+                # Using ``<= expansion_count`` here would leak one extra
+                # expansion's worth of backprop into this step's values —
+                # confirmed concretely against real data (see Task 5 Progress
+                # Log entry for 2026-07-10, reconciliation pass).
+                while log_cursor < num_log_entries and log_step_index[log_cursor] <= expansion_count - 1:
+                    node_id = log_node_id[log_cursor]
+                    if node_id < running_node_features.shape[0]:
+                        running_node_features[node_id, 0] = log_q_value[log_cursor]
+                        running_node_features[node_id, 1:4] = log_wdl[log_cursor]
+                    log_cursor += 1
+                # Clone: running_node_features is mutated in place on later
+                # iterations, so a bare slice (a view) would retroactively
+                # change earlier steps' already-appended tensors.
+                step_nf.append(running_node_features[:node_cutoff].clone())
+            else:
+                # Fallback for shards without an update log (pre-Task-1 packed
+                # data): reproduces today's frozen-slice behavior exactly. This
+                # is the documented bug (history.md "What's wrong with the
+                # current code"), kept only so this dataset still runs against
+                # packed data that predates packhistory_trees landing.
+                step_nf.append(full_node_features[:node_cutoff])
             step_pi.append(full_parent_index[:node_cutoff])
             step_d.append(full_depth[:node_cutoff])
 
