@@ -667,11 +667,11 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
     """Expensive half of the decodability plot: load data, fit the linear/MLP R^2 probes. Returns a
     JSON-serializable dict consumed by ``_render_decodability``."""
     from cts.analysis.zt_probe import _linear_r2, _mlp_r2, _episode_split_mask  # local: avoids circular import
-    episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes)
+    episodes = _load_split_episodes(packed_root, "validation", max_episodes=max_episodes, load_action_gaps=True)
     z_by_ep = _load_zt_by_episode(episodes, cache_path, d_embed)
     step_counts = [len(ep["halt_rewards"]) for ep in episodes]
     total = int(sum(step_counts))
-    cols = {k: [] for k in ("R", "steps", "heights", "widths", "nnodes", "z")}
+    cols = {k: [] for k in ("R", "steps", "heights", "widths", "nnodes", "z", "ag")}
     for ep, z_ep in zip(episodes, z_by_ep):
         hr = np.asarray(ep["halt_rewards"], np.float64)
         cols["R"].append(np.maximum.accumulate(hr[::-1])[::-1] - hr)
@@ -680,9 +680,11 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
         cols["widths"].append(np.asarray(ep["widths"], np.float64))
         cols["nnodes"].append(np.asarray(ep["tree_sizes"], np.float64))
         cols["z"].append(z_ep)
+        cols["ag"].append(np.asarray(ep["action_gaps"], np.float64))
     R = np.concatenate(cols["R"])
     steps, heights = np.concatenate(cols["steps"]), np.concatenate(cols["heights"])
     widths, nnodes, z = np.concatenate(cols["widths"]), np.concatenate(cols["nnodes"]), np.concatenate(cols["z"], axis=0)
+    ag = np.concatenate(cols["ag"])
     traj_keys = [ep["trajectory_key"] for ep in episodes]
     is_tr = _episode_split_mask(step_counts, total, seed=seed, trajectory_keys=traj_keys); is_te = ~is_tr
 
@@ -691,19 +693,23 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
     # the reported R^2 mostly reflected R(t)'s near-tautological relationship
     # with trajectory position (fewer remaining steps -> mechanically less
     # room for R(t)'s forward-max to be large), not what z_t itself encodes.
-    # "all" is kept as a reference upper bound (every signal combined).
+    # "action_gap" (2026-07-10) is the same head-to-head baseline used by the
+    # frontier/delta-regret plots, added here so decodability can be read
+    # against it directly. "all" is kept as a reference upper bound (every
+    # signal combined, now including action_gap).
     feats = {"steps": np.column_stack([steps]),
              "stats": np.column_stack([nnodes, heights, widths]),
              "z_t": np.column_stack([z]),
-             "all (steps+stats+z_t)": np.column_stack([steps, nnodes, heights, widths, z])}
+             "action_gap": np.column_stack([ag]),
+             "all (steps+stats+z_t+ag)": np.column_stack([steps, nnodes, heights, widths, z, ag])}
     rows = [(name, _linear_r2(X[is_tr], R[is_tr], X[is_te], R[is_te]),
              _mlp_r2(X[is_tr], R[is_tr], X[is_te], R[is_te], seed=seed)) for name, X in feats.items()]
-    Xall = np.column_stack([steps, nnodes, heights, widths, z])
+    Xall = np.column_stack([steps, nnodes, heights, widths, z, ag])
     Xs = Xall[np.random.default_rng(seed + 7).permutation(total)]
     shuf_r2 = _linear_r2(Xs[is_tr], R[is_tr], Xs[is_te], R[is_te])
 
-    # Orthogonality check: how much does "stats" or "z_t" ALONE already
-    # decode "steps" itself? High values here mean stats/z_t are entangled
+    # Orthogonality check: how much does "stats"/"z_t"/"action_gap" ALONE already
+    # decode "steps" itself? High values here mean the feature is entangled
     # with trajectory position, not independent of it — the entanglement
     # that made the old nested-feature design misleading in the first place.
     orthogonality = {
@@ -711,6 +717,8 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
             np.column_stack([nnodes, heights, widths])[is_tr], steps[is_tr],
             np.column_stack([nnodes, heights, widths])[is_te], steps[is_te]),
         "z_t_predicts_steps": _linear_r2(z[is_tr], steps[is_tr], z[is_te], steps[is_te]),
+        "action_gap_predicts_steps": _linear_r2(
+            ag.reshape(-1, 1)[is_tr], steps[is_tr], ag.reshape(-1, 1)[is_te], steps[is_te]),
     }
     return {"rows": rows, "shuf_r2": shuf_r2, "orthogonality": orthogonality}
 
@@ -733,7 +741,7 @@ def _render_decodability(data: dict, out_dir: str | Path) -> dict:
     ax.axvline(shuf_r2, color=_MUTED, ls="--", lw=1.3, label=f"Shuffle Floor ({shuf_r2:+.2f})")
     ax.axvline(0, color=_MUTED, lw=0.8)
     ax.set_yticks(y)
-    ax.set_yticklabels(["steps", "stats", "$z_t$", "combined"], fontsize=10.5)
+    ax.set_yticklabels(["steps", "stats", "$z_t$", "action gap", "combined"], fontsize=10.5)
     ax.invert_yaxis()
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.set_xlabel(r"R(t) Variance Explained (held-out $R^2$)")
