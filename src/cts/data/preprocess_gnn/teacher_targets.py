@@ -60,14 +60,13 @@ class TeacherSearchConfig:
 
     ``selection`` picks the generation-time leaf-selection rule:
       - ``"puct"`` (only option, default): AlphaZero PUCT, ``Q + c_puct * P *
-        sqrt(N)/(1+n)``. An unvisited child (``visit_count == 0``) uses a
-        first-play-urgency fallback of ``-static_value_of_child`` (sign-flipped
-        to the parent's POV) instead of a hardcoded ``Q=0`` — informed by that
-        child's own static eval rather than treating it like a known draw.
-        This value is seeded once into ``EdgeStats.fpu_value`` when the edge
-        is created and read by every consumer of ``q_value`` (selection, the
-        oracle trace, etc.); visited children's ``Q`` is always the genuine
-        visit-mean, never diluted by the seed.
+        sqrt(N)/(1+n)``. An unvisited child (``visit_count == 0``) reports a
+        hardcoded ``Q=0`` — no first-play-urgency fallback. Exploration of
+        unvisited children is driven by the prior term alone, which is
+        sufficient here since priors come from lc0's own policy network
+        rather than being uniform/uninformative. (FPU was added post-split
+        from ``main`` and reverted 2026-07-10 to match factory PUCT — see
+        ``labnotebook.md``.)
 
       A ``"befs"`` best-first-minimax alternative existed but was removed
       2026-07-08: its selection rule tunnel-visioned (committed an entire
@@ -154,16 +153,11 @@ class EdgeStats:
     visit_count: int = 0  # number of PUCT visits that traversed this edge
     total_value: float = 0.0  # sum of side-corrected leaf values backed up through this edge
     total_wdl: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # sum of side-corrected leaf WDLs
-    fpu_value: float = 0.0  # first-play-urgency seed: child's own static value, sign-flipped to
-    # the parent's POV, set once when the edge is created (see PUCTSearch.on_expand). Used as the
-    # q_value fallback only — never folded into total_value/visit_count, so it can never dilute a
-    # real backup average the way seeding visit_count=1 (BeFS's trick) would for PUCT's accumulating
-    # backup.
 
     @property
     def q_value(self) -> float:
-        """Action-value estimate: ``total_value / visit_count`` if visited, else the FPU seed."""
-        return self.total_value / self.visit_count if self.visit_count > 0 else self.fpu_value
+        """Action-value estimate: ``total_value / visit_count`` (0 when unvisited)."""
+        return self.total_value / self.visit_count if self.visit_count > 0 else 0.0
 
     @property
     def mean_wdl(self) -> Tuple[float, float, float]:
@@ -1274,15 +1268,12 @@ def _select_leaf_by_puct(
     taken to reach it. PUCT score is ``Q + c_puct * prior * sqrt(N) / (1+n)``,
     the AlphaZero formulation.
 
-    First-play-urgency fix: an unvisited child (``visit_count == 0``) has no
-    real ``Q`` estimate yet. Rather than treating it as a known draw
-    (``Q=0``), ``EdgeStats.q_value`` falls back to ``fpu_value`` — that
-    child's own static eval, sign-flipped to the parent's POV, seeded once
-    when the edge is created (see ``PUCTSearch.on_expand``) — so selection is
-    informed by whatever one-ply information is already sitting on the child
-    instead of a fake neutral value. The moment a child gets its first real
-    visit, ``q_value`` is the genuine ``total_value / visit_count``; the seed
-    is never folded into that average.
+    No first-play-urgency fallback: an unvisited child (``visit_count == 0``)
+    has ``q_value == 0`` (a known-draw prior) until its first real backup.
+    Exploration of unvisited children relies entirely on the prior term
+    (``c_puct * prior * sqrt(N)/(1+n)``, large relative to a zero-visit
+    ``1+n``), which is informative here because priors come from lc0's own
+    policy network rather than being uniform.
     """
     if tree.root_id is None:
         raise ValueError("Tree must contain a root.")
@@ -1521,19 +1512,15 @@ class TreeSearch(ABC):
 
 
 class PUCTSearch(TreeSearch):
-    """AlphaZero PUCT with a corrected first-play-urgency fallback.
+    """AlphaZero PUCT, factory settings (no first-play-urgency fallback).
 
     Backup is the standard visit-accumulating running mean
-    (``_backpropagate_path``), unchanged from before. The fix is that every
-    edge is seeded at creation (``on_expand``) with ``EdgeStats.fpu_value``
-    set to the child's own sign-flipped static value, instead of a bare
-    zero-init ``EdgeStats()``. ``q_value`` falls back to that seed until the
-    edge gets its first real visit — this is what ``_select_leaf_by_puct``
-    reads for selection, but critically it is also what the oracle trace
-    (``_root_q_values_from_edge_stats``) reads, so an unvisited root move no
-    longer reports a fake ``Q=0`` there either. ``total_value``/
-    ``visit_count`` are never touched by the seed, so real backups are exact
-    running means, not diluted by it.
+    (``_backpropagate_path``). Every edge starts as a bare zero-init
+    ``EdgeStats()`` (``on_expand``); an unvisited child's ``q_value`` is
+    exactly 0 until its first real backup. Exploration of unvisited children
+    relies entirely on the prior term in ``_select_leaf_by_puct``'s PUCT
+    score, which is sufficient since priors come from lc0's own policy
+    network rather than being uniform/uninformative.
     """
 
     def select_leaf(self, tree, edge_stats):
@@ -1541,8 +1528,7 @@ class PUCTSearch(TreeSearch):
 
     def on_expand(self, tree, edge_stats, path, node_id, child_ids):
         for child_id in child_ids:
-            fpu_value = -_static_node_value(tree, child_id, self.config.value_feature)
-            edge_stats[(node_id, child_id)] = EdgeStats(fpu_value=fpu_value)
+            edge_stats[(node_id, child_id)] = EdgeStats()
         leaf_value = _static_node_value(tree, node_id, self.config.value_feature)
         leaf_wdl = _maybe_static_node_wdl(tree, node_id)
         _backpropagate_path(edge_stats, path, leaf_value, leaf_wdl)
@@ -1746,12 +1732,12 @@ def compute_teacher_targets(
     if tree.root_id is None:
         raise ValueError("Tree must contain a root.")
 
-    # Initialize FPU-seeded stats for every existing edge (see EdgeStats.fpu_value).
+    # Initialize empty stats for every existing edge (no FPU fallback — factory
+    # PUCT: unvisited edges report Q=0 until their first real backup).
     edge_stats: Dict[Tuple[int, int], EdgeStats] = {}
     for node in tree.iter_nodes():
         for child_id in tree.child_ids(node.node_id):
-            fpu_value = -_static_node_value(tree, child_id, config.value_feature)
-            edge_stats[(node.node_id, child_id)] = EdgeStats(fpu_value=fpu_value)
+            edge_stats[(node.node_id, child_id)] = EdgeStats()
 
     # Standard PUCT: select a leaf, evaluate its static features, backprop.
     for _ in range(config.search_budget):
@@ -1780,7 +1766,7 @@ def build_pretrain_example(
     rng: Optional[random.Random] = None,
     root_position_id: Optional[str] = None,
     *,
-    include_edge_wdl_targets: bool = False,
+    include_edge_wdl_targets: bool = True,
 ) -> PretrainExample:
     """End-to-end: build a tree, run teacher search, and return a ``PretrainExample``.
 
@@ -1897,7 +1883,7 @@ def derive_prefix_pretrain_example(
     max_nodes: int,
     rng: Optional[random.Random] = None,
     *,
-    include_edge_wdl_targets: bool = False,
+    include_edge_wdl_targets: bool = True,
 ) -> PretrainExample:
     """Snapshot a source example to a prefix and re-run teacher search on it.
 
