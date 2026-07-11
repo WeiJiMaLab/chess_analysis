@@ -70,15 +70,15 @@ class TreeEncoder(nn.Module):
     downward message passing, and returns both all node states and the root state
     for each tree in the batch.
 
-    When ``sequential=True`` (default), messages propagate in topological order
-    within each pass — leaves-to-root for the upward sweep, root-to-leaves for the
-    downward sweep — so that each node sees its children's (or parent's) *already-
-    updated* states.  A single pass (``k=1``) therefore gives every node a receptive
-    field covering the entire tree, regardless of depth.
-
-    When ``sequential=False``, the original synchronous (Jacobi-style) update is
-    used: all nodes update simultaneously from the previous round's states, giving
-    a receptive-field radius of *k* hops.
+    Messages propagate in topological order within each pass — leaves-to-root
+    for the upward sweep, root-to-leaves for the downward sweep — so that each
+    node sees its children's (or parent's) *already-updated* states. A single
+    pass (``k=1``) therefore gives every node a receptive field covering the
+    entire tree, regardless of depth. (An earlier synchronous/Jacobi-style
+    update mode, selected via a ``sequential=False`` constructor flag, was
+    removed 2026-07-11: it was never actually exercised by any caller or
+    config, so the dead branch and its ``_forward_synchronous`` implementation
+    were deleted.)
     """
 
     def __init__(
@@ -140,48 +140,10 @@ class TreeEncoder(nn.Module):
         # no attention needed since each node has at most one parent.
         self.downward_msg = nn.Linear(d_embed, d_message, bias=False, device=self.device)
 
-    def _downward_messages(self, node_states, parent_index):
-        """Compute one downward message per node from its parent's current state.
-
-        Args:
-            node_states: [N, d_embed] current activations.
-            parent_index: [N] long tensor; entry i is the parent's index, or -1 for roots.
-        """
-        messages = node_states.new_zeros(node_states.size(0), self.d_message)
-        # Roots get the zero message; everyone else gets a linear projection
-        # of their parent's current state.
-        has_parent = parent_index >= 0
-        if has_parent.any():
-            parent_states = node_states[parent_index[has_parent]]
-            messages[has_parent] = self.downward_msg(parent_states)
-        return messages
-
     def slot_embeddings(self, edge_slot: torch.Tensor) -> torch.Tensor:
         """Encode per-edge child slot indices and apply the learnable projection."""
         slot_encoding = self.child_slot_encoding(edge_slot.to(self.device))
         return self.child_slot_projection(slot_encoding)
-
-    def _forward_synchronous(
-        self, node_states, edge_parent, edge_child, edge_slot_embed,
-        parent_index,
-    ):
-        """Run k Jacobi-style iterations: every node updates simultaneously each round.
-
-        Receptive field after k rounds is k hops, so depth-D trees need k >= D
-        for the root to see every leaf.
-        """
-        for _ in range(self.k):
-            upward = self.upward_msg(
-                node_states,
-                edge_parent,
-                edge_child,
-                edge_slot_embed=edge_slot_embed,
-            )
-            node_states = self.node_gru(upward, node_states)
-
-            downward = self._downward_messages(node_states, parent_index)
-            node_states = self.node_gru(downward, node_states)
-        return node_states
 
     def _forward_sequential(
         self, node_states, edge_parent, edge_child, edge_slot_embed,
@@ -277,16 +239,10 @@ class TreeEncoder(nn.Module):
         node_states = self.node_embed(node_features)
         edge_slot_embed = self.slot_embeddings(edge_slot)
 
-        if self.sequential:
-            node_states = self._forward_sequential(
-                node_states, edge_parent, edge_child, edge_slot_embed,
-                parent_index, depth,
-            )
-        else:
-            node_states = self._forward_synchronous(
-                node_states, edge_parent, edge_child, edge_slot_embed,
-                parent_index,
-            )
+        node_states = self._forward_sequential(
+            node_states, edge_parent, edge_child, edge_slot_embed,
+            parent_index, depth,
+        )
 
         return TreeEncoderOutput(
             node_states=node_states,

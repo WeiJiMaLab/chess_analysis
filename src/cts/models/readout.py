@@ -55,10 +55,6 @@ class Readout(nn.Module):
         """Return predicted per-step advantages ``[num_steps]`` for one episode."""
         raise NotImplementedError
 
-    def stop_step(self, features: torch.Tensor, starting_budget: int) -> int:
-        """Apply the shared continue-iff-``A>0`` rule to the predicted advantages."""
-        return stop_step_from_advantages(self.advantages(features, starting_budget))
-
 
 class AlwaysStop(Readout):
     """Tier 1: halt at step 0 (advantage <= 0 everywhere). No parameters."""
@@ -68,14 +64,6 @@ class AlwaysStop(Readout):
         return torch.full((num_steps,), -1.0)
 
 
-class NeverStop(Readout):
-    """Tier 2: search to the last step (advantage > 0 everywhere). No parameters."""
-
-    def advantages(self, features: torch.Tensor, starting_budget: int) -> torch.Tensor:
-        num_steps = int(features.shape[0])
-        return torch.full((num_steps,), 1.0)
-
-
 class StatsReadout(Readout):
     """Tier 3: MLP advantage head on hand-crafted ``[height, width, n_nodes, B]``.
 
@@ -83,68 +71,6 @@ class StatsReadout(Readout):
     n_nodes]`` per step; ``B`` (the scalar starting budget) is broadcast and
     concatenated here. Uses the shared :func:`build_advantage_head` so the
     architecture matches tier 4.
-    """
-
-    NUM_STATS = 3  # [height, width, n_nodes]
-
-    def __init__(self, hidden_dim: int = 64, hidden_layers: int = 2) -> None:
-        super().__init__()
-        self.head = build_advantage_head(self.NUM_STATS + 1, hidden_dim, hidden_layers)
-
-    def advantages(self, features: torch.Tensor, starting_budget: int) -> torch.Tensor:
-        num_steps = int(features.shape[0])
-        budget_col = torch.full((num_steps, 1), float(starting_budget), dtype=features.dtype)
-        head_input = torch.cat([features[:, : self.NUM_STATS], budget_col], dim=-1)
-        return self.head(head_input).squeeze(-1)
-
-
-class ValueGainReadout(Readout):
-    """Train-once / sweep-many head: MLP regressing the COST-FREE value gain.
-
-    Unlike the cost-baked tiers above, this head predicts ``value_gain(t)`` (the
-    expected move-quality gain from continuing, in pure reward units, >= 0) from
-    the same hand-crafted ``[height, width, n_nodes, B]`` features as
-    :class:`StatsReadout`.  Because the target carries NO cost, a single trained
-    instance is reused across every cost regime: the decision-time cost is
-    subtracted by the eval harness
-    (``cts.data.preprocess_mc.value_gain.swept_advantage_trace``), NOT baked into
-    the head.
-
-    ``advantages`` returns the raw cost-free predicted gain (clamped >= 0, since
-    the target is non-negative); the harness turns it into a regime advantage by
-    subtracting the analytic cost before applying the shared stop rule.  Calling
-    ``stop_step`` directly therefore corresponds to the zero-cost / search-
-    forever regime (gain > 0 => keep going), a useful sanity limit.
-    """
-
-    NUM_STATS = 3  # [height, width, n_nodes]
-
-    def __init__(self, hidden_dim: int = 64, hidden_layers: int = 2) -> None:
-        super().__init__()
-        self.head = build_advantage_head(self.NUM_STATS + 1, hidden_dim, hidden_layers)
-
-    def advantages(self, features: torch.Tensor, starting_budget: int) -> torch.Tensor:
-        num_steps = int(features.shape[0])
-        budget_col = torch.full((num_steps, 1), float(starting_budget), dtype=features.dtype)
-        head_input = torch.cat([features[:, : self.NUM_STATS], budget_col], dim=-1)
-        return self.head(head_input).squeeze(-1).clamp_min(0.0)
-
-
-class HaltCurveReadout(Readout):
-    """Train-once / sweep-many head: MLP regressing the COST-FREE per-step halt curve.
-
-    The production trajectory-prediction head.  It predicts ``halt_reward(t)`` at
-    each step from the same ``[height, width, n_nodes, B]`` features, producing a
-    per-step VALUE CURVE rather than a single collapsed gain scalar.  At eval the
-    harness runs the EXACT oracle backward-induction over this predicted curve
-    with the regime's analytic per-step cost
-    (``cts.data.preprocess_mc.value_gain.dp_stop_over_curve``), recovering the
-    true OSS for any lambda from one trained model -- not greedy, not horizon-
-    mismatched.
-
-    ``advantages`` here returns the raw predicted halt-reward level (the curve);
-    it is NOT an advantage and is not meant for the shared greedy ``stop_step``
-    -- the harness consumes the curve via the DP instead.
     """
 
     NUM_STATS = 3  # [height, width, n_nodes]

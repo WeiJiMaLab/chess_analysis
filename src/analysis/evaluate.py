@@ -11,6 +11,7 @@ from typing import Any
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as mticker  # noqa: E402
 import numpy as np
 import torch
 
@@ -23,7 +24,7 @@ from cts.models.readout import build_advantage_head, stop_step_from_advantages
 from cts.stats import bootstrap_ci
 from cts.train.controller_train import _load_materialized_cache_unchecked
 from cts.train.pg_controller_train import fit_readout_pg
-from analysis.utils.plots import save_pdf_png
+from analysis.utils.plots import apply_shared_exponent_log_ticks, padded_range_log, save_pdf_png
 from analysis.utils.helpers import MAIN_COLOR
 
 
@@ -379,14 +380,6 @@ def _load_json(path: Path) -> dict:
         return json.load(f)
 
 
-def _padded_range_log(lo: float, hi: float, frac: float, min_log_pad: float = 0.05) -> tuple[float, float]:
-    """Like _padded_range but pads proportionally in log10 space -- linear padding on a log axis
-    puts nearly all the whitespace below small values, pushing every point up near the top."""
-    log_lo, log_hi = np.log10(lo), np.log10(hi)
-    log_pad = max((log_hi - log_lo) * frac, min_log_pad)
-    return float(10 ** (log_lo - log_pad)), float(10 ** (log_hi + log_pad))
-
-
 def _padded_range(lo: float, hi: float, frac: float, min_pad: float) -> tuple[float, float]:
     """(lo, hi) padded by ``frac`` of the actual span (floored at ``min_pad`` for near-zero spans).
 
@@ -443,6 +436,9 @@ def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsi
     if log_y and ylim[0] > 0:
         ax.set_yscale("log")
         ax.set_ylim(*ylim)
+        # LogLocator's default formatter suppresses non-decade labels, so a <1-decade range can end
+        # up with only one labeled tick -- force 4 explicit, evenly-log-spaced labeled positions.
+        apply_shared_exponent_log_ticks(ax, np.geomspace(ylim[0], ylim[1], 6)[1:-1])
         ax.set_ylabel("Regret")
     else:
         ax.set_ylim(*ylim)
@@ -570,20 +566,16 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     axL = fig.add_subplot(gs[1, 0], sharex=axH)
     axR = fig.add_subplot(gs[:, 1])
     axR.set_box_aspect(1)
-    zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
-                              frac=0.25, min_pad=1e-3)
-    zoom_ylim = (max(1e-6, zoom_ylim[0]), zoom_ylim[1])  # keep strictly positive for the log-scale panel below
+    zoom_ylim = padded_range_log(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers), frac=0.25)
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
                               frac=0.3, min_pad=1.0)
     zoom_xlim = (max(0, zoom_xlim[0]), zoom_xlim[1])
-    full_lo, full_hi = _padded_range(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points),
-                                     frac=0.05, min_pad=1e-3)
-    full_ylim = (min(0, full_lo), full_hi)
+    full_ylim = padded_range_log(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points), frac=0.05)
     # Order for the LEGEND only (axR is the one that actually collects labels) — Frontier, Meta-
     # Control (Ours), Tree Stats, Fixed Stop, Always Stop, Always Continue; axL's draw order is
     # unaffected (it shows no legend) since it still plots the untouched `all_points`.
     legend_points = sorted(all_points, key=lambda p: p["_rank"])
-    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0)
+    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0, log_y=True)
     _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5,
                     log_y=True)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)

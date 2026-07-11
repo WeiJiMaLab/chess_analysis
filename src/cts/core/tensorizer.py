@@ -45,10 +45,9 @@ class TreeBatch:
 class TensorizedTreeExample:
     """A single tree pre-tensorized for training (carries node-level targets).
 
-    Produced by ``tensorize_tree_with_targets`` and later concatenated
-    by ``collate_tensorized_examples`` into a ``TreeBatch``. Holds only
-    the per-tree (not yet batch-offset-adjusted) tensors plus the
-    training targets.
+    Later concatenated by ``collate_tensorized_examples`` into a
+    ``TreeBatch``. Holds only the per-tree (not yet batch-offset-adjusted)
+    tensors plus the training targets.
     """
 
     node_features: torch.Tensor  # [n_nodes, F]
@@ -61,24 +60,6 @@ class TensorizedTreeExample:
     feature_names: Tuple[str, ...]  # mirrors the schema's column order
     edge_wdl_targets: Optional[torch.Tensor] = None  # [n_edges, 3] normalized WDL targets, when provided
     edge_visit_weights: Optional[torch.Tensor] = None  # [n_edges] per-edge loss weight (e.g. Delta-visits), when provided
-
-
-@dataclass
-class TensorizedTreeObservation:
-    """A single tree pre-tensorized for inference (no targets).
-
-    Used as the input format to the controller's online tree evaluation:
-    same shape as ``TensorizedTreeExample`` minus training-only fields.
-    """
-
-    node_features: torch.Tensor  # [n_nodes, F]
-    parent_index: torch.Tensor  # [n_nodes] long; local parent ids, -1 for the root
-    edge_parent: torch.Tensor  # [n_edges] long; local parent ids per edge
-    edge_child: torch.Tensor  # [n_edges] long; local child ids per edge
-    edge_slot: torch.Tensor  # [n_edges] long; UCI-lex slot of the child
-    depth: torch.Tensor  # [n_nodes] long
-    root_index: int  # local node id of the root (typically 0)
-    feature_names: Tuple[str, ...]  # mirrors the schema's column order
 
 
 def _sorted_child_ids_with_slots(tree: SearchTree, parent_id: int) -> list[tuple[int, int]]:
@@ -139,68 +120,6 @@ def edge_wdl_target_tensor(
     if not target_rows:
         return torch.empty((0, 3), dtype=torch.float32, device=device)
     return torch.stack(target_rows, dim=0)
-
-
-def tensorize_tree(
-    tree: SearchTree,
-    *,
-    schema: NodeFeatureSchema,
-    device: Union[torch.device, str] = "cpu",
-    validate: bool = False,
-) -> TreeBatch:
-    """Convenience wrapper: tensorize a single tree as a batch of one."""
-    return tensorize_forest([tree], schema=schema, device=device, validate=validate)
-
-
-def tensorize_tree_observation(
-    tree: SearchTree,
-    *,
-    schema: NodeFeatureSchema,
-    device: Union[torch.device, str] = "cpu",
-    validate: bool = False,
-) -> TensorizedTreeObservation:
-    """Tensorize a single tree without batch-offset adjustments (inference path).
-
-    Args:
-        tree: tree to tensorize; must have a root.
-        schema: feature schema that fixes the column order of
-            ``node_features`` and the tensor dtype.
-        device: target device for the produced tensors.
-        validate: run ``tree.validate()`` first; turn off only in
-            hot paths where the tree is known to be well-formed.
-    """
-    device = torch.device(device)
-    if validate:
-        tree.validate()
-
-    node_feature_rows = []
-    parent_index = []
-    depth = []
-    edge_parent = []
-    edge_child = []
-    edge_slot = []
-
-    # Single traversal: emit one node row, then enumerate the node's
-    # children in slot order so the edge arrays land in canonical order.
-    for node in tree.iter_nodes():
-        node_feature_rows.append(schema.vectorize_tuple(node.scalar_features))
-        parent_index.append(-1 if node.parent_id is None else node.parent_id)
-        depth.append(node.depth)
-        for child_id, slot in _sorted_child_ids_with_slots(tree, node.node_id):
-            edge_parent.append(node.node_id)
-            edge_child.append(child_id)
-            edge_slot.append(slot)
-
-    return TensorizedTreeObservation(
-        node_features=torch.tensor(node_feature_rows, dtype=schema.dtype, device=device),
-        parent_index=torch.tensor(parent_index, dtype=torch.long, device=device),
-        edge_parent=torch.tensor(edge_parent, dtype=torch.long, device=device),
-        edge_child=torch.tensor(edge_child, dtype=torch.long, device=device),
-        edge_slot=torch.tensor(edge_slot, dtype=torch.long, device=device),
-        depth=torch.tensor(depth, dtype=torch.long, device=device),
-        root_index=tree.root_id,
-        feature_names=schema.feature_names,
-    )
 
 
 def tensorize_forest(
@@ -291,44 +210,6 @@ def tensorize_forest(
         batch_size=len(trees),
         num_nodes=len(node_feature_rows),
         num_edges=len(edge_parent),
-    )
-
-
-def tensorize_tree_with_targets(
-    tree: SearchTree,
-    node_target_values: Sequence[float],
-    schema: NodeFeatureSchema,
-    device: Union[torch.device, str] = "cpu",
-    edge_wdl_targets: Optional[Mapping[tuple[int, int], Sequence[float]]] = None,
-) -> TensorizedTreeExample:
-    """Tensorize a tree together with per-node training targets.
-
-    Returns the per-tree (not yet collated) format; concatenate via
-    ``collate_tensorized_examples`` to build a training batch.
-
-    Args:
-        tree: source tree.
-        node_target_values: one scalar target per node, in node-id order.
-        schema: feature schema for the node feature columns.
-        device: target device for the result tensors.
-        edge_wdl_targets: optional per-edge WDL targets keyed by
-            ``(parent_id, child_id)``; passed through ``edge_wdl_target_tensor``.
-    """
-    tree_batch = tensorize_tree(tree, schema=schema, device=device)
-    return TensorizedTreeExample(
-        node_features=tree_batch.node_features,
-        parent_index=tree_batch.parent_index,
-        edge_parent=tree_batch.edge_parent,
-        edge_child=tree_batch.edge_child,
-        edge_slot=tree_batch.edge_slot,
-        depth=tree_batch.depth,
-        node_targets=torch.tensor(node_target_values, dtype=torch.float32, device=tree_batch.node_features.device),
-        feature_names=tree_batch.feature_names,
-        edge_wdl_targets=(
-            edge_wdl_target_tensor(tree, edge_wdl_targets, schema=schema, device=device)
-            if edge_wdl_targets is not None
-            else None
-        ),
     )
 
 
@@ -456,91 +337,3 @@ def collate_tensorized_examples(examples: Sequence[TensorizedTreeExample]) -> tu
         ),
     )
     return tree_batch, targets
-
-
-def collate_tensorized_observations(observations: Sequence[TensorizedTreeObservation]) -> TreeBatch:
-    """Concatenate per-tree observations into a batched ``TreeBatch`` (inference).
-
-    Mirror of ``collate_tensorized_examples`` for the no-targets path:
-    same id remapping and CSR reconstruction, but carries the per-tree
-    ``root_index`` through (observations don't assume the root is at
-    local id 0, so it must be tracked explicitly).
-    """
-    if not observations:
-        raise ValueError("Cannot collate an empty batch.")
-
-    feature_names = observations[0].feature_names
-    node_features_parts = []
-    parent_index_parts = []
-    edge_parent_parts = []
-    edge_child_parts = []
-    edge_slot_parts = []
-    depth_parts = []
-    tree_index_parts = []
-    root_index = []
-
-    node_offset = 0
-    for batch_idx, observation in enumerate(observations):
-        if observation.feature_names != feature_names:
-            raise ValueError("All tensorized observations must share the same feature schema.")
-        num_nodes = int(observation.node_features.shape[0])
-        node_features_parts.append(observation.node_features)
-        depth_parts.append(observation.depth)
-        tree_index_parts.append(
-            torch.full((num_nodes,), batch_idx, dtype=torch.long, device=observation.node_features.device)
-        )
-        # Honor the per-observation root_index rather than assuming 0,
-        # since the observation type carries it explicitly.
-        root_index.append(node_offset + int(observation.root_index))
-
-        parent_index = observation.parent_index.clone()
-        has_parent = parent_index >= 0
-        parent_index[has_parent] += node_offset
-        parent_index_parts.append(parent_index)
-
-        if observation.edge_parent.numel() > 0:
-            edge_parent_parts.append(observation.edge_parent + node_offset)
-            edge_child_parts.append(observation.edge_child + node_offset)
-            edge_slot_parts.append(observation.edge_slot)
-
-        node_offset += num_nodes
-
-    node_features = torch.cat(node_features_parts, dim=0)
-    parent_index = torch.cat(parent_index_parts, dim=0)
-    depth = torch.cat(depth_parts, dim=0)
-    tree_index = torch.cat(tree_index_parts, dim=0)
-    root_index_tensor = torch.tensor(root_index, dtype=torch.long, device=node_features.device)
-
-    if edge_parent_parts:
-        edge_parent = torch.cat(edge_parent_parts, dim=0)
-        edge_child = torch.cat(edge_child_parts, dim=0)
-        edge_slot = torch.cat(edge_slot_parts, dim=0)
-        children_index = edge_child
-        # CSR pointer rebuilt from per-parent edge counts; see the
-        # collate_tensorized_examples branch for the rationale.
-        child_counts = torch.bincount(edge_parent, minlength=node_features.shape[0])
-        child_ptr = torch.zeros(node_features.shape[0] + 1, dtype=torch.long, device=node_features.device)
-        child_ptr[1:] = torch.cumsum(child_counts, dim=0)
-    else:
-        edge_parent = torch.empty(0, dtype=torch.long, device=node_features.device)
-        edge_child = torch.empty(0, dtype=torch.long, device=node_features.device)
-        edge_slot = torch.empty(0, dtype=torch.long, device=node_features.device)
-        children_index = torch.empty(0, dtype=torch.long, device=node_features.device)
-        child_ptr = torch.zeros(node_features.shape[0] + 1, dtype=torch.long, device=node_features.device)
-
-    return TreeBatch(
-        node_features=node_features,
-        tree_index=tree_index,
-        parent_index=parent_index,
-        root_index=root_index_tensor,
-        edge_parent=edge_parent,
-        edge_child=edge_child,
-        edge_slot=edge_slot,
-        child_ptr=child_ptr,
-        children_index=children_index,
-        depth=depth,
-        feature_names=feature_names,
-        batch_size=len(observations),
-        num_nodes=int(node_features.shape[0]),
-        num_edges=int(edge_parent.shape[0]),
-    )

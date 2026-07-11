@@ -12,6 +12,41 @@ from analysis.utils.helpers import (
 )
 
 
+def padded_range_log(lo: float, hi: float, frac: float, min_log_pad: float = 0.05) -> tuple[float, float]:
+    """Padded (lo, hi) proportional in log10 space -- linear padding on a log axis puts nearly all
+    the whitespace below small values, pushing every point up near the top."""
+    log_lo, log_hi = np.log10(lo), np.log10(hi)
+    log_pad = max((log_hi - log_lo) * frac, min_log_pad)
+    return float(10 ** (log_lo - log_pad)), float(10 ** (log_hi + log_pad))
+
+
+def apply_shared_exponent_log_ticks(ax, tick_vals, *, color: str = "#7A8894") -> None:
+    """Label each y tick with just its mantissa and write the one shared "x10^k" once, above the
+    axis, instead of repeating the exponent on every tick -- for values almost always <1 and
+    within about a decade of each other (e.g. regret, loss)."""
+    shared_exp = int(np.floor(np.log10(np.median(tick_vals))))
+    ax.yaxis.set_major_locator(mticker.FixedLocator(tick_vals))
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v / 10 ** shared_exp:.3g}"))
+    ax.text(-0.02, 1.02, f"$\\times10^{{{shared_exp}}}$", transform=ax.transAxes, ha="right", va="bottom",
+           fontsize=10.5, color=color)
+
+
+def setup_log_y_axis(ax, values, *, frac: float = 0.1, n_ticks: int = 4, ylabel: str | None = None) -> bool:
+    """Set a log-scale y-axis sized to `values` (padded range + shared-exponent ticks) -- the common
+    sequence every log-scale training/eval curve in this repo wants. Returns False (axis left
+    untouched, caller should fall back to linear) if `values` has no positive entries."""
+    positive = [v for v in values if v > 0]
+    if not positive:
+        return False
+    lo, hi = padded_range_log(min(positive), max(positive), frac=frac)
+    ax.set_yscale("log")
+    ax.set_ylim(lo, hi)
+    apply_shared_exponent_log_ticks(ax, np.geomspace(lo, hi, n_ticks + 2)[1:-1])
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    return True
+
+
 def _wrap_long_label(label: str, threshold: int = 29) -> str:
     """Break a long axis label onto two lines at its first parenthetical.
     At FONT_SIZE_LABEL (52pt) a single-line label past ~29 chars is wider than a
@@ -193,35 +228,6 @@ def _draw_feature_histogram(
     ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=5))
 
 
-def plot_histogram_from_bins(
-    ax, df_bins,
-    left_col="bin_left", right_col="bin_right", count_col="n",
-    x_label=None, y_label="Count", color=MAIN_COLOR,
-    mean=None, median=None,
-):
-    """Aligned-edge bar histogram from SQL histogram tables.
-
-    Draws optional dashed vertical lines at ``mean`` and ``median`` when provided.
-    No-op if ``df_bins`` is empty.
-    """
-    apply_poster_style()
-    if df_bins.empty:
-        return
-    widths = df_bins[right_col] - df_bins[left_col]
-    ax.bar(df_bins[left_col], df_bins[count_col], width=widths, align="edge",
-           color=color, alpha=0.5, edgecolor=color, linewidth=1.5)
-    if mean is not None:
-        ax.axvline(mean, color="black", linestyle="--", lw=2.5, label=f"Mean = {mean:.3f}")
-    if median is not None:
-        ax.axvline(median, color="dimgray", linestyle=":", lw=2.5, label=f"Median = {median:.3f}")
-    if mean is not None or median is not None:
-        ax.legend(fontsize=LEGEND_FONTSIZE)
-    if x_label:
-        ax.set_xlabel(x_label, fontsize=FONT_SIZE_LABEL)
-    if y_label:
-        ax.set_ylabel(y_label, fontsize=FONT_SIZE_LABEL)
-
-
 def get_isoluminant_cmap(name="isoluminant_azure", h1=0.58, h2=None, s1=0.0, s2=0.85, lightness=0.6, saturation=None):
     """Matplotlib ``ListedColormap`` at fixed HSL lightness.
 
@@ -348,9 +354,9 @@ def _typed_path(base_dir: str, kind: str, filename: str) -> str:
 def save_pdf_png(fig, base_dir: str, base: str, *, dpi: int = 300, **savefig_kwargs) -> str:
     """Write ``base.pdf`` -> ``base_dir/pdf/`` and ``base.png`` -> ``base_dir/png/``.
 
-    PDF and PNG live in separate type subfolders (pdf/ png/); CSV tables go to
-    csv/ via ``save_table``. Extra kwargs (``bbox_extra_artists``, ``pad_inches``,
-    …) are forwarded to ``fig.savefig``. Returns the PDF path."""
+    PDF and PNG live in separate type subfolders (pdf/ png/). Extra kwargs
+    (``bbox_extra_artists``, ``pad_inches``, …) are forwarded to ``fig.savefig``.
+    Returns the PDF path."""
     pdf = _typed_path(base_dir, "pdf", f"{base}.pdf")
     png = _typed_path(base_dir, "png", f"{base}.png")
     fig.savefig(pdf, dpi=dpi, bbox_inches="tight", **savefig_kwargs)
@@ -358,14 +364,6 @@ def save_pdf_png(fig, base_dir: str, base: str, *, dpi: int = 300, **savefig_kwa
     plt.close(fig)
     print(f"Saved figures: {pdf} and {png}")
     return pdf
-
-
-def save_table(df, base_dir: str, filename: str, **to_csv_kwargs) -> str:
-    """Write a CSV table to ``base_dir/csv/<filename>`` (sibling of pdf/ and png/)."""
-    path = _typed_path(base_dir, "csv", filename)
-    df.to_csv(path, **to_csv_kwargs)
-    print(f"Saved table: {path}")
-    return path
 
 
 def save_figure(fig, category: str, filename: str) -> str:

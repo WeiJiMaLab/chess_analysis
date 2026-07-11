@@ -151,7 +151,6 @@ class TeacherSearchResult:
     """Targets produced by the teacher search over an already-built tree."""
 
     node_target_values: List[float]  # per-node scalar value target (indexed by node_id)
-    edge_stats: Dict[Tuple[int, int], EdgeStats]  # per-edge stats keyed by (parent_id, child_id)
     edge_target_wdls: Dict[Tuple[int, int], Tuple[float, float, float]]  # per-edge WDL pretraining target
 
 
@@ -166,13 +165,10 @@ class GeneratedTree:
 
     tree: SearchTree  # the partially-expanded tree
     edge_stats: Dict[Tuple[int, int], EdgeStats]  # PUCT stats accumulated during generation
-    sampled_node_budget: int  # the budget drawn from ``NodeBudgetDistribution`` for this tree
-    num_expansions: int  # how many expansions actually happened (may be < budget if frontier exhausts)
     oracle_trace_expansion_counts: List[int] = field(default_factory=list)  # expansion-step indices at which the trace was sampled
     oracle_root_moves: List[str] = field(default_factory=list)  # canonical move ordering for the trace columns
     oracle_root_q_trace: List[List[float]] = field(default_factory=list)  # per-step Q-values aligned with oracle_root_moves
     oracle_best_move_trace: List[str] = field(default_factory=list)  # per-step argmax move
-    oracle_root_visits_trace: List[List[int]] = field(default_factory=list)  # per-step visit counts aligned with oracle_root_moves
 
 
 @dataclass
@@ -268,12 +264,6 @@ RAW_PRETRAIN_LEGACY_FORMATS = frozenset(
         RAW_PRETRAIN_FORMAT,
     }
 )
-RAW_PRETRAIN_V3_FORMAT = "cts_raw_pretrain_example_v3"
-
-# Teacher ``value`` scalars are win-loss in ``[-1, 1]``; multiply by this for centipawn targets.
-VALUE_SCALAR_TO_CENTIPAWNS = 100.0
-
-
 def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
     """Collect every persisted feature name observed in the tree, in first-seen order.
 
@@ -291,28 +281,6 @@ def _ordered_feature_names_from_tree(tree: SearchTree) -> Tuple[str, ...]:
                 seen.add(name)
                 ordered.append(str(name))
     return tuple(ordered)
-
-
-def _node_visit_counts_from_edge_stats(
-    tree: SearchTree,
-    edge_stats: Mapping[Tuple[int, int], EdgeStats],
-) -> List[int]:
-    """Map PUCT edge visit counts to per-node visit totals.
-
-    Non-root nodes inherit the visit count on the incoming parent→child edge.
-    The root uses the sum of outgoing edge visits (total rollouts through the root).
-    """
-    counts = [0] * tree.num_nodes()
-    for node in tree.iter_nodes():
-        node_id = node.node_id
-        if node.parent_id is None:
-            counts[node_id] = sum(
-                edge_stats.get((node_id, child_id), EdgeStats()).visit_count
-                for child_id in tree.child_ids(node_id)
-            )
-        else:
-            counts[node_id] = edge_stats.get((node.parent_id, node_id), EdgeStats()).visit_count
-    return counts
 
 
 def _dense_node_feature_tensor(tree: SearchTree, feature_names: Sequence[str]) -> torch.Tensor:
@@ -855,30 +823,6 @@ def save_pretrain_example(path: str, example: PretrainExample) -> None:
     RawPretrainExampleRecord.from_example(example).save(path)
 
 
-# Disk format tag for a list of raw pretrain examples in one file. Used when
-# shipping shards rather than one-file-per-example.
-RAW_PRETRAIN_LIST_FORMAT = "cts_raw_pretrain_example_list_v2"
-
-
-def save_pretrain_examples(path: str, examples: Sequence[PretrainExample]) -> None:
-    """Save many examples to a single file as a list-format payload."""
-    torch.save(
-        {
-            "format": RAW_PRETRAIN_LIST_FORMAT,
-            "examples": [RawPretrainExampleRecord.from_example(example).to_payload() for example in examples],
-        },
-        path,
-    )
-
-
-def load_pretrain_examples(path: str) -> List[PretrainExample]:
-    """Load a list-format file and rehydrate every example."""
-    payload = torch.load(path, weights_only=False)
-    if payload.get("format") != RAW_PRETRAIN_LIST_FORMAT:
-        raise ValueError(f"Expected {RAW_PRETRAIN_LIST_FORMAT} at {path}.")
-    return [RawPretrainExampleRecord.from_payload(example_payload).to_pretrain_example() for example_payload in payload["examples"]]
-
-
 def load_raw_pretrain_record(path: str) -> RawPretrainExampleRecord:
     """Load a single raw record without rehydrating it into a ``PretrainExample``."""
     return RawPretrainExampleRecord.load(path)
@@ -902,26 +846,6 @@ def save_pretrain_example_to_directory(directory: str, example: PretrainExample,
     path = _pretrain_example_output_path(directory, root_position_id, index)
     save_pretrain_example(path, example)
     return path
-
-
-def save_pretrain_examples_to_directory(directory: str, examples: Sequence[PretrainExample]) -> List[str]:
-    """Save every example into ``directory`` and return the list of written paths."""
-    os.makedirs(directory, exist_ok=True)
-    saved_paths = []
-    for index, example in enumerate(examples):
-        saved_paths.append(save_pretrain_example_to_directory(directory, example, index))
-    return saved_paths
-
-
-def load_pretrain_examples_from_directory(directory: str) -> List[PretrainExample]:
-    """Load every ``*.pt`` file in ``directory`` as a ``PretrainExample`` (sorted by filename)."""
-    examples = []
-    for filename in sorted(os.listdir(directory)):
-        if not filename.endswith(".pt"):
-            continue
-        path = os.path.join(directory, filename)
-        examples.append(load_pretrain_example(path))
-    return examples
 
 
 class PretrainExampleDirectoryDataset(Sequence[PretrainExample]):
@@ -1066,36 +990,6 @@ def load_pretrain_example_dataset(path: str) -> Sequence[PretrainExample]:
     if not paths:
         raise ValueError(f"No pretrain example paths found in manifest: {path}")
     return PretrainExamplePathDataset(paths)
-
-
-def load_raw_pretrain_example_paths(path: str) -> List[str]:
-    """Resolve a path spec to a flat list of raw ``.pt`` example paths.
-
-    Controller training needs raw examples (not packed shards) because the
-    controller's snapshot replay machinery uses ``PretrainExample.tree``
-    directly. Rejecting packed JSON manifests here surfaces that mismatch
-    early rather than letting it explode mid-training.
-    """
-    if os.path.isdir(path):
-        paths = [
-            str(candidate)
-            for candidate in sorted(Path(path).rglob("*.pt"))
-            if candidate.is_file()
-        ]
-    else:
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Pretrain dataset path does not exist: {path}")
-        if path.endswith(".json"):
-            raise ValueError(
-                "Raw pretrain example paths are required for controller training. "
-                "Use a directory of .pt examples or a text manifest of raw example paths, not a packed JSON manifest."
-            )
-        with open(path, "r", encoding="utf-8") as handle:
-            paths = [line.strip() for line in handle if line.strip()]
-    if not paths:
-        raise ValueError(f"No raw pretrain examples found at: {path}")
-    return paths
-
 
 
 def build_tree_from_provider(
@@ -1404,7 +1298,6 @@ class TreeSearch(ABC):
         oracle_root_moves: List[str] = []
         oracle_root_q_trace: List[List[float]] = []
         oracle_best_move_trace: List[str] = []
-        oracle_root_visits_trace: List[List[int]] = []
 
         def _record_oracle_root_trace() -> None:
             """Snapshot the root's current per-move Q-values after each expansion."""
@@ -1436,9 +1329,6 @@ class TreeSearch(ABC):
             oracle_trace_expansion_counts.append(num_expansions)
             oracle_root_q_trace.append(row)
             oracle_best_move_trace.append(best_move)
-
-            visits_row = [int(edge_stats.get((tree.root_id, child_id), EdgeStats()).visit_count) for child_id in root_children]
-            oracle_root_visits_trace.append(visits_row)
 
         # --- Main search loop: pick a leaf, expand or terminate, backprop ---
         simulations = 0
@@ -1483,13 +1373,10 @@ class TreeSearch(ABC):
         return GeneratedTree(
             tree=tree,
             edge_stats=edge_stats,
-            sampled_node_budget=sampled_node_budget,
-            num_expansions=num_expansions,
             oracle_trace_expansion_counts=oracle_trace_expansion_counts,
             oracle_root_moves=oracle_root_moves,
             oracle_root_q_trace=oracle_root_q_trace,
             oracle_best_move_trace=oracle_best_move_trace,
-            oracle_root_visits_trace=oracle_root_visits_trace,
         )
 
 
@@ -1539,33 +1426,6 @@ def _backup_target_from_child_q(
 
     weighted_sum = sum(stats.visit_count * stats.q_value for stats in keyed_child_stats)
     return weighted_sum / total_visits
-
-
-def _backup_target_from_child_wdl(
-    tree: SearchTree,
-    node_id: int,
-    edge_stats: Mapping[Tuple[int, int], EdgeStats],
-) -> Tuple[float, float, float]:
-    """Visit-weighted mean child WDL, with fallback to the static node WDL.
-
-    Not currently called from the public pipeline — kept for symmetry with
-    ``_backup_target_from_child_q`` and for analyses that want a WDL-style
-    node target.
-    """
-    child_ids = tree.child_ids(node_id)
-    if not child_ids:
-        return _static_node_wdl(tree, node_id)
-
-    keyed_child_stats = [edge_stats[(node_id, child_id)] for child_id in child_ids]
-    total_visits = sum(stats.visit_count for stats in keyed_child_stats)
-    if total_visits == 0:
-        return _static_node_wdl(tree, node_id)
-
-    weighted = [0.0, 0.0, 0.0]
-    for stats in keyed_child_stats:
-        for index, value in enumerate(stats.mean_wdl):
-            weighted[index] += stats.visit_count * value
-    return tuple(component / total_visits for component in weighted)
 
 
 def _edge_target_wdls_from_edge_stats(
@@ -1660,7 +1520,6 @@ def consolidate_generated_tree(
 
     return TeacherSearchResult(
         node_target_values=node_target_values,
-        edge_stats=dict(generated_tree.edge_stats),
         edge_target_wdls=_edge_target_wdls_from_edge_stats(tree, generated_tree.edge_stats),
     )
 
@@ -1735,7 +1594,6 @@ def compute_teacher_targets(
 
     return TeacherSearchResult(
         node_target_values=node_target_values,
-        edge_stats=edge_stats,
         edge_target_wdls=_edge_target_wdls_from_edge_stats(tree, edge_stats),
     )
 
@@ -1810,100 +1668,4 @@ def build_pretrain_example(
     )
 
 
-def prefix_expansion_count_schedule(tree: SearchTree) -> List[int]:
-    """Return ``[0, 1, ..., total_expansions]`` — every valid prefix length."""
-    if tree.root_id is None:
-        raise ValueError("Tree must contain a root.")
-    return list(range(0, len(tree.ordered_expansion_parent_ids()) + 1))
-
-
-def sample_prefix_expansion_count_for_node_budget(
-    tree: SearchTree,
-    min_nodes: int,
-    max_nodes: int,
-    rng: Optional[random.Random] = None,
-) -> int:
-    """Pick an expansion prefix length whose expanded-node count lies in ``[min_nodes, max_nodes]``.
-
-    Target is drawn log-uniformly in the same way ``NodeBudgetDistribution``
-    samples, and we pick the eligible prefix length whose log is closest to
-    the target. Ties broken by smaller prefix.
-    """
-    if min_nodes <= 0:
-        raise ValueError("min_nodes must be positive.")
-    if max_nodes < min_nodes:
-        raise ValueError("max_nodes must be >= min_nodes.")
-
-    rng = rng or random.Random()
-    counts = prefix_expansion_count_schedule(tree)
-    eligible = [count for count in counts if min_nodes <= count <= max_nodes]
-    if not eligible:
-        raise ValueError(
-            f"Tree with {len(tree.ordered_expansion_parent_ids())} expanded nodes has no root prefix whose expanded-node count falls in [{min_nodes}, {max_nodes}]."
-        )
-
-    if min_nodes == max_nodes:
-        target_nodes = float(min_nodes)
-    else:
-        log_min = math.log(min_nodes)
-        log_max = math.log(max_nodes)
-        target_nodes = math.exp(rng.uniform(log_min, log_max))
-
-    return min(
-        eligible,
-        key=lambda count: (
-            abs(math.log(count) - math.log(target_nodes)),
-            count,
-        ),
-    )
-
-
-def derive_prefix_pretrain_example(
-    source_example: PretrainExample,
-    config: TeacherSearchConfig,
-    min_nodes: int,
-    max_nodes: int,
-    rng: Optional[random.Random] = None,
-    *,
-    include_edge_wdl_targets: bool = True,
-) -> PretrainExample:
-    """Snapshot a source example to a prefix and re-run teacher search on it.
-
-    Used to augment training data: from a single fully-built tree, derive
-    smaller-tree pretrain examples that retrace the teacher's intermediate
-    states. The prefix tree carries provenance metadata pointing back to
-    the source.
-    """
-    rng = rng or random.Random()
-    prefix_expansion_count = sample_prefix_expansion_count_for_node_budget(
-        source_example.tree,
-        min_nodes=min_nodes,
-        max_nodes=max_nodes,
-        rng=rng,
-    )
-    prefix_tree = source_example.tree.clone_expansion_prefix(prefix_expansion_count)
-    teacher_result = compute_teacher_targets(prefix_tree, config)
-    prefix_total_node_count = prefix_tree.num_nodes()
-
-    source_root_position_id = str(source_example.metadata.get("root_position_id", "unknown_root"))
-    metadata = dict(source_example.metadata)
-    metadata.update(
-        {
-            "root_position_id": f"{source_root_position_id}__prefix_expanded_{prefix_expansion_count}",
-            "source_root_position_id": source_root_position_id,
-            "source_num_nodes": source_example.tree.num_nodes(),
-            "source_expanded_node_count": len(source_example.tree.ordered_expansion_parent_ids()),
-            "prefix_expansion_count": prefix_expansion_count,
-            "prefix_total_node_count": prefix_total_node_count,
-            "prefix_expanded_node_budget_min": min_nodes,
-            "prefix_expanded_node_budget_max": max_nodes,
-            "prefix_target_generation_version": "search_consolidated_edge_wdl_prefix_v1",
-        }
-    )
-    return PretrainExample(
-        tree=prefix_tree,
-        node_target_values=teacher_result.node_target_values,
-        edge_wdl_targets=teacher_result.edge_target_wdls if include_edge_wdl_targets else {},
-        metadata=metadata,
-    )
 

@@ -90,29 +90,3 @@ def depth_bin_labels(max_bin: int) -> List[str]:
     return labels
 
 
-def num_children_per_node(edge_parent: torch.Tensor, num_nodes: int) -> torch.Tensor:
-    """Count children per parent node via ``bincount`` over ``edge_parent``.
-
-    ``edge_parent[i]`` is the parent node id for edge ``i`` in the canonical
-    edge order; the number of children of node ``n`` is just how often ``n``
-    appears in this tensor.
-    """
-    return torch.bincount(edge_parent, minlength=num_nodes)
-
-
-def num_children_bin(num_children: torch.Tensor, max_bin: int) -> torch.Tensor:
-    """Clamp parent's number of children to ``[0, max_bin]``.
-
-    Unlike ``size_bin`` (which uses log₂ bucketing because subtree sizes
-    span orders of magnitude), number of children is small (chess: ≤ ~40
-    legal moves), so we use a linear axis with everything above ``max_bin``
-    folded into the last cell.
-    """
-    return num_children.clamp_max(max_bin)
-
-
-def num_children_bin_labels(max_bin: int) -> List[str]:
-    """Pretty labels: ``"0", "1", …, "≥max_bin"`` (linear axis)."""
-    labels = [str(i) for i in range(max_bin)]
-    labels.append(f"≥{max_bin}")
-    return labels
