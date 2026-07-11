@@ -1,32 +1,8 @@
-"""Select "informative-stopping" trees by a post-hoc read of the search's best-move trace.
-
-A tree's ``oracle_best_move_index[i]`` is the argmax root move after expansion ``i+1``; the
-trace has one entry per expansion (96 under the canonical budget). We gate the tree set used
-to train BOTH the GNN encoder and the MC controller (matching ysagiv's "train GNN+MC on the
-filtered subset" pipeline) by the **INTERSECTION** of two tree-level criteria:
-
-1. **PUCT-stability** — *search materially changes the chosen action*::
-
-       bmi[0] != bmi[-1]   AND   bmi[mid] != bmi[-1]          (mid = len // 2)
-
-   Drops trees whose best move is already settled at the first expansion or by the midpoint
-   (no deliberation needed). This is a post-hoc 96-step read of ysagiv's PUCT-stability filter
-   (`oracle96_trace_filtered`); the original legacy variant ran a separate 16-node search.
-
-2. **Monotone-convergence** — *once the eventual-best is first found, it is never abandoned*::
-
-       gss = argmax(bmi == bmi[-1]);   require all(bmi[gss:] == bmi[-1])
-
-   Drops "found-then-lost" oscillators (e.g. ``1 2 3 [4] 3 2 1 4 4 4`` — the 4 is hit
-   transiently at step 3, lost, then re-found) where the greedy first-found stop is unreliable.
-
-The episode-level **halt-reward-range** filter (``min_halt_reward_range``) is applied
-SEPARATELY at MC-pack time, on top of this tree set.
-
-Empirically on the 405K ``human_trees``: PUCT-stability ~32%, monotone ~65%, **intersection ~16%**.
-
-    python -m cts.data.filter_trees_by_trace --config filter_trees.yaml
-"""
+"""Gates the tree set by the INTERSECTION of two criteria on ``oracle_best_move_index``
+(bmi, one entry per expansion): (1) PUCT-stability -- bmi[0] != bmi[-1] and
+bmi[mid] != bmi[-1]; (2) monotone-convergence -- once bmi first reaches bmi[-1]
+(at gss), it never leaves it. The halt-reward-range filter is applied separately
+at MC-pack time."""
 from __future__ import annotations
 
 import json
@@ -47,11 +23,8 @@ class FilterTreesConfig(BaseModel):
     output_dir: str  # writes clean_trees.txt (basenames) + filter_stats.json
     n_workers: int = 72
     min_steps: int = 3
-    # Array-shard mode (CPU array job): when shard_index >= 0, this process
-    # classifies only the trees[shard_index::num_shards] slice and writes a
-    # shard-level shards/clean_trees_shard_<idx>.txt; merge_and_pack.slurm later
-    # concatenates the shards into the final clean_trees.txt. When shard_index < 0
-    # (default) the original single-process whole-set behaviour is used.
+    # Array-shard mode: shard_index >= 0 classifies only trees[shard_index::num_shards]
+    # and writes shards/clean_trees_shard_<idx>.txt; shard_index < 0 is single-process.
     num_shards: int = 1
     shard_index: int = -1  # skip degenerate traces shorter than this
 

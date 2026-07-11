@@ -1,14 +1,5 @@
-"""Shared UCI-protocol parsing and position-spec helpers.
-
-Utility layer sitting between the chess engine (which speaks UCI text lines)
-and the rest of the CTS pipeline (which works with FEN strings, UCI moves,
-and value scalars). Centralizes the regexes for engine output, the
-``"<fen> ||moves|| <m1> <m2> ..."`` position-spec encoding used to thread
-move histories through the codebase, and the conversion of engine cp/mate
-scores into the unified [-1, 1] value range. Importing ``chess`` is
-optional so callers without the dependency can still touch position-spec
-strings (but board-level helpers will return ``None``).
-"""
+"""Importing ``chess`` is optional here: callers without the dependency can still
+touch position-spec strings, but board-level helpers will return ``None``."""
 
 from __future__ import annotations
 

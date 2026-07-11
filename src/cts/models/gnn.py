@@ -1,14 +1,3 @@
-"""Tree encoder network and its child-WDL pretraining head.
-
-``TreeEncoder`` is the encoder used by every downstream consumer (controller,
-analysis scripts, evaluation): it embeds per-node scalar features and runs k
-iterations of level-sequential upward/downward attention message passing
-(``TreeAttMsgLayer`` from ``TreeMHA``) to produce per-node embeddings plus a
-distinguished ``z_root`` for each tree. ``ChildWdlModel`` wraps the encoder
-with a slot-conditioned MLP that predicts each child's WDL distribution from
-its parent's state — the supervised objective used to pretrain the encoder.
-"""
-
 import math
 from typing import NamedTuple
 

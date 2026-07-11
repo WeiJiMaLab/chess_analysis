@@ -1,17 +1,3 @@
-"""Phase 2 Agent 1 (ysagiv human_trees) -- paired-bootstrap significance of the three-way
-comparison (SingleHalt* / Stats-Controller / z_t-Controller) at ANY regime point, generalizing
-``evaluate_sig_s.py`` (which only did SingleHalt* vs Stats at one hardcoded regime) to all three
-pairwise diffs, parameterized over regime -- so the same script can be reused across the 2-3
-REGIME-confirmed points this track evaluates on the ysagiv corpus, and, in principle, on our own
-corpus too. Same paired-bootstrap-CI-on-the-per-episode-regret-difference methodology as
-``evaluate_sig_s.py`` / ``evaluate.py``'s built-in ``d_zs`` (``cts.stats.bootstrap_ci``, percentile,
-n_boot=2000, never normal-theory, per repo convention) -- reuses ``_load_assessment_data`` /
-``_fit_stop_controllers`` / ``_regret_at`` directly, no reimplementation.
-
-Usage:
-    python -m analysis.ysagiv_sig --packed-root $MCP --cache $MAT/validation_cache.pt \
-        --out-dir <dir> --time-lambda 0.01 --maintenance-scale 0.0
-"""
 from __future__ import annotations
 
 import argparse

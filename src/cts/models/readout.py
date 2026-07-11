@@ -1,32 +1,6 @@
-"""Unified stop-policy ``Readout`` family for the meta-controller D0 comparison.
-
-Every readout shares ONE decision rule (``Readout.stop_step``): walk the
-episode's per-step snapshots, ask the subclass for a predicted advantage
-``A`` at each step, and STOP at the first step where ``A <= 0`` (continue iff
-``A > 0``), falling back to the last step if ``A`` never crosses zero. This is
-the same greedy rule the controller eval uses
-(:func:`cts.data.preprocess_mc.oracle.predicted_stop_from_advantages`), so all
-five D0 tiers are compared on identical machinery and only the *advantage
-signal* differs between them.
-
-The D0 ladder (all trained/selected on **regret directly**, never the
-surrogate MSE+sign-BCE — see ``mc_pipeline.md`` §10b):
-
-  1. :class:`AlwaysStop`        -- A<=0 everywhere       (stop@0, no parameters)
-  2. :class:`NeverStop`         -- A>0 everywhere        (full budget, no parameters)
-  3. :class:`StatsReadout`      -- MLP on [height, width, n_nodes, B]
-  4. :class:`GnnMetaController` -- MLP on [z, B]
-
-Tiers 3 and 4 share an IDENTICAL head architecture (:func:`build_advantage_head`)
-so the 4-vs-5 gap isolates *representation* (hand-crafted stats vs learned GNN
-embedding), not capacity.
-
-Per-step features are supplied as a ``[num_steps, feature_dim]`` tensor by the
-caller (the eval harness derives ``[height, width, n_nodes]`` from the packed
-tree payload and ``z`` from the materialized encoder cache). Parameter fitting
-on regret lives in the eval harness; this module is the model zoo + the shared
-decision rule only.
-"""
+"""Every readout shares one decision rule (``Readout.stop_step``): stop at the
+first step where predicted advantage ``A <= 0``, falling back to the last step
+if ``A`` never crosses zero."""
 
 from __future__ import annotations
 

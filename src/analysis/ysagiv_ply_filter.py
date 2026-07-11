@@ -1,23 +1,5 @@
-"""Ply-window filter for ysagiv `human_trees`: keeps only trees whose root FEN matches a
-position that occurs at ply in [min_ply, max_ply] in OUR OWN human-game move database — the
-same window used by the own-corpus `puctvalue_md36` pipeline (config_minply15_maxply75.yaml,
-Russek et al. 15-75), applied here as a cross-corpus membership check rather than a recomputed
-window (ysagiv's trees carry no ply/game metadata of their own to window directly).
-
-Root FEN format matches directly: ysagiv's `root_position_spec` and our DB's
-`filtered_moves_minply15_maxply75.fen` are both 4-field (board turn castling ep, no
-halfmove/fullmove clocks) — confirmed empirically (500/500 sampled ysagiv root FENs match SOME
-row in our unwindowed `processed_moves_nonzero`; 295/500 fall in the ply-15-75 window), not
-assumed. The high overlap is expected: both draw from the same underlying Lichess position pool.
-
-Composable with exclude_xaba (filter_xaba.py) via `--restrict-to <include_list>` — when given,
-only trees already in that list are checked/kept, so the two filters intersect in one pass
-instead of a separate set-intersection step (mirrors the "stack a second filter on the first"
-pattern already used for the own-corpus argmax+xaba probe, see outputs/reports/ysagiv.md).
-
-Usage: python -m analysis.ysagiv_ply_filter \
-    --trees-dir <dir> --output <include_list.txt> [--restrict-to <existing_include_list.txt>]
-"""
+"""Root FEN format is 4-field (board turn castling ep, no halfmove/fullmove clocks),
+matching filtered_moves_minply15_maxply75.fen directly."""
 from __future__ import annotations
 
 import argparse

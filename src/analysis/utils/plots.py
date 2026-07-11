@@ -1,10 +1,4 @@
-"""Matplotlib helpers for chess_analysis dashboards.
-
-Plots assume aggregates already computed (often SQL-side via ``Analyzer``): mean curves with
-normal approximated bands (``1.96 * SEM``), quantile-bin panels, and heatmaps with frequency-aware alpha.
-
-Uses poster typography/grid defaults via ``helpers.apply_poster_style()`` unless noted otherwise.
-"""
+"""Plots assume aggregates already computed elsewhere (often SQL-side via ``Analyzer``)."""
 
 import os
 

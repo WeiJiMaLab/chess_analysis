@@ -1,17 +1,5 @@
-"""Filter + sample: the single run-specific step downstream of preprocess.
-
-Both outputs come from applying the run's ply window once:
-  1. filtered_moves: ``processed_moves_nonzero`` windowed to [min_ply, max_ply] with
-     ``game_fraction`` added — the canonical table board/engine read.
-  2. tree-root FENs: a uniform sample of N distinct FENs from filtered_moves, one per
-     line → the treegen input file (roots for the normative branch).
-
-game_fraction's denominator is the TRUE game length — max(move_ply) over the
-UNWINDOWED processed_moves — so games longer than the window aren't all pinned to
-the same denominator.
-
-    python -m analysis.filter_and_sample
-"""
+"""game_fraction's denominator is the true game length (max move_ply over the
+unwindowed processed_moves), not the windowed subset."""
 
 import argparse
 import os

@@ -1,58 +1,13 @@
-"""Pack T_n -> T_{n+k} snapshot-pair training examples ("packhistory_GNNpretrain" stage).
+"""Packs T_n -> T_{n+k} snapshot-pair training examples: T_n is supervised with a
+target read off that same tree's own recorded state at step n + lookahead_k.
 
-See ``history.md`` (repo root) for the full plan; this module implements the
-"packhistory_GNNpretrain" stage described there. Summary: instead of pretraining
-the GNN encoder on one example per *complete* tree (today's ``preprocess_gnn/pack.py``
-+ ``ChildWdlModel``), we sample a step ``n`` per tree, build ``T_n`` (the tree as it
-existed at step n), and supervise every edge of ``T_n`` with a target read off the
-*same* tree's own future -- its recorded state at step ``n + lookahead_k`` -- since a
-tree's own history at a later step is just a later point in its own already-completed
-96-step trajectory. No new search is run; everything is read from
-``packhistory_trees``'s packed output (never raw trees).
-
-**Upstream contract (packhistory_trees's packed shard format) -- IMPORTANT**: as of
-this module's authorship, Task 1 (``packhistory_trees``, the ``preprocess_mc/pack.py``
-rewrite) had not yet landed real code (see ``history.md`` Progress Log, Task 1
-subsection). The sparse update-log *schema* is fully fixed by the plan (the
-``step_index``/``node_id``/``visit_count``/``q_value``/``wdl`` columns + the
-``node_update_ptr`` CSR index, sorted by ``(node_id, step_index)``); everything else
-about the packed shard's exact field layout is this module's own extrapolation,
-built by mirroring the *existing* ``preprocess_mc/pack.py`` shard format
-(``cts_budgeted_controller_episode_shard_v4``, see ``_serialize_shard_payload`` and
-``_accumulate_shard_buffers`` in that file) -- since packhistory_trees is explicitly a
-rewrite of that stage's *data source*, not its *control flow* or output structure,
-and Task 2's diff-based regression test requires the structural fields
-(``node_features``, ``parent_index``, ``child_ptr``, ``depth``, ``expansion_parent_ids``,
-``step_node_cutoffs``, ``first_decision_expansion_counts``, the ``trajectory_*_ptr`` CSR
-index arrays, etc.) to stay byte-identical to today's ``mc_packed/`` output. This
-module therefore assumes packhistory_trees's shard adds exactly two new pieces on top
-of that unchanged structure:
-
-  1. Five new flat, shard-concatenated arrays holding the sparse update log, using the
-     schema fixed in history.md: ``update_log_step_index``, ``update_log_node_id``,
-     ``update_log_visit_count``, ``update_log_q_value``, ``update_log_wdl``.
-  2. A per-trajectory-local CSR index ``node_update_ptr`` (one array per trajectory,
-     shape ``[N_i + 1]``, local node ids -- mirrors how ``child_ptr`` is already
-     trajectory-local) into those five arrays, sliced out via two new pointer arrays
-     that follow the exact same convention as the existing ``trajectory_child_ptr_ptr``
-     / ``trajectory_edge_ptr``: ``trajectory_node_update_ptr_ptr`` (slices
-     ``node_update_ptr``) and ``trajectory_update_log_ptr`` (slices the five flat
-     update-log arrays).
-
-``iter_history_trajectories`` below is the single seam where this assumption lives --
-if Task 1's real field names differ, only that function (plus ``HistoryTrajectory``'s
-field list) needs to change; everything downstream operates on the decoded
-``HistoryTrajectory`` dataclass, not the raw payload dict. This is flagged in
-``history.md``'s Task 4 Progress Log entry for Wave-2 integration.
-
-**Step-index coordinate system -- also flagged, also unconfirmed**: ``n`` here is
-1-indexed into the trajectory's own root-rank-trimmed step sequence, i.e.
-``local_step = n - 1`` indexes ``step_node_cutoffs`` / ``expansion_parent_ids`` the
-same way ``ControllerEpisodeDataset.__getitem__`` already does
-(``controller_train.py:876-907``), and the update log's ``step_index`` column is
-assumed to live in this *same* coordinate system (both are produced by the same
-replay loop in Task 1, so a single consistent numbering is the natural design, but
-this has not been confirmed against Task 1's real code).
+Upstream contract (unconfirmed against packhistory_trees's real code): assumes
+the structural fields are unchanged from ``cts_budgeted_controller_episode_shard_v4``,
+plus five flat update-log arrays (``update_log_step_index/node_id/visit_count/
+q_value/wdl``) and a per-trajectory CSR index ``node_update_ptr``, decoded in
+``iter_history_trajectories`` (the one seam to change if field names differ).
+``step_index``'s coordinate system (0-indexed, aligned to ``local_step = n - 1``)
+is also unconfirmed.
 """
 
 from __future__ import annotations
@@ -215,21 +170,16 @@ def _forward_filled_wdl_at_step(
 ) -> torch.Tensor:
     """Return ``[K, 3]`` cumulative (win, draw, loss) for each of ``node_ids`` as of ``step``.
 
-    Forward-fill lookup against the sparse update log: for each node, find the last
-    update-log entry with ``step_index <= step`` (binary search over that node's own
-    sorted slice via ``node_update_ptr``). Nodes with zero update-log entries at all
-    (never visited by backprop), or whose first update hasn't happened yet as of
-    ``step``, fall back to a zero WDL triple -- NOT ``node_features``'s own
-    ``wdl_win``/``wdl_draw``/``wdl_loss`` columns (indices 1:4). Those columns are NOT
-    each node's static pre-backprop leaf WDL (an earlier version of this docstring
-    wrongly assumed that, matching the OLD pre-fix behavior): ``pack.py``'s
-    ``_build_compact_trajectory`` overwrites them with each node's *final*,
-    end-of-search replayed WDL, so falling back to that array here would leak a node's
-    eventual answer into every step before its own first backprop update. Zero matches
-    the ``EdgeStats()``-zero convention this codebase already uses elsewhere for a node
-    with no backprop yet (see ``pack.py``'s replay code), and flows cleanly through
-    ``_build_tree_n``'s renormalization below (an all-zero win/draw/loss triple yields
-    ``value=0, variance=0`` via the ``clamp_min(1e-8)`` guard there).
+    Forward-fill lookup against the sparse update log: for each node, binary-search
+    its sorted update-log slice (via ``node_update_ptr``) for the last entry with
+    ``step_index <= step``. Nodes never visited by backprop, or whose first update
+    hasn't happened yet as of ``step``, fall back to a zero WDL triple -- NOT
+    ``node_features``'s own wdl columns, which ``pack.py``'s
+    ``_build_compact_trajectory`` overwrites with each node's *final* replayed WDL
+    (using that would leak the eventual answer into earlier steps). Zero matches the
+    ``EdgeStats()``-zero convention used elsewhere for an unvisited node, and flows
+    cleanly through ``_build_tree_n``'s renormalization below (an all-zero triple
+    yields ``value=0, variance=0`` via the ``clamp_min(1e-8)`` guard there).
     """
     node_update_ptr = trajectory.node_update_ptr
     update_step_index_list = trajectory.update_step_index.tolist()
@@ -253,9 +203,8 @@ def _never_visited(trajectory: HistoryTrajectory, node_id: int) -> bool:
     """True iff ``node_id`` has zero update-log entries across the *entire* tree.
 
     Such nodes were created as some ancestor's child but never themselves selected by
-    backprop during the original search -- Delta-visits is provably zero for them
-    regardless of ``n``/``lookahead_k``. This is the "never-visited-leaf" filter from
-    history.md (measured there at ~90-98% of nodes in typical trees).
+    backprop during the original search -- delta-visits is provably zero for them
+    regardless of ``n``/``lookahead_k``.
     """
     lo = int(trajectory.node_update_ptr[node_id].item())
     hi = int(trajectory.node_update_ptr[node_id + 1].item())
@@ -307,12 +256,9 @@ def _build_tree_n(trajectory: HistoryTrajectory, n: int) -> Optional[_TreeNSnaps
     expansion_count = trajectory.first_decision_expansion_count + local_step
 
     node_ids = torch.arange(node_cutoff, dtype=torch.long)
-    # BUGFIX: query at `local_step` (= n - 1), not `n`. `step_index` in the update log
-    # is 0-indexed (matches `local_step`, per _replay_backprop_history's own convention
-    # -- row k of oracle_root_q_trace lines up with step_index == k), same convention
-    # `node_cutoff` above already correctly uses. Querying at `n` directly leaked the
-    # *next* expansion's backprop update into T_n's own features (found by due-diligence
-    # review against real data, history.md Task 4 Progress Log).
+    # Query at `local_step` (= n - 1), not `n`: `step_index` is 0-indexed, matching
+    # `local_step` and `node_cutoff` above. Querying at `n` would leak the *next*
+    # expansion's backprop update into T_n's own features.
     forward_filled_wdl = _forward_filled_wdl_at_step(trajectory, node_ids, local_step)
 
     win, draw, loss = forward_filled_wdl[:, 0], forward_filled_wdl[:, 1], forward_filled_wdl[:, 2]

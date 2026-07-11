@@ -1,30 +1,5 @@
-"""Z0/Z1 feasibility smoke test (see plan.md / endtoend.md): does an UNFROZEN
-``MetaController`` (encoder + advantage head trained jointly) actually get a live
-gradient into the encoder on a real batch?
-
-Today's production path (``cts.train.pg_controller_train``) always trains against a
-FROZEN encoder (`controller_train.py`'s ``_build_model_and_optimizer`` calls
-``model.freeze_encoder()`` unless ``config.unfreeze_encoder`` is set, which nothing
-currently does). `endtoend.md` proposes joint encoder+head training instead, reusing:
-
-- ``ControllerEpisodeDataset`` (``cts.train.controller_train``, class at
-  controller_train.py:260) — reconstructs REAL per-step raw tree data from the packed
-  manifest (not cached embeddings).
-- ``collate_controller_episodes`` (``cts.train.controller_train:512-649``) — batches
-  multiple episodes' per-step trees into a ``ControllerBatch``.
-- ``MetaController.forward`` (``cts.models.mc:238-246``) — runs encoder -> head
-  end-to-end given a ``ControllerBatch``'s ``tree_batch``/``tree_sizes``/``time_budgets``.
-  ``MetaController.freeze_encoder`` (``cts.models.mc:156-159``) is simply never called
-  here, which is the one change needed to make the encoder trainable.
-- ``expected_regret_batched`` (``cts.train.pg_controller_train:119-138``) — the
-  existing closed-form expected-regret loss, reused as-is; its four tensor inputs
-  (``adv``, ``g``, ``mask``, ``lengths``, ``oracle_values``) are built here from the
-  SAME oracle machinery ``pg_controller_train.py`` itself uses
-  (``return_for_stop_step`` + ``budgeted_oracle_config_from_metadata``), not a
-  synthetic placeholder loss.
-
-This is the single most important correctness check before any timing measurement
-(Z0) means anything: if backprop can't even reach the encoder, timing it is moot.
+"""Feasibility smoke test: does an unfrozen ``MetaController`` (encoder + advantage
+head trained jointly) get a live gradient into the encoder on a real batch?
 
 Requires the real validation manifest at ``$MCP/validation_manifest.json`` (source
 ``slurm/helpers/setup_env.sh`` first) -- skipped if that env/data isn't available.

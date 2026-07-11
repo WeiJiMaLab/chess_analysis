@@ -1,13 +1,3 @@
-"""Abstract provider interface that any tree-expansion backend implements.
-
-A provider knows how to produce, for a given FEN, the per-node feature dict
-and the list of child ``ExpansionChild`` records (priors, WDLs, terminal
-flags). The rest of CTS only ever calls into this interface — generation,
-oracles, and tests can swap in test stubs or alternative engines without
-touching the consumers. Concrete production implementation is
-``cts.core.providers.lc0.Lc0DirectEvalProvider``.
-"""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

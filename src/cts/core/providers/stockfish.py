@@ -1,13 +1,3 @@
-"""Production tree-expansion provider backed by a Stockfish subprocess.
-
-Plugs into the ``TreeExpansionProvider`` interface that tree generation calls
-to expand a node: given a FEN, return root WDL features and a list of
-``ExpansionChild`` records for each legal move.
-
-Can be configured to limit its playing strength to a particular Elo rating
-to simulate human-like evaluations rather than superhuman play.
-"""
-
 from __future__ import annotations
 
 import dataclasses

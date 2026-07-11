@@ -1,58 +1,6 @@
-"""Canary/poisoning regression tests for the future-leakage bugs fixed 2026-07-10/11.
-
-``test_no_future_leakage.py`` (this directory) verifies the fix by CODE READING plus
-hand-picked real examples: it asserts specific known nodes/steps show the expected
-(zero, then correct) values. That is a good, real regression test, but it still relies
-on a human having correctly reasoned about which rows/columns matter.
-
-This file takes a different, more MECHANICAL approach: **poison the exact on-disk
-quantity that leaked** (``preprocess_mc/pack.py``'s ``final_value``/``final_wdl``
-baseline -- the array that gets packed into each shard's ``node_features`` column
-and that ``_build_compact_trajectory``'s own docstring documents as "each node's
-FINAL, end-of-search replayed value/WDL", see that file's comment above
-``node_features = full_tree.node_features.clone()``) with an IMPOSSIBLE sentinel
-value that can never occur naturally, then run the poisoned data through every
-downstream per-step consumer this codebase has. If the sentinel is reachable from
-any per-step output, that consumer is (re-)leaking the future. If it never is, the
-consumer is provably independent of that array's content -- a much stronger
-guarantee than "this one hand-picked example looked right."
-
-All poisoning happens on IN-MEMORY COPIES of a small (16-tree), freshly-generated
-real ``pack_history`` shard (built once per test session, in a pytest temp dir, via
-the actual production packing code -- ``preprocess_mc.pack._pack_split`` -- run
-against a handful of real trees from the project's own ``xaba20k`` split manifest).
-Nothing on disk under ``/scratch`` is ever read back after mutation, and nothing
-under the real ``pack_history``/``mc_packed`` production directories is touched.
-
-Five independent canaries, each catching a different failure mode:
-
-1. ``test_canary_baseline_leak_controller_episode_dataset`` -- poisons the WHOLE
-   ``node_features`` baseline array and proves ``ControllerEpisodeDataset.__getitem__``
-   is bit-for-bit IDENTICAL whether that array is poisoned or not (a strictly stronger
-   claim than "the sentinel doesn't appear anywhere", which is also checked).
-2. ``test_canary_baseline_leak_pack_history`` -- same poison, same bit-identity proof,
-   for ``pack_history.py``'s ``_build_tree_n``/``_forward_filled_wdl_at_step``.
-3. ``test_canary_target_input_separation`` -- poisons only the update-log entries that
-   fall in the "future" (T_n, T_{n+k}] window and confirms the poison appears in the
-   GNN-pretraining TARGET (``edge_wdl_targets``) but never in the INPUT
-   (``node_features`` of T_n) for the same example.
-4. ``test_canary_update_log_respects_step_order`` -- poisons one later update-log entry
-   for a node and confirms forward-fill queries at earlier steps never see it (and a
-   query at/after that step does -- the positive control).
-5. ``test_canary_perturbation_propagates_correctly`` -- the mirror-image check: a
-   PERTURBED (not poisoned-to-impossible) real value must correctly flow into the
-   per-step output for exactly the steps it's supposed to cover, and nowhere else.
-   Guards against the degenerate "always return 0" implementation that would pass
-   canaries 1-4 trivially while being completely broken.
-
-Two more, lower priority, run only if the encoder checkpoint / real data are available:
-
-6. ``test_canary_baseline_leak_through_encoder_forward_pass`` -- extends canary 1
-   through a REAL trained ``TreeEncoder`` forward pass (not just the raw feature
-   tensor), confirming the resulting ``z_root`` is also bit-identical.
-7. ``test_canary_perturbation_propagates_through_encoder`` -- extends canary 5 the
-   same way: a real, valid perturbation must make ``z_root`` for the perturbed episode
-   differ from the unperturbed one.
+"""Poisons the on-disk "final value/WDL" baseline array with an impossible sentinel
+and runs it through every downstream per-step consumer: if the sentinel is
+reachable from any per-step output, that consumer is leaking the future.
 
 Run explicitly (this directory isn't covered by pytest.ini's testpaths):
     pytest src/cts/tests/test_canary_future_leakage.py -v

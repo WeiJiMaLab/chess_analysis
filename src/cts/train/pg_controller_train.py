@@ -1,29 +1,14 @@
-"""Policy-gradient (exact expected-return) trainer for the MCHalt controller.
+"""Optimizes regret directly: treats the controller as a stochastic stop policy
+(continues at step t with p_t = sigmoid(A_t)) and marginalizes the stop step in
+closed form over the known full halt-reward trace, so there's no REINFORCE
+sampling / rollout variance:
 
-The standard ``controller_train`` fits the per-step advantage with MSE + a sign BCE — a
-DIFFERENTIABLE SURROGATE for regret, because the deployed objective (regret of the greedy
-"stop at first advantage<=0" rule) is a threshold-crossing of the advantage trace and has
-no usable gradient w.r.t. the head weights.
-
-This trainer optimizes the regret objective DIRECTLY. Treat the controller as a stochastic
-stop policy: at step t it continues with probability ``p_t = sigmoid(A_t)``. Because every
-episode's FULL halt-reward trace is known offline, the stop-step distribution and the
-expected return are written in CLOSED FORM — the policy gradient with the stop step
-marginalized analytically, so there is no REINFORCE sampling / rollout variance:
-
-    P(stop@s)   = (prod_{u<s} p_u) * (1 - p_s)      for s < T-1     (continue then stop)
-    P(stop@T-1) = prod_{u<T-1} p_u                  (forced stop at the budget end)
-    E[return]   = sum_s P(stop@s) * g(s)            (g(s) = return_for_stop_step(s))
+    P(stop@s)   = (prod_{u<s} p_u) * (1 - p_s)      for s < T-1
+    P(stop@T-1) = prod_{u<T-1} p_u                  (forced stop at budget end)
+    E[return]   = sum_s P(stop@s) * g(s)
     loss        = oracle_value - E[return]   ==   E[regret]
 
-As training sharpens p_u toward 0/1 the soft policy converges to the deployed hard greedy
-rule. Checkpoints are still SELECTED on the HARD greedy val regret, so the result is
-directly comparable to the MSE-trained controller and the baseline tiers. Only the MLP head
-trains (encoder frozen; z_t read from the materialized cache), so it is CPU-cheap.
-
-    python -m cts.train.pg_controller_train --config config.yaml --stage train \
-        --set globals.sf_elo=2000 --set device=cpu \
-        --set output_checkpoint=/scratch/.../sf_mchalt_pg.pt --set epochs=20
+Checkpoints are selected on the hard greedy val regret, not this soft loss.
 """
 from __future__ import annotations
 

@@ -1,12 +1,3 @@
-"""
-Skeptical provenance tests for the single python board featurizer
-(board.calc_captures_checks, captures/checks via legal-move enumeration)
-and the SQL-side board columns it complements.
-
-Assume the metrics are wrong until proven right — hand-computed fixtures plus
-DB cross-checks.
-"""
-
 from __future__ import annotations
 
 import os

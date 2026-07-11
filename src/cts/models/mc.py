@@ -1,16 +1,5 @@
-"""Meta-controller model: encoder + advantage head over a configurable subset of ``[z_t, N_t, T_t]``.
-
-The training loop in :mod:`cts.train.controller_train` wraps this model with
-the data plumbing, loss, and diagnostics, but the model itself only depends
-on the encoder (``cts.models.gnn``) and the packed tensor format
-(``cts.core.tensorizer``).
-
-The features the advantage head consumes are configured via
-``controller_inputs``: a tuple drawn from ``("z_t", "N_t", "T_t")`` declaring
-which inputs the head receives. The canonical on-disk feature layout
-(``[z_t, N_t, T_t]``) is unchanged; the model slices to the configured subset
-at the boundary so callers can keep passing the full feature tensor.
-"""
+"""The canonical on-disk feature layout ``[z_t, N_t, T_t]`` is unchanged; the model
+slices to the ``controller_inputs``-configured subset at the boundary."""
 
 from __future__ import annotations
 

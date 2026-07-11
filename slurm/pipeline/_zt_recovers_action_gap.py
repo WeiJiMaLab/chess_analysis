@@ -1,11 +1,3 @@
-"""Can action_gap (top1-top2 root Q) be recovered FROM z_t? Different question than
-decodability's R(t)-from-z_t probe -- this regresses action_gap ~ z_t directly, reusing
-the same data-loading path (_load_split_episodes/_load_zt_by_episode) and probe helpers
-(_linear_r2/_mlp_r2) evaluate.py's decodability plot already uses, just with a different
-target/feature pairing. Ad-hoc one-off script, kept alongside the slurm script that drives
-it (zt_action_gap_probe.slurm) rather than under a scratchpad path -- compute nodes don't
-see the interactive session's /tmp.
-"""
 import sys
 sys.path.insert(0, "/home/hl4291/chess_analysis/src")
 

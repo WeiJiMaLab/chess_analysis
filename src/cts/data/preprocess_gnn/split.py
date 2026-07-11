@@ -1,12 +1,5 @@
-"""Split generated-tree shards into train/validation manifests.
-
-Walks the generated-trees directory produced by
-``submit_generate_dataset_shards.py``, shuffles the per-tree ``.pt`` files
-with a fixed seed, and writes two newline-delimited manifests (train and
-validation) into ``--split-root``. The split is at the example level rather
-than the shard level so every shard contributes to both manifests. Output
-manifests feed ``derive_pretrain_prefixes.py`` downstream.
-"""
+"""Split is at the example level, not the shard level, so every shard contributes
+to both train and validation manifests."""
 
 from __future__ import annotations
 
@@ -25,10 +18,8 @@ class SplitConfig(BaseModel):
     validation_fraction: float = 0.05
     seed: int = 0
     clear: bool = False
-    # Optional path to a clean_trees.txt (one basename per line, e.g. from
-    # filter_trees_by_trace). When set, the split is restricted to those trees
-    # under source_root instead of every *.pt — this is how tree filtering feeds
-    # the encoder/MC packs.
+    # Optional clean_trees.txt (one basename per line); when set, restricts the
+    # split to those trees instead of every *.pt under source_root.
     include_list: Optional[str] = None
 
 

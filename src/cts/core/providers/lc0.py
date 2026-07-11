@@ -1,16 +1,3 @@
-"""Production tree-expansion provider backed by two ``lc0`` subprocesses.
-
-Plugs into the ``TreeExpansionProvider`` interface that tree generation calls
-to expand a node: given a FEN, return root WDL features and a list of
-``ExpansionChild`` records for each legal move. Internally composes a prior
-engine (``go nodes 1``, parsed by ``parse_no_search_analysis`` to get
-per-child move priors) with a separate value engine that gives the root
-position's WDL valuehead reading, plus three caches (prior, value, terminal)
-so repeat queries on the same FEN don't re-invoke the engine. Only live
-during tree generation — afterwards trees are frozen as JSON on disk and the
-engine processes are gone.
-"""
-
 from __future__ import annotations
 
 import os

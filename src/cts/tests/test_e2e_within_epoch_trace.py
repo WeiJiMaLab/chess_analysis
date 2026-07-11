@@ -1,9 +1,4 @@
-"""TDD-lite tests for plan.md Agent 2's fix to ``cts.train.e2e_controller_train``: ``run_epoch``'s
-docstring promised ``(mean loss, per-batch loss trace)`` but only ever returned the mean -- the
-trace was computed (``float(loss.detach())``) but never collected into a list or returned, and
-the referenced ``_plot_within_epoch`` didn't exist. Caught by a direct user request during the
-Agent 2 continuation run; these tests guard the fix without needing real packed data / a GPU.
-"""
+"""Tests that ``run_epoch`` returns the per-batch loss trace, not just the mean."""
 from __future__ import annotations
 
 import csv

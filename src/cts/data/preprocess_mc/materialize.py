@@ -1,16 +1,3 @@
-"""Pre-compute frozen-encoder activations for fitted-Q controller training.
-
-Runs the encoder forward on every snapshot in a packed-episodes manifest and
-writes a flat tensor cache (``z_root`` per snapshot, target advantage, oracle
-stop step) which ``train_fitted_q_controller.py`` mmaps at training time. This
-makes controller training I/O-light and GPU-bound on the small MLP head
-instead of repeatedly re-encoding the same trees.
-
-Sits between ``filter_packed_episodes.py`` and ``train_fitted_q_controller.py``.
-Two subcommands: ``materialize`` writes one worker's slice as numbered shards
-(safe to run in parallel SLURM jobs); ``merge`` collects the per-worker
-manifests into the single cache file the training script expects.
-"""
 from __future__ import annotations
 
 import os
@@ -45,19 +32,16 @@ class MaterializeConfig(BaseModel):
     packed_data: Optional[str] = None
     encoder_checkpoint: Optional[str] = None
     worker_index: Optional[int] = None
-    # Default False: clear this worker's shard directory and start fresh. Set
-    # True to resume a killed/OOM'd/timed-out worker by skipping already-
-    # written batches (see materialize_worker's resume-handling comment).
+    # Default False: clear and start fresh. Set True to resume a killed/OOM'd
+    # worker (see materialize_worker's resume-handling comment).
     resume: bool = False
     device: str = "cuda"
     episode_batch_size: int = 8
     loader_workers: int = 0
     max_snapshots_per_shard: int = 250000
     log_interval: int = 100
-    # Advantage-head architecture. The encoder's architecture is read out
-    # of the checkpoint metadata; only the head shape is configurable here
-    # (the head is reconstructed with random weights since we only use the
-    # encoder for materialization).
+    # Advantage-head shape (encoder architecture comes from the checkpoint
+    # metadata); head is reconstructed with random, unused weights.
     hidden_dim: int = 256
     hidden_layers: int = 3
     # Optional cap on episodes processed (smoke / subset runs).

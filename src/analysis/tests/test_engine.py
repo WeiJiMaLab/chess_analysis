@@ -1,14 +1,3 @@
-"""
-Tests for the UNIT-PARAMETRIC engine signal readouts (analysis.utils.tree_loader).
-
-Covers the new provenance-critical behavior: deep signals are computed by
-REPLAYING negamax over the stored per-node static values in the requested unit
-(pwin -> "value", cp -> "cp_order"), NOT by reading the generator's oracle_*
-arrays. Mock trees give exact expected values; the saturation case shows the
-unit genuinely changes the signal (action_gap_pwin == 0 but action_gap_cp == 500
-on the same tree).
-"""
-
 from __future__ import annotations
 
 import os

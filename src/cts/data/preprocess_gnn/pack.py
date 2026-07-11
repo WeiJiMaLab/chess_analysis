@@ -1,14 +1,3 @@
-"""Flatten per-tree `.pt` pretrain examples into batched shards the GNN eats.
-
-Given split manifests pointing at teacher trees (`cts_raw_pretrain_example_*`), this CLI
-loads each example, aligns columns with the encoder schema (optionally widening with
-scaled teacher topology), and writes chunky ``.pt`` shards plus JSON manifests — the
-usual input to Child-WDL or topology Encoder/TopologyHead training — Huber on the four topology
-vectors lines up encoder **node** states (root included) with scaled teacher summaries, while checkpoints
-stay five columns wide at the embedding input.
-
-Pipeline: manifest paths → tensors per node/edge → stack many trees → shard files."""
-
 from __future__ import annotations
 
 import json

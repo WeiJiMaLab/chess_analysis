@@ -1,22 +1,6 @@
-""""Thinking helps" filter, run after gen_trees and before pack_trees (see
-slurm/pipeline/argmax_filter.slurm + pipeline.yaml). Non-destructive: scans
-every generated tree and writes an include_list of survivors' basenames for
-split.py to read (config split.include_list) -- gen_trees's own output
-directory (human_analysis.trees_default) is left untouched, so
-engine_analysis_pwin/cp still see the full, unfiltered population.
-
-For each tree, reconstructs the cost-adjusted return curve at a fixed
-BudgetedOracleConfig using the exact same machinery mc_pack uses
-(``build_compact_trajectory`` / ``budgeted_oracle_from_trajectory``), and
-keeps the tree only if the TRUE oracle argmax step exceeds
-``--argmax-threshold`` -- i.e. only positions where continued search
-genuinely has a better stop point than the immediate static read. See
-labnotebook 2026-07-07: the 900-FEN pilot found ``argmax > 2`` the
-highest-yield cutoff (24.7% retained, SingleHalt* k*=7).
-
-Usage: python -m cts.data.preprocess_mc.filter_argmax \
-    --trees-dir <dir> --output <include_list.txt>
-"""
+"""Keeps a tree only if its true oracle argmax step exceeds ``--argmax-threshold``,
+i.e. only positions where continued search has a genuinely better stop point
+than the immediate static read. Non-destructive: writes an include_list only."""
 from __future__ import annotations
 
 import argparse

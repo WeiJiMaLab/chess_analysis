@@ -1,15 +1,3 @@
-"""Train the budget-aware compute-advantage controller via fitted-Q regression.
-
-This script is the controller-training stage of the CTS pipeline. It loads
-packed episode shards (sequences of partial-tree snapshots with target
-advantages) and, when the encoder is frozen, materializes the encoder once
-into a feature cache keyed by ``[z_root, N_t, T_t]``. It then trains a small
-MLP advantage head on those features with MSE + auxiliary sign BCE loss,
-optionally reweighted by oracle stop-step frequency or a hand-tuned
-non-trivial boost. The output is a controller checkpoint plus a JSONL of
-per-episode greedy-policy diagnostics.
-"""
-
 from __future__ import annotations
 
 import json
@@ -57,14 +45,10 @@ class ControllerTrainConfig(BaseModel):
     packed_validation_data: str
     encoder_checkpoint: str
     output_checkpoint: Optional[str] = None
-    # Warm-starts the full model (encoder + head) from a checkpoint's
-    # ``model_state_dict``, loaded after ``encoder_checkpoint`` in
-    # ``_build_model_and_optimizer`` so it takes precedence. Shared resume hook
-    # for both ``pg_controller_train.py`` and ``e2e_controller_train.py``.
+    # Warm-starts the full model (encoder + head), loaded after encoder_checkpoint
+    # so it takes precedence. Shared resume hook for pg/e2e_controller_train.py.
     resume_checkpoint: Optional[str] = None
-    # Save a checkpoint every epoch (not just on val-regret improvement), as
-    # ``<output_checkpoint stem>_epoch{N:03d}<suffix>``, so a run can be
-    # evaluated at multiple points along its curve, not just the best epoch.
+    # Save a checkpoint every epoch (not just on val-regret improvement).
     save_every_epoch: bool = False
     materialized_train_cache: Optional[str] = None
     materialized_validation_cache: Optional[str] = None
@@ -87,10 +71,8 @@ class ControllerTrainConfig(BaseModel):
     min_lr: float = 0.0
     weight_decay: float = 0.0
     sign_loss_weight: float = 1.0
-    # Asymmetric penalty on the sign-BCE: pos_weight < 1 penalizes false-continue
-    # more than false-stop, pulling the advantage zero-crossing earlier to counter
-    # over-search. 1.0 = symmetric. Checkpoint selection still uses validation
-    # regret, not this loss.
+    # Asymmetric sign-BCE penalty: pos_weight < 1 penalizes false-continue more
+    # than false-stop, pulling the zero-crossing earlier to counter over-search.
     sign_pos_weight: float = 1.0
     nontrivial_loss_weight: float = 1.0
     # --- policy-gradient (exact expected-return) trainer: cts.train.pg_controller_train ---
@@ -98,10 +80,8 @@ class ControllerTrainConfig(BaseModel):
     # with the stop step marginalized in closed form over the full trace (no REINFORCE sampling).
     pg_episode_batch: int = 1024        # episodes per PG gradient step
     pg_max_episodes: Optional[int] = None  # cap train/val episodes (smoke / quick runs)
-    # PG stop-policy temperature: continue prob = sigmoid(A_t / tau). tau > 1
-    # avoids the 0/1 sigmoid saturation boundary (dead gradient) early in
-    # training; annealed linearly to stop_temperature_final. Does not affect the
-    # deployed hard greedy rule (sign(A_t)). 1.0/1.0 = original.
+    # PG stop-policy temperature: continue prob = sigmoid(A_t / tau); tau > 1
+    # avoids the sigmoid saturation boundary (dead gradient) early in training.
     stop_temperature: float = 1.0
     stop_temperature_final: float = 1.0
     inverse_freq_weights: bool = False
@@ -144,10 +124,8 @@ class ControllerTrainConfig(BaseModel):
     large_max_time: int = 60
     very_large_min_time: int = 61
     very_large_max_time: int = 120
-    # Which canonical inputs the advantage head consumes. Order in the list is
-    # not significant; the model concatenates the selected features in
-    # canonical ``(z_t, N_t, T_t)`` order regardless. Default keeps the
-    # pre-refactor behavior (all three inputs).
+    # Which canonical inputs the advantage head consumes; list order doesn't
+    # matter, features are concatenated in canonical (z_t, N_t, T_t) order.
     controller_inputs: List[str] = Field(default_factory=lambda: list(CONTROLLER_INPUT_NAMES))
 
     @field_validator("controller_inputs")

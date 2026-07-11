@@ -1,45 +1,11 @@
-"""End-to-end (encoder-unfrozen) MetaController training loop (plan.md Z2 / endtoend.md).
-
-Today's production controller path (``cts.train.pg_controller_train``) always trains
-against a FROZEN encoder: ``z_t`` is precomputed once by ``materialize.py`` and cached,
-and only the small advantage head ever gets a gradient. The encoder never sees the
-downstream regret objective. This script removes that: it builds a ``MetaController``
-WITHOUT calling ``freeze_encoder()``, initializes the encoder from the pretrained
-child-WDL checkpoint (not from scratch), and trains encoder + head JOINTLY against the
-real closed-form expected-regret loss (``pg_controller_train.expected_regret_batched``),
-via one joint optimizer.
-
-Reuses, verbatim, the three pieces plan.md/endtoend.md identified as already-existing
-and sufficient:
-  - ``ControllerEpisodeDataset`` / ``collate_controller_episodes`` (``controller_train.py``)
-    — reconstruct + batch REAL per-step raw tree data from the packed manifest.
-  - ``MetaController`` (``cts.models.mc``) with ``freeze_encoder()`` skipped.
-  - ``expected_regret_batched`` (``pg_controller_train.py``) — the closed-form
-    expected-regret loss, no REINFORCE rollout variance.
-  - ``_build_model_and_optimizer`` / ``_seed_and_resolve_paths`` (``controller_train.py``)
-    — same encoder-loading + optimizer-construction path ``pg_controller_train.py`` uses;
-    passing ``unfreeze_encoder: true`` is the one flag flip that makes the encoder trainable
-    (that flag already existed in ``ControllerTrainConfig`` but nothing previously called it
-    with a live/unfrozen encoder).
-
-Config: reuses the existing ``train`` section of the pipeline config (same
-``ControllerTrainConfig`` pydantic model pg_controller_train.py uses) — no new config class.
-Point ``--set output_checkpoint=...`` at a SCRATCH path; never at the real
+"""Point ``--set output_checkpoint=...`` at a scratch path; never at the real
 ``${packed_dir}/mchalt_controller.pt`` production checkpoint.
 
-    python -m cts.train.e2e_controller_train --config config_minply15_maxply75.yaml \\
-        --stage train --set unfreeze_encoder=true \\
-        --set output_checkpoint=/scratch/.../e2e_controller.pt --set epochs=20
-
-Data-loading note (important for wall-clock, NOT covered by Z0's timing script — that
-script timed compute only, on one pre-loaded batch): ``ControllerEpisodeDataset`` caches
-just the ONE most-recently-loaded shard (``_load_shard``'s single-slot memo), because its
-designed access pattern is shard-local, not fully-random. A naive ``torch.randperm`` over
-the WHOLE dataset (~22K episodes / ~45 shards for the train split) would evict and reload
-a ~500-episode shard from disk on nearly every 8-episode batch — pure I/O thrashing Z0
-never measured. ``_epoch_batches`` below shuffles the ORDER OF SHARDS and the order of
-episodes WITHIN each shard, but keeps every batch's episodes drawn from a single shard, so
-each shard is ``torch.load``-ed at most once per epoch.
+``ControllerEpisodeDataset`` caches only the one most-recently-loaded shard, since
+its access pattern is shard-local, not fully-random. ``_epoch_batches`` below
+shuffles shard order and within-shard episode order, but keeps every batch drawn
+from a single shard, so each shard is loaded at most once per epoch -- a naive
+``torch.randperm`` over the whole dataset would thrash shard I/O every batch.
 """
 from __future__ import annotations
 
@@ -183,11 +149,7 @@ def run_epoch(
 
     total_loss = 0.0
     total_episodes = 0
-    batch_loss_trace: list[float] = []  # per-batch loss, in batch order -- the promised 2nd
-                                        # return value, previously computed (line below) but
-                                        # never collected/returned (plan.md Agent 2 fix, flagged
-                                        # by a direct user request: within-epoch curves matter
-                                        # when a run is capped at very few epochs).
+    batch_loss_trace: list[float] = []  # per-batch loss, in batch order
     started = time.time()
     for batch_index, idxs in enumerate(batches, start=1):
         episodes = [dataset[i] for i in idxs]
@@ -235,14 +197,12 @@ def _save_checkpoint(path: Path, model, epoch: int, train_loss: float, val_loss:
         },
         path,
     )
-    # ALSO write an encoder-only checkpoint in the exact format
-    # `gnn_pretrain.save_encoder_checkpoint`/`load_encoder_checkpoint`/`load_encoder_architecture`
-    # expect ({"encoder_state_dict", "metadata": {"encoder_architecture": ...}}) -- this is the
-    # format `cts.data.preprocess_mc.materialize.materialize_worker` consumes directly (it only
-    # ever reads the encoder half of a checkpoint, discarding whatever head is paired with it —
-    # see materialize_worker's own comment). Writing this here means Z3 can re-materialize z_t
-    # from the jointly-trained encoder with the EXISTING materialize.py pipeline unchanged,
-    # instead of a bespoke loader for this one checkpoint format.
+    # Also write an encoder-only checkpoint in the format
+    # gnn_pretrain.save_encoder_checkpoint/load_encoder_checkpoint expect
+    # ({"encoder_state_dict", "metadata": {"encoder_architecture": ...}}), since
+    # materialize_worker only reads the encoder half of a checkpoint. This lets
+    # z_t be re-materialized from the jointly-trained encoder with the existing
+    # materialize.py pipeline unchanged.
     encoder_path = path.with_name(f"{path.stem}_encoder{path.suffix}")
     save_encoder_checkpoint(
         str(encoder_path),
@@ -412,20 +372,15 @@ def main(config: ControllerTrainConfig) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     generator = torch.Generator().manual_seed(config.seed)
 
-    # Reuses the SAME config field pg_controller_train.py already uses to cap train/val
-    # episodes for smoke/quick-turnaround runs (ControllerTrainConfig.pg_max_episodes,
-    # default None = no cap). Under the whole effort's 1h-wall-clock hard constraint this
-    # is the "cap further via a max_episodes-style override" headroom knob -- no new config
-    # field, just wiring the existing one through (previously dead in this script).
+    # Reuses the same config field pg_controller_train.py uses to cap train/val
+    # episodes for smoke/quick-turnaround runs (default None = no cap).
     episode_cap = config.pg_max_episodes
     if episode_cap is not None:
         print(f"[e2e-controller] pg_max_episodes cap active: {episode_cap} episodes/epoch (train+val each)", flush=True)
 
     history: list[dict] = []
-    within_epoch_trace: list[dict] = []  # per-batch {epoch, phase, batch_index, loss} rows across
-                                         # ALL epochs of THIS job -- the within-epoch curve a
-                                         # capped-epoch run needs (see run_epoch's docstring;
-                                         # previously promised but never collected -- fixed here).
+    within_epoch_trace: list[dict] = []  # per-batch {epoch, phase, batch_index, loss} rows
+                                         # across all epochs of this job (see run_epoch's docstring)
     best_val_loss = float("inf")
     for epoch in range(1, config.epochs + 1):
         epoch_started = time.time()

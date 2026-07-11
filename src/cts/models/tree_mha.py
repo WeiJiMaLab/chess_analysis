@@ -1,15 +1,6 @@
-"""Per-level multi-head attention building block for the tree encoder.
-
-This module provides the single attention layer that ``GNN.TreeEncoder`` invokes
-once per message-passing iteration: for every parent node in a batched tree,
-attend over that parent's children to produce an aggregated upward message.
-
-The layer operates on a flattened batch (all nodes/edges from all trees in
-one packed array, indexed by ``edge_parent`` / ``edge_child``) rather than a
-padded dense tensor, since child counts vary widely between nodes. That
-choice is why the softmax and weighted-sum are implemented as segmented
-scatter operations rather than ``F.softmax`` + ``matmul``.
-"""
+"""Operates on a flattened batch (edge_parent/edge_child indexed), not a padded
+dense tensor, since child counts vary widely -- hence segmented scatter instead
+of F.softmax + matmul."""
 
 import math
 

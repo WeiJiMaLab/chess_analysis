@@ -1,14 +1,5 @@
-"""Packed-tensor adapter between ``SearchTree`` and the tree encoder.
-
-This module converts the dict-of-dicts ``SearchTree`` representation into
-the flat tensor batches the encoder/attention layers consume. Trees are
-concatenated along the node axis with a ``tree_index`` mapping (rather
-than padded), and parent→child edges are stored in CSR form via
-``child_ptr`` and ``children_index``. The slot assignment used for the
-encoder's positional encoding is UCI-lexicographic and is the canonical
-ordering — it must agree byte-for-byte with the order used by the
-pretraining packer in ``cts_pretrain._child_ptr_and_children_index``.
-"""
+"""Slot assignment (encoder positional encoding) is UCI-lexicographic and must
+agree byte-for-byte with ``cts_pretrain._child_ptr_and_children_index``."""
 
 from __future__ import annotations
 

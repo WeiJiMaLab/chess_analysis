@@ -1,25 +1,5 @@
-"""Teacher search and pretrain-example format/IO.
-
-Extracted out of the monolithic ``cts_pretrain.py`` as part of the migration
-to the ``cts`` package layout. This module owns:
-
-- The on-disk pretrain example format (``cts_raw_pretrain_example_v3`` and
-  its list counterpart) plus the save/load helpers.
-- The teacher PUCT search machinery that converts a partially-expanded tree
-  into node value targets and per-edge WDL targets
-  (``generate_partial_tree_from_provider``, ``compute_teacher_targets``,
-  ``build_pretrain_example``).
-- The prefix-snapshot helpers used by the encoder pretraining data chain
-  (``prefix_expansion_count_schedule``, ``derive_prefix_pretrain_example``).
-- The dataset wrappers (``PretrainExampleDirectoryDataset``,
-  ``PackedTensorizedShardDataset``) consumed by the training loop.
-
-The training loop itself lives in :mod:`cts.train.gnn_pretrain`.
-
-Slot ordering is load-bearing: ``_child_ptr_and_children_index`` sorts
-children by UCI move string and must agree with
-``cts.core.tensorizer._sorted_child_ids_with_slots``.
-"""
+"""Slot ordering is load-bearing: ``_child_ptr_and_children_index`` sorts children
+by UCI move string and must agree with ``cts.core.tensorizer._sorted_child_ids_with_slots``."""
 
 from __future__ import annotations
 

@@ -1,12 +1,4 @@
-"""Subprocess wrapper around a UCI chess engine (primarily ``lc0``).
-
-Sits between the rest of the CTS pipeline and the engine binary: spawns the
-process, drives the UCI handshake (``uci`` / ``setoption`` / ``isready``),
-issues ``position`` + ``go`` queries, and reads back the raw response lines
-up to ``bestmove``. Callers feed each FEN to ``analyse`` and parse the
-returned lines themselves; this module deliberately stays format-agnostic.
-Process death is recovered by restarting on the next ``analyse`` call.
-"""
+"""Process death is recovered by restarting on the next ``analyse`` call."""
 
 from __future__ import annotations
 

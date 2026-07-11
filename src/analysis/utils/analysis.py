@@ -1,9 +1,3 @@
-"""
-Unified analysis framework for chess thinking dynamics.
-Standardizes SQL-native statistics calculation and publication-ready plotting
-using a clean, object-oriented approach.
-"""
-
 from __future__ import annotations
 
 import os

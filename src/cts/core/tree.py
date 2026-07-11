@@ -1,16 +1,5 @@
-"""In-memory representation of a partially-expanded chess search tree.
-
-``SearchTree`` is the canonical graph type passed between every pipeline
-stage (generation, oracle, packing, training, evaluation). It is append-only:
-node ids are assigned in insertion order and never change, which lets
-downstream code use ids as stable references and reconstruct expansion
-history just from id ordering. Per-node features are kept as dicts keyed by
-name so the on-disk format stays self-describing; the ``schema`` module
-projects them onto the canonical ordered tensor when the encoder needs them.
-
-Every tree has a root. The root spec (FEN + scalar features) is required at
-construction; there is no rootless intermediate state.
-"""
+"""``SearchTree`` is append-only: node ids are assigned in insertion order and
+never change, so downstream code can reconstruct expansion history from id order."""
 
 from __future__ import annotations
 

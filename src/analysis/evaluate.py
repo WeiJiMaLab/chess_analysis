@@ -1,29 +1,5 @@
-"""Meta-controller assessment plots (R-EVALUATE) — mechanism behind ``outputs/reports/normative.md``.
-
-Does the learned ``z_t`` halting head beat hand-crafted tree-stats and a fixed stop, and in WHICH
-cost regime? Four figures answer it (:func:`plot_regret_effort_frontier`, :func:`plot_r_decodability`,
-:func:`plot_delta_regret_vs_zt` — the latter renders both the lambda- and maintenance-sweep panels).
-
-The halt policies are stop-controller modules, fit on the train split and scored per-episode on eval:
-  * SingleHalt* — one parameter ``k`` (fixed stop step), fit by minimizing fit-split regret
-    (:func:`fit_singlehalt_stop`); the frontier of fixed-``k`` rules is its parameter space.
-  * Stats-Controller / Zt-Controller — MLP readouts (``cts.models.readout.build_advantage_head``)
-    trained by the EXACT expected-return objective via the DEPLOYED trainer
-    (``cts.train.pg_controller_train.fit_readout_pg``) — no bespoke training loop here.
-
-Design: readouts see STEPS-TAKEN, not budget (``T_t``). All fitting is on the VALIDATION split with a
-70/30 EPISODE split (the train materialized cache is ``shuffle=True`` so its ``z_t`` rows don't align
-to episodes; validation is ``shuffle=False`` and does — alignment self-checked). Cost regimes are
-applied at ANALYSIS TIME: packed ``halt_rewards``/``tree_sizes`` are cost-independent, so return curves
-are recomputed for any cost config without repacking.
-
-    python -m analysis.evaluate --which all \
-        --packed-root <mc_packed> --cache <validation_cache.pt> \
-        --out-dir outputs/figures/minply15_maxply75/normative
-
-``_load_split_episodes`` / ``_oracle_config`` / ``_load_materialized_cache_unchecked`` are the shared
-data-loaders (also imported by ``cts.analysis.zt_probe`` and ``cts.train.pg_controller_train``).
-"""
+"""All fitting is on the VALIDATION split (train materialized cache is shuffle=True,
+so its z_t rows don't align to episodes; validation is shuffle=False and does)."""
 from __future__ import annotations
 
 import argparse
@@ -546,13 +522,11 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     fr_x, fr = np.asarray(data["fr_x"]), np.asarray(data["fr"])
     controllers, all_points, kf = data["controllers"], data["all_points"], data["kf"]
 
-    # Colors AND labels are baked into the CACHED json (frozen at the time `_compute_frontier_data`
-    # ran), so a later edit to `_C` or to the display text has no effect on an already-computed
-    # frontier_data.json unless re-applied here at render time -- refresh every point's color/label
-    # from the ORIGINAL label it was built with, in both lists (a JSON round-trip means
-    # `controllers`/`all_points` are independent copies, not the same dict objects `all_points =
-    # controllers + ends` originally shared). `rank` orders the legend: Frontier(0) is the line,
-    # handled separately in `_frontier_panel`'s `frontier_label`.
+    # Colors and labels are baked into the cached JSON at `_compute_frontier_data`
+    # time, so a later edit to `_C` or the display text has no effect unless
+    # refreshed here from the original label -- needed in both `controllers` and
+    # `all_points` since the JSON round-trip makes them independent copies.
+    # `rank` orders the legend (Frontier is rank 0, handled in `_frontier_panel`).
     _legend_info = {
         "SingleHalt* (fixed stop)": ("Fixed Stop", "singlehalt", 4),
         "Stats-Controller": ("Tree Stats", "stats", 2),
@@ -688,15 +662,11 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
     traj_keys = [ep["trajectory_key"] for ep in episodes]
     is_tr = _episode_split_mask(step_counts, total, seed=seed, trajectory_keys=traj_keys); is_te = ~is_tr
 
-    # Each feature set is tested ALONE (not nested/cumulative): "steps" was
-    # previously baked into every row, including the one labeled "z_t" — so
-    # the reported R^2 mostly reflected R(t)'s near-tautological relationship
-    # with trajectory position (fewer remaining steps -> mechanically less
-    # room for R(t)'s forward-max to be large), not what z_t itself encodes.
-    # "action_gap" (2026-07-10) is the same head-to-head baseline used by the
-    # frontier/delta-regret plots, added here so decodability can be read
-    # against it directly. "all" is kept as a reference upper bound (every
-    # signal combined, now including action_gap).
+    # Each feature set is tested ALONE (not nested/cumulative), so "steps"
+    # mixed into another set would make its R^2 reflect R(t)'s near-tautological
+    # relationship with trajectory position rather than what that set encodes.
+    # "action_gap" is the same head-to-head baseline used by the frontier/
+    # delta-regret plots. "all" is a reference upper bound (every signal combined).
     feats = {"steps": np.column_stack([steps]),
              "stats": np.column_stack([nnodes, heights, widths]),
              "z_t": np.column_stack([z]),
@@ -863,10 +833,10 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     deltas_b = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_b"]]
 
     def _finish(fig, ax, title, base):
-        # A fixed bbox_to_anchor FRACTION scales its absolute gap with the figure's height, which
-        # overlapped the x-axis label on the short (3-row) lambda figure while looking fine on the
-        # tall (7-row) maintenance one. Target a constant ~0.5in gap in every figure instead by
-        # dividing that inch target by this particular figure's height.
+        # A fixed bbox_to_anchor fraction scales its gap with figure height, which
+        # overlaps the x-axis label on short figures but looks fine on tall ones.
+        # Target a constant ~0.5in gap by dividing that inch target by this
+        # figure's height.
         gap_frac = 0.5 / fig.get_size_inches()[1]
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -gap_frac), ncol=len(handles),
@@ -875,11 +845,9 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
         save_pdf_png(fig, str(out_dir), base, dpi=200, bbox_extra_artists=(fig.legends[0],))
 
     _rcparams()
-    # Constant + per-row height shrunk (and made a fixed-per-figure fig.legend below take the place of
-    # the old axes-fraction legend) so the many-row maintenance sweep doesn't render with a huge
-    # vertical gap of empty gridline rows above/below the data and before the legend -- an
-    # axes-fraction bbox_to_anchor scales its absolute gap with the axes' height, which is fine for the
-    # 3-row lambda panel but balloons on the 7-row maintenance panel.
+    # Fixed per-figure legend (not axes-fraction) below, so the many-row
+    # maintenance sweep doesn't render with a huge empty gap before the legend
+    # relative to the short lambda panel.
     figA, axA = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_a)))
     _delta_ci_panel(axA, labels_a, deltas_a)
     _finish(figA, axA, "varying linear cost λ  (maintenance = 0)", "delta_mean_regret_lambda")

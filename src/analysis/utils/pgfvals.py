@@ -1,12 +1,5 @@
-"""Single source of truth for numbers quoted in reports: every headline statistic
-board.py actually computes gets registered here under a stable key, then dumped to
-one .tex file of ``\\pgfkeyssetvalue`` macros. Reports cite the number AND its key
-(e.g. "mean 6.5 s (key: `board/rt/mean_s`)") so a reader can trace it back to the
-exact line of code that produced it, instead of a number silently drifting out of
-sync between the plotting code and the prose that describes it.
-
-Usage in LaTeX: ``\\usepackage{pgfkeys}`` then ``\\pgfkeysvalueof{/board/rt/mean_s}``.
-"""
+"""Registers headline statistics under a stable key, dumped to one .tex file of
+``\\pgfkeyssetvalue`` macros so reports can cite the number and trace it back."""
 
 from __future__ import annotations
 

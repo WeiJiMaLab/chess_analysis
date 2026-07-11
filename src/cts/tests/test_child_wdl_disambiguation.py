@@ -1,54 +1,10 @@
-"""Empirical test of whether `ChildWdlModel`'s `concat(parent_states, slot_states)`
-genuinely disambiguates between sibling children on a T_n-shaped PARTIAL tree.
-
-Background (see `history.md`'s "Stage: packhistory_GNNpretrain" and Task 3's
-Progress Log for the full narrative): the k-steps-ahead pretraining plan
-originally called for a new head taking `concat(u_n, v_n, slot_states)`
-(`gnn.py`), reasoning that `ChildWdlHead`'s `concat(parent_states, slot_states)`
-alone was only sufficient for children with no accumulated history of their
-own. That reasoning was reverted: `ChildWdlHead` is already used, unmodified,
-on every edge of today's *complete* trees -- including richly-explored
-children, not just fresh leaves -- because `TreeEncoder`'s bottom-up attention
-pass already routes a child's subtree information into its parent's aggregate
-state before `ChildWdlHead` ever runs; `slot_states` is meant to disambiguate
-*which* child that shared aggregate is being asked about. Nothing about
-encoding a partial tree T_n instead of a complete tree should change this --
-T_n *is* "the complete tree" from the encoder's own perspective when that's
-what it's given.
-
-This module tests that claim empirically, on a genuine T_n-shaped partial
-tree (two sibling children under one parent, each with its OWN small,
-independently-signaled subtree -- not the complete-tree shape `ChildWdlHead`
-is already proven on in production), per the user's explicit instruction that
-the correction needs rigorous testing, not just an architectural argument.
-
-Development process (see history.md for the full trail): several earlier
-probe designs were tried and discarded before this one -- a random-init
-forward-pass check (predictions differed, but entirely due to the slot
-embedding, not content); a single-signal supervised design where only ONE
-child's edge was ever supervised (a real training-objective flaw: it let the
-model win by ignoring slot_states entirely and mapping the shared aggregate
-straight to a class, which is why the model's "sibling" prediction moved in
-lockstep with the target's -- not evidence about localization, just an
-artifact of an under-specified objective). The design below fixes that by
-independently supervising BOTH children from their OWN distinct subtrees each
-training step, which is the only way to genuinely penalize a "collapse to a
-shared, slot-independent prediction" shortcut.
-
-Two properties are tested (mirroring the plan's DoD checklist for Task 3):
-  (a) predictions genuinely differ / carry real per-child signal -- measured
-      by held-out joint accuracy on a task solvable only via each child's own
-      subtree content, well above the two-independent-3-way-classes chance
-      rate (1/3 * 1/3 = 1/9).
-  (b) perturbation localizes to the perturbed child -- holding the parent's
-      own features AND the sibling's entire subtree exactly fixed, and
-      changing ONLY the target child's grandchildren, the target child's own
-      prediction should move noticeably while the (untouched) sibling's
-      prediction should stay close to unchanged. This is what distinguishes
-      genuine slot-gated disambiguation from generic parent-state drift (a
-      shared-aggregate perturbation that moves every sibling's prediction by
-      comparable magnitude regardless of which one's subtree actually
-      changed).
+"""Empirical test of whether ``ChildWdlModel``'s ``concat(parent_states, slot_states)``
+genuinely disambiguates sibling children on a T_n-shaped partial tree. Two
+properties are tested: (a) held-out joint accuracy on a task solvable only via
+each child's own subtree content, well above chance (1/9); (b) perturbing only
+one child's grandchildren moves that child's prediction while the untouched
+sibling's stays fixed -- distinguishing genuine slot-gated disambiguation from
+generic parent-state drift.
 """
 
 from __future__ import annotations

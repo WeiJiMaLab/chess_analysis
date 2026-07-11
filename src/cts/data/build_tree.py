@@ -1,15 +1,3 @@
-"""Single CLI entry point for the supervised branch of the pipeline.
-
-Hosts two subcommands: ``generate-dataset``, which iterates over root FENs
-and runs PUCT-bounded expansion through ``Lc0DirectEvalProvider`` to write
-one JSON example per root into a shard directory; and
-``pretrain-child-wdl-encoder``, which consumes those examples to train the
-tree encoder against the per-child WDL pretraining objective. Dataset
-generation is the slow, engine-bound first stage; it supports ``--resume``
-and ``--start-index``/``--end-index`` for shard parallelism, plus a periodic
-``--cache-clear-interval`` so the provider caches don't blow memory.
-"""
-
 from __future__ import annotations
 
 import json
@@ -64,10 +52,8 @@ class BuildTreeConfig(BaseModel):
     command: Literal["generate-dataset", "pretrain-child-wdl-encoder"]
 
     # generate-dataset
-    # Which engine drives expansion. "lc0" runs the two-engine prior+value
-    # provider; "stockfish" runs the single-process StockfishDirectEvalProvider
-    # (uniform priors, WDL from Stockfish's internal eval->WDL model). Both
-    # emit the same per-edge child-WDL targets the encoder pretrains on.
+    # Which engine drives expansion: "lc0" (two-engine prior+value provider) or
+    # "stockfish" (single-process, uniform priors, WDL from Stockfish's eval).
     provider: Literal["lc0", "stockfish"] = "lc0"
     # Stockfish-only knobs (ignored when provider == "lc0").
     sf_elo: Optional[int] = None  # UCI_Elo strength limit; None => full strength
@@ -84,23 +70,13 @@ class BuildTreeConfig(BaseModel):
     max_depth: int = 4
     search_budget: int = 64
     c_puct: float = 1.0
-    # Generation-time leaf selection rule. "puct" (only option): AlphaZero
-    # PUCT. A "befs" best-first-minimax alternative existed but was removed
-    # 2026-07-08: its selection rule tunnel-visioned (confirmed, unfixed bug)
-    # and it was already unreachable from the live pipeline -- see
-    # TeacherSearchConfig.selection in teacher_targets.py and labnotebook.md.
+    # Generation-time leaf selection rule; "puct" (AlphaZero PUCT) is the only
+    # option -- see TeacherSearchConfig.selection in teacher_targets.py.
     selection: Literal["puct"] = "puct"
-    # Per-node scalar feature used as the search value (selection priority +
-    # backup targets). "value" = win-loss in [-1,1] from WDL; "cp_order" =
-    # Stockfish-native centipawns with mate scores folded into a ±20000 band
-    # (see cts.core.providers.parsers.score_order_features); "tanh_cp_value" =
-    # tanh(cp_order / tanh_cp_temperature), a desaturated alternative to
-    # "value" computed at generation time (see cp_regen.md, Agent 3) --
-    # requires tanh_cp_temperature to be set (stockfish provider only).
+    # Per-node scalar used as search value: "value" (win-loss in [-1,1]),
+    # "cp_order" (Stockfish centipawns), or "tanh_cp_value" (needs tanh_cp_temperature).
     value_feature: str = "value"
-    # Temperature for the "tanh_cp_value" value_feature (ignored otherwise).
-    # None (default) leaves every node's features exactly as before -- a
-    # zero-cost no-op for every existing config.
+    # Temperature for "tanh_cp_value" (ignored otherwise); None is a no-op.
     tanh_cp_temperature: Optional[float] = None
     min_nodes: int = 16
     max_nodes: int = 128
@@ -135,28 +111,20 @@ class BuildTreeConfig(BaseModel):
     disable_persistent_workers: bool = False
     loss_type: Literal["huber", "mse"] = "huber"
     huber_delta: float = 1.0
-    # When set, the pretrainer's validation pass also accumulates per-edge KL
-    # into a (child_subtree_size, parent_depth) grid, and appends one JSONL
-    # row per epoch to ``log_bucketed_kl_path`` containing the per-bin mean
-    # KL + edge counts + marginals. Same bucketing as ``cts.analysis.audit_encoder_kl``
-    # so the time series is directly comparable to the post-hoc audit.
+    # When set, validation also logs per-(subtree_size, depth)-bucketed KL to this
+    # JSONL path, comparable to ``cts.analysis.audit_encoder_kl``'s bucketing.
     log_bucketed_kl_path: Optional[str] = None
     bucket_max_depth_bin: int = 12
     bucket_subtree_size_log_max: int = 10
-    # When True, encoder pretraining weights each edge's cross-entropy by
-    # its child's subtree size — see ``ChildWdlPretrainConfig`` for the
-    # full rationale.
+    # Weight each edge's cross-entropy by its child's subtree size; see
+    # ``ChildWdlPretrainConfig`` for the rationale.
     loss_weight_by_subtree_size: bool = False
-    # Per-epoch encoder checkpointing so an interrupted/incomplete run still yields
-    # downstream-loadable weights. ``checkpoint_dir`` defaults to ``output_checkpoint``'s
-    # directory; a tagged ``encoder_epoch{NNN}.pt`` (every ``checkpoint_every_epochs``) plus a
-    # rolling ``encoder_latest.pt`` are written each epoch with the current encoder weights.
+    # Per-epoch checkpointing (encoder_epoch{NNN}.pt + rolling encoder_latest.pt);
+    # defaults to output_checkpoint's directory.
     checkpoint_dir: Optional[str] = None
     checkpoint_every_epochs: int = 1
-    # When set, the encoder training-curve CSV+PNG land here (matching the eval pipeline's own
-    # `curves_out_dir` convention for the readout heads) instead of next to the checkpoint in
-    # scratch -- so all training curves for a run (encoder + both readouts) end up in the same
-    # place: <run's figures_dir>/curves/, alongside everything else that run's outputs live.
+    # Training-curve CSV+PNG land here instead of next to the checkpoint, matching
+    # the eval pipeline's curves_out_dir convention for the readout heads.
     curves_out_dir: Optional[str] = None
 
 

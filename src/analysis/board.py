@@ -1,21 +1,3 @@
-"""
-Board-level (no-model) response time analyses (DuckDB + matplotlib).
-
-Three ordered modes (each depends on the previous — mirror this in the pipeline):
-  --featurize  precondition: featurize the legal-move covariates (captures/checks)
-               over this task's hash-slice of the run's ``filtered_moves`` FENs →
-               a shard. Runs single, or as a Slurm array (task per hash partition).
-  --merge      merge the featurize shards → the ``board_features`` table (single).
-  --plot       (default) the four analyses over filtered_moves ⋈ board_features:
-                 move_time_summary  log(RT) distribution + normal QQ + RT-vs-ply arc
-                 bivariate_analysis RT vs each covariate: histogram, overall trend, by-ply trend
-                 correlation_matrix Spearman + Pearson over log(RT), ply, covariates
-                 feature_histograms marginal distribution of each covariate
-
-The canonical windowed table (``table_filtered``) is built by the filter stage; the
-covariate list is defined in run_plot().
-"""
-
 import argparse
 import math
 import multiprocessing as mp

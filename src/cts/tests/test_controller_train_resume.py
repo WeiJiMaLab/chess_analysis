@@ -1,12 +1,4 @@
-"""TDD-lite sanity tests for plan.md Agent 2 (our_trees_continued)'s two new hooks in
-``cts.train.controller_train``: ``resume_checkpoint`` (warm-start a fresh MetaController from a
-prior run's full ``model_state_dict``) and the ``save_every_epoch`` config flag's payload shape.
-
-Both ``pg_controller_train.py`` (frozen-encoder head-only) and ``e2e_controller_train.py``
-(encoder-unfrozen joint) share ``_build_model_and_optimizer``, so testing it once here covers
-resuming either lineage. No packed data / GPU needed -- ``_feature_schema()`` is deterministic
-and a randomly-initialized tiny encoder is enough to exercise the checkpoint round-trip.
-"""
+"""Tests ``resume_checkpoint`` and ``save_every_epoch`` in ``cts.train.controller_train``."""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,12 +1,4 @@
-"""Shared statistics helpers — the one home for rank-correlation + bootstrap CIs.
-
-Before this module these were copy-pasted as ``_spearman`` / ``_partial_spearman`` /
-``_boot`` across the ``analysis/`` scripts and as a torch ``_bootstrap_ci`` buried in
-``analysis.evaluate``. The implementations here are byte-for-byte the
-behaviour of those copies (same RNG stream, same percentile convention), so repointing
-callers does not move any published number. All CIs are **percentile bootstrap**
-([[bootstrap-cis-always]]).
-"""
+"""All CIs are percentile bootstrap, never normal-theory."""
 from __future__ import annotations
 
 import numpy as np

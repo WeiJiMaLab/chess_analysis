@@ -1,25 +1,7 @@
-"""Regression test for a real bug found and fixed 2026-07-10 (see history.md's
-Progress Log, "Post-Wave-3" section, the follow-up leak investigation): nodes not
-yet individually backed up as of a queried step were being fed their FINAL,
-end-of-search (step-96) converged value instead of a neutral "no signal yet" (0) --
-a genuine future-information leak, structurally distinct from (but in the same
-spirit as) the original frozen-value bug this whole project exists to eliminate.
-
-Root cause: ``preprocess_mc/pack.py``'s ``_build_compact_trajectory`` deliberately
-overwrites a packed "base" node-features array's value/WDL columns with each
-node's *final* replayed value -- a legitimate choice for THAT array's own stated
-purpose (a fallback for a consumer that ignores the sparse update log entirely).
-Two downstream per-step consumers (``controller_train.ControllerEpisodeDataset``
-and ``preprocess_gnn/pack_history._forward_filled_wdl_at_step``) each
-independently cloned/read that same array as their own "not yet visited"
-placeholder, silently leaking the final answer into every step before a node's
-own first individual backprop update.
-
-Both real-data tests below use a real xaba20k tree with a documented, known
-"created before first visit" node (episode index 8, node id 66, first real
-update at expansion_count 26 -- see history.md for how this example was found)
-and directly assert the fixed behavior: 0.0 (not the final value) before the
-node's first update, correct forward-filled values from its first update onward.
+"""Regression test: nodes not yet individually backed up as of a queried step must
+read 0.0 ("no signal yet"), not their final end-of-search value -- checked in
+``ControllerEpisodeDataset`` and ``pack_history._forward_filled_wdl_at_step`` on a
+real xaba20k tree (episode index 8, node id 66, first update at expansion_count 26).
 
 Run explicitly (this directory isn't covered by pytest.ini's testpaths):
     pytest src/cts/tests/test_no_future_leakage.py -v

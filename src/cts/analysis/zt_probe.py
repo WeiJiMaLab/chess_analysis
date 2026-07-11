@@ -1,34 +1,7 @@
-"""z_t tree-stat decodability probe: can the encoder ROOT EMBEDDING recover topology?
-
-The deployed MCHalt controller reads a PURE ``z_t`` head (``controller_inputs =
-['z_t', 'T_t']``); the tree-stats baseline (:class:`cts.models.readout.StatsReadout`)
-instead reads the hand-crafted ``[height, width, n_nodes]``. If ``z_t`` cannot recover
-those three stats, the pure-``z_t`` head is structurally missing information the stats
-baseline keys off. The encoder was trained on child-WDL, NOT topology, so decodability
-is a real, open question — this probe measures it directly.
-
-For each target in ``{height, width, n_nodes}`` we fit two decoders ``z_t -> target``
-on a held-out episode split of the VALIDATION set and report test R^2:
-
-    1. Linear : standardize ``z_t`` (fit on probe-train), Ridge, held-out R^2.
-    2. MLP    : small 2x64 ReLU torch net, early-stopped on an inner val slice.
-    3. Shuffle: row-permuted ``z_t`` Ridge control -> the R^2 floor (~0).
-
-Alignment guard (CRITICAL). The materialized cache stores ``[z_t (d_embed), N_t, T_t]``
-rows in dataset (episode) order; the TRAIN cache is materialized with ``shuffle=True`` so
-its row order need NOT match the dataset, but VALIDATION uses ``shuffle=False`` so it does.
-We therefore probe on VALIDATION only and SELF-CHECK the pairing row-for-row: the packed
-episodes' per-snapshot ``n_nodes`` (== ``tree_sizes``) MUST equal ``N_t = feat[:, d_embed]``
-from the cache. If they mismatch the pairing is wrong and we abort rather than emit garbage.
-
-The ``[height, width, n_nodes]`` stats come from the SAME code path the eval harness uses
-(:func:`analysis.evaluate._load_split_episodes`, which derives per-step height/width from
-the trajectory ``depth`` array + ``step_node_cutoffs`` and reads ``n_nodes`` from the
-packed shards), so the probe targets are computed identically to the StatsReadout inputs.
-
-    python -m cts.analysis.zt_probe --config config_minply15_maxply75.yaml
-    python -m cts.analysis.zt_probe --config config_minply15_maxply75.yaml --limit 200
-"""
+"""Alignment guard (critical): the train cache is materialized with shuffle=True,
+so its row order need not match the dataset, but validation uses shuffle=False,
+so it does -- probe on validation only, and self-check the pairing (packed
+n_nodes must equal N_t from the cache) rather than emit garbage on a mismatch."""
 from __future__ import annotations
 
 import argparse

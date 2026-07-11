@@ -1,17 +1,3 @@
-"""
-Unified engine-level (no-normative) RT analyses (DuckDB + SF-1 tree evaluation).
-Derives the SF-1 (n1md36) tree signals — Gain, MQ, greedy action gap, greedy
-stop step (GSS), greedy frac-good, optimal stop step (OSS) — joins them to human
-RTs, and emits the per-signal RT dashboards plus a Spearman correlation matrix
-over all engine signals AND the board features (ply / legal moves / clock).
-
-Trees are read from human_analysis.trees_default in the active config (the SF-1
-n1md36 set). All processed-move reads — including the backwards tree->move join —
-go through a ply-windowed view (move_ply in [min_ply, max_ply]) so the ply filter
-is applied consistently on arrival and on the way back. All plots are saved
-(PDF + PNG) under <figures_dir>/engine/ (namespaced by run_name).
-"""
-
 from __future__ import annotations
 
 import argparse

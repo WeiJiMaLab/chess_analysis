@@ -1,14 +1,6 @@
-"""Parsers that turn raw UCI engine output into tree-building primitives.
-
-This module replaces the older unified ``Lc0AnalysisParser`` which conflated
-prior parsing and value parsing and silently inverted perspective in some
-cases. The split here is deliberate: ``parse_no_search_analysis`` consumes
-the ``go nodes 1`` output of a policy engine (root value + child moves with
-their priors) and ``parse_root_value_features_from_lines`` consumes the root
-output of a separate value engine (WDL triple), so the two perspectives
-never get mixed up at this boundary. Sits between the engine-driver layer
-and the tree-construction layer in the data-generation pipeline.
-"""
+"""``parse_no_search_analysis`` handles the policy engine's output (priors);
+``parse_root_value_features_from_lines`` handles the separate value engine's
+(WDL) -- kept split so the two perspectives never mix at this boundary."""
 
 from __future__ import annotations
 

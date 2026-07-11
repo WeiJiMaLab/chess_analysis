@@ -1,8 +1,3 @@
-"""
-Tests for board-level and database-level calculations in src/analysis.
-Consolidates board piece counts, side-specific piece counts, and reservoir sampling logic.
-"""
-
 from __future__ import annotations
 
 import unittest

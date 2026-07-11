@@ -1,60 +1,17 @@
-"""Test suite for the ``packhistory_trees`` stage (Task 2 of the plan in
-repo-root ``history.md`` -- read that file first, it is the authoritative spec;
-this docstring is a summary, not ground truth).
+"""Test suite for the ``packhistory_trees`` stage: replays each tree's own
+backprop history so every node's value/WDL is correct as of the queried step,
+instead of frozen at the tree's final value.
 
-**IMPORTANT -- pytest.ini does NOT cover this directory.** ``pytest.ini`` sets
-``testpaths = src/analysis/tests``, which does not include ``src/cts/tests/``.
-A bare ``pytest`` invocation from the repo root will silently skip this whole
-file. Run it explicitly::
+**pytest.ini does NOT cover this directory** (testpaths = src/analysis/tests
+only) -- a bare ``pytest`` run silently skips this file. Run it explicitly:
 
     pytest src/cts/tests/test_packhistory_trees.py -v
 
-Background: ``preprocess_mc/pack.py`` (nee ``mc_pack``, being rewritten into
-``packhistory_trees`` by a parallel task -- "Task 1" in history.md) currently
-tensorizes each tree's per-node value/WDL encoding **once**, from the complete
-final search tree, and every decision step just slices a growing prefix of
-that one static tensor. The fix replays each tree's own backprop history so
-every node's value/WDL is correct *as of* whatever step is being queried, not
-frozen at the final value. This file is the test suite proving that fix
-actually works, per history.md's "Stage: packhistory_trees" Test section and
-the "Task 2" Definition-of-Done checklist.
-
-Three real-data tests (see each test function's docstring for detail):
-  1. ``test_replay_matches_oracle_root_q_trace`` -- replayed root-child Q
-     trace (derived from packhistory_trees's own packed update log) matches
-     the tree's stored ``oracle_root_q_trace`` within ``1e-3``, sampled from
-     real ``human_trees``/``oracle96`` files.
-  2. ``test_packed_action_gap_matches_oracle_at_every_step`` -- the packed
-     root-children "value" read directly off the packed artifact (via the
-     update log's "value as of step t" lookup -- NOT a separate replay call)
-     gives a top1-top2 action gap matching the oracle action gap at every t.
-  3. ``test_diff_vs_old_mc_packed`` -- structure and root oracle values byte-
-     identical between ``mc_packed/`` (old) and ``pack_history/`` (new) for
-     xaba20k, matched by ``source_path``; per-step node features must now
-     differ at every step.
-
 Each real-data test is paired with a ``*_logic_synthetic_fixture`` test that
-hand-builds a tiny fixture conforming to the schema fixed in history.md (the
-update-log columnar schema: ``step_index``/``node_id``/``visit_count``/
-``q_value``/``wdl``/``node_update_ptr``) and validates THIS FILE's own lookup
-and comparison helpers against hand-computed expected values, independent of
-whether Task 1's implementation has landed. This is what history.md's Wave-1
-table means by "buildable against schemas already fixed... only *integration*
-is a genuine sequential dependency": the synthetic tests prove the test LOGIC
-is correct; the real-data tests prove the PRODUCTION CODE is correct, and are
-designed to flip from skip to pass/fail the moment Task 1 (and, for test 3,
-Task 6 + a real pipeline run) land, with no edits needed to this file *if*
-Task 1 lands using the exact field names in history.md's schema block. If it
-uses different field names, ``_extract_update_log`` below is the one place to
+validates this file's own lookup/comparison helpers against a hand-built
+fixture, independent of whether the production code has landed. If real field
+names differ from what's assumed, ``_extract_update_log`` is the one place to
 patch (its candidate-name lists document exactly what it tried).
-
-STATUS AS OF WRITING (see this file's history.md Progress Log entry for the
-date): Task 1 had not yet landed in ``src/cts/data/preprocess_mc/pack.py``
-(``build_compact_trajectory``'s returned dict carries no update-log fields
-yet), and Task 6 had not yet produced ``config_ysagiv_xaba20k_history.yaml``
-or any ``pack_history/`` output. All three real-data tests therefore
-currently ``pytest.skip`` with an explicit reason naming the missing
-dependency; all three synthetic-fixture tests pass for real today.
 """
 
 from __future__ import annotations

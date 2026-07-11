@@ -1,11 +1,5 @@
-"""Shared (parent_depth, child_subtree_size) bucketing helpers for per-edge KL.
-
-Used by both the post-hoc encoder KL audit (``cts.analysis.audit_encoder_kl``)
-and the in-training bucketed-KL logging in the pretrainer
-(``cts.train.gnn_pretrain``), so the numbers in the two are directly
-comparable. Pulled out of the audit module to break a circular import
-between ``cts.analysis`` and ``cts.train``.
-"""
+"""Shared by ``cts.analysis.audit_encoder_kl`` and ``cts.train.gnn_pretrain`` so
+their bucketed-KL numbers are directly comparable."""
 
 from __future__ import annotations
 

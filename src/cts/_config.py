@@ -1,37 +1,8 @@
-"""Shared config loading: YAML file + CLI mechanism + Pydantic validation.
-
-Every CTS entry point uses this. The pattern at each call site is:
-
-    from cts._config import load_config, run_with_config_cli
-
-    class MyConfig(BaseModel):
-        # … typed fields with defaults …
-        encoder_checkpoint: str
-        seed: int = 0
-
-    def run(config: MyConfig) -> None:
-        # ... actual work ...
-
-    if __name__ == "__main__":
-        run_with_config_cli(MyConfig, run)
-
-Two CLI shapes are supported:
-
-1. **Flat config** (the original contract): ``--config PATH`` points at a YAML
-   file whose top level *is* the config. ``--override key=value`` (repeatable,
-   dot-notation, YAML-parsed) patches individual fields.
-
-2. **Merged config** (lmcos_small): ``--config PATH --stage NAME`` points at a
-   multi-stage config — a ``globals`` block plus one section per stage — and
-   ``NAME`` selects the section to validate. ``${...}`` placeholders are resolved
-   against ``globals`` first. ``--set key=value`` patches a *global* before
-   interpolation when dotted (e.g. ``--set globals.sf_elo=1800``) or the selected
-   *section* when bare (e.g. ``--set num_workers=32``). This lets every entry
-   point read one shared ``config.yaml`` directly — no intermediary rendered YAML.
-
-Pydantic validates the result and rejects unknown fields, so a typo in a YAML
-file or a CLI flag is caught at load time.
-"""
+"""Two CLI shapes: flat config (``--config PATH``, ``--override key=value``) or
+merged config (``--config PATH --stage NAME``, a ``globals`` block plus one
+section per stage, ``${...}`` resolved against globals, ``--set key=value``
+patches a global when dotted else the selected section). Pydantic rejects
+unknown fields, so a typo is caught at load time."""
 
 from __future__ import annotations
 

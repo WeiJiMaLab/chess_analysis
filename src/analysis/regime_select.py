@@ -1,33 +1,7 @@
-"""REGIME — confirm which (time_lambda, maintenance_scale) cost-regime points are "meaningful"
-before any more frontier/significance plots get generated at them.
-
-Everything validated so far in the z_t investigation (S1's stats ablation, Z's e2e comparison) ran at
-exactly ONE point in cost-regime space (`time_lambda=0.01, maintenance_scale=0.0`). Separately,
-`maintenance_scale in {0.05, 0.1}` was observed to collapse ALL controllers (SingleHalt*, Stats, z_t)
-to identical degenerate regret. This module grid-searches `time_lambda x maintenance_scale` and marks
-each point "meaningful" by a single cheap, pure-arithmetic criterion applied to SingleHalt* alone (no
-model fitting beyond `evaluate.fit_singlehalt_stop`, no GPU):
-
-    meaningful  iff  1 < k* < ceiling - 1
-
-where `k*` is SingleHalt*'s own fit-split-optimal fixed stop step (`fit_singlehalt_stop`, a pure
-argmin over `_regret_at`) and `ceiling = max(len(curve) for curve in curves)` is the longest episode's
-step count at that grid point (`fit_singlehalt_stop`'s own `kmax`; `k*` can never exceed `ceiling - 1`
-by construction, since it's chosen by `argmin` over `range(kmax)`). The two exclusions:
-
-  * `k* <= 1`  — SingleHalt* wants to stop essentially immediately (a `k*->0` collapse: continuing is
-    never worth the cost at this regime, so every controller degenerates to "always stop").
-  * `k* >= ceiling - 1` — SingleHalt* is pinned at the LAST available stop step, i.e. it always wants
-    to keep going as far as the data allows: since `k*` can literally never exceed `ceiling - 1`, this
-    is the operational meaning of "k* -> ceiling pileup / right-censoring" in a domain where the argmin
-    can't range past `ceiling - 1` — the fit can't tell whether the true optimum is at `ceiling - 1` or
-    somewhere further out that the data doesn't reach.
-
-See `/home/hl4291/chess_analysis/regime_select.md` for the full grid, criterion discussion, confirmed
-regime set, and the collapse root-cause finding this sweep produced as a side effect.
-
-    python -m analysis.regime_select --packed-root <mc_packed> --out-dir outputs/figures/minply15_maxply75/diagnosis
-"""
+"""Grid-searches (time_lambda, maintenance_scale) and marks each point "meaningful"
+via SingleHalt*'s fit-split-optimal stop step k*: meaningful iff 1 < k* < ceiling - 1,
+where ceiling is the longest episode's step count (k* excluded at either boundary
+means SingleHalt* collapsed to always-stop or is right-censored at the data limit)."""
 from __future__ import annotations
 
 import argparse

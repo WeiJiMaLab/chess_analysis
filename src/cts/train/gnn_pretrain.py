@@ -1,15 +1,3 @@
-"""Encoder pretraining training loop.
-
-Extracted out of ``cts_pretrain.py`` as part of the migration to the
-``cts`` package layout. Holds the configuration, metrics, and training
-loop that fit ``ChildWdlModel`` against the per-edge WDL targets produced
-by :mod:`cts.data.preprocess_gnn.teacher_targets`.
-
-Encoder checkpoint save/load helpers live here too because they're used
-by both this trainer and downstream consumers loading the trained encoder
-for controller training and analysis.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -110,34 +98,20 @@ class ChildWdlPretrainConfig:
     pin_memory: bool = False
     prefetch_factor: int = 2  # only used when num_workers > 0
     persistent_workers: bool = True  # only used when num_workers > 0
-    # Per-validation-epoch bucketed-KL logging. When set, the validation
-    # loop also accumulates per-edge KL into a (size, depth) grid; the
-    # summary is exposed alongside the standard metrics so callers can
-    # serialize it (e.g. to JSONL) for offline plotting of the time series.
+    # When set, validation also accumulates per-edge KL into a (size, depth)
+    # grid, exposed alongside the standard metrics for offline plotting.
     log_bucketed_kl: bool = False
     bucket_max_depth_bin: int = 12
     bucket_subtree_size_log_max: int = 10  # ≥1024 top bin; covers chess trees up to ~2000 nodes
-    # What BucketedKLState's size axis bins: subtree size (default, matches the
-    # audit module) or, for the k-steps-ahead objective, Delta-visits
-    # (TreeBatch.edge_visit_weights) -- see BucketedKLState.update's bucket_by.
+    # BucketedKLState's size axis: subtree size (default) or, for the
+    # k-steps-ahead objective, Delta-visits (TreeBatch.edge_visit_weights).
     bucket_by: Literal["subtree_size", "visit_weight"] = "subtree_size"
-    # When True, each edge's cross-entropy is weighted by its child's subtree
-    # size before averaging. Principle: each "node summarized" gets equal
-    # voice in the loss, instead of each edge prediction. Without this,
-    # ~97% of edges are leaves (subtree_size=1, near-trivial input-copy
-    # predictions) and they dominate the gradient, leaving large-subtree
-    # children — the predictions that actually require summarization
-    # capacity — with little optimization budget.
+    # Weight each edge's cross-entropy by its child's subtree size before
+    # averaging, so large-subtree children aren't drowned out by the ~97% of
+    # edges that are leaves.
     loss_weight_by_subtree_size: bool = False
-    # k-steps-ahead ("packhistory_GNNpretrain") packed batches carry a
-    # per-edge Delta-visits weight (TreeBatch.edge_visit_weights) instead of
-    # subtree size. When present and loss_weight_by_subtree_size is False,
-    # it's used the same way: each edge's cross-entropy weighted before
-    # averaging. "identity" uses Delta-visits directly; "log1p" applies
-    # log1p(Delta-visits) first, for use if a handful of high-visit edges
-    # (e.g. root children) end up dominating the batch loss under "identity"
-    # — check empirically (BucketedKLState's visit-weight bucketing below),
-    # don't assume either is right a priori.
+    # For k-steps-ahead batches carrying a per-edge Delta-visits weight instead
+    # of subtree size: "identity" uses it directly, "log1p" dampens outliers.
     visit_weight_transform: Literal["identity", "log1p"] = "identity"
 
 
@@ -168,11 +142,8 @@ class BucketedKLState:
     count: torch.Tensor  # [num_size_bins, num_depth_bins] long
     overall_sum_kl: torch.Tensor  # scalar float64
     overall_count: int = 0
-    # "subtree_size" (default) bins the child's subtree size, matching the
-    # post-hoc audit module. "visit_weight" bins TreeBatch.edge_visit_weights
-    # (Delta-visits) instead, for the k-steps-ahead ("packhistory_GNNpretrain")
-    # objective, where subtree size isn't the quantity that determines an
-    # edge's loss weight.
+    # "subtree_size" (default, matches the audit module) or "visit_weight"
+    # (TreeBatch.edge_visit_weights, for the k-steps-ahead objective).
     bucket_by: Literal["subtree_size", "visit_weight"] = "subtree_size"
 
     @classmethod
@@ -286,14 +257,11 @@ class ChildWdlPretrainer:
         config: ChildWdlPretrainConfig,
     ) -> None:
         """For the k-steps-ahead ("packhistory_GNNpretrain") objective, ``model``
-        is a ``ChildWdlModel`` applied to a T_n snapshot instead of a complete
-        tree -- unmodified, no new head (see history.md's "Stage:
-        packhistory_GNNpretrain", revised: `ChildWdlHead`'s existing
-        ``concat(parent_states, slot_states)`` already carries each child's
-        disambiguating signal via the encoder's bottom-up message passing, on
-        a partial tree exactly as it does on a complete one). Everything else
-        in this trainer (the loss, the weighting branch, the batch loop) is
-        unchanged for this objective too.
+        is an unmodified ``ChildWdlModel`` applied to a T_n snapshot instead of a
+        complete tree -- no new head needed, since ``ChildWdlHead``'s
+        ``concat(parent_states, slot_states)`` carries each child's disambiguating
+        signal on a partial tree the same way it does on a complete one. Loss,
+        weighting branch, and batch loop are unchanged for this objective too.
         """
         self.model = model
         self.schema = schema

@@ -1,17 +1,3 @@
-"""Pack budget-augmented controller episodes into tensorized shards.
-
-This is the controller data packing stage of the CTS pipeline. It reads a
-pretrain split (already split into train/validation by root FEN), runs
-``BudgetedControllerOracle`` on each source tree at multiple sampled starting
-budgets, and writes packed episode shards (one trajectory per source tree,
-many oracle episodes per trajectory) grouped under a per-split JSON manifest.
-
-The shards are consumed downstream by ``materialize_controller_cache.py``
-(which encodes nodes into the controller's input cache) and then by
-``train_fitted_q_controller.py`` for training. Supports per-tree filtering
-(``--min-halt-reward-range``, ``--exclude-xaba``), tree-level stratified
-sampling, budget-sensitivity weighting, and ``ProcessPoolExecutor`` workers.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -689,10 +675,9 @@ def _replay_backprop_history(
 ) -> Dict[str, np.ndarray]:
     """Retroactively replay a tree's own PUCT backprop history from data already on disk.
 
-    This is the core of ``packhistory_trees``: the fix for the frozen-per-step-value bug
-    described in history.md. No re-generation is needed because every *real* PUCT
-    expansion event's backup is fully determined by information the final tree already
-    carries:
+    This is the core of ``packhistory_trees``: the fix for the frozen-per-step-value
+    bug. No re-generation is needed because every *real* PUCT expansion event's backup
+    is fully determined by information the final tree already carries:
 
       - *which* node got expanded, and in what order (``expansion_parent_ids``, from
         ``_ordered_expansion_parent_ids``);
@@ -714,60 +699,35 @@ def _replay_backprop_history(
     string in this raw format, not creation order, and node ids are assigned
     sequentially at creation time, so ascending id is the one true creation order.
 
-    What this does NOT recover, and why that is the right tradeoff: PUCT leaf selection
-    (``_select_leaf_by_puct`` in teacher_targets.py) can, and empirically does,
-    repeatedly re-select an already-permanently-terminal node as the best leaf (e.g. a
-    discovered forced mate) without ever expanding it again. Each such repeat visit
-    still runs a full backprop up its ancestor path but creates no new node, so it
-    leaves no trace in the final tree structure or in ``expansion_parent_ids`` -- this
-    function does not attempt to recover those "wasted" backprop events. Doing so would
-    require re-running the exact same deterministic PUCT leaf-selection procedure that
-    produced them, using each node's *static* ``prior`` feature -- but that feature is
-    only available post-hoc as float16 (this raw format's on-disk dtype, see
-    ``RawPretrainExampleRecord.__post_init__``), a precision loss the live search itself
-    never had. An earlier version of this function did attempt the full PUCT
-    re-simulation and was found, via this module's own validation against real
-    ``human_trees``, to occasionally (on ~1/40 sampled trees) diverge onto a *completely
-    different* branch after a near-tied PUCT score got decided the other way by float16
-    rounding -- a large, unbounded, hard-to-predict error, strictly worse than the
-    small gap from just not chasing terminal-revisit backprop mass. Measured directly
-    (40 sampled ``human_trees``, every step x every root child, ~94k comparisons against
-    the tree's own stored ``oracle_root_q_trace``) for the simpler approach implemented
-    here: median error 0.0, p95 = 1.5e-4, p99 = 2.2e-4, only 0.16% of comparisons above
-    1e-3, concentrated in a small number of terminal-revisit-heavy trees (one outlier
-    tree reached 0.056; every other sampled tree's worst step was <= 0.004). This
-    matches, and gives fuller context for, the "~1e-4 residual" already flagged in
-    history.md's Deferred section. See this stage's Progress Log entry in history.md
-    for the full measurement and the schema-deviation note (this function ended up
-    NOT needing a direct call to ``_flip_wdl_target``, since ``_backpropagate_path``
-    already applies it internally).
+    What this does NOT recover, and why: PUCT leaf selection can repeatedly re-select
+    an already-permanently-terminal node as the best leaf (e.g. a discovered forced
+    mate) without ever expanding it again. Each such repeat visit still backprops up
+    its ancestor path but creates no new node, so it leaves no trace in the final tree
+    structure or in ``expansion_parent_ids`` -- this function does not recover those
+    "wasted" backprop events. Recovering them would require re-running PUCT leaf
+    selection using each node's static ``prior``, which is only available post-hoc as
+    float16 (a precision loss the live search never had); a full PUCT re-simulation
+    using it was found to occasionally (~1/40 sampled trees) diverge onto a completely
+    different branch when a near-tied score got decided the other way by float16
+    rounding -- a larger, unbounded error than the small gap from not chasing
+    terminal-revisit backprop mass. Measured against 40 sampled ``human_trees`` (every
+    step x every root child, ~94k comparisons against ``oracle_root_q_trace``): median
+    error 0.0, p95 = 1.5e-4, p99 = 2.2e-4, only 0.16% of comparisons above 1e-3 (one
+    outlier tree at 0.056; every other tree's worst step <= 0.004).
 
     Returns a dict of parallel numpy arrays for the sparse update-log schema
-    (``step_index``, ``node_id``, ``visit_count``, ``q_value``, ``wdl``), already sorted
-    by ``(node_id, step_index)`` ascending (achieved for free by iterating node ids in
-    order, since each node's own update history is already time-ordered by
-    construction), plus the CSR ``node_update_ptr`` index and each node's *final*
-    (as of the last replayed step) value/WDL for convenience.
+    (``step_index``, ``node_id``, ``visit_count``, ``q_value``, ``wdl``), sorted by
+    ``(node_id, step_index)`` ascending, plus the CSR ``node_update_ptr`` index and
+    each node's *final* (as of the last replayed step) value/WDL for convenience.
 
-    ``step_index`` convention -- read this before querying "value as of step t" from
-    the log, it is a common off-by-one trap: ``step_index`` is the 0-indexed position
-    of an expansion event within ``expansion_parent_ids`` (i.e. within
-    ``record.oracle_trace_expansion_counts``, whose values are the 1-indexed
-    ``num_expansions`` count). A log row with ``step_index == k`` reflects the state
-    immediately after the ``(k + 1)``-th real expansion -- i.e. it lines up with
-    ``record.oracle_root_q_trace[k]`` / ``record.oracle_trace_expansion_counts[k]``
-    (== ``k + 1``) directly, at the *same* 0-indexed row ``k``, not ``k + 1``. A
-    forward-fill "value as of step t" query into this log should therefore be called
-    with ``t = k`` to reproduce oracle row ``k`` -- calling it with ``t = k + 1``
-    (e.g. by mistakenly treating ``step_index`` as 1-indexed, matching
-    ``oracle_trace_expansion_counts``' own values instead of its *index*) silently
-    includes one extra expansion's worth of backprop and can produce spurious,
-    sometimes large, mismatches against ``oracle_root_q_trace`` that look like a
-    replay-accuracy bug but are actually a caller-side indexing bug. (Confirmed
-    directly against one such apparent mismatch during this stage's own validation:
-    error 0.0058 querying with the off-by-one convention at a step where the correctly
-    -indexed query gives error 0.0 exactly -- see this stage's Progress Log entry in
-    history.md.)
+    ``step_index`` convention (off-by-one trap): it is the 0-indexed position of an
+    expansion event within ``expansion_parent_ids``. A row with ``step_index == k``
+    reflects the state immediately after the ``(k + 1)``-th real expansion, lining up
+    with ``record.oracle_root_q_trace[k]`` at that same index ``k`` -- NOT ``k + 1``.
+    A forward-fill "value as of step t" query should use ``t = k`` to reproduce oracle
+    row ``k``; treating ``step_index`` as 1-indexed instead silently includes one
+    extra expansion's backprop and produces spurious mismatches against
+    ``oracle_root_q_trace``.
     """
     num_nodes = int(record.parent_index.shape[0])
     parent_index = record.parent_index.tolist()

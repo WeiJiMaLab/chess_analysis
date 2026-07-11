@@ -1,22 +1,6 @@
-"""Xaba-exclusion filter, head-to-head alternative to filter_argmax.py (Phase 2 Agent 1
-coordinator correction, 2026-07-08). Non-destructive, mirrors filter_argmax.py's CLI/output
-shape exactly so the two filters can be compared like-for-like via separate include_lists fed
-into the same split -> pack -> train -> eval pipeline.
-
-Reuses the ALREADY-IMPLEMENTED churn-motif classifier in ``cts.data.preprocess_mc.pack``
-(``_source_top_level_root_churn_category``, gated in production by ``mc_pack.exclude_xaba``):
-classifies each tree's root-best-move trace into one of three motifs --
-  "A"       -- best move never changes (stable)
-  "X*A"     -- one or more switches, ending on a settled move
-  "X*AB*A"  -- churns AND ends on a move that was revisited (the noisiest pattern)
-and keeps every tree EXCEPT the "X*AB*A" ones. Unlike ``exclude_xaba`` as it's normally used
-(a flag inside ``mc_pack``'s per-tree processing, applied only at the moment episodes are
-oracle-scored), this script runs it as a STANDALONE pre-filter -- same role filter_argmax.py
-plays -- so its survival rate and downstream training population can be measured independently.
-
-Usage: python -m cts.data.preprocess_mc.filter_xaba \
-    --trees-dir <dir> --output <include_list.txt>
-"""
+"""Classifies each tree's root-best-move trace into one of three motifs -- "A"
+(stable), "X*A" (switches, settles), "X*AB*A" (churns and revisits) -- and keeps
+every tree except the "X*AB*A" ones."""
 from __future__ import annotations
 
 import argparse

@@ -1,8 +1,3 @@
-"""
-Shared analysis utilities: config loading, DuckDB connections/helpers, ply-window
-views, plotting style, and small stats helpers.
-"""
-
 from __future__ import annotations
 
 import contextlib

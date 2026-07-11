@@ -1,26 +1,6 @@
-"""
-Tree data loading and signal extraction, UNIT-PARAMETRIC (pwin | cp).
-
-Loads teacher-tree ``.pt`` payloads in parallel and derives the engine signals —
-Greedy Stopping Step (GSS), Gain/VOC, Action Gap, n-within-epsilon (COUNT of
-near-best root moves), n-acceptable (COUNT of ≥-equal root moves), n-root-children
-(the legal-move denominator), Optimal Stopping Step (OSS), prior entropy H(π), and
-per-root-move MQ — in a chosen VALUE UNIT:
-
-  unit="pwin"  per-node feature ``value``    = p_win − p_loss ∈ [−1, 1] (WDL-derived)
-  unit="cp"    per-node feature ``cp_order`` = Stockfish-native centipawns with mate
-               scores folded into a ±20000 band (see cts parsers.score_order_features)
-
-Provenance note (deliberate): DEEP signals are computed by REPLAYING the negamax
-backup over the stored per-node static values in the requested unit — we do NOT
-read the generator's ``oracle_*`` value arrays, whose unit silently follows the
-generation-time ``value_feature``. BeFS insertion order is the expansion order
-(children always have higher node index than their parent), so the step-by-step
-trace is exactly reconstructable from the saved tree. Sign convention matches
-the generator (parsers/teacher_targets): a node's static value is from that
-node's side-to-move POV; negamax parent value = −min(children) (the parent picks
-the child that is worst for the opponent).
-"""
+"""Deep signals are computed by REPLAYING the negamax backup over stored per-node
+static values in the requested unit (pwin | cp) -- not by reading the generator's
+oracle_* arrays, whose unit silently follows generation-time value_feature."""
 
 import functools
 import os

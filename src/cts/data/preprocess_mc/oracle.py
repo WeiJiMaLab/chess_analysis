@@ -1,16 +1,3 @@
-"""Budgeted oracle that defines the controller's reward function.
-
-For each snapshot of a search tree, the oracle decides whether the controller
-should ``halt`` (consume the current tree's quality) or ``expand`` (pay a
-maintenance + time cost and continue). Buckets partition expansion-count
-space so training data covers tight (1-3 expansions) through generous
-(61-120 expansions) regimes. The dynamic-programming pass in
-``compute_budgeted_oracle`` produces the per-step (halt, continue) values
-that the fitted-Q controller learns from. Invoked at packing time from
-``scripts/pack_controller_episodes.py`` and at train time from
-``train_fitted_q_controller.py`` for config sanity checks.
-"""
-
 from __future__ import annotations
 
 import hashlib

@@ -1,10 +1,4 @@
-"""Per-node feature schema for the tree encoder.
-
-Single source of truth for which scalar features a tree node carries and in
-what order. Disk format, in-memory ``SearchTree`` features, and encoder input
-tensor columns all funnel through ``NodeFeatureSchema`` so they stay aligned.
-Changing ``TREE_ENCODER_FEATURE_NAMES`` is a format-breaking change.
-"""
+"""Changing ``TREE_ENCODER_FEATURE_NAMES`` is a format-breaking change."""
 
 from __future__ import annotations
 

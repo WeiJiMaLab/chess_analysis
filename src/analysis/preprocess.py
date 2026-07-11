@@ -1,20 +1,5 @@
-"""
-Preprocess Lichess data for response-time analysis.
-Includes selection of games, extraction of moves, and feature engineering.
-
-Contract (do not subvert with optional alternate temp paths):
-    DuckDB ``temp_directory`` always equals the directory named by ``work_dir`` or ``staging_dir``.
-    Shard parquet outputs go under ``staging_dir``. Merge reads ``staging_dir`` only and replaces
-    ``moves``. :func:`process_moves` builds ``processed_moves`` and ``processed_moves_nonzero`` from ``moves``;
-    ``preprocess.sh`` runs merge then ``process_moves``.
-
-The CLI (:func:`main`) resolves every parameter from the active config via
-:func:`_load_preprocess_config` and passes them in explicitly — the yaml is the single source
-of ``threads`` / ``memory_limit`` / ``moves_root`` / the selection filters and the rest.
-``threads`` / ``memory_limit`` / ``total_shards`` still honor ``DUCKDB_THREADS`` /
-``DUCKDB_MEMORY_LIMIT`` / ``PREPROCESS_TOTAL_SHARDS`` overrides. The ``shard`` subcommand reads
-``job_id`` from ``SLURM_ARRAY_TASK_ID`` only.
-"""
+"""Contract: DuckDB ``temp_directory`` always equals ``work_dir``/``staging_dir`` -- do
+not subvert with an alternate temp path."""
 
 from __future__ import annotations
 
