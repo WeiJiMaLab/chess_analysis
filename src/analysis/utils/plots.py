@@ -31,7 +31,7 @@ def apply_shared_exponent_log_ticks(ax, tick_vals, *, color: str = "black") -> N
     # visible -- NullFormatter keeps them from re-adding their own "2x10^-1"-style exponent text.
     ax.yaxis.set_minor_locator(mticker.LogLocator(subs=np.arange(2, 10) * 0.1, numticks=12))
     ax.yaxis.set_minor_formatter(mticker.NullFormatter())
-    ax.tick_params(axis="y", which="minor", length=3)
+    ax.tick_params(axis="y", which="minor", length=3, left=True)  # rcParams default is ytick.minor.visible=False
     ax.grid(which="minor", axis="y", alpha=0.15)
     ax.text(-0.02, 1.0, f"$\\times10^{{{shared_exp}}}$", transform=ax.transAxes, ha="right", va="bottom",
            fontsize=10.5, color=color)
