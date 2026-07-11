@@ -374,7 +374,7 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
 # ===========================================================================
 # Plots
 # ===========================================================================
-_PT_SIZE, _PT_ALPHA = 4, 0.88  # one uniform marker size/alpha for every point series — color is the only encoding
+_PT_SIZE, _PT_ALPHA = 5, 0.88  # one uniform marker size/alpha for every point series — color is the only encoding
 
 
 def _to_jsonable(obj):
@@ -568,16 +568,16 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
             p["label"], p["color"], p["_rank"] = new_label, _C[ckey], rank
 
     _rcparams()
-    # Explicit rects (not a single shared gridspec) so the histogram row's vertical space and the
-    # legend's gap below it are both under direct control, independent of the frontier row's own
-    # layout. Histogram sits at the TOP (the bimodal stop-step spread it reveals is the headline
-    # finding), frontier panels in the middle, shared legend at the bottom.
-    fig = plt.figure(figsize=(9.2, 6.4))
-    axH = fig.add_axes([0.09, 0.76, 0.89, 0.20])
-    gs_mid = fig.add_gridspec(1, 2, width_ratios=[1, 1.1], left=0.09, right=0.98, top=0.66, bottom=0.16,
-                              wspace=0.28)
-    axL = fig.add_subplot(gs_mid[0, 0])
-    axR = fig.add_subplot(gs_mid[0, 1])
+    # Left column stacks histogram (top) over the full-range frontier panel (bottom), sharing the
+    # "Stop Step" x-axis since both are on the same scale; right column is the zoom panel, spanning
+    # both rows and forced square via set_box_aspect regardless of its (non-square) cell.
+    fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.8))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.5, 2], height_ratios=[0.55, 1], left=0.09, right=0.98,
+                          top=0.95, bottom=0.20, hspace=0.12, wspace=0.28)
+    axH = fig.add_subplot(gs[0, 0])
+    axL = fig.add_subplot(gs[1, 0], sharex=axH)
+    axR = fig.add_subplot(gs[:, 1])
+    axR.set_box_aspect(1)
     zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
                               frac=0.25, min_pad=1e-3)
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
@@ -591,13 +591,13 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # unaffected (it shows no legend) since it still plots the untouched `all_points`.
     legend_points = sorted(all_points, key=lambda p: p["_rank"])
     _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0)
-    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=2.5)
+    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
     handles, labels = axR.get_legend_handles_labels()
     # 4 columns (not 3): with AG-Controller present this is 7 entries -- ncol=3 makes a 3rd row that
     # collides with the frontier panels' "Stop Step" xlabel just above it. ncol=4 keeps it to 2 rows
     # for both the 6-entry (no AG) and 7-entry (with AG) case.
-    fig.legend(handles, labels, loc="center", bbox_to_anchor=(0.5, 0.045), ncol=4,
+    fig.legend(handles, labels, loc="center", bbox_to_anchor=(0.5, 0.03), ncol=4,
               fontsize=10, frameon=False)
 
     # Secondary panel: the ACTUAL per-episode stop-step distribution for each controller (MC/TS/AG/
@@ -618,7 +618,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
             parts[key].set_color([_C[ckey_by_name[n]] for n in order])
             parts[key].set_linewidth(1.2)
         axH.set_yticks(range(len(order))); axH.set_yticklabels(order)
-        axH.set_xlabel("Stop Step")
+        axH.tick_params(axis="x", labelbottom=False)  # shares x with axL below, which carries the label
         axH.grid(axis="x", color=_GRID, lw=1)
         axH.xaxis.set_major_locator(plt.MaxNLocator(nbins=8))
     else:

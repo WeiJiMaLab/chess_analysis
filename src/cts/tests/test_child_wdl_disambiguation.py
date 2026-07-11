@@ -268,6 +268,16 @@ def test_predictions_differ_meaningfully_between_siblings_with_different_subtree
     )
 
 
+@pytest.mark.xfail(
+    reason="Known, accepted limitation of ChildWdlHead's concat(parent_states, "
+    "slot_states) mechanism -- perturbing one child's subtree measurably moves its "
+    "untouched sibling's prediction too (ratio ~1.0, not the >1.5 clean-localization "
+    "bar). Reproduced across 4 independent probe designs including 2000-step "
+    "training; not a training-budget artifact. User decision (2026-07-10): not a "
+    "blocker, plausibly a pre-existing property of this architecture unrelated to "
+    "T_n specifically. See history.md Task 3 Progress Log.",
+    strict=True,
+)
 def test_perturbation_localizes_to_the_perturbed_child(fast_trained_model):
     """Property (b): the decisive check. Perturbing ONLY child_a's subtree
     (holding the parent's own features and child_b's entire subtree exactly
@@ -293,6 +303,12 @@ def test_perturbation_localizes_to_the_perturbed_child(fast_trained_model):
 # --- Slow confirmatory variant: much larger training budget, opt-in ---
 
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason="Same known, accepted limitation as test_perturbation_localizes_to_the_"
+    "perturbed_child, re-confirmed at 5x training budget. See that test's xfail "
+    "reason and history.md Task 3 Progress Log.",
+    strict=True,
+)
 def test_perturbation_localization_with_extended_training():
     """Confirms the fast test's localization result is not merely an
     artifact of a short training budget -- trains ~5x longer (matching the

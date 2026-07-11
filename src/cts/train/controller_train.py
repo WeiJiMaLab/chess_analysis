@@ -29,6 +29,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, Dataset
 
+from cts.core.providers.parsers import value_features_from_wdl
 from cts.core.schema import NodeFeatureSchema, tree_encoder_feature_schema
 from cts.core.tensorizer import TreeBatch
 from cts.data.preprocess_mc.oracle import (
@@ -56,21 +57,14 @@ class ControllerTrainConfig(BaseModel):
     packed_validation_data: str
     encoder_checkpoint: str
     output_checkpoint: Optional[str] = None
-    # plan.md Agent 2 (our_trees_continued) -- warm-start the FULL model (encoder + head)
-    # from a previously-trained checkpoint's ``model_state_dict``, instead of the usual
-    # fresh-head-on-top-of-``encoder_checkpoint`` init. Loaded AFTER ``encoder_checkpoint``
-    # in ``_build_model_and_optimizer`` (so it takes precedence), which means
-    # ``encoder_checkpoint`` can safely stay pointed at the ORIGINAL base encoder --
-    # ``resume_checkpoint``'s full state dict overwrites those weights anyway. Neither
-    # ``pg_controller_train.py`` nor ``e2e_controller_train.py`` otherwise supports
-    # continuing a run; this is the single shared hook both use.
+    # Warm-starts the full model (encoder + head) from a checkpoint's
+    # ``model_state_dict``, loaded after ``encoder_checkpoint`` in
+    # ``_build_model_and_optimizer`` so it takes precedence. Shared resume hook
+    # for both ``pg_controller_train.py`` and ``e2e_controller_train.py``.
     resume_checkpoint: Optional[str] = None
-    # Dump a checkpoint EVERY epoch (not just on val-regret improvement), named
-    # ``<output_checkpoint stem>_epoch{N:03d}<suffix>`` -- lets a continued run be
-    # paired-significance-evaluated at several points along its curve, not just the
-    # final/best epoch. Mirrors ``e2e_controller_train.py``'s existing per-epoch save
-    # (that script always saves every epoch); ``pg_controller_train.py`` previously only
-    # saved on improvement, so this flag opt-in extends it without changing default behavior.
+    # Save a checkpoint every epoch (not just on val-regret improvement), as
+    # ``<output_checkpoint stem>_epoch{N:03d}<suffix>``, so a run can be
+    # evaluated at multiple points along its curve, not just the best epoch.
     save_every_epoch: bool = False
     materialized_train_cache: Optional[str] = None
     materialized_validation_cache: Optional[str] = None
@@ -93,12 +87,10 @@ class ControllerTrainConfig(BaseModel):
     min_lr: float = 0.0
     weight_decay: float = 0.0
     sign_loss_weight: float = 1.0
-    # PROTOTYPE — asymmetric over-search penalty on the sign-BCE. That loss treats the
-    # predicted advantage as a logit for "continue"; pos_weight < 1 down-weights the
-    # "continue" class, so FALSE-CONTINUE (predicting continue when the oracle says STOP)
-    # is penalised more than false-stop. This pulls the advantage zero-crossing earlier,
-    # directly countering the controller's chronic over-search. 1.0 = symmetric/original.
-    # Checkpoint selection stays on validation regret, not this loss (the §10b rule).
+    # Asymmetric penalty on the sign-BCE: pos_weight < 1 penalizes false-continue
+    # more than false-stop, pulling the advantage zero-crossing earlier to counter
+    # over-search. 1.0 = symmetric. Checkpoint selection still uses validation
+    # regret, not this loss.
     sign_pos_weight: float = 1.0
     nontrivial_loss_weight: float = 1.0
     # --- policy-gradient (exact expected-return) trainer: cts.train.pg_controller_train ---
@@ -106,12 +98,10 @@ class ControllerTrainConfig(BaseModel):
     # with the stop step marginalized in closed form over the full trace (no REINFORCE sampling).
     pg_episode_batch: int = 1024        # episodes per PG gradient step
     pg_max_episodes: Optional[int] = None  # cap train/val episodes (smoke / quick runs)
-    # Stop-policy temperature for the PG trainer: continue prob = sigmoid(A_t / tau).
-    # tau > 1 keeps the soft policy AWAY from the 0/1 saturation boundary (where the
-    # sigmoid slope p(1-p) -> 0 and the gradient dies), so it explores to the right
-    # stop step before sharpening. Annealed linearly stop_temperature -> _final over
-    # the epochs. tau does NOT affect the deployed hard greedy rule (sign(A_t)), so
-    # checkpoint selection on hard val regret stays comparable. 1.0/1.0 = original.
+    # PG stop-policy temperature: continue prob = sigmoid(A_t / tau). tau > 1
+    # avoids the 0/1 sigmoid saturation boundary (dead gradient) early in
+    # training; annealed linearly to stop_temperature_final. Does not affect the
+    # deployed hard greedy rule (sign(A_t)). 1.0/1.0 = original.
     stop_temperature: float = 1.0
     stop_temperature_final: float = 1.0
     inverse_freq_weights: bool = False
@@ -786,10 +776,8 @@ class ControllerEpisodeDataset(Dataset):
     def __len__(self) -> int:
         return self.cumulative_sizes[-1]
 
-    # Shard formats this dataset can read: the original one-shot-frozen-value
-    # format, and packhistory_trees' (Task 1's) format, which adds the sparse
-    # per-edge update log (see history.md "Stage: packhistory_trees"). Both are
-    # accepted so this dataset keeps working against pre-Task-1 packed data too.
+    # Shard formats this dataset can read: the original frozen-value format,
+    # and packhistory_trees' format, which adds the sparse per-edge update log.
     _SUPPORTED_SHARD_FORMATS = (
         "cts_budgeted_controller_episode_shard_v4",
         "cts_packhistory_trees_shard_v1",
@@ -843,37 +831,13 @@ class ControllerEpisodeDataset(Dataset):
         full_parent_index = payload["parent_index"][node_begin:node_end]
         full_depth = payload["depth"][node_begin:node_end]
 
-        # --- history.md "Stage: packhistory_MCmaterialize" (Task 5) ---
-        # ``full_node_features`` above is the pre-existing one-shot, frozen
-        # tensorization (each node's own raw leaf eval, baked once from the
-        # complete tree — see history.md "What's wrong with the current code").
-        # If this shard was produced by the new packhistory_trees stage (Task 1),
-        # it also carries a sparse per-edge update log recording each node's real
-        # backed-up value/WDL as backprop revised it during search (schema fixed
-        # in history.md "Stage: packhistory_trees" > "Update log schema":
-        # step_index/node_id/visit_count/q_value/wdl[3], sorted by
-        # (node_id, step_index), node ids LOCAL to this trajectory — same
-        # convention as ``parent_index``/``edge_child`` above).
-        #
-        # Field names below (``update_log_step_index``, ``update_log_node_id``,
-        # ``update_log_q_value``, ``update_log_wdl``, ``trajectory_update_log_ptr``)
-        # were this task's own guess, made before Task 1 landed, mirroring the
-        # existing ``trajectory_edge_ptr`` / ``trajectory_child_ptr_ptr``
-        # pointer-array convention used elsewhere in this same method.
-        # Reconciled 2026-07-10 against Task 1's actual, landed implementation
-        # (preprocess_mc/pack.py's ``_serialize_shard_payload``): every one of
-        # these field names matches exactly — no renaming needed. (Task 1 also
-        # ships ``update_log_visit_count``, ``node_update_ptr``, and
-        # ``trajectory_node_update_ptr_ptr`` for CSR point-lookups, which this
-        # method doesn't need — its access pattern is a single forward sweep
-        # over steps, not random-access per-node queries — see
-        # ``packhistory_GNNpretrain``/``pack_history.py`` for where those are
-        # actually used.) The step-index convention was NOT a correct guess —
-        # see the fixed off-by-one in the per-step loop below and the Task 5
-        # Progress Log entry in history.md for the reconciliation. Falls back
-        # to the old frozen-slice behavior below when these fields are absent
-        # (older shard format, or Task 1 not yet run),
-        # so this dataset keeps working against today's packed data too.
+        # ``full_node_features`` is the frozen, one-shot tensorization of each
+        # node's final backed-up value/WDL. If this shard carries a per-edge
+        # update log (``update_log_step_index``/``_node_id``/``_q_value``/``_wdl``,
+        # sorted by (node_id, step_index), node ids local to this trajectory), it
+        # records each node's real value/WDL as backprop revised it during
+        # search, used below to reconstruct step-accurate values. Falls back to
+        # the frozen values when the log fields are absent (older shard format).
         update_log_step_index_all = payload.get("update_log_step_index")
         has_update_log = update_log_step_index_all is not None
         if has_update_log:
@@ -884,12 +848,9 @@ class ControllerEpisodeDataset(Dataset):
             log_node_id = payload["update_log_node_id"][log_begin:log_end]
             log_q_value = payload["update_log_q_value"][log_begin:log_end]
             log_wdl = payload["update_log_wdl"][log_begin:log_end]
-            # The packed log is sorted by (node_id, step_index) — the layout
-            # that gives O(log M) per-node lookup, per history.md — not by
-            # step_index alone. Re-sort by step_index (stable, so entries that
-            # share a step keep their node_id-ascending relative order) so the
-            # per-step loop below can apply updates with one linear sweep
-            # instead of re-scanning per node at every step.
+            # Log is sorted by (node_id, step_index) for O(log M) per-node
+            # lookup; re-sort stably by step_index so the loop below can apply
+            # updates in one linear sweep instead of rescanning per node.
             step_order = torch.argsort(log_step_index, stable=True)
             log_step_index = log_step_index[step_order].tolist()
             log_node_id = log_node_id[step_order].tolist()
@@ -897,17 +858,16 @@ class ControllerEpisodeDataset(Dataset):
             log_wdl = log_wdl[step_order]
             num_log_entries = len(log_step_index)
             log_cursor = 0
-            # Running per-node state, forward-filled step by step. Starts from
-            # the same baseline the old code used unconditionally (each node's
-            # pre-backprop static value) and is overwritten in place as log
-            # entries are applied — this IS the fix: node ROWS now carry
-            # step-accurate values, not just a longer/shorter prefix of one
-            # static tensor. Column layout is TREE_ENCODER_FEATURE_NAMES =
-            # ("value", "wdl_win", "wdl_draw", "wdl_loss", "wdl_var")
-            # (cts/core/schema.py); wdl_var (column 4) has no corresponding
-            # field in the update-log schema and is left at its baseline value
-            # throughout — variance-over-visits isn't tracked by replay.
-            running_node_features = full_node_features.clone()
+            # Running per-node state, forward-filled and overwritten in place as
+            # log entries are applied, so rows carry step-accurate values rather
+            # than a static prefix. Zero-initialized (not cloned from
+            # ``full_node_features``): that tensor holds each node's *final*,
+            # end-of-search replayed value/WDL (see pack.py's
+            # ``_build_compact_trajectory``), so cloning any column — including
+            # ``wdl_var``, which is purely derived from the WDL triple and has no
+            # field of its own in the log — would leak the eventual answer into
+            # steps before the node's first backprop update.
+            running_node_features = torch.zeros_like(full_node_features)
 
         trajectory_edge_ptr = payload["trajectory_edge_ptr"]
         edge_begin = int(trajectory_edge_ptr[trajectory_index].item())
@@ -953,49 +913,34 @@ class ControllerEpisodeDataset(Dataset):
             expansion_count = first_decision_expansion_count + local_step
 
             if has_update_log:
-                # Advance the log cursor to absorb every update whose
-                # step_index has already happened as of this step (cumulative
-                # values, per schema — a later entry for the same node simply
-                # overwrites, no accumulation needed here).
+                # Advance the cursor to absorb every log entry whose step_index
+                # has occurred by this step (a later entry for the same node
+                # just overwrites; no accumulation needed).
                 #
-                # Reconciled against Task 1's actual implementation
-                # (preprocess_mc/pack.py, ``_replay_backprop_history`` /
-                # ``_build_compact_trajectory``): ``step_index`` is the
-                # 0-indexed position of an expansion event within
-                # ``expansion_parent_ids`` (tagged BEFORE increment — a log row
-                # with ``step_index == k`` reflects the state immediately after
-                # the ``(k+1)``-th real expansion). ``step_node_cutoffs[local_step]``
-                # (this method's structural cutoff) is built the same way: it
-                # reflects the tree after processing
-                # ``expansion_parent_ids[0 : first_decision_expansion_count + local_step]``,
-                # i.e. after the expansion event at 0-indexed position
-                # ``expansion_count - 1`` (== ``first_decision_expansion_count
-                # + local_step - 1``) was just processed. So the update-log
-                # query that matches this step's structural cutoff must use
-                # ``step_index <= expansion_count - 1``, not ``<= expansion_count``
-                # — this is the exact same before/after-increment off-by-one
-                # Task 4 found and fixed in ``pack_history.py:_build_tree_n``
-                # (see history.md, Task 4 Progress Log, "Off-by-one fixed").
-                # Using ``<= expansion_count`` here would leak one extra
-                # expansion's worth of backprop into this step's values —
-                # confirmed concretely against real data (see Task 5 Progress
-                # Log entry for 2026-07-10, reconciliation pass).
+                # step_index is 0-indexed, tagged BEFORE increment: a row with
+                # step_index == k reflects the state right after the (k+1)-th
+                # expansion. step_node_cutoffs[local_step] reflects the tree
+                # after expansion event (expansion_count - 1), so the matching
+                # query is step_index <= expansion_count - 1, NOT
+                # <= expansion_count (which would leak one extra expansion's
+                # backprop into this step's values).
                 while log_cursor < num_log_entries and log_step_index[log_cursor] <= expansion_count - 1:
                     node_id = log_node_id[log_cursor]
                     if node_id < running_node_features.shape[0]:
                         running_node_features[node_id, 0] = log_q_value[log_cursor]
                         running_node_features[node_id, 1:4] = log_wdl[log_cursor]
+                        # wdl_var is derived from the wdl triple just written above;
+                        # recompute it from this update, not the node's frozen baseline.
+                        win, draw, loss = (float(x) for x in log_wdl[log_cursor])
+                        running_node_features[node_id, 4] = value_features_from_wdl(win, draw, loss)["wdl_var"]
                     log_cursor += 1
                 # Clone: running_node_features is mutated in place on later
                 # iterations, so a bare slice (a view) would retroactively
                 # change earlier steps' already-appended tensors.
                 step_nf.append(running_node_features[:node_cutoff].clone())
             else:
-                # Fallback for shards without an update log (pre-Task-1 packed
-                # data): reproduces today's frozen-slice behavior exactly. This
-                # is the documented bug (history.md "What's wrong with the
-                # current code"), kept only so this dataset still runs against
-                # packed data that predates packhistory_trees landing.
+                # Fallback for shards without an update log: frozen-slice
+                # behavior, kept for compatibility with older packed data.
                 step_nf.append(full_node_features[:node_cutoff])
             step_pi.append(full_parent_index[:node_cutoff])
             step_d.append(full_depth[:node_cutoff])
@@ -2178,12 +2123,8 @@ def _build_model_and_optimizer(
     )
     load_encoder_checkpoint(config.encoder_checkpoint, model.encoder)
     if config.resume_checkpoint:
-        # Warm-start the WHOLE model (encoder + head) from a prior run's checkpoint --
-        # overwrites the encoder weights ``load_encoder_checkpoint`` just loaded above (by
-        # design: resume_checkpoint is authoritative when set). Checkpoint format is the
-        # shared ``{"model_state_dict": ..., "metadata": {...}}`` both pg_controller_train.py
-        # and e2e_controller_train.py already save (see each module's save call), so this one
-        # loader works for resuming either lineage, frozen or unfrozen.
+        # Warm-start the whole model (encoder + head), overwriting the encoder
+        # weights just loaded above -- resume_checkpoint is authoritative when set.
         payload = torch.load(config.resume_checkpoint, map_location=config.device, weights_only=False)
         model.load_state_dict(payload["model_state_dict"])
         print(f"[compute_advantage] resumed full model state (encoder+head) from "

@@ -219,26 +219,32 @@ def _forward_filled_wdl_at_step(
     update-log entry with ``step_index <= step`` (binary search over that node's own
     sorted slice via ``node_update_ptr``). Nodes with zero update-log entries at all
     (never visited by backprop), or whose first update hasn't happened yet as of
-    ``step``, fall back to the node's static baseline WDL -- read straight off its own
-    ``node_features`` row (``wdl_win``/``wdl_draw``/``wdl_loss`` columns, indices 1:4
-    per ``TREE_ENCODER_FEATURE_NAMES``), i.e. the same static leaf WDL a node starts
-    at before its first backprop update.
+    ``step``, fall back to a zero WDL triple -- NOT ``node_features``'s own
+    ``wdl_win``/``wdl_draw``/``wdl_loss`` columns (indices 1:4). Those columns are NOT
+    each node's static pre-backprop leaf WDL (an earlier version of this docstring
+    wrongly assumed that, matching the OLD pre-fix behavior): ``pack.py``'s
+    ``_build_compact_trajectory`` overwrites them with each node's *final*,
+    end-of-search replayed WDL, so falling back to that array here would leak a node's
+    eventual answer into every step before its own first backprop update. Zero matches
+    the ``EdgeStats()``-zero convention this codebase already uses elsewhere for a node
+    with no backprop yet (see ``pack.py``'s replay code), and flows cleanly through
+    ``_build_tree_n``'s renormalization below (an all-zero win/draw/loss triple yields
+    ``value=0, variance=0`` via the ``clamp_min(1e-8)`` guard there).
     """
     node_update_ptr = trajectory.node_update_ptr
     update_step_index_list = trajectory.update_step_index.tolist()
     update_wdl = trajectory.update_wdl
-    baseline_wdl = trajectory.node_features[node_ids][:, 1:4].clone()
+    out = torch.zeros((len(node_ids), 3), dtype=trajectory.node_features.dtype)
 
-    out = baseline_wdl
     for row, node_id in enumerate(node_ids.tolist()):
         lo = int(node_update_ptr[node_id].item())
         hi = int(node_update_ptr[node_id + 1].item())
         if hi <= lo:
-            continue  # never visited by backprop; keep the static baseline
+            continue  # never visited by backprop; keep the zero baseline
         steps_slice = update_step_index_list[lo:hi]  # sorted ascending for this node
         idx = bisect.bisect_right(steps_slice, step) - 1
         if idx < 0:
-            continue  # first update hasn't happened yet as of `step`; keep the static baseline
+            continue  # first update hasn't happened yet as of `step`; keep the zero baseline
         out[row] = update_wdl[lo + idx]
     return out
 

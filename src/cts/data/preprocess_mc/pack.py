@@ -824,11 +824,10 @@ def _replay_backprop_history(
             _, _, last_q_value, last_wdl = rows[-1]
             final_value[node_id] = last_q_value
             final_wdl[node_id] = last_wdl
-        # Nodes with no update-log rows (never visited by any backprop event --
-        # 88.8%/97.7% of nodes on the two trees measured during planning) keep the
-        # EdgeStats()-zero default here, exactly matching what a live query against
-        # generation's own edge_stats would have returned for an unvisited edge (see
-        # teacher_targets._root_q_values_from_edge_stats's explicit 0.0 fallback).
+        # Nodes with no update-log rows (never visited by backprop) keep the
+        # EdgeStats()-zero default, matching what a live query against
+        # generation's own edge_stats returns for an unvisited edge (see
+        # teacher_targets._root_q_values_from_edge_stats's 0.0 fallback).
         node_update_ptr.append(len(step_index_col))
 
     return {
@@ -911,30 +910,18 @@ def _build_compact_trajectory(
     trimmed_best_move_index = record.oracle_best_move_index.to(dtype=torch.long)[root_rank:]
     trimmed_halt_rewards = record.oracle_final_root_q_values.to(dtype=torch.float32)[trimmed_best_move_index]
 
-    # Retroactively replay this tree's own backprop history (the actual bug fix --
-    # see _replay_backprop_history's docstring). ``full_tree.node_features`` as
-    # returned by ``to_tensorized_tree_example`` carries the STATIC, one-shot
-    # per-node provider features (each node's own network eval, baked in at node
-    # creation and never mutated -- see teacher_targets.value_features_from_wdl);
-    # packing that directly, unchanged, for every step is exactly the bug this
-    # stage fixes. The "value"/"wdl_win"/"wdl_draw"/"wdl_loss" columns are
+    # Replay this tree's own backprop history (see _replay_backprop_history's
+    # docstring). ``full_tree.node_features`` carries the static per-node eval
+    # baked in at node creation; the value/wdl_win/wdl_draw/wdl_loss columns are
     # overwritten below with each node's *final* replayed backed-up value/WDL
-    # (its own incoming edge's EdgeStats, i.e. the same quantity
-    # oracle_root_q_trace records for root children) so that even a consumer that
-    # ignores the sparse update log below gets the converged, correct value
-    # rather than the never-updated static eval. "wdl_var" is left untouched: the
-    # update-log schema (per history.md) tracks only visit_count/q_value/wdl, not
-    # a variance term, and wdl_var is a property of the node's own static WDL
-    # distribution, not something backprop revises.
+    # (its incoming edge's EdgeStats), so a consumer ignoring the sparse update
+    # log below still gets the converged value, not the stale static eval.
+    # wdl_var is left untouched -- it's a property of the static WDL
+    # distribution, not something backprop revises or the log tracks.
     #
-    # Per-STEP (not just final) values are not densely materialized here -- doing
-    # so would be an O(steps * nodes * features) blow-up per tree. Instead this
-    # function packs (a) this static/final-state feature matrix and (b) the full
-    # sparse update log (below), so downstream per-step consumption
-    # (packhistory_MCmaterialize / packhistory_GNNpretrain) does an O(log M)
-    # forward-fill lookup into the log rather than reading a pre-materialized
-    # dense per-step tensor. See this stage's Progress Log entry in history.md for
-    # this interpretation note.
+    # Per-step values aren't densely materialized here (O(steps * nodes *
+    # features) blow-up); instead we pack this final-state matrix plus the full
+    # sparse update log, so downstream consumers do an O(log M) lookup instead.
     replay = _replay_backprop_history(record, expansion_parent_ids, value_feature=_VALUE_FEATURE_NAME)
     node_features = full_tree.node_features.clone()
     feature_columns = {name: index for index, name in enumerate(schema.feature_names)}

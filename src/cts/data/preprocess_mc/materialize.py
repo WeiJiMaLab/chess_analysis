@@ -45,13 +45,9 @@ class MaterializeConfig(BaseModel):
     packed_data: Optional[str] = None
     encoder_checkpoint: Optional[str] = None
     worker_index: Optional[int] = None
-    # Default False: clear this worker's shard directory and start fresh. The
-    # expensive part of a rerun is redoing the encoder forward pass, so if
-    # you're specifically recovering from a killed/OOM'd/timed-out worker
-    # (check `sacct` for the exit reason before deciding), pass resume=True
-    # to skip already-written batches instead of redoing them. Resuming onto
-    # a DIFFERENT run's packed_data is still refused (see the mtime check
-    # below) even with resume=True.
+    # Default False: clear this worker's shard directory and start fresh. Set
+    # True to resume a killed/OOM'd/timed-out worker by skipping already-
+    # written batches (see materialize_worker's resume-handling comment).
     resume: bool = False
     device: str = "cuda"
     episode_batch_size: int = 8
@@ -83,23 +79,11 @@ def materialize_worker(config: MaterializeConfig) -> None:
     schema = tree_encoder_feature_schema()
     device = torch.device(config.device)
 
-    # Encoder architecture comes from the checkpoint's embedded metadata so
-    # it always matches the saved weights. The head is configurable here
-    # (we throw away its random weights after this run — only the encoder
-    # outputs are consumed).
-    #
-    # ``config.encoder_checkpoint`` is a plain config field (no hardcoded
-    # fallback in ``MaterializeConfig`` above) — the only thing that has to
-    # change to run this stage against the history.md pipeline's retrained,
-    # partial-tree-aware encoder (Task 1/3/4's `packhistory_GNNpretrain` +
-    # `train_encoder`) instead of today's Child-WDL-pretrained one is the
-    # *config value* passed in, not this code. history.md's "Directory
-    # layout" convention: the new checkpoint lives at
-    # ``${gnnpack_history_dir}/tiny_encoder.pt`` (mirrors today's
-    # ``${packed_dir}/tiny_encoder.pt``, config_ysagiv_xaba20k.yaml:84,101) —
-    # Task 6 owns wiring `materialize.encoder_checkpoint` to that path in the
-    # new `config_ysagiv_xaba20k_history.yaml`. Nothing in this file should
-    # ever hardcode either path.
+    # Encoder architecture comes from the checkpoint's metadata, so it always
+    # matches the saved weights; the head is reconstructed with random weights
+    # (discarded after this run -- only encoder outputs are used). No
+    # hardcoded fallback for encoder_checkpoint: swapping encoders is purely
+    # a config change.
     architecture = load_encoder_architecture(config.encoder_checkpoint)
     model = MetaController(
         k=architecture["k"],
@@ -162,36 +146,23 @@ def materialize_worker(config: MaterializeConfig) -> None:
     shard_index = 0
     started = time.time()
 
-    # Default behavior: clear this worker's shard directory and start fresh,
-    # matching split/gnn_pack/mc_pack's clear-and-redo semantics. Only pass
-    # resume=True when specifically recovering a killed/OOM'd/timed-out
-    # worker (check `sacct`'s exit reason first) — the expensive part of a
-    # rerun is redoing the encoder forward pass, so skipping already-written
-    # batches is worth it THERE, but trusting old shards by default is what
-    # caused a real incident: a rerun with regenerated packed_data (same
-    # path, different content) silently resumed onto the PRIOR run's
-    # leftover shards, since shard count alone can't tell a completed prefix
-    # of THIS run from a completed prefix of a DIFFERENT one.
+    # Default: clear and start fresh, matching split/gnn_pack/mc_pack's
+    # clear-and-redo semantics. Pass resume=True only to recover a killed/
+    # OOM'd/timed-out worker -- shard count alone can't distinguish a
+    # completed prefix of this run from stale shards left by a prior run over
+    # regenerated packed_data, so trusting old shards by default is unsafe.
     if not config.resume:
         for stale in shard_dir.glob("*"):
             stale.unlink()
     else:
-        # Resume support: shards are written atomically (write to .tmp, then
-        # os.replace) and only flushed at batch boundaries, so any shard_*.pt
-        # file on disk represents a contiguous prefix of the worker's slice.
-        # On startup, clean up leftover .tmp files (artifacts of a previous
-        # kill mid-write) and scan shards in order. If a shard fails to load
-        # — which should only happen for shards from a pre-atomic-write run,
-        # or for shards corrupted by external causes — truncate the resume
-        # point there: delete the corrupted shard plus every later one (to
-        # keep numbering contiguous) and resume from before it. The
-        # DataLoader is shuffle=False, so batch order is deterministic across
-        # runs and the truncated resume point is well-defined.
-        #
-        # Staleness check: even in an intentional resume, refuse to trust a
-        # shard older than packed_data's mtime — mc_pack always bumps that
-        # mtime when it regenerates, so an older shard cannot belong to the
-        # current input regardless of why resume=True was passed.
+        # Shards are written atomically (temp file + os.replace), so any
+        # shard_*.pt on disk is a contiguous prefix of this worker's slice.
+        # Clean up leftover .tmp files, then scan shards in order; if one
+        # fails to load, delete it and every later shard (DataLoader is
+        # shuffle=False, so order is deterministic) and resume before it.
+        # Refuse to resume from a shard older than packed_data's mtime --
+        # mc_pack bumps that mtime on regeneration, so a stale shard can
+        # never belong to the current input.
         packed_data_mtime = Path(config.packed_data).stat().st_mtime if config.packed_data else None
         for tmp_leftover in shard_dir.glob("*.tmp"):
             print(f"[materialize] cleaning up leftover {tmp_leftover}", flush=True)

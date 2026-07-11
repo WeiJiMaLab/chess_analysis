@@ -1,15 +1,24 @@
-# Phase 2 Agent 1 (ysagiv human_trees, Filter B: xaba-exclusion), FROZEN-VALUE-FIX branch.
-# See history.md (repo root) for the full plan this config implements Task 6 of.
+# Phase 2 Agent 1 (ysagiv human_trees, Filter B: xaba-exclusion INTERSECT ply-window 15-75),
+# FROZEN-VALUE-FIX branch. See history.md (repo root) for the full plan this config implements
+# Task 6 of -- this is the SECOND dataset run under that plan, after xaba20k validated it
+# end-to-end (2026-07-10, see history.md's Wave 3 + post-Wave-3 z_t-vs-action-gap sections).
 #
-# This is a FULL COPY of config_ysagiv_xaba20k.yaml with every stage's output-directory /
-# checkpoint global repointed at NEW, parallel "_history" scratch paths. It is NOT a patch or
-# variant of the old config -- it is an independent config that happens to point at the SAME
-# `split/` (shared, deterministic -- same seed, same trees, same train/validation assignment)
-# and the same underlying ysagiv trees. Every stage from packhistory_trees (rewrite of mc_pack)
-# through train_readout_pg runs under THIS config exactly as it runs under the old one; the two
-# configs' outputs never collide and BOTH are retained indefinitely as separate, permanent runs
-# -- xaba20k's old (`mc_packed/`, `packed/`, `materialized/`) outputs are a permanent regression
-# baseline, not something this config ever reads from or overwrites.
+# This is a FULL COPY of config_ysagiv_xaba100k_minply15_maxply75.yaml with every stage's
+# output-directory/checkpoint global repointed at NEW, parallel "_history" scratch paths --
+# same transformation as config_ysagiv_xaba20k_history.yaml, applied to this dataset. NOT a
+# patch/variant of the old config -- an independent config that happens to point at the SAME
+# `split/` (shared, deterministic) and the same underlying ysagiv trees. Old
+# (`mc_packed/`, `packed/`, `materialized/`) and new (`pack_history/`, `gnnpack_history/`,
+# `materialize_history/`) outputs never collide and BOTH are retained indefinitely.
+#
+# Scale note (2026-07-10, checked before submitting): this corpus's split (64,009 train +
+# 16,002 validation = 80,011 raw trees) is actually SMALLER than xaba20k's own split as it
+# currently exists on disk (132,062 total) -- despite the "100k" name, the ply-window filter
+# (root FEN must fall at ply 15-75 in our own move DB) cuts hard. Old mc_pack kept 85.8% of
+# split trees as episodes for this corpus (vs xaba20k's old mc_pack keeping only 7.9% -- though
+# that xaba20k comparison is against a STALE split snapshot, see history.md). Old materialize
+# used a 20-worker array for this corpus; pipeline.yaml's own default (40) is used below for
+# extra headroom, matching what worked cleanly for xaba20k_history.
 #
 # New directory globals introduced here (mirror the old ones 1:1, written fresh):
 #   pack_history_dir         mirrors mc_packed_dir    (mc_pack -> packhistory_trees output)
@@ -19,52 +28,40 @@
 #   materialize_history_dir  mirrors materialized_dir  (materialize -> packhistory_MCmaterialize
 #                                                        output; also where the trained readout
 #                                                        controller checkpoint lands)
+#   mc_packed_dir / materialized_dir aliases -- REQUIRED so the shared slurm/helpers/setup_env.sh
+#   (used unmodified by every pipeline script, old and new) can resolve $MCP/$MAT without
+#   erroring (`export MCP=$($RENDER --get globals.mc_packed_dir)` etc, unconditional). Without
+#   these, sourcing setup_env.sh under this config aborts immediately (set -e) before any
+#   pipeline script's real body runs -- discovered and fixed the hard way on xaba20k_history
+#   (job would have died at the very first line); baked in here from the start.
 #
-# `split_dir` is deliberately NOT repointed -- history.md is explicit that split/ is shared
-# between the old and new pipelines (preprocess_gnn/split.py seeds its shuffle from
-# config.seed, so the same config reproduces the identical train/validation assignment either
-# way; no reason to regenerate or duplicate it).
+# `split_dir` is deliberately NOT repointed -- shared between old and new pipelines
+# (preprocess_gnn/split.py seeds its shuffle from config.seed, so the same config reproduces
+# the identical train/validation assignment either way; no reason to regenerate or duplicate).
 #
-# `figures_dir` IS repointed (to a sibling `xaba20k_history` folder under outputs/figures/ysagiv/)
-# so this run's curves/results never land in the same folder as the old run's -- same
-# "nothing overwritten" principle applied to figures as to packed data/checkpoints.
+# `figures_dir` IS repointed (sibling `xaba100k_minply15_maxply75_history` folder) so this
+# run's curves/results never land in the same folder as the old run's.
 #
-# packhistory_GNNpretrain (Task 4) lives in its OWN new section, `gnn_pack_history:` -- NOT
-# `gnn_pack:` (that old section/stage is left untouched, unused by this config, reserved for
-# the old cts.data.preprocess_gnn.pack module). New fields there:
-#   lookahead_k          (v1 default: 12 -- see history.md "Parameters: k and dataset")
-#   snapshots_per_tree   (v1 default: 1  -- see same section)
-#
-# Stage --stage names for the UNCHANGED stages (split/mc_pack/encoder/materialize/train/eval)
-# are the same as the old config -- "packhistory_trees" etc. are history.md's human-readable
-# names for the rewritten *logic* behind mc_pack/materialize (in-place rewrites of the same
-# modules), not new CLI --stage values; those section keys stay as they always were. The one
-# exception is packhistory_GNNpretrain: it's a wholly NEW module (pack_history.py, not a
-# modification of preprocess_gnn/pack.py), so it needs its own --stage name (gnn_pack_history)
-# and its own slurm script (pack_trees_history.slurm), not the old pack_trees.slurm.
+# packhistory_GNNpretrain lives in its OWN new section, `gnn_pack_history:` -- NOT `gnn_pack:`
+# (that old section/stage is left untouched, reserved for the old cts.data.preprocess_gnn.pack
+# module). New fields there: lookahead_k (v1 default 12), snapshots_per_tree (v1 default 1) --
+# same v1 defaults as xaba20k_history, not re-tuned for this dataset.
 globals:
-  run_name: ysagiv_xaba20k
+  run_name: ysagiv_xaba100k_minply15_maxply75
   scratch_dir: /scratch/gpfs/GRIFFITHS/hl4291/lmcos
   outputs_dir: /home/hl4291/chess_analysis/outputs/figures
   search_budget: 96                                    # matches ysagiv trees' own oracle_trace budget (96 root expansions)
   run_dir: ${scratch_dir}/${run_name}
-  split_dir: ${run_dir}/split                           # SHARED with config_ysagiv_xaba20k.yaml -- not repointed, see header
+  split_dir: ${run_dir}/split                           # SHARED with config_ysagiv_xaba100k_minply15_maxply75.yaml -- not repointed
   pack_history_dir: ${run_dir}/pack_history              # NEW -- mirrors mc_packed_dir
   gnnpack_history_dir: ${run_dir}/gnnpack_history        # NEW -- mirrors packed_dir
   materialize_history_dir: ${run_dir}/materialize_history # NEW -- mirrors materialized_dir
-  # Aliases so the SHARED slurm/helpers/setup_env.sh (used unmodified by every pipeline
-  # config, old and new) can resolve $MCP/$MAT without erroring: it unconditionally does
-  # `export MCP=$($RENDER --get globals.mc_packed_dir)` / `globals.materialized_dir` regardless
-  # of which config is active. Without these, sourcing setup_env.sh under this config aborts
-  # immediately (set -e) before any pipeline script's real body ever runs -- confirmed directly
-  # via `render_stage.py config_ysagiv_xaba20k_history.yaml --get globals.mc_packed_dir` failing
-  # with "Key 'mc_packed_dir' not found" prior to this fix. Purely additive; doesn't touch
-  # setup_env.sh (shared infra other configs also depend on) or rename anything above.
+  # setup_env.sh compatibility aliases -- see header note above.
   mc_packed_dir: ${pack_history_dir}
   materialized_dir: ${materialize_history_dir}
   config_dir: ${run_dir}/pack_configs_history
   log_dir: ${run_dir}/pack_logs_history
-  figures_dir: ${outputs_dir}/ysagiv/xaba20k_history      # separate from xaba20k's figures_dir -- never overwritten
+  figures_dir: ${outputs_dir}/ysagiv/xaba100k_minply15_maxply75_history  # separate from the old run's figures_dir -- never overwritten
 
 # analysis.evaluate imports analysis.utils.helpers, which unconditionally reads a
 # `human_analysis` section at MODULE IMPORT TIME (db_connection()'s default arg reads
@@ -76,23 +73,15 @@ human_analysis:
   selected_db_default: ${scratch_dir}/personal.db
 
 split:
-  source_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample   # our own seeded 20K symlink sample (read-only links INTO human_trees, never writes there)
-  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/xaba/include_list.txt  # written by ysagiv_xaba_filter.slurm
+  source_root: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/raw_sample   # our own seeded symlink sample (read-only links INTO human_trees, never writes there)
+  include_list: /scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv/xaba_minply15_maxply75/include_list.txt  # written by ysagiv_ply_window_filter.slurm (exclude_xaba INTERSECT ply-window)
   split_root: ${split_dir}
   validation_fraction: 0.2
   seed: 0
   clear: true
 
 # --- packhistory_GNNpretrain (rewrite of gnn_pack; separate stage/section from the old
-# `gnn_pack:`, NOT a repoint of it -- pack_history.py's own PackHistoryGNNPretrainConfig
-# (extra="forbid") reads from packhistory_trees' output, not raw trees, so it needs a
-# different field (`pack_history_dir`, not `split_root`) and its own section name
-# (`gnn_pack_history`, per that class's own docstring) so `--stage gnn_pack_history`
-# routes here while `--stage gnn_pack` (unused by this config, but still valid syntax)
-# stays reserved for the old cts.data.preprocess_gnn.pack module untouched. Invoked via
-# `python -m cts.data.preprocess_gnn.pack_history --config ... --stage gnn_pack_history`
-# (slurm/pipeline/pack_trees_history.slurm), not the old pack_trees.slurm, which still
-# correctly drives config_ysagiv_xaba20k.yaml's `gnn_pack:` unmodified. ---------------------
+# `gnn_pack:`, NOT a repoint of it) ---------------------------------------------------------
 gnn_pack_history:
   pack_history_dir: ${pack_history_dir}
   output_root: ${gnnpack_history_dir}
@@ -100,9 +89,6 @@ gnn_pack_history:
   shard_size: 2000
   seed: 0
   clear: true
-  # k-step-ahead lookahead window and number of (n, n+k) snapshot draws per tree. See
-  # history.md "Parameters: k and dataset" for the rationale behind both defaults -- not
-  # tuned, a v1 starting point.
   lookahead_k: 12
   snapshots_per_tree: 1
 
@@ -163,7 +149,7 @@ materialize:
   hidden_layers: 2
 
 train:
-  metrics_run_name: mchalt_ysagiv_xaba_history
+  metrics_run_name: mchalt_ysagiv_xaba100k_minply15_maxply75_history
   packed_train_data: ${pack_history_dir}/train_manifest.json
   packed_validation_data: ${pack_history_dir}/validation_manifest.json
   materialized_train_cache: ${materialize_history_dir}/train_cache.pt
@@ -215,10 +201,8 @@ eval:
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
   time_mode: linear
-  time_lambda: 0.0015  # same regime pointer as config_ysagiv_xaba20k.yaml -- see that file's
-                        # comment for the sweep this targets (k*=47, non-degenerate band). Not
-                        # re-derived for the history pipeline; carried over as the same starting
-                        # point until/unless the fix changes what regime is optimal.
+  time_lambda: 0.0015  # same regime pointer as the old (non-history) config for this dataset --
+                        # not re-derived for the history pipeline.
   maintenance_scale: 0.0
   maintenance_exponent: 1.0
   maint_lambda: 0.0015
