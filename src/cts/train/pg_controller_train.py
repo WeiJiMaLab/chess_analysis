@@ -348,8 +348,13 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         ax.plot(ep, [h["train_E_regret"] for h in history], "-", color=train_color, label="Train")
         ax.plot(ep, [h["val_greedy_regret"] for h in history], "-", color=val_color, label="Val")
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
-        ax.set_xlabel("Epoch"); ax.set_ylabel("Regret"); ax.legend(loc="upper right")
+        # Log scale: late-epoch improvement is real but reads as flat on a linear axis.
+        ax.set_yscale("log")
+        ax.set_ylim(bottom=max(1e-6, min(
+            min(h["train_E_regret"] for h in history if h["train_E_regret"] > 0),
+            min(h["val_greedy_regret"] for h in history if h["val_greedy_regret"] > 0),
+        ) * 0.8))
+        ax.set_xlabel("Epoch"); ax.set_ylabel("Regret (log scale)"); ax.legend(loc="upper right")
         fig.tight_layout()
         fig.savefig(f"{base}_training_curve.png", dpi=150)
         plt.close(fig)

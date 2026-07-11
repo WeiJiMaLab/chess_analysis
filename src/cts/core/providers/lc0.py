@@ -5,14 +5,9 @@ from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence
 
 from .common import (
-    POSITION_SPEC_SEPARATOR,
-    UCI_MOVE_PATTERN,
     analysis_has_no_legal_move,
-    append_move_to_position_spec,
     board_from_position_spec,
     chess,
-    position_spec_to_uci_command,
-    split_position_spec,
     terminal_value_from_board,
     terminal_value_from_position_spec,
 )
@@ -23,7 +18,7 @@ from .parsers import (
     parse_root_value_from_lines,
     terminal_value_features,
 )
-from .process import UciEngineConfig, UciEngineProcess
+from .process import UciEngineProcess
 from .base import TreeExpansionProvider
 from ..tree import ExpansionChild
 

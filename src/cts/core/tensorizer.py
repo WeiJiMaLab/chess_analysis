@@ -3,15 +3,12 @@ agree byte-for-byte with ``cts_pretrain._child_ptr_and_children_index``."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
 import torch
 
-from .schema import (
-    TREE_ENCODER_FEATURE_NAMES,
-    NodeFeatureSchema,
-)
+from .schema import NodeFeatureSchema
 from .tree import SearchTree
 
 

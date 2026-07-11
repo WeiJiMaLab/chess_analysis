@@ -18,7 +18,6 @@ import numpy as np
 import torch
 
 from cts._config import run_with_config_cli
-from cts.core.schema import tree_encoder_feature_schema
 from cts.data.preprocess_mc.oracle import return_for_stop_step
 from cts.train.controller_train import (
     ControllerTrainConfig,

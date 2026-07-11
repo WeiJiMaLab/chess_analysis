@@ -6,7 +6,6 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
-import pandas as pd
 
 from analysis.utils.helpers import (
     CONFIG, FONT_SIZE_LABEL, FONT_SIZE_TICKS, LEGEND_FONTSIZE, MAIN_COLOR, apply_poster_style,

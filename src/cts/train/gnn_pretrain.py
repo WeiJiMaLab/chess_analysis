@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import torch
@@ -15,17 +15,9 @@ from cts.core.kl_buckets import (
     size_bin,
     size_bin_labels,
 )
-from cts.core.schema import (
-    NodeFeatureSchema,
-    tree_encoder_feature_schema,
-)
-from cts.core.tensorizer import (
-    TensorizedTreeExample,
-    collate_tensorized_examples,
-    edge_wdl_target_tensor,
-    tensorize_forest,
-)
-from cts.data.preprocess_gnn.teacher_targets import PackedTensorizedShardDataset, PretrainExample
+from cts.core.schema import NodeFeatureSchema
+from cts.core.tensorizer import edge_wdl_target_tensor
+from cts.data.preprocess_gnn.teacher_targets import PretrainExample
 from cts.models.gnn import ChildWdlModel
 
 

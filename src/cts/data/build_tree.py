@@ -577,8 +577,15 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
             ax.plot(ep, [r["train_loss_gap"] for r in rows], "-", color=train_color, label="Train")
         ax.plot(ep, [r["val_loss_gap"] for r in rows], "-", color=val_color, label="Val")
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
-        ax.set_xlabel("Epoch"); ax.set_ylabel("Loss"); ax.legend(loc="upper right")
+        # Log scale: late-epoch improvement is real but reads as flat on a linear axis.
+        all_loss_gaps = [r["train_loss_gap"] for r in rows] + [r["val_loss_gap"] for r in rows]
+        if fine_train_history:
+            all_loss_gaps += [r["loss_gap"] for r in fine_train_history]
+        positive_gaps = [v for v in all_loss_gaps if v > 0]
+        if positive_gaps:
+            ax.set_yscale("log")
+            ax.set_ylim(bottom=max(1e-6, min(positive_gaps) * 0.8))
+        ax.set_xlabel("Epoch"); ax.set_ylabel("Loss (log scale)" if positive_gaps else "Loss"); ax.legend(loc="upper right")
         fig.tight_layout()
         fig.savefig(f"{base}_training_curve.png", dpi=150)
         plt.close(fig)

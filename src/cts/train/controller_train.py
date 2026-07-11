@@ -29,7 +29,6 @@ from cts.data.preprocess_mc.oracle import (
     predicted_stop_from_advantages,
     return_for_stop_step,
 )
-from cts.models.gnn import TreeEncoderOutput, TreeEncoder
 from cts.models.mc import (
     CONTROLLER_INPUT_NAMES,
     MetaController,

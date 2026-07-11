@@ -379,6 +379,14 @@ def _load_json(path: Path) -> dict:
         return json.load(f)
 
 
+def _padded_range_log(lo: float, hi: float, frac: float, min_log_pad: float = 0.05) -> tuple[float, float]:
+    """Like _padded_range but pads proportionally in log10 space -- linear padding on a log axis
+    puts nearly all the whitespace below small values, pushing every point up near the top."""
+    log_lo, log_hi = np.log10(lo), np.log10(hi)
+    log_pad = max((log_hi - log_lo) * frac, min_log_pad)
+    return float(10 ** (log_lo - log_pad)), float(10 ** (log_hi + log_pad))
+
+
 def _padded_range(lo: float, hi: float, frac: float, min_pad: float) -> tuple[float, float]:
     """(lo, hi) padded by ``frac`` of the actual span (floored at ``min_pad`` for near-zero spans).
 
@@ -419,7 +427,8 @@ def _deconflict_points(points: list[dict], x_scale: float, y_scale: float, frac:
     return out
 
 
-def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsize=3.5, frontier_label="Frontier"):
+def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsize=3.5, frontier_label="Frontier",
+                    log_y=False):
     """Draw the fixed-stop frontier line and every point (SingleHalt*/Stats/z_t/AlwaysStop/AlwaysContinue) —
     all the SAME marker/size, differing only by color, each with 95% CI error bars in x AND y."""
     ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label=frontier_label if label_line else None)
@@ -428,11 +437,20 @@ def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsi
                     yerr=[[p["y"] - p["lo"]], [p["hi"] - p["y"]]], fmt="o", ms=_PT_SIZE, color=p["color"],
                     ecolor=p["color"], elinewidth=1.5, capsize=capsize, mec="none", alpha=_PT_ALPHA,
                     zorder=p.get("zorder", 6), label=p["label"] if label_line else None)
-    ax.set_xlim(*xlim); ax.set_ylim(*ylim)
-    ax.set_xlabel("Stop Step"); ax.set_ylabel("Regret")
+    ax.set_xlim(*xlim)
+    # Log scale only when the caller confirms ylim's floor is strictly positive (not the full-range
+    # panel, which deliberately floors at/near 0 to show Always-Stop's high regret).
+    if log_y and ylim[0] > 0:
+        ax.set_yscale("log")
+        ax.set_ylim(*ylim)
+        ax.set_ylabel("Regret")
+    else:
+        ax.set_ylim(*ylim)
+        ax.set_ylabel("Regret")
+        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+    ax.set_xlabel("Stop Step")
     ax.grid(axis="both", color=_GRID, lw=1)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
-    ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
 
 
 def _draw_zoom_indicator(fig, ax_from, ax_to, xlim, ylim):
@@ -554,6 +572,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     axR.set_box_aspect(1)
     zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
                               frac=0.25, min_pad=1e-3)
+    zoom_ylim = (max(1e-6, zoom_ylim[0]), zoom_ylim[1])  # keep strictly positive for the log-scale panel below
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
                               frac=0.3, min_pad=1.0)
     zoom_xlim = (max(0, zoom_xlim[0]), zoom_xlim[1])
@@ -565,7 +584,8 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # unaffected (it shows no legend) since it still plots the untouched `all_points`.
     legend_points = sorted(all_points, key=lambda p: p["_rank"])
     _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0)
-    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5)
+    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5,
+                    log_y=True)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
     handles, labels = axR.get_legend_handles_labels()
     # 4 columns (not 3): with AG-Controller present this is 7 entries -- ncol=3 makes a 3rd row that

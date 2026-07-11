@@ -2,6 +2,29 @@
 ``pack_history.py``, plus a robustness/latent-bug check and a fresh, independent
 regression canary for the already-fixed step-index off-by-one.
 
+STATUS UPDATE (2026-07-11): tests 2 and 3 below (``test_never_visited_filter_
+uses_whole_trajectory_not_prefix`` / ``test_never_visited_filter_couples_sibling_
+predictions_via_attention``) originally characterized a real bug: ``build_snapshot_
+pair_example`` used to filter T_n's structural edge set (not just its loss target)
+using ``_never_visited``, which changed the segmented-softmax-attention-driven
+prediction for OTHER, legitimately-kept sibling edges under the same parent --
+a train/inference topology mismatch, since production inference never filters.
+That filter has since been REMOVED from ``build_snapshot_pair_example`` (see its
+current docstring in ``pack_history.py``); ``_never_visited`` itself has moved out of
+production code entirely (it had no remaining production caller) and now lives here,
+as a test-local helper just above ``test_never_visited_filter_uses_whole_trajectory_
+not_prefix``, purely to keep exercising its still-true standalone semantics. Both tests below
+remain true and are left as-is: neither asserts anything about ``build_snapshot_
+pair_example``'s behavior (test 2 only exercises ``_never_visited``/``_build_tree_n``
+directly; test 3 is a from-scratch synthetic architecture probe of
+``TreeAttMsgLayer`` itself, independent of ``pack_history.py`` entirely), so both
+continue to correctly describe (2) ``_never_visited``'s own semantics and (3) the
+segmented-softmax coupling mechanism the fix's docstring now cites as the reason the
+filter had to go. The regression guard for the actual fix -- confirming
+``build_snapshot_pair_example``'s edge set now always equals ``_build_tree_n``'s raw
+edge set, with real-data + cross-pipeline + mutation-tested coverage -- lives in
+``test_pack_history_fix_parity.py``, not here.
+
 ``test_no_future_leakage.py`` and ``test_canary_future_leakage.py`` (this directory)
 both focus on the *value/WDL* leak: does a node's per-step feature row ever reflect
 information from after the queried step. This file targets four DIFFERENT failure
@@ -83,7 +106,6 @@ from cts.data.preprocess_gnn.pack_history import (
     _build_tree_n,
     _delta_visits,
     _forward_filled_wdl_at_step,
-    _never_visited,
     build_snapshot_pair_example,
     deterministic_snapshot_steps,
     PackHistoryGNNPretrainConfig,
@@ -296,6 +318,25 @@ def _sibling_trajectory(late_visit_step: int) -> HistoryTrajectory:
     )
 
 
+def _never_visited(trajectory: HistoryTrajectory, node_id: int) -> bool:
+    """True iff ``node_id`` has zero update-log entries across the *entire* tree.
+
+    Test-local now (2026-07-11): this used to live in ``pack_history.py`` itself,
+    where ``build_snapshot_pair_example`` used it to filter T_n's structural edge
+    set -- removed from production once that filter was found to create a
+    train/inference topology mismatch (see ``pack_history.py``'s updated docstring
+    and ``test_pack_history_fix_parity.py``). The underlying fact this function
+    checks (a node created as some ancestor's child but never itself selected by
+    backprop, anywhere in the 96-step trajectory) is still real and still worth
+    demonstrating in isolation -- see the test below -- so the check itself moved
+    here rather than being deleted outright; production code no longer references
+    it at all.
+    """
+    lo = int(trajectory.node_update_ptr[node_id].item())
+    hi = int(trajectory.node_update_ptr[node_id + 1].item())
+    return hi <= lo
+
+
 def test_never_visited_filter_uses_whole_trajectory_not_prefix():
     """Direct demonstration that ``_never_visited`` is NOT a function of "state as of
     step n": build two leaves indistinguishable as of n=1 (both zero visits so far)
@@ -306,6 +347,14 @@ def test_never_visited_filter_uses_whole_trajectory_not_prefix():
     This is not, by itself, a claim that this is a leak (see this file's module
     docstring point 3/7 and the report this test was written for) -- it is the
     narrower, mechanical fact the leak-or-not judgment call rests on.
+
+    NOTE (2026-07-11): this test only exercises ``_never_visited`` and
+    ``_build_tree_n`` directly, never ``build_snapshot_pair_example`` -- so it
+    remains true and unchanged after ``build_snapshot_pair_example`` stopped using
+    ``_never_visited`` to filter its structural edge set (see this file's module
+    docstring status update, and ``pack_history.py``'s current docstrings). It
+    documents ``_never_visited``'s own semantics only, not any claim about what
+    ``build_snapshot_pair_example`` does with that information.
     """
     traj = _sibling_trajectory(late_visit_step=50)  # visited at a step far beyond any n this test queries
 
@@ -353,6 +402,16 @@ def test_never_visited_filter_couples_sibling_predictions_via_attention():
     softmax attention, so the never-visited filter is judged here as a genuine
     train-time structural artifact (see this file's module docstring point 3),
     not merely "the label set changes, nothing else does."
+
+    NOTE (2026-07-11): this coupling mechanism is exactly why the never-visited
+    filter was subsequently removed from ``build_snapshot_pair_example`` (see
+    ``pack_history.py``'s current docstring on that function, and this file's
+    module docstring status update) -- this test's synthetic, from-scratch
+    demonstration of the mechanism remains valid and is unaffected by that fix
+    (it never calls ``build_snapshot_pair_example`` at all). A real-data,
+    measured-magnitude version of the same coupling effect, post-fix, lives in
+    ``test_pack_history_fix_parity.py``'s
+    ``test_loss_neutrality_of_previously_filtered_edges``.
     """
     torch.manual_seed(0)
     schema = tree_encoder_feature_schema()

@@ -199,18 +199,6 @@ def _forward_filled_wdl_at_step(
     return out
 
 
-def _never_visited(trajectory: HistoryTrajectory, node_id: int) -> bool:
-    """True iff ``node_id`` has zero update-log entries across the *entire* tree.
-
-    Such nodes were created as some ancestor's child but never themselves selected by
-    backprop during the original search -- delta-visits is provably zero for them
-    regardless of ``n``/``lookahead_k``.
-    """
-    lo = int(trajectory.node_update_ptr[node_id].item())
-    hi = int(trajectory.node_update_ptr[node_id + 1].item())
-    return hi <= lo
-
-
 def _delta_visits(trajectory: HistoryTrajectory, node_id: int, n: int, n_plus_k: int) -> int:
     """Count update-log entries for ``node_id`` with ``step_index`` in ``(n, n_plus_k]``."""
     lo = int(trajectory.node_update_ptr[node_id].item())
@@ -318,59 +306,94 @@ def build_snapshot_pair_example(
     lookahead_k: int,
     schema: NodeFeatureSchema,
 ) -> Optional[TensorizedTreeExample]:
-    """Build one T_n -> T_{n+k} training example from every (filtered) edge of T_n.
+    """Build one T_n -> T_{n+k} training example from every edge of T_n, unfiltered.
 
-    Every edge present in T_n is a candidate training example from this one forward
-    pass (matching how today's Child-WDL pretraining already supervises every edge of
-    a whole tree from one pass -- not a new pattern), except edges whose child has
-    zero update-log entries anywhere in the tree (the never-visited-leaf filter --
-    Delta-visits is provably always zero for those, for any (n, k)).
+    Every edge present in T_n is both a candidate training example (matching how
+    today's Child-WDL pretraining already supervises every edge of a whole tree from
+    one pass -- not a new pattern) AND part of the graph topology fed into the
+    encoder's message passing. Those two roles cannot be pulled apart: T_n's
+    ``edge_parent``/``edge_child``/``edge_slot`` fields returned here are the literal
+    edge set ``TreeEncoder`` runs upward message passing over (via
+    ``collate_tensorized_examples`` -> ``TreeBatch``), and ``TreeAttMsgLayer.forward``
+    (``models/tree_mha.py``) computes each parent's per-child attention via a
+    SEGMENTED SOFTMAX over exactly the children present in those arrays --
+    ``parent_sums.scatter_add_`` then ``exp_logits / parent_sums[edge_parent]``.
+    Dropping a child changes the softmax denominator, and therefore the attention
+    weight and message, for every *other* (kept) child of that same parent.
+
+    An earlier version of this function additionally dropped edges whose child had
+    zero update-log entries anywhere in the whole trajectory (the "never-visited-leaf
+    filter", formerly implemented by a ``_never_visited`` helper in this module --
+    since removed; a copy of the same check now lives only as a test helper in
+    ``test_canary_pack_history_structural.py``, no longer part of production code) as
+    a compute-savings optimization -- Delta-visits
+    is provably zero for such a child regardless of (n, k), so it was assumed to be a
+    pure candidate-count reduction with no effect on the surviving edges' targets.
+    That assumption was wrong: because of the segmented-softmax coupling above, the
+    filter *did* change the training-time prediction for every kept sibling edge under
+    the same parent, in a way that never matches production inference. Inference
+    (``preprocess_mc/materialize.py``, ``train/controller_train.py``) always feeds the
+    encoder the FULL real edge set -- there is no such filter on that path -- so
+    filtering here created a train/inference topology mismatch: with ~88.8-97.7% of a
+    typical tree's nodes never touched by backprop (see history.md), the vast majority
+    of each parent's children were being removed only at training time. This function
+    now passes T_n's full, real edge set straight through with no filtering, so the
+    training-time topology is identical to what the encoder sees at inference.
 
     Target for edge (u, v) = v's forward-filled WDL at step ``n + lookahead_k``.
     Weight = Delta-visits, the count of update-log entries for v with step_index in
-    ``(n, n + lookahead_k]``. Delta-visits=0 edges are kept (not filtered) -- this is
-    a per-example *weight*, not a filter; note the never-visited-leaf filter above is
-    a strictly stronger, k-independent condition than "this particular (n, k)
-    happened to see zero visits."
+    ``(n, n + lookahead_k]``. Delta-visits=0 edges (including the now-unfiltered
+    never-visited ones) are always kept, never filtered -- this is a per-edge
+    *weight*, not a filter: ``_forward_filled_wdl_at_step``'s zero-WDL fallback plus
+    the ``clamp_min(1e-8)`` normalization below give a never-visited edge a
+    ``[0, 0, 0]`` -> harmless normalized target, and ``_delta_visits`` returns 0 for it
+    over any window by construction (zero update-log rows), exactly like any other
+    kept edge that happens to have zero Delta-visits for a given (n, k) already did
+    before this fix. ``gnn_pretrain.py``'s Delta-visits weighting branch already
+    treats weight=0 as "contributes ~nothing to the loss", not "must be excluded" --
+    see the ``elif edge_visit_weights is not None`` branch there -- so nothing
+    downstream needs to change to make this safe.
 
-    Returns None if T_n has no steps, no edges, or every edge gets filtered out.
+    COMPUTE-COST TRADEOFF: removing the filter undoes the ~10-30x candidate-example-
+    count reduction it bought (per Task 4's original design note) -- packed shards for
+    this stage will now be substantially larger and slower to build/store, since most
+    of a tree's nodes are leaves that were never visited by backprop. That is an
+    accepted correctness-over-compute tradeoff, not an oversight; a sparse on-disk
+    representation for zero-weight edges (to claw back the storage cost without
+    reintroducing the topology bug) is a plausible follow-up but is explicitly NOT
+    implemented here -- deferred.
+
+    Returns None if T_n has no steps or no edges.
     """
     n_plus_k = n + lookahead_k
     snapshot = _build_tree_n(trajectory, n)
     if snapshot is None or snapshot.edge_child.numel() == 0:
         return None
 
-    keep_mask = torch.tensor(
-        [not _never_visited(trajectory, int(child_id)) for child_id in snapshot.edge_child.tolist()],
-        dtype=torch.bool,
-    )
-    if not bool(keep_mask.any()):
-        return None
-
-    kept_parent = snapshot.edge_parent[keep_mask]
-    kept_child = snapshot.edge_child[keep_mask]
-    kept_slot = snapshot.edge_slot[keep_mask]
+    edge_parent = snapshot.edge_parent
+    edge_child = snapshot.edge_child
+    edge_slot = snapshot.edge_slot
 
     # BUGFIX (same root cause as _build_tree_n's local_step fix above): `step_index` is
     # 0-indexed, so "as of T_{n+k}" is step_index `n_plus_k - 1`, not `n_plus_k`. And for
     # Delta-visits to describe the same (T_n, T_{n+k}) pair the value target now does,
     # its window must shift by the same -1 on both ends: "new visits since T_n" means
     # step_index in (n - 1, n_plus_k - 1], not (n, n_plus_k].
-    target_wdl = _forward_filled_wdl_at_step(trajectory, kept_child, n_plus_k - 1)
+    target_wdl = _forward_filled_wdl_at_step(trajectory, edge_child, n_plus_k - 1)
     target_mass = target_wdl.sum(dim=-1, keepdim=True).clamp_min(1e-8)
     target_wdl = target_wdl / target_mass
 
     weights = torch.tensor(
-        [_delta_visits(trajectory, int(child_id), n - 1, n_plus_k - 1) for child_id in kept_child.tolist()],
+        [_delta_visits(trajectory, int(child_id), n - 1, n_plus_k - 1) for child_id in edge_child.tolist()],
         dtype=torch.float32,
     )
 
     return TensorizedTreeExample(
         node_features=snapshot.node_features,
         parent_index=snapshot.parent_index,
-        edge_parent=kept_parent,
-        edge_child=kept_child,
-        edge_slot=kept_slot,
+        edge_parent=edge_parent,
+        edge_child=edge_child,
+        edge_slot=edge_slot,
         depth=snapshot.depth,
         # Unused placeholder: ChildWdlModel's training loop (applied to T_n here,
         # unmodified -- no new head) reads only edge-level targets/weights
@@ -467,7 +490,11 @@ def pack_history_split_to_shards(
     total_examples = 0
     trees_seen = 0
     trees_skipped_too_short = 0
-    trees_skipped_all_edges_filtered = 0
+    # Renamed from `trees_skipped_all_edges_filtered`: since the never-visited-leaf
+    # filter was removed from build_snapshot_pair_example (see its docstring), the
+    # only remaining reason it returns None is a genuinely edgeless T_n (no steps or
+    # zero edges) -- "all edges filtered" no longer describes any real code path.
+    trees_skipped_no_edges = 0
 
     def flush() -> None:
         nonlocal shard_index, total_examples
@@ -492,7 +519,7 @@ def pack_history_split_to_shards(
             for n in sampled_ns:
                 example = build_snapshot_pair_example(trajectory, n, config.lookahead_k, schema)
                 if example is None:
-                    trees_skipped_all_edges_filtered += 1
+                    trees_skipped_no_edges += 1
                     continue
                 buffered.append(example)
                 if len(buffered) >= config.shard_size:
@@ -511,7 +538,7 @@ def pack_history_split_to_shards(
         "total_examples": total_examples,
         "trees_seen": trees_seen,
         "trees_skipped_too_short": trees_skipped_too_short,
-        "trees_skipped_all_edges_filtered": trees_skipped_all_edges_filtered,
+        "trees_skipped_no_edges": trees_skipped_no_edges,
     }
     packed_manifest_path = output_root / f"{split_name}_manifest.json"
     with packed_manifest_path.open("w", encoding="utf-8") as handle:

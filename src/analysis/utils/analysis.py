@@ -15,7 +15,6 @@ def _seconds_from_log(axis) -> None:
 from analysis.utils.helpers import (
     apply_poster_style,
     FONT_SIZE_LABEL,
-    FONT_SIZE_TICKS,
     LEGEND_FONTSIZE,
     MAIN_COLOR,
     PHASE_COLORS,

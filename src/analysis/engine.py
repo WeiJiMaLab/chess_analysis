@@ -19,7 +19,6 @@ from analysis.utils.helpers import (
 )
 from analysis.utils.plots import (
     highlight_corr_row,
-    save_figure,
     _annotate_n,
     _draw_feature_histogram,
 )

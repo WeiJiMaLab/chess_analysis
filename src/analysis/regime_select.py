@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 
 from analysis.evaluate import (_load_split_episodes, _oracle_config, _return_curves, fit_singlehalt_stop,
-                               _rcparams, _MUTED)
+                               _rcparams)
 from analysis.utils.plots import save_pdf_png
 
 # Grids recalibrated 2026-07-08 from an initial coarse probe: the naive order-of-magnitude grid
