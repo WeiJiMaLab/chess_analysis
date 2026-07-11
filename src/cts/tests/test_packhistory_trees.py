@@ -576,7 +576,7 @@ def test_diff_logic_synthetic_fixture():
     not os.path.isfile(os.path.join(_OLD_MC_PACKED_DIR, "train_manifest.json")),
     reason=f"old mc_packed data not reachable at {_OLD_MC_PACKED_DIR!r}",
 )
-def test_old_mc_packed_shard_is_parseable_by_diff_helpers():
+def test_old_shard_parseable_by_diff_helpers():
     """Partial real-data check available right now, independent of Task 1/6:
     the structural/oracle-value extraction helpers this diff test relies on
     must actually parse a REAL old ``mc_packed`` shard without error (not

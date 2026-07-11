@@ -227,7 +227,7 @@ def _find_node_with_step_gap(
 # --------------------------------------------------------------------------- #
 
 
-def test_canary_baseline_leak_controller_episode_dataset(real_fixture, payload):
+def test_canary1_dataset_baseline_leak(real_fixture, payload):
     """Poison the ENTIRE final_value/final_wdl baseline array (node_features) with
     an impossible sentinel and confirm ControllerEpisodeDataset.__getitem__'s output
     is bit-for-bit IDENTICAL to the unpoisoned run, for every step of every episode.
@@ -278,7 +278,7 @@ def test_canary_baseline_leak_controller_episode_dataset(real_fixture, payload):
 # --------------------------------------------------------------------------- #
 
 
-def test_canary_baseline_leak_pack_history(payload, trajectories):
+def test_canary2_pack_history_baseline_leak(payload, trajectories):
     """Same poison as canary 1 (the whole node_features baseline array), same
     bit-identity proof, for the SECOND, independently-fixed consumer:
     pack_history.py's _build_tree_n / _forward_filled_wdl_at_step (the GNN
@@ -321,7 +321,7 @@ def test_canary_baseline_leak_pack_history(payload, trajectories):
 # --------------------------------------------------------------------------- #
 
 
-def test_canary_target_input_separation(trajectories):
+def test_canary3_target_input_separation(trajectories):
     """Poison ONLY the update-log entry that falls in the "future" window (n, n+k]
     used as build_snapshot_pair_example's WDL TARGET, and confirm the sentinel
     appears ONLY in edge_wdl_targets, never in T_n's own INPUT node_features for the
@@ -390,7 +390,7 @@ def test_canary_target_input_separation(trajectories):
 # --------------------------------------------------------------------------- #
 
 
-def test_canary_update_log_respects_step_order(trajectories):
+def test_canary4_step_order_respected(trajectories):
     """Poison one LATER update-log entry for a real node and confirm forward-filled
     queries at every step strictly before it never see the sentinel (proving the
     lookup keys off step_index via a genuine ordered search, not e.g. "the last
@@ -434,7 +434,7 @@ def test_canary_update_log_respects_step_order(trajectories):
 # --------------------------------------------------------------------------- #
 
 
-def test_canary_perturbation_propagates_correctly(real_fixture, payload, trajectories):
+def test_canary5_perturbation_propagates(real_fixture, payload, trajectories):
     """The mirror-image of canaries 1-4: those all check "does the wrong (future or
     poisoned) value stay OUT". This checks "does the RIGHT (current, real) value
     actually get IN" -- a pipeline that always emitted 0 (or any other constant)
@@ -558,7 +558,7 @@ def _load_real_encoder():
     return encoder
 
 
-def test_canary_baseline_leak_through_encoder_forward_pass(real_fixture, payload):
+def test_canary6_encoder_baseline_leak(real_fixture, payload):
     """Extends canary 1 through materialize.py's actual encode path
     (MetaController.encode_with_state_features / TreeEncoder.forward): poison the
     whole final_value/final_wdl baseline, run a real trained encoder over both the
@@ -595,7 +595,7 @@ def test_canary_baseline_leak_through_encoder_forward_pass(real_fixture, payload
     assert torch.equal(out_clean.node_states, out_poisoned.node_states)
 
 
-def test_canary_perturbation_propagates_through_encoder(real_fixture, payload, trajectories):
+def test_canary7_encoder_perturbation_propagates(real_fixture, payload, trajectories):
     """Extends canary 5 through the same real encoder forward pass: a genuine,
     valid perturbation to one node's WDL must make z_root for the perturbed episode
     differ measurably from the unperturbed one -- confirming per-step value changes

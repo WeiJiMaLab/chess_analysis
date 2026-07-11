@@ -105,7 +105,7 @@ class TestBoard(unittest.TestCase):
         self.assertEqual(n_inc, 3)
         self.assertEqual(n_exc, 3)
 
-    def test_ten_non_pawn_across_two_ranks(self) -> None:
+    def test_ten_non_pawn_pieces(self) -> None:
         placement = "nqrbk3/8/8/8/8/8/8/NQRBK3"
         n_inc, n_exc = _counts_from_placement(self.con, placement)
         self.assertEqual(n_inc, 10)
@@ -148,7 +148,7 @@ class TestBoard(unittest.TestCase):
         self.assertEqual(s, 1)
         self.assertEqual(o, 0)
 
-    def test_black_king_only_but_white_flag_swaps_roles(self) -> None:
+    def test_flag_swaps_self_and_opponent(self) -> None:
         pl = "8/8/8/8/8/8/8/k7"
         s, o = _side_exc_counts(self.con, pl, True)
         self.assertEqual(s, 0)
@@ -193,7 +193,7 @@ _WHERE = """
 """
 
 
-def test_filtered_subquery_then_sample_returns_exact_count(mock_db_conn):
+def test_filter_then_sample_exact_count(mock_db_conn):
     n = 200
     mock_db_conn.execute("SET enable_progress_bar = false")
     got = len(mock_db_conn.execute(f"""
@@ -208,7 +208,7 @@ def test_filtered_subquery_then_sample_returns_exact_count(mock_db_conn):
     assert got == n
 
 
-def test_sample_before_where_returns_fewer_rows(mock_db_conn):
+def test_sample_before_filter_fewer_rows(mock_db_conn):
     n = 200
     mock_db_conn.execute("SET enable_progress_bar = false")
     got = len(mock_db_conn.execute(f"""
@@ -248,7 +248,7 @@ class TestAnalyzerCorrectness(unittest.TestCase):
         for row in rows:
             self.con.execute("INSERT INTO test_moves VALUES (?, ?, ?, ?)", row)
 
-    def test_row_conservation_with_zero_inflation_and_edge_mass(self) -> None:
+    def test_row_conservation_zero_inflated_edge_mass(self) -> None:
         """Verify that zero-inflation, interior binning, and edge-masses conserve the total row count."""
         # 100 rows total: 40 are exactly 0.0, 40 are normal (1.0 to 4.0), 20 are edge mass (>= 10.0)
         data = []
@@ -426,7 +426,7 @@ class TestAnalyzerCorrectness(unittest.TestCase):
         self.assertEqual(len(analyzer.quantile_df), 1)
         self.assertEqual(analyzer.quantile_df.iloc[0]["n"], 50)
 
-    def test_single_row_dataset_stddev_and_plotting(self) -> None:
+    def test_single_row_stddev_plotting(self) -> None:
         """Verify that a dataset with exactly 1 row (where stddev is NULL/NaN) does not crash plotting."""
         data = [(1, 20, 5.0, 10.0)]
         self._populate_data(data)

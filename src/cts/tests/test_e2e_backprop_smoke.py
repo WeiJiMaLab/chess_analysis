@@ -99,7 +99,7 @@ def _real_regret_loss(episodes, advantages: torch.Tensor) -> torch.Tensor:
 
 
 @pytest.mark.skipif(_requires_real_manifest() != "", reason=_requires_real_manifest())
-def test_unfrozen_metacontroller_backprop_reaches_encoder():
+def test_backprop_reaches_encoder():
     """The core Z0/Z1 smoke test: unfrozen encoder + real batch + real loss -> real grad."""
     torch.manual_seed(0)
     # 4 episodes (384 steps) keeps this test in the tens-of-seconds range on a
@@ -156,11 +156,11 @@ def test_unfrozen_metacontroller_backprop_reaches_encoder():
 
 
 @pytest.mark.skipif(_requires_real_manifest() != "", reason=_requires_real_manifest())
-def test_e2e_optimizer_steps_actually_decrease_loss():
+def test_optimizer_steps_decrease_loss():
     """Stronger correctness check than the grad-flow smoke test above: a real
     Adam optimizer, stepped a handful of times on a tiny REAL batch, must
     actually DECREASE the expected-regret loss -- not merely produce nonzero
-    gradients (which ``test_unfrozen_metacontroller_backprop_reaches_encoder``
+    gradients (which ``test_backprop_reaches_encoder``
     already covers). This is the cheap pre-flight check plan.md's Z2 section
     asks for before trusting a long (hours) e2e SLURM training run: if a few
     manual optimizer steps on real data don't move the loss down at all, the

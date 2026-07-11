@@ -6,7 +6,7 @@ import csv
 from cts.train.e2e_controller_train import _write_within_epoch_trace
 
 
-def test_write_within_epoch_trace_writes_csv_with_expected_rows(tmp_path):
+def test_trace_writes_expected_csv_rows(tmp_path):
     trace = [
         {"epoch": 1, "phase": "train", "batch_index": 1, "loss": 0.5},
         {"epoch": 1, "phase": "train", "batch_index": 2, "loss": 0.4},
@@ -22,7 +22,7 @@ def test_write_within_epoch_trace_writes_csv_with_expected_rows(tmp_path):
     assert float(rows[1]["loss"]) == 0.4
 
 
-def test_write_within_epoch_trace_also_writes_plot(tmp_path):
+def test_trace_also_writes_plot(tmp_path):
     trace = [{"epoch": 1, "phase": "train", "batch_index": i, "loss": 1.0 / i} for i in range(1, 6)]
     trace += [{"epoch": 1, "phase": "validation", "batch_index": 1, "loss": 0.2}]
     out_path = tmp_path / "e2e_step2"
@@ -31,7 +31,7 @@ def test_write_within_epoch_trace_also_writes_plot(tmp_path):
     assert (tmp_path / "pdf" / "e2e_step2_within_epoch_trace.pdf").is_file()
 
 
-def test_write_within_epoch_trace_empty_is_a_clean_noop(tmp_path):
+def test_trace_empty_is_noop(tmp_path):
     out_path = tmp_path / "e2e_step_empty"
     result = _write_within_epoch_trace([], out_path)
     assert result == ""

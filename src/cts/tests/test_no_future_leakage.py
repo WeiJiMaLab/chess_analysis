@@ -27,7 +27,7 @@ def _require_real_pack_history():
         pytest.skip(f"real pack_history/ output not found at {_PACK_HISTORY_ROOT} -- run packhistory_trees first")
 
 
-def test_controller_episode_dataset_no_leak_before_first_visit():
+def test_no_leak_before_first_visit():
     """ControllerEpisodeDataset.__getitem__ (controller_train.py): a node's fed
     value must be exactly 0.0 for every step before its own first update-log
     entry, and must match the real forward-filled value from that step onward --
@@ -68,7 +68,7 @@ def test_controller_episode_dataset_no_leak_before_first_visit():
     )
 
 
-def test_controller_episode_dataset_wdl_var_tracks_current_wdl():
+def test_wdl_var_tracks_current_step():
     """Second, independently-found leak (2026-07-10, same day as the first): wdl_var
     (column 4) is a pure function of the wdl triple (value_features_from_wdl:
     variance = (p_win+p_loss) - value**2) and must be recomputed from the CURRENT
@@ -101,7 +101,7 @@ def test_controller_episode_dataset_wdl_var_tracks_current_wdl():
     assert checked_any, "fixture node never got a real update in this episode -- pick a different (episode, node)"
 
 
-def test_every_unvisited_leaf_is_all_zero_across_episodes():
+def test_unvisited_leaves_all_zero():
     """Strongest, most general form of the check: at EVERY step, for EVERY node
     that is still a leaf (has no children yet in the tree's structure), the fed
     feature row must be all-zero -- not just the one hand-picked (episode 8, node
@@ -143,7 +143,7 @@ def test_every_unvisited_leaf_is_all_zero_across_episodes():
     )
 
 
-def test_root_is_always_zero_even_with_many_children():
+def test_root_always_zero():
     """The one structural exception to "leaf implies zero, non-leaf implies real
     value": the root has no incoming edge at all (nothing backprops INTO the
     root itself, only into its children), so its row must stay all-zero at
@@ -171,7 +171,7 @@ def test_root_is_always_zero_even_with_many_children():
         )
 
 
-def test_pack_history_build_tree_n_no_leak_before_first_visit():
+def test_pack_history_no_leak_before_first_visit():
     """pack_history.py's _build_tree_n / _forward_filled_wdl_at_step (the GNN
     pretraining input builder): same invariant, independently re-checked against
     the second, separate consumer that had the same bug."""

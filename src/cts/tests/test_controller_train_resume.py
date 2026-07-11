@@ -22,7 +22,7 @@ def _dummy_encoder_ckpt(tmp_path: Path, schema) -> str:
     return str(path)
 
 
-def test_resume_checkpoint_overwrites_fresh_head_weights(tmp_path):
+def test_resume_overwrites_fresh_weights(tmp_path):
     schema = _feature_schema()
     enc_ckpt = _dummy_encoder_ckpt(tmp_path, schema)
 
@@ -53,7 +53,7 @@ def test_resume_checkpoint_overwrites_fresh_head_weights(tmp_path):
         assert torch.allclose(p_a, p_b), f"resumed param {name_b} does not match the saved source"
 
 
-def test_resume_checkpoint_respects_freeze_flag_after_loading(tmp_path):
+def test_resume_respects_freeze_flag(tmp_path):
     """resume_checkpoint loads BEFORE the freeze/unfreeze branch, so a frozen resume still ends
     up with requires_grad=False on the encoder (the load itself must not silently unfreeze it)."""
     schema = _feature_schema()

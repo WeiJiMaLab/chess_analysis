@@ -203,7 +203,7 @@ def fast_trained_model() -> ChildWdlModel:
     return model
 
 
-def test_predictions_differ_meaningfully_between_siblings_with_different_subtrees(
+def test_joint_accuracy_above_chance(
     fast_trained_model,
 ):
     """Property (a): ChildWdlModel's concat(parent_states, slot_states) can be
@@ -234,7 +234,7 @@ def test_predictions_differ_meaningfully_between_siblings_with_different_subtree
     "T_n specifically. See history.md Task 3 Progress Log.",
     strict=True,
 )
-def test_perturbation_localizes_to_the_perturbed_child(fast_trained_model):
+def test_perturbation_localizes_to_child(fast_trained_model):
     """Property (b): the decisive check. Perturbing ONLY child_a's subtree
     (holding the parent's own features and child_b's entire subtree exactly
     fixed) should move child_a's prediction specifically, without equally
@@ -260,12 +260,12 @@ def test_perturbation_localizes_to_the_perturbed_child(fast_trained_model):
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    reason="Same known, accepted limitation as test_perturbation_localizes_to_the_"
-    "perturbed_child, re-confirmed at 5x training budget. See that test's xfail "
+    reason="Same known, accepted limitation as test_perturbation_localizes_to_child, "
+    "re-confirmed at 5x training budget. See that test's xfail "
     "reason and history.md Task 3 Progress Log.",
     strict=True,
 )
-def test_perturbation_localization_with_extended_training():
+def test_perturbation_localizes_to_child_slow():
     """Confirms the fast test's localization result is not merely an
     artifact of a short training budget -- trains ~5x longer (matching the
     2000-step scratch probe run during development, which reproduced the
