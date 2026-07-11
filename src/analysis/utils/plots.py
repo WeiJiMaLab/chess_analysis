@@ -12,47 +12,6 @@ from analysis.utils.helpers import (
 )
 
 
-def padded_range_log(lo: float, hi: float, frac: float, min_log_pad: float = 0.05) -> tuple[float, float]:
-    """Padded (lo, hi) proportional in log10 space -- linear padding on a log axis puts nearly all
-    the whitespace below small values, pushing every point up near the top."""
-    log_lo, log_hi = np.log10(lo), np.log10(hi)
-    log_pad = max((log_hi - log_lo) * frac, min_log_pad)
-    return float(10 ** (log_lo - log_pad)), float(10 ** (log_hi + log_pad))
-
-
-def apply_shared_exponent_log_ticks(ax, tick_vals, *, color: str = "black") -> None:
-    """Label each y tick with just its mantissa and write the one shared "x10^k" once, flush with
-    the top of the axis, instead of repeating the exponent on every tick -- for values almost
-    always <1 and within about a decade of each other (e.g. regret, loss)."""
-    shared_exp = int(np.floor(np.log10(np.median(tick_vals))))
-    ax.yaxis.set_major_locator(mticker.FixedLocator(tick_vals))
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v / 10 ** shared_exp:.1f}"))
-    # Unlabeled sub-decade ticks (2,3,...,9) so the log spacing between labeled ticks is still
-    # visible -- NullFormatter keeps them from re-adding their own "2x10^-1"-style exponent text.
-    ax.yaxis.set_minor_locator(mticker.LogLocator(subs=np.arange(2, 10) * 0.1, numticks=12))
-    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
-    ax.tick_params(axis="y", which="minor", length=3, left=True)  # rcParams default is ytick.minor.visible=False
-    ax.grid(which="minor", axis="y", alpha=0.15)
-    ax.text(-0.02, 1.0, f"$\\times10^{{{shared_exp}}}$", transform=ax.transAxes, ha="right", va="bottom",
-           fontsize=10.5, color=color)
-
-
-def setup_log_y_axis(ax, values, *, frac: float = 0.1, n_ticks: int = 4, ylabel: str | None = None) -> bool:
-    """Set a log-scale y-axis sized to `values` (padded range + shared-exponent ticks) -- the common
-    sequence every log-scale training/eval curve in this repo wants. Returns False (axis left
-    untouched, caller should fall back to linear) if `values` has no positive entries."""
-    positive = [v for v in values if v > 0]
-    if not positive:
-        return False
-    lo, hi = padded_range_log(min(positive), max(positive), frac=frac)
-    ax.set_yscale("log")
-    ax.set_ylim(lo, hi)
-    apply_shared_exponent_log_ticks(ax, np.geomspace(lo, hi, n_ticks + 2)[1:-1])
-    if ylabel:
-        ax.set_ylabel(ylabel)
-    return True
-
-
 def _wrap_long_label(label: str, threshold: int = 29) -> str:
     """Break a long axis label onto two lines at its first parenthetical.
     At FONT_SIZE_LABEL (52pt) a single-line label past ~29 chars is wider than a
@@ -372,12 +331,16 @@ def save_pdf_png(fig, base_dir: str, base: str, *, dpi: int = 300, **savefig_kwa
     return pdf
 
 
-def save_figure(fig, category: str, filename: str) -> str:
+def save_figure(fig, category: str, filename: str, *, pad_inches: float = 0.3) -> str:
     """Save a figure under figures/<category>/{pdf,png}/<name> — PDF and PNG in
-    separate type subfolders. Creates the subdirectories if needed."""
+    separate type subfolders. Creates the subdirectories if needed.
+
+    ``pad_inches`` defaults to 0.3 (the long-standing value every caller used to get
+    implicitly); pass a larger value for a figure whose ``bbox_inches="tight"`` crop
+    is still clipping a tall/rotated label at the default padding."""
     if category not in ("board", "engine"):
         raise ValueError(f"Invalid figure category: {category}. Must be 'board' or 'engine'.")
     base, _ = os.path.splitext(filename)
     base_dir = os.path.join(CONFIG["figures_dir"], category)
-    return save_pdf_png(fig, base_dir, base, dpi=300, pad_inches=0.3)
+    return save_pdf_png(fig, base_dir, base, dpi=300, pad_inches=pad_inches)
 

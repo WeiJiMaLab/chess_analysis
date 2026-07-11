@@ -35,11 +35,19 @@ from cts.data.preprocess_mc.pack import build_compact_trajectory
 # ---------------------------------------------------------------------------
 _HUMAN_TREES_DIR = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees"
 _ORACLE96_DIR = "/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/generated_trees_oracle96_trace_filtered"
-_XABA20K_RUN_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k"
-_OLD_MC_PACKED_DIR = os.path.join(_XABA20K_RUN_DIR, "mc_packed")
+# Repointed from ysagiv_xaba20k (2026-07-11): xaba20k's pack_history/ was
+# purged in an earlier cleanup and is not being regenerated. xaba100k
+# (minply15_maxply75) has both mc_packed/ (old baseline) AND pack_history/
+# (new) on disk, is a fresher run than xaba20k's ever was, and postdates
+# every correctness fix landed so far -- so it's a strictly better fixture
+# for this diff test. The diff logic below joins purely by source_path
+# across whatever shards exist, with no hardcoded episode/node indices, so
+# this is a pure path repoint.
+_HISTORY_RUN_DIR = "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba100k_minply15_maxply75"
+_OLD_MC_PACKED_DIR = os.path.join(_HISTORY_RUN_DIR, "mc_packed")
 # Naming convention fixed by history.md's "Directory layout" section:
 # ${run_dir}/pack_history (new dir mirroring mc_packed 1:1).
-_NEW_PACK_HISTORY_DIR = os.path.join(_XABA20K_RUN_DIR, "pack_history")
+_NEW_PACK_HISTORY_DIR = os.path.join(_HISTORY_RUN_DIR, "pack_history")
 
 _SCHEMA = tree_encoder_feature_schema()
 _VALUE_COL = _SCHEMA.index("value")

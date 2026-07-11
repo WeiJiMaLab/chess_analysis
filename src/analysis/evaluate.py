@@ -24,7 +24,7 @@ from cts.models.readout import build_advantage_head, stop_step_from_advantages
 from cts.stats import bootstrap_ci
 from cts.train.controller_train import _load_materialized_cache_unchecked
 from cts.train.pg_controller_train import fit_readout_pg
-from analysis.utils.plots import apply_shared_exponent_log_ticks, padded_range_log, save_pdf_png
+from analysis.utils.plots import save_pdf_png
 from analysis.utils.helpers import MAIN_COLOR
 
 
@@ -420,8 +420,7 @@ def _deconflict_points(points: list[dict], x_scale: float, y_scale: float, frac:
     return out
 
 
-def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsize=3.5, frontier_label="Frontier",
-                    log_y=False):
+def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsize=3.5, frontier_label="Frontier"):
     """Draw the fixed-stop frontier line and every point (SingleHalt*/Stats/z_t/AlwaysStop/AlwaysContinue) —
     all the SAME marker/size, differing only by color, each with 95% CI error bars in x AND y."""
     ax.plot(fr_x, fr, color=_C["front"], lw=1.1, label=frontier_label if label_line else None)
@@ -431,19 +430,9 @@ def _frontier_panel(ax, fr_x, fr, points, *, xlim, ylim, label_line=False, capsi
                     ecolor=p["color"], elinewidth=1.5, capsize=capsize, mec="none", alpha=_PT_ALPHA,
                     zorder=p.get("zorder", 6), label=p["label"] if label_line else None)
     ax.set_xlim(*xlim)
-    # Log scale only when the caller confirms ylim's floor is strictly positive (not the full-range
-    # panel, which deliberately floors at/near 0 to show Always-Stop's high regret).
-    if log_y and ylim[0] > 0:
-        ax.set_yscale("log")
-        ax.set_ylim(*ylim)
-        # LogLocator's default formatter suppresses non-decade labels, so a <1-decade range can end
-        # up with only one labeled tick -- force 4 explicit, evenly-log-spaced labeled positions.
-        apply_shared_exponent_log_ticks(ax, np.geomspace(ylim[0], ylim[1], 6)[1:-1])
-        ax.set_ylabel("Regret")
-    else:
-        ax.set_ylim(*ylim)
-        ax.set_ylabel("Regret")
-        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+    ax.set_ylim(*ylim)
+    ax.set_ylabel("Regret")
+    ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.set_xlabel("Stop Step")
     ax.grid(axis="both", color=_GRID, lw=1)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
@@ -566,18 +555,21 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     axL = fig.add_subplot(gs[1, 0], sharex=axH)
     axR = fig.add_subplot(gs[:, 1])
     axR.set_box_aspect(1)
-    zoom_ylim = padded_range_log(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers), frac=0.25)
+    zoom_ylim = _padded_range(min(p["lo"] for p in controllers), max(p["hi"] for p in controllers),
+                              frac=0.25, min_pad=0.01)
+    zoom_ylim = (max(0, zoom_ylim[0]), zoom_ylim[1])
     zoom_xlim = _padded_range(min(p["x"] for p in controllers), max(p["x"] for p in controllers),
                               frac=0.3, min_pad=1.0)
     zoom_xlim = (max(0, zoom_xlim[0]), zoom_xlim[1])
-    full_ylim = padded_range_log(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points), frac=0.05)
+    full_ylim = _padded_range(min(p["lo"] for p in all_points), max(p["hi"] for p in all_points),
+                              frac=0.05, min_pad=0.01)
+    full_ylim = (max(0, full_ylim[0]), full_ylim[1])
     # Order for the LEGEND only (axR is the one that actually collects labels) — Frontier, Meta-
     # Control (Ours), Tree Stats, Fixed Stop, Always Stop, Always Continue; axL's draw order is
     # unaffected (it shows no legend) since it still plots the untouched `all_points`.
     legend_points = sorted(all_points, key=lambda p: p["_rank"])
-    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0, log_y=True)
-    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5,
-                    log_y=True)
+    _frontier_panel(axL, fr_x, fr, all_points, xlim=(-1, fr_x[-1] + 1), ylim=full_ylim, capsize=0)
+    _frontier_panel(axR, fr_x, fr, legend_points, ylim=zoom_ylim, xlim=zoom_xlim, label_line=True, capsize=1.5)
     _draw_zoom_indicator(fig, axL, axR, zoom_xlim, zoom_ylim)
     handles, labels = axR.get_legend_handles_labels()
     # 4 columns (not 3): with AG-Controller present this is 7 entries -- ncol=3 makes a 3rd row that
@@ -702,7 +694,20 @@ def _compute_decodability_data(packed_root: Path, cache_path: str | Path, *,
         "action_gap_predicts_steps": _linear_r2(
             ag.reshape(-1, 1)[is_tr], steps[is_tr], ag.reshape(-1, 1)[is_te], steps[is_te]),
     }
-    return {"rows": rows, "shuf_r2": shuf_r2, "orthogonality": orthogonality}
+
+    # Is action_gap itself decodable FROM z_t? action_gap (root move separation) is a real,
+    # policy-relevant scalar the tree already computes -- if z_t can't recover it, z_t is missing
+    # signal that's cheaply available elsewhere. stats_alone is the reference: action_gap is not
+    # a tree-size/height/width statistic, so a z_t win here that stats can't match would show z_t
+    # is carrying content beyond what the size-based readouts see.
+    stats_X = np.column_stack([nnodes, heights, widths])
+    ag_decodability = {
+        "z_t_alone": {"linear": _linear_r2(z[is_tr], ag[is_tr], z[is_te], ag[is_te]),
+                     "mlp": _mlp_r2(z[is_tr], ag[is_tr], z[is_te], ag[is_te], seed=seed)},
+        "stats_alone": {"linear": _linear_r2(stats_X[is_tr], ag[is_tr], stats_X[is_te], ag[is_te]),
+                        "mlp": _mlp_r2(stats_X[is_tr], ag[is_tr], stats_X[is_te], ag[is_te], seed=seed)},
+    }
+    return {"rows": rows, "shuf_r2": shuf_r2, "orthogonality": orthogonality, "ag_decodability": ag_decodability}
 
 
 def _render_decodability(data: dict, out_dir: str | Path) -> dict:
@@ -713,6 +718,7 @@ def _render_decodability(data: dict, out_dir: str | Path) -> dict:
     reference upper bound."""
     rows, shuf_r2 = data["rows"], data["shuf_r2"]
     orthogonality = data.get("orthogonality", {})
+    ag_decodability = data.get("ag_decodability", {})
     _rcparams()
     mono = _C["mono"]
     fig, ax = plt.subplots(figsize=(7.4, 3.0))
@@ -735,6 +741,10 @@ def _render_decodability(data: dict, out_dir: str | Path) -> dict:
     if orthogonality:
         print(f"[assess] orthogonality (R^2 predicting steps FROM each): " +
               "  ".join(f"{k}={v:.3f}" for k, v in orthogonality.items()), flush=True)
+    if ag_decodability:
+        print(f"[assess] action-gap decodability (R^2 predicting action_gap FROM each): " +
+              "  ".join(f"{k}: linear={v['linear']:.3f} mlp={v['mlp']:.3f}"
+                        for k, v in ag_decodability.items()), flush=True)
     return out
 
 
@@ -805,10 +815,82 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.grid(axis="both", color=_GRID, lw=1)
 
 
+DEFAULT_LAMBDA_GRID: tuple[float, ...] = (0.003, 0.005, 0.008, 0.01)
+DEFAULT_MAINT_LAMBDA: float = 0.005
+DEFAULT_MAINT_GRID: tuple[float, ...] = (0.0, 0.0001, 0.001, 0.01)
+
+
+def _regime_grid(lambda_grid: tuple[float, ...], maint_lambda: float,
+                 maint_grid: tuple[float, ...]) -> list[tuple[str, str, str, float, float]]:
+    """Ordered ``(group, label, mode, lam, mnt)`` specs, ``lambda_grid`` first then ``maint_grid`` --
+    index ``i`` into this list is the SLURM_ARRAY_TASK_ID a regime-fit array task is given. Shared by
+    ``compute_regime_task`` (array task) and ``collect_regime_results`` (collector) so both always
+    agree on what index means what regime; ``_compute_delta_regret_data`` (the sequential in-process
+    path) also builds its two grids off the same lists, just without going through this indexing."""
+    specs = [("lambda", f"linear λ={lam:g}", "linear", lam, 0.0) for lam in lambda_grid]
+    specs += [("maintenance", f"maint={mnt:g}", "linear", maint_lambda, mnt) for mnt in maint_grid]
+    return specs
+
+
+def compute_regime_task(packed_root: Path, cache_path: str | Path, out_dir: str | Path, regime_index: int, *,
+                        d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
+                        lambda_grid: tuple[float, ...] = DEFAULT_LAMBDA_GRID,
+                        maint_lambda: float = DEFAULT_MAINT_LAMBDA,
+                        maint_grid: tuple[float, ...] = DEFAULT_MAINT_GRID,
+                        maintenance_exponent: float = 1.0) -> None:
+    """Array-task entry point (``--which regime-fit --regime-index N``): fits stop controllers for
+    ONE cost regime -- ``_regime_grid(lambda_grid, maint_lambda, maint_grid)[regime_index]`` -- and
+    saves its per-episode delta-vs-z_t dict to ``<out_dir>/regime_results/<NN>.json``. Each array task
+    is its own SLURM job with its own allocation, so this reloads episodes/z_by_ep itself rather than
+    sharing state with sibling tasks -- see ``collect_regime_results`` for the afterok-side merge."""
+    group, label, mode, lam, mnt = _regime_grid(lambda_grid, maint_lambda, maint_grid)[regime_index]
+    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
+                                                                load_action_gaps=True)
+    base_cfg = _oracle_config(packed_root)
+    deltas = _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam, mnt,
+                                  maintenance_exponent, d_embed, seed)
+    result_dir = Path(out_dir) / "regime_results"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    result_path = result_dir / f"{regime_index:02d}.json"
+    _save_json({"index": regime_index, "group": group, "label": label, "deltas": deltas}, result_path)
+    print(f"[assess] regime[{regime_index:02d}] group={group} {label} -> {result_path}", flush=True)
+
+
+def collect_regime_results(out_dir: str | Path, *, lambda_grid: tuple[float, ...] = DEFAULT_LAMBDA_GRID,
+                           maint_lambda: float = DEFAULT_MAINT_LAMBDA,
+                           maint_grid: tuple[float, ...] = DEFAULT_MAINT_GRID) -> dict:
+    """Collector counterpart to ``compute_regime_task`` (``--which regime-collect``, run
+    ``--dependency=afterok`` on the regime-fit array): reassembles every
+    ``<out_dir>/regime_results/<NN>.json`` in ``_regime_grid`` order and renders the delta-regret
+    figures exactly like ``_compute_delta_regret_data`` + ``_render_delta_regret`` would have.
+    ``lambda_grid``/``maint_lambda``/``maint_grid`` MUST match what the array was submitted with --
+    they're what turns a bare index back into a regime label, and a mismatch would silently
+    mislabel (not just miscount) the figure. Raises loudly if any expected index is missing (a
+    straggler/OOM'd array task must not silently drop a regime from the figure)."""
+    specs = _regime_grid(lambda_grid, maint_lambda, maint_grid)
+    result_dir = Path(out_dir) / "regime_results"
+    results = {}
+    for i in range(len(specs)):
+        path = result_dir / f"{i:02d}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"missing regime result {path} -- array task {i} did not complete")
+        results[i] = _load_json(path)
+    n_lambda = len(lambda_grid)
+    labels_a = [specs[i][1] for i in range(n_lambda)]
+    deltas_a = [results[i]["deltas"] for i in range(n_lambda)]
+    labels_b = [specs[i][1] for i in range(n_lambda, len(specs))]
+    deltas_b = [results[i]["deltas"] for i in range(n_lambda, len(specs))]
+    data = {"labels_a": labels_a, "deltas_a": deltas_a, "labels_b": labels_b, "deltas_b": deltas_b,
+            "maint_lambda": maint_lambda}
+    _save_json(data, Path(out_dir) / "delta_regret_data.json")
+    return _render_delta_regret(data, out_dir)
+
+
 def _compute_delta_regret_data(packed_root: Path, cache_path: str | Path, *,
                                d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
-                               lambda_grid: tuple[float, ...] = (0.003, 0.01, 0.03), maint_lambda: float = 0.01,
-                               maint_grid: tuple[float, ...] = (0.0, 0.01, 0.03, 0.1, 0.15, 0.2, 0.3),
+                               lambda_grid: tuple[float, ...] = DEFAULT_LAMBDA_GRID,
+                               maint_lambda: float = DEFAULT_MAINT_LAMBDA,
+                               maint_grid: tuple[float, ...] = DEFAULT_MAINT_GRID,
                                maintenance_exponent: float = 1.0) -> dict:
     """Expensive half of the delta-regret plots: load data, fit stop controllers for every regime in
     both grids. Returns a JSON-serializable dict consumed by ``_render_delta_regret``. Loads action
@@ -878,8 +960,9 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
 
 def plot_delta_regret_vs_zt(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
                             d_embed: int = 32, max_episodes: int = 15000, seed: int = 0,
-                            lambda_grid: tuple[float, ...] = (0.003, 0.01, 0.03), maint_lambda: float = 0.01,
-                            maint_grid: tuple[float, ...] = (0.0, 0.01, 0.03, 0.1, 0.15, 0.2, 0.3),
+                            lambda_grid: tuple[float, ...] = DEFAULT_LAMBDA_GRID,
+                            maint_lambda: float = DEFAULT_MAINT_LAMBDA,
+                            maint_grid: tuple[float, ...] = DEFAULT_MAINT_GRID,
                             maintenance_exponent: float = 1.0):
     """(3) Δ mean regret (model − $z_t$) sweeps over cost regimes -- see ``_render_delta_regret`` for
     the full docstring.
@@ -934,7 +1017,8 @@ def main() -> None:
     ap.add_argument("--cache", help="validation materialized cache (.pt); MUST be shuffle=False "
                     "(not needed with --replot)")
     ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/normative")
-    ap.add_argument("--which", choices=["frontier", "decodability", "separation", "all"], default="all")
+    ap.add_argument("--which", choices=["frontier", "decodability", "separation", "regime-fit",
+                                        "regime-collect", "all"], default="all")
     ap.add_argument("--replot", action="store_true",
                     help="re-render from --out-dir's saved *_data.json instead of recomputing -- "
                     "skips data loading + model fitting entirely, use after changing plotting-only code")
@@ -946,15 +1030,38 @@ def main() -> None:
     ap.add_argument("--maintenance-exponent", type=float, default=1.0,
                     help="1.0 = maintenance cost exactly linear in node count")
     ap.add_argument("--maint-lambda", type=float, default=10.0, help="lambda held fixed in the maintenance sweep")
+    ap.add_argument("--regime-index", type=int, default=None,
+                    help="SLURM_ARRAY_TASK_ID-style index into the combined lambda+maintenance grid "
+                    "(required for --which regime-fit; see _regime_grid)")
+    ap.add_argument("--lambda-grid", default=",".join(str(x) for x in DEFAULT_LAMBDA_GRID),
+                    help="comma-separated linear time-cost sweep at maintenance=0 "
+                    "(regime-fit/regime-collect/separation)")
+    ap.add_argument("--maint-grid", default=",".join(str(x) for x in DEFAULT_MAINT_GRID),
+                    help="comma-separated maintenance-scale sweep at --maint-lambda fixed "
+                    "(regime-fit/regime-collect/separation)")
     args = ap.parse_args()
+    lambda_grid = tuple(float(x) for x in args.lambda_grid.split(","))
+    maint_grid = tuple(float(x) for x in args.maint_grid.split(","))
 
     if args.replot:
         replot_saved(args.out_dir, which=args.which)
         return
+    if args.which == "regime-collect":
+        collect_regime_results(args.out_dir, lambda_grid=lambda_grid, maint_lambda=args.maint_lambda,
+                               maint_grid=maint_grid)
+        return
     if not args.packed_root or not args.cache:
-        ap.error("--packed-root and --cache are required unless --replot is set")
+        ap.error("--packed-root and --cache are required unless --replot or --which regime-collect is set")
 
     packed_root, out = Path(args.packed_root), args.out_dir
+    if args.which == "regime-fit":
+        if args.regime_index is None:
+            ap.error("--regime-index is required for --which regime-fit")
+        compute_regime_task(packed_root, args.cache, out, args.regime_index, d_embed=args.d_embed,
+                            max_episodes=args.max_episodes, lambda_grid=lambda_grid,
+                            maint_lambda=args.maint_lambda, maint_grid=maint_grid,
+                            maintenance_exponent=args.maintenance_exponent)
+        return
     if args.which in ("frontier", "all"):
         plot_regret_effort_frontier(packed_root, args.cache, out, d_embed=args.d_embed, time_mode=args.time_mode,
                                     time_lambda=args.time_lambda, maintenance_scale=args.maintenance_scale,
@@ -963,7 +1070,8 @@ def main() -> None:
         plot_r_decodability(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=min(args.max_episodes, 12000))
     if args.which in ("separation", "all"):
         plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes,
-                                maint_lambda=args.maint_lambda, maintenance_exponent=args.maintenance_exponent)
+                                lambda_grid=lambda_grid, maint_lambda=args.maint_lambda, maint_grid=maint_grid,
+                                maintenance_exponent=args.maintenance_exponent)
 
 
 if __name__ == "__main__":

@@ -73,21 +73,22 @@ always run, never skip):
    (see history.md's Task 4 Progress Log, "off-by-one fix pass" entry), independent
    of both existing test files' fixtures/methodology.
 
-7. ``test_value_query_ignores_root_rank_latent_bug`` -- documents a related, but
-   DIFFERENT and NOT YET fixed, latent inconsistency found while re-deriving (6) from
-   scratch: ``_build_tree_n``'s structural cutoff (``expansion_count =
-   first_decision_expansion_count + local_step``) correctly incorporates
-   ``first_decision_expansion_count`` (`= root_rank + 1`, from
+7. ``test_value_query_respects_root_rank_fix`` (renamed 2026-07-11 from
+   ``test_value_query_ignores_root_rank_latent_bug``, which only documented the bug
+   without fixing it) -- a related, but DIFFERENT, ``root_rank`` step-scale bug found
+   while re-deriving (6) from scratch: ``_build_tree_n``'s structural cutoff
+   (``expansion_count = first_decision_expansion_count + local_step``) correctly
+   incorporated ``first_decision_expansion_count`` (`= root_rank + 1`, from
    ``preprocess_mc/pack.py:_build_compact_trajectory``), but its VALUE query
-   (``_forward_filled_wdl_at_step(trajectory, node_ids, local_step)``) uses bare
-   ``local_step`` and does not. Empirically confirmed DORMANT today (root_rank == 0
-   for all 200 real ``xaba20k`` trees sampled while investigating this file -- see
-   this module's own inline note below), but live and reproducible on synthetic data
-   with ``first_decision_expansion_count > 1``. Direction of the resulting error is
-   understaying (this queries a real, valid, but too-early step), not leaking the
-   future, so it falls outside this repo's specific "future leaks backward" threat
-   model -- flagged as a real, separate correctness hypothesis, not re-classified as
-   a leak.
+   (``_forward_filled_wdl_at_step(trajectory, node_ids, local_step)``) used bare
+   ``local_step`` and did not -- same for ``build_snapshot_pair_example``'s target
+   query and ``_delta_visits``'s window. Fixed 2026-07-11 via the new
+   ``_full_scale_step`` helper in ``pack_history.py``; this test now asserts the
+   fixed behavior rather than documenting the bug. Was empirically confirmed DORMANT
+   on real data before the fix (root_rank == 0 for all 200 real ``xaba20k`` trees
+   sampled while investigating this file -- see this module's own inline note below),
+   i.e. it never actually corrupted real training data, but was live and reproducible
+   on synthetic data with ``first_decision_expansion_count > 1``.
 
 Run explicitly (this directory isn't covered by pytest.ini's testpaths):
     pytest src/cts/tests/test_canary_pack_history_structural.py -v
@@ -715,9 +716,11 @@ def test_off_by_one_regression_canary_independent():
 # --------------------------------------------------------------------------- #
 
 
-def test_value_query_ignores_root_rank_latent_bug():
-    """Documents (does not "fix") a latent inconsistency found while re-deriving
-    the off-by-one fix from scratch for this audit.
+def test_value_query_respects_root_rank_fix():
+    """Regression test for a real (though empirically dormant on all real data seen)
+    ``root_rank`` step-scale bug, fixed 2026-07-11: renamed from
+    ``test_value_query_ignores_root_rank_latent_bug``, which documented the bug
+    without fixing it -- this now asserts the FIXED behavior.
 
     ``preprocess_mc/pack.py:_build_compact_trajectory`` sets
     ``first_decision_expansion_count = root_rank + 1`` and packs ``update_log_*``
@@ -730,29 +733,24 @@ def test_value_query_ignores_root_rank_latent_bug():
     ``_build_tree_n``'s structural cutoff correctly re-derives the full-scale
     expansion count: ``expansion_count = first_decision_expansion_count +
     local_step`` (`= root_rank + n`, full scale) and slices
-    ``expansion_parent_ids[:expansion_count]`` -- also full scale, so structure is
-    correct for any root_rank. But its VALUE query,
-    ``_forward_filled_wdl_at_step(trajectory, node_ids, local_step)``, uses BARE
+    ``expansion_parent_ids[:expansion_count]`` -- also full scale, so structure was
+    already correct for any root_rank. Its VALUE query used to use BARE
     ``local_step`` (`= n - 1`) -- missing the same ``+ root_rank`` shift -- to query
-    ``update_step_index``, which is on the FULL scale. When root_rank > 0 this
-    queries a real, valid, but numerically SMALLER (too-early) step than the
-    structural cutoff implies, so T_n's values would be stale by exactly
-    ``root_rank`` steps relative to its own structure -- NOT a future leak (forward-
-    fill is monotonic in the query step, so querying too-early can only omit
-    information, never include future information), but a genuine, different
-    correctness bug from the ones already fixed.
+    ``update_step_index``, which is on the FULL scale. Fixed by routing the query
+    through the new ``_full_scale_step`` helper (``expansion_count - 1``, matching
+    the structural cutoff's own scale), which ``_delta_visits`` and
+    ``build_snapshot_pair_example``'s target query now use too.
 
-    Empirically CONFIRMED DORMANT on real data: sampled first_decision_expansion_count
-    (= root_rank + 1) across 200 real trees built from
-    ``ysagiv_xaba20k/split/train_manifest.txt`` via the production
-    ``preprocess_mc.pack._pack_split`` path (same fixture-building approach as
-    ``test_canary_future_leakage.py``) -- all 200 had root_rank == 0 (every real
-    tree's own root is the very first thing expanded, which is structurally forced
-    for a single fresh PUCT search: nothing else exists to expand before the root
-    does). So this bug cannot fire against any real data seen so far; this test
-    exercises it only on synthetic data with root_rank > 0, which today's real
-    ``xaba20k`` trees never produce. Labeled here as a hypothesis about a distinct,
-    currently-inert code path -- not a confirmed live leak.
+    Empirically CONFIRMED DORMANT on real data before this fix (and hence low-risk
+    to fix): sampled ``first_decision_expansion_count`` (= root_rank + 1) across 200
+    real trees built from ``ysagiv_xaba20k/split/train_manifest.txt`` via the
+    production ``preprocess_mc.pack._pack_split`` path (same fixture-building
+    approach as ``test_canary_future_leakage.py``) -- all 200 had root_rank == 0
+    (every real tree's own root is the very first thing expanded, which is
+    structurally forced for a single fresh PUCT search: nothing else exists to
+    expand before the root does). So the pre-fix bug never fired against any real
+    data seen so far -- this test exercises the fix only on synthetic data with
+    root_rank > 0, which today's real ``xaba20k``/``xaba100k`` trees never produce.
     """
     # root_rank=2: first_decision_expansion_count=3, i.e. 2 "pre-root" expansions
     # (structurally impossible for a real single-root PUCT tree, per the note
@@ -777,23 +775,17 @@ def test_value_query_ignores_root_rank_latent_bug():
     win = float(snap.node_features[1, 1])
 
     correct_full_scale_step = traj.first_decision_expansion_count - 1 + 0  # = expansion_count - 1 = 2
-    current_code_query_step = 0  # local_step = n - 1 = 0, what _build_tree_n actually queries today
+    pre_fix_query_step = 0  # local_step = n - 1 = 0, what _build_tree_n queried before the fix
 
     expected_if_correct = _forward_filled_wdl_at_step(traj, torch.tensor([1]), correct_full_scale_step)
-    expected_from_current_code = _forward_filled_wdl_at_step(traj, torch.tensor([1]), current_code_query_step)
+    expected_pre_fix = _forward_filled_wdl_at_step(traj, torch.tensor([1]), pre_fix_query_step)
 
-    assert win == pytest.approx(float(expected_from_current_code[0, 0]), abs=1e-6), (
-        "sanity check on this test's own derivation of _build_tree_n's actual query step failed"
+    assert not torch.allclose(expected_if_correct, expected_pre_fix, atol=1e-6), (
+        "test fixture too degenerate to discriminate the two query steps (both happen to read the "
+        "same update-log row) -- adjust the fixture's step_index values"
     )
-    if correct_full_scale_step != current_code_query_step:
-        assert not torch.allclose(expected_if_correct, expected_from_current_code, atol=1e-6), (
-            "test fixture too degenerate to discriminate the two query steps (both happen to read the "
-            "same update-log row) -- adjust the fixture's step_index values"
-        )
-        assert win == pytest.approx(0.9, abs=1e-6), (
-            f"T_1 with root_rank=2 shows wdl_win={win}. This equals the step_index=0 row (0.9), confirming "
-            f"_build_tree_n queries local_step={current_code_query_step} rather than the root_rank-correct "
-            f"full-scale step {correct_full_scale_step} (which would show 0.4, the step_index=2 row) -- "
-            f"i.e. the latent inconsistency described in this test's docstring is real and reproducible, "
-            f"though confirmed dormant on all real xaba20k data sampled for this audit (root_rank always 0)."
-        )
+    assert win == pytest.approx(float(expected_if_correct[0, 0]), abs=1e-6), (
+        f"T_1 with root_rank=2 shows wdl_win={win}, expected {float(expected_if_correct[0, 0])} "
+        f"(the step_index={correct_full_scale_step} row, 0.4). Got the step_index={pre_fix_query_step} "
+        f"row (0.9) instead -- the root_rank fix has regressed back to the pre-fix bug."
+    )

@@ -556,7 +556,7 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
         # square val marker), single metric (loss_gap) -- the total_loss overlay lines this used to
         # also draw are dropped for the same "just epoch vs the one metric" reason.
         from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
-        from analysis.utils.plots import save_pdf_png, setup_log_y_axis
+        from analysis.utils.plots import save_pdf_png
         apply_poster_style()
         # Board-plot sizing convention: a SMALLER figure at these font sizes reads as bigger,
         # more legible text -- no title, fewer ticks, no per-point markers (a plain line).
@@ -578,12 +578,8 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
             ax.plot(ep, [r["train_loss_gap"] for r in rows], "-", color=train_color, label="Train")
         ax.plot(ep, [r["val_loss_gap"] for r in rows], "-", color=val_color, label="Val")
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
-        # Log scale: late-epoch improvement is real but reads as flat on a linear axis.
-        all_loss_gaps = [r["train_loss_gap"] for r in rows] + [r["val_loss_gap"] for r in rows]
-        if fine_train_history:
-            all_loss_gaps += [r["loss_gap"] for r in fine_train_history]
-        if not setup_log_y_axis(ax, all_loss_gaps, ylabel="Loss"):
-            ax.set_ylabel("Loss")
+        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+        ax.set_ylabel("Loss")
         ax.set_xlabel("Epoch"); ax.legend(loc="upper right")
         fig.tight_layout()
         curve_path = save_pdf_png(fig, str(base.parent), f"{base.name}_training_curve", dpi=150)

@@ -337,7 +337,13 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ax_p.xaxis.set_major_formatter(mticker.ScalarFormatter())
 
     _annotate_n(fig, n_moves)
-    save_figure(fig, "board", filename)
+    # pad_inches bumped 0.3 -> 0.6: even after the figsize bump above, ax_q's rotated
+    # "Empirical Quantile (s)" ylabel sits close enough to the top of the tight bbox
+    # that the default pad occasionally lets its top parenthesis/ascender clip in the
+    # saved PDF -- extra pad_inches (uniform margin added AROUND the already-tight
+    # bbox at save time) fixes this without re-touching the figsize-vs-label-length
+    # tradeoff documented above.
+    save_figure(fig, "board", filename, pad_inches=0.6)
 
 
 def _binning_opts(col: str, kind: str, clip) -> dict:

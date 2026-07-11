@@ -201,9 +201,9 @@ eval:
   results_json: ${figures_dir}/results.json
   out_dir: ${figures_dir}
   time_mode: linear
-  time_lambda: 0.0015  # same regime pointer as the old (non-history) config for this dataset --
-                        # not re-derived for the history pipeline.
+  time_lambda: 0.01  # linear-cost default; see analysis.evaluate.DEFAULT_LAMBDA_GRID/DEFAULT_MAINT_LAMBDA
+                      # for the matching separation-sweep regime grids (2026-07-11).
   maintenance_scale: 0.0
   maintenance_exponent: 1.0
-  maint_lambda: 0.0015
+  maint_lambda: 0.005  # fixed lambda the maintenance sweep is evaluated at (2026-07-11)
   max_episodes: 15000

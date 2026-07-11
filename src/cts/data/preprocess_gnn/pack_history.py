@@ -1,13 +1,15 @@
 """Packs T_n -> T_{n+k} snapshot-pair training examples: T_n is supervised with a
 target read off that same tree's own recorded state at step n + lookahead_k.
 
-Upstream contract (unconfirmed against packhistory_trees's real code): assumes
-the structural fields are unchanged from ``cts_budgeted_controller_episode_shard_v4``,
-plus five flat update-log arrays (``update_log_step_index/node_id/visit_count/
-q_value/wdl``) and a per-trajectory CSR index ``node_update_ptr``, decoded in
-``iter_history_trajectories`` (the one seam to change if field names differ).
-``step_index``'s coordinate system (0-indexed, aligned to ``local_step = n - 1``)
-is also unconfirmed.
+Upstream contract, confirmed against packhistory_trees's real code (``preprocess_mc/pack.py``):
+structural fields match ``cts_budgeted_controller_episode_shard_v4``, plus five flat
+update-log arrays (``update_log_step_index/node_id/visit_count/q_value/wdl``) and a
+per-trajectory CSR index ``node_update_ptr``, decoded in ``iter_history_trajectories``.
+``step_index``'s coordinate system is 0-indexed, but on the FULL (untrimmed)
+expansion-position scale -- NOT re-based to ``root_rank`` the way ``step_node_cutoffs``/
+``local_step = n - 1`` are. See ``_full_scale_step`` for the conversion between the two
+scales (fixed 2026-07-11 -- see ``test_value_query_respects_root_rank_fix`` in
+``test_canary_pack_history_structural.py`` for the regression test).
 """
 
 from __future__ import annotations
@@ -199,15 +201,40 @@ def _forward_filled_wdl_at_step(
     return out
 
 
+def _full_scale_step(trajectory: HistoryTrajectory, n: int) -> int:
+    """Convert ``n`` (T_n's 1-indexed step, on the trimmed/``root_rank``-relative scale
+    ``step_node_cutoffs`` and friends use) into the *full-scale* ``step_index`` convention
+    the update log uses (0-indexed from the very start of ``expansion_parent_ids``, i.e.
+    before ``_build_compact_trajectory``'s ``root_rank`` trimming -- see
+    ``preprocess_mc/pack.py:_build_compact_trajectory``).
+
+    ``local_step = n - 1``; ``expansion_count = trajectory.first_decision_expansion_count +
+    local_step`` is the full-scale count of expansions completed as of step n (matches
+    ``_build_tree_n``'s structural cutoff and ``ControllerEpisodeDataset``'s
+    ``expansion_count``); the matching update-log query is ``expansion_count - 1``
+    (``step_index`` is 0-indexed, tagged before increment) = ``first_decision_expansion_count
+    + n - 2``.
+
+    Collapses to plain ``n - 1`` whenever ``root_rank == 0`` (i.e.
+    ``first_decision_expansion_count == 1``) -- true on every real tree sampled so far,
+    since a fresh single-root PUCT search always expands the root first. That is why using
+    bare ``n - 1``/``local_step`` directly against the update log (the bug this function
+    fixes) never produced a visibly wrong value on real data despite being wrong in
+    general -- see ``test_value_query_respects_root_rank_fix``.
+    """
+    return trajectory.first_decision_expansion_count + n - 2
+
+
 def _delta_visits(trajectory: HistoryTrajectory, node_id: int, n: int, n_plus_k: int) -> int:
-    """Count update-log entries for ``node_id`` with ``step_index`` in ``(n, n_plus_k]``."""
+    """Count update-log entries for ``node_id`` with ``step_index`` in
+    ``(_full_scale_step(n), _full_scale_step(n_plus_k)]``."""
     lo = int(trajectory.node_update_ptr[node_id].item())
     hi = int(trajectory.node_update_ptr[node_id + 1].item())
     if hi <= lo:
         return 0
     steps_slice = trajectory.update_step_index[lo:hi].tolist()
-    upper = bisect.bisect_right(steps_slice, n_plus_k)
-    lower = bisect.bisect_right(steps_slice, n)
+    upper = bisect.bisect_right(steps_slice, _full_scale_step(trajectory, n_plus_k))
+    lower = bisect.bisect_right(steps_slice, _full_scale_step(trajectory, n))
     return upper - lower
 
 
@@ -244,10 +271,16 @@ def _build_tree_n(trajectory: HistoryTrajectory, n: int) -> Optional[_TreeNSnaps
     expansion_count = trajectory.first_decision_expansion_count + local_step
 
     node_ids = torch.arange(node_cutoff, dtype=torch.long)
-    # Query at `local_step` (= n - 1), not `n`: `step_index` is 0-indexed, matching
-    # `local_step` and `node_cutoff` above. Querying at `n` would leak the *next*
-    # expansion's backprop update into T_n's own features.
-    forward_filled_wdl = _forward_filled_wdl_at_step(trajectory, node_ids, local_step)
+    # Query at `expansion_count - 1` (= _full_scale_step(trajectory, n)), NOT bare
+    # `local_step`: `step_index` is on the *full*, untrimmed expansion-position scale
+    # (0-indexed from the very start of `expansion_parent_ids`), while `local_step` is
+    # `root_rank`-relative (trimmed). The two coincide only when `root_rank == 0` --
+    # true on every real tree checked, which is why querying at bare `local_step` never
+    # produced a visibly wrong value in practice despite being wrong in general. See
+    # `_full_scale_step`'s docstring and `test_value_query_respects_root_rank_fix`.
+    # (Also not `expansion_count` itself, which would leak the *next* expansion's
+    # backprop update into T_n's own features.)
+    forward_filled_wdl = _forward_filled_wdl_at_step(trajectory, node_ids, expansion_count - 1)
 
     win, draw, loss = forward_filled_wdl[:, 0], forward_filled_wdl[:, 1], forward_filled_wdl[:, 2]
     total = (win + draw + loss).clamp_min(1e-8)
@@ -374,17 +407,19 @@ def build_snapshot_pair_example(
     edge_child = snapshot.edge_child
     edge_slot = snapshot.edge_slot
 
-    # BUGFIX (same root cause as _build_tree_n's local_step fix above): `step_index` is
-    # 0-indexed, so "as of T_{n+k}" is step_index `n_plus_k - 1`, not `n_plus_k`. And for
-    # Delta-visits to describe the same (T_n, T_{n+k}) pair the value target now does,
-    # its window must shift by the same -1 on both ends: "new visits since T_n" means
-    # step_index in (n - 1, n_plus_k - 1], not (n, n_plus_k].
-    target_wdl = _forward_filled_wdl_at_step(trajectory, edge_child, n_plus_k - 1)
+    # BUGFIX: `step_index` is on the full, untrimmed expansion-position scale (see
+    # `_full_scale_step`'s docstring), so "as of T_{n+k}" is `_full_scale_step(n_plus_k)`,
+    # not bare `n_plus_k - 1` (which silently drops the `root_rank` shift -- dormant on
+    # every real tree checked so far, since `root_rank == 0` there, but wrong in general;
+    # see `test_value_query_respects_root_rank_fix`). `_delta_visits` applies the
+    # same conversion internally to both ends of its window, so it's called here with the
+    # plain `n`/`n_plus_k` this function already has, not pre-shifted values.
+    target_wdl = _forward_filled_wdl_at_step(trajectory, edge_child, _full_scale_step(trajectory, n_plus_k))
     target_mass = target_wdl.sum(dim=-1, keepdim=True).clamp_min(1e-8)
     target_wdl = target_wdl / target_mass
 
     weights = torch.tensor(
-        [_delta_visits(trajectory, int(child_id), n - 1, n_plus_k - 1) for child_id in edge_child.tolist()],
+        [_delta_visits(trajectory, int(child_id), n, n_plus_k) for child_id in edge_child.tolist()],
         dtype=torch.float32,
     )
 
