@@ -561,7 +561,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # both rows and forced square via set_box_aspect regardless of its (non-square) cell.
     fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.8))
     gs = fig.add_gridspec(2, 2, width_ratios=[1.5, 2], height_ratios=[0.55, 1], left=0.09, right=0.98,
-                          top=0.95, bottom=0.20, hspace=0.12, wspace=0.28)
+                          top=0.95, bottom=0.20, hspace=0.4, wspace=0.28)
     axH = fig.add_subplot(gs[0, 0])
     axL = fig.add_subplot(gs[1, 0], sharex=axH)
     axR = fig.add_subplot(gs[:, 1])

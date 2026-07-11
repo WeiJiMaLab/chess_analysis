@@ -556,6 +556,7 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
         # square val marker), single metric (loss_gap) -- the total_loss overlay lines this used to
         # also draw are dropped for the same "just epoch vs the one metric" reason.
         from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
+        from analysis.utils.plots import save_pdf_png, setup_log_y_axis
         apply_poster_style()
         # Board-plot sizing convention: a SMALLER figure at these font sizes reads as bigger,
         # more legible text -- no title, fewer ticks, no per-point markers (a plain line).
@@ -581,15 +582,12 @@ def _save_encoder_training_curves(history: list[dict], output_checkpoint: str,
         all_loss_gaps = [r["train_loss_gap"] for r in rows] + [r["val_loss_gap"] for r in rows]
         if fine_train_history:
             all_loss_gaps += [r["loss_gap"] for r in fine_train_history]
-        positive_gaps = [v for v in all_loss_gaps if v > 0]
-        if positive_gaps:
-            ax.set_yscale("log")
-            ax.set_ylim(bottom=max(1e-6, min(positive_gaps) * 0.8))
-        ax.set_xlabel("Epoch"); ax.set_ylabel("Loss (log scale)" if positive_gaps else "Loss"); ax.legend(loc="upper right")
+        if not setup_log_y_axis(ax, all_loss_gaps, ylabel="Loss"):
+            ax.set_ylabel("Loss")
+        ax.set_xlabel("Epoch"); ax.legend(loc="upper right")
         fig.tight_layout()
-        fig.savefig(f"{base}_training_curve.png", dpi=150)
-        plt.close(fig)
-        print(f"[child-wdl-pretrain] training curve figure -> {base}_training_curve.png", flush=True)
+        curve_path = save_pdf_png(fig, str(base.parent), f"{base.name}_training_curve", dpi=150)
+        print(f"[child-wdl-pretrain] training curve figure -> {curve_path}", flush=True)
     except Exception as e:  # plotting is best-effort; the CSV is the source of truth
         print(f"[child-wdl-pretrain] curve plot skipped: {e}", flush=True)
 

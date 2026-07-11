@@ -59,6 +59,17 @@ commissioned for:
    helper is ever removed) and confirms this file's own core-invariant
    assertion helper correctly FAILS against it, proving test 1 is not vacuous.
 
+5. ``test_all_never_visited_children_returns_full_zero_weight_example_not_none``
+   -- added after an independent skeptical re-review (2026-07-11) flagged that
+   the old code's SECOND early-return (``if not keep_mask.any(): return None``,
+   for a T_n whose real edges are ALL never-visited) has no post-fix
+   equivalent, and no test above exercised that exact case. Pins down that the
+   current code returns a real, all-zero-weight example rather than ``None``
+   there -- confirmed harmless downstream by the same re-review (zero loss,
+   bit-identical params after an actual optimizer step), and confirmed to never
+   occur in real ``xaba20k`` data (checked exhaustively, 12,600 real (tree, n)
+   pairs, zero occurrences) -- so this uses a synthetic fixture instead.
+
 Run explicitly (this directory isn't covered by pytest.ini's testpaths):
     pytest src/cts/tests/test_pack_history_fix_parity.py -v
 """
@@ -675,3 +686,67 @@ def test_core_invariant_is_not_vacuous_against_reintroduced_old_filter(real_hist
     assert example is not None
     real_triples = _edge_triples(example.edge_parent, example.edge_child, example.edge_slot)
     _assert_edge_sets_match(real_triples, full_triples, context=f"REAL {traj.source_path} n={n}")
+
+
+def test_all_never_visited_children_returns_full_zero_weight_example_not_none():
+    """Edge case flagged by an independent skeptical re-review (2026-07-11) of this
+    fix, not covered by any test above: the OLD code had a SECOND early-return guard
+    beyond "T_n has zero edges" -- ``if not keep_mask.any(): return None`` -- which
+    fired specifically when T_n had real structural edges but EVERY one of their
+    children was never-visited (e.g. a handful of children freshly created by a
+    parent's first expansion, none yet individually backed up). That guard depended
+    on ``keep_mask``, which no longer exists post-fix.
+
+    This test pins down what the CURRENT code actually does in that exact scenario,
+    on a synthetic trajectory built to guarantee it (real ``xaba20k`` data was
+    exhaustively checked across 12,600 real (tree, n) pairs during the re-review and
+    never once hit this case, so it can't be exercised against real data at all):
+    ``build_snapshot_pair_example`` must return a REAL example (not None) whose
+    structural edges are the full real set (parity with ``_build_tree_n``, same
+    invariant as test 1 above) and whose ``edge_wdl_targets``/``edge_visit_weights``
+    are all-zero -- i.e. a legitimate, harmless, fully-zero-weighted training
+    example, not a silently-dropped one. (Separately verified, by the same
+    re-review, that feeding such a batch through ``ChildWdlPretrainer``'s real loss
+    and an actual optimizer step produces exactly zero loss and a bit-identical
+    parameter state -- not re-verified here, this test only pins the *packing*
+    output shape/values, not the downstream training safety already confirmed.)
+    """
+    from cts.tests.test_canary_pack_history_structural import _make_trajectory
+
+    traj = _make_trajectory(
+        num_nodes=3,
+        parents=[-1, 0, 0],
+        depths=[0, 1, 1],
+        children_by_parent={0: [1, 2]},
+        expansion_parent_ids=[0],
+        first_decision_expansion_count=1,
+        step_node_cutoffs=[3],
+        updates={},  # neither child ever visited by backprop, anywhere in the trajectory
+    )
+    schema = tree_encoder_feature_schema()
+
+    snapshot = _build_tree_n(traj, 1)
+    assert snapshot is not None and snapshot.edge_child.numel() == 2, (
+        "test setup invalid: expected T_1 to have exactly 2 real structural edges "
+        "(both children), independent of visitation"
+    )
+
+    example = build_snapshot_pair_example(traj, n=1, lookahead_k=1, schema=schema)
+
+    assert example is not None, (
+        "regression: build_snapshot_pair_example returned None for a T_n with real structural "
+        "edges where every child is never-visited -- this matches the OLD (pre-fix) "
+        "keep_mask.any() early-return behavior, which this fix was supposed to have removed. "
+        "If this is intentionally reintroduced, this test and history.md's 2026-07-11 entry "
+        "both need updating to document it as a deliberate, not accidental, guard."
+    )
+    real_triples = _edge_triples(snapshot.edge_parent, snapshot.edge_child, snapshot.edge_slot)
+    example_triples = _edge_triples(example.edge_parent, example.edge_child, example.edge_slot)
+    _assert_edge_sets_match(example_triples, real_triples, context="all-never-visited T_1")
+
+    assert torch.allclose(example.edge_wdl_targets, torch.zeros_like(example.edge_wdl_targets)), (
+        f"expected all-zero targets for an all-never-visited snapshot, got {example.edge_wdl_targets.tolist()}"
+    )
+    assert torch.allclose(example.edge_visit_weights, torch.zeros_like(example.edge_visit_weights)), (
+        f"expected all-zero Delta-visits weights, got {example.edge_visit_weights.tolist()}"
+    )

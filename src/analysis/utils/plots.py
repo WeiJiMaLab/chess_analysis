@@ -20,14 +20,20 @@ def padded_range_log(lo: float, hi: float, frac: float, min_log_pad: float = 0.0
     return float(10 ** (log_lo - log_pad)), float(10 ** (log_hi + log_pad))
 
 
-def apply_shared_exponent_log_ticks(ax, tick_vals, *, color: str = "#7A8894") -> None:
-    """Label each y tick with just its mantissa and write the one shared "x10^k" once, above the
-    axis, instead of repeating the exponent on every tick -- for values almost always <1 and
-    within about a decade of each other (e.g. regret, loss)."""
+def apply_shared_exponent_log_ticks(ax, tick_vals, *, color: str = "black") -> None:
+    """Label each y tick with just its mantissa and write the one shared "x10^k" once, flush with
+    the top of the axis, instead of repeating the exponent on every tick -- for values almost
+    always <1 and within about a decade of each other (e.g. regret, loss)."""
     shared_exp = int(np.floor(np.log10(np.median(tick_vals))))
     ax.yaxis.set_major_locator(mticker.FixedLocator(tick_vals))
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v / 10 ** shared_exp:.3g}"))
-    ax.text(-0.02, 1.02, f"$\\times10^{{{shared_exp}}}$", transform=ax.transAxes, ha="right", va="bottom",
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v / 10 ** shared_exp:.1f}"))
+    # Unlabeled sub-decade ticks (2,3,...,9) so the log spacing between labeled ticks is still
+    # visible -- NullFormatter keeps them from re-adding their own "2x10^-1"-style exponent text.
+    ax.yaxis.set_minor_locator(mticker.LogLocator(subs=np.arange(2, 10) * 0.1, numticks=12))
+    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+    ax.tick_params(axis="y", which="minor", length=3)
+    ax.grid(which="minor", axis="y", alpha=0.15)
+    ax.text(-0.02, 1.0, f"$\\times10^{{{shared_exp}}}$", transform=ax.transAxes, ha="right", va="bottom",
            fontsize=10.5, color=color)
 
 

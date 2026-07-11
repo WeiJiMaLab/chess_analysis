@@ -333,6 +333,7 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         # they're not reused verbatim here — this is a small (9,6) figure, so font sizes below
         # are picked to be legible on that scale instead of overflowing it.
         from analysis.utils.helpers import apply_poster_style, PHASE_COLORS
+        from analysis.utils.plots import save_pdf_png, setup_log_y_axis
         apply_poster_style()
         # Board-plot sizing convention: a SMALLER figure at these font sizes reads as bigger,
         # more legible text (same reasoning as the board dashboards) -- no title (board plots
@@ -344,21 +345,19 @@ def _save_training_curves(history: list[dict], out_path: Path) -> None:
         train_color = PHASE_COLORS[1]  # light indigo
         val_color = PHASE_COLORS[3]    # dark indigo
         ep = [h["epoch"] for h in history]
+        train_vals = [h["train_E_regret"] for h in history]
+        val_vals = [h["val_greedy_regret"] for h in history]
         fig, ax = plt.subplots(figsize=(3.6, 2.6))
-        ax.plot(ep, [h["train_E_regret"] for h in history], "-", color=train_color, label="Train")
-        ax.plot(ep, [h["val_greedy_regret"] for h in history], "-", color=val_color, label="Val")
+        ax.plot(ep, train_vals, "-", color=train_color, label="Train")
+        ax.plot(ep, val_vals, "-", color=val_color, label="Val")
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=6))
         # Log scale: late-epoch improvement is real but reads as flat on a linear axis.
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=max(1e-6, min(
-            min(h["train_E_regret"] for h in history if h["train_E_regret"] > 0),
-            min(h["val_greedy_regret"] for h in history if h["val_greedy_regret"] > 0),
-        ) * 0.8))
-        ax.set_xlabel("Epoch"); ax.set_ylabel("Regret (log scale)"); ax.legend(loc="upper right")
+        if not setup_log_y_axis(ax, train_vals + val_vals, ylabel="Regret"):
+            ax.set_ylabel("Regret")
+        ax.set_xlabel("Epoch"); ax.legend(loc="upper right")
         fig.tight_layout()
-        fig.savefig(f"{base}_training_curve.png", dpi=150)
-        plt.close(fig)
-        print(f"[pg] training curve figure -> {base}_training_curve.png", flush=True)
+        curve_path = save_pdf_png(fig, str(base.parent), f"{base.name}_training_curve", dpi=150)
+        print(f"[pg] training curve figure -> {curve_path}", flush=True)
     except Exception as e:  # plotting is best-effort; the CSV is the source of truth
         print(f"[pg] curve plot skipped: {e}", flush=True)
 

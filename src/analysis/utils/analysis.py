@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 
@@ -13,22 +11,15 @@ def _seconds_from_log(axis) -> None:
     axis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{np.round(np.exp(v), 1)}"))
 
 from analysis.utils.helpers import (
-    apply_poster_style,
     FONT_SIZE_LABEL,
     LEGEND_FONTSIZE,
     MAIN_COLOR,
     PHASE_COLORS,
 )
 from analysis.utils.plots import (
-    get_isoluminant_cmap,
-    plot_heatmap_with_alpha,
     plot_qbin_stats,
     _wrap_long_label,
 )
-
-# Highlight color for an isolated value point-mass (e.g. Gain==0) on a LOWESS panel:
-# black ``x`` reads as a discrete "special point" against the steel-blue smoother.
-_MASS_COLOR = "black"
 
 
 def _infer_tertile_cuts(conn, source: str, column: str = "move_ply") -> tuple[int, int]:
@@ -78,10 +69,6 @@ class Analyzer:
     across several filtered analyses). ``quantile_tertile_df`` holds per-tertile
     aggregates with the qbin ``ntile`` recomputed **within** each fixed tertile;
     legend labels are the fixed ply ranges (``self.ply_cuts``).
-
-    Optional ``quantile_heatmap_row``: second column (e.g. ``move_ply``) for a
-    quantile×quantile heatmap of mean transformed Y, saved as its own figure when
-    ``save_dashboard(..., include_quantile_heatmap=True)`` (not embedded in the 2×2 grid).
     """
 
     def __init__(
@@ -93,16 +80,12 @@ class Analyzer:
         n_bins=20,
         filter_query=None,
         title=None,
-        quantile_heatmap_row: str | None = None,
-        quantile_heatmap_row_label: str | None = None,
         zero_inflated: bool = False,
         zero_threshold: float = 0.0,
         ply_tertile_source: str | None = None,
         segment_column: str = "move_ply",
         segment_source: str | None = None,
         segment_label: str = "ply",
-        segment_cuts: tuple[float, float] | None = None,
-        segment_range_labels: dict[int, str] | None = None,
         bin_mode: str = "ntile",
         integer_tail_cut: float | None = None,
         integer_floor_cut: float | None = None,
@@ -159,10 +142,6 @@ class Analyzer:
         self.segment_column = segment_column
         self.segment_source = segment_source or self.ply_tertile_source
         self.segment_label = segment_label
-        # Optional fixed cutpoints (bypass the empirical quantiles) + explicit legend
-        # labels — e.g. game fraction split at fixed thirds 1/3, 2/3 with "< 1/3" labels.
-        self.segment_cuts = segment_cuts
-        self.segment_range_labels = segment_range_labels
         self.ply_cuts: tuple[int, int] | None = None
         # When the x distribution has a large mass near 0 (e.g. VOC: ~⅔ of moves
         # are 0), plain ``ntile`` wastes most bins on that mass. ``zero_inflated``
@@ -196,19 +175,6 @@ class Analyzer:
             if op not in _allowed_ops:
                 raise ValueError(f"edge_mass op must be one of {_allowed_ops}; got {op!r}")
             float(val)
-
-        self.quantile_heatmap_row = None
-        self._quantile_heatmap_row_label = ""
-        self.quantile_heatmap_mean_df = None
-        self.quantile_heatmap_count_df = None
-
-        if quantile_heatmap_row is not None:
-            if quantile_heatmap_row == self.x.column.strip():
-                raise ValueError(
-                    "quantile_heatmap_row must differ from x_var.column (otherwise the quantile grid is degenerate)."
-                )
-            self.quantile_heatmap_row = quantile_heatmap_row
-            self._quantile_heatmap_row_label = quantile_heatmap_row_label or quantile_heatmap_row.replace("_", " ")
 
         # Results to be populated by _run_sql_pipeline()
         self.n_games = 0
@@ -329,10 +295,7 @@ class Analyzer:
         # 0. Settle ply tertile cutpoints from the WHOLE source dataset (a priori),
         # then assign each row's tertile by those fixed boundaries (no ntile over
         # the filtered subset). Tertile = 1 + #cutpoints exceeded (avoids CASE).
-        if self.segment_cuts is not None:
-            c1, c2 = self.segment_cuts
-        else:
-            c1, c2 = _infer_tertile_cuts(self.conn, self.segment_source, self.segment_column)
+        c1, c2 = _infer_tertile_cuts(self.conn, self.segment_source, self.segment_column)
         self.ply_cuts = (c1, c2)
         tertile_expr = f"(1 + ({self.segment_column} > {c1})::INT + ({self.segment_column} > {c2})::INT)"
 
@@ -404,29 +367,6 @@ class Analyzer:
         self.quantile_df["is_mass"] = self.quantile_df["qbin"].apply(self._is_mass_qbin)
         self.quantile_tertile_df["is_mass"] = self.quantile_tertile_df["qbin"].apply(self._is_mass_qbin)
 
-        if self.quantile_heatmap_row:
-            hr = self.quantile_heatmap_row
-            nb = self.n_bins
-            self.quantile_heatmap_mean_df = self.conn.execute(f"""
-                PIVOT (
-                    SELECT
-                        ntile({nb}) OVER (ORDER BY {self.x.column}) AS x_qbin,
-                        ntile({nb}) OVER (ORDER BY {hr}) AS row_qbin,
-                        _y_transformed
-                    FROM _analyzer_view
-                )
-                ON x_qbin USING avg(_y_transformed) GROUP BY row_qbin
-            """).df().set_index("row_qbin")
-            self.quantile_heatmap_count_df = self.conn.execute(f"""
-                PIVOT (
-                    SELECT
-                        ntile({nb}) OVER (ORDER BY {self.x.column}) AS x_qbin,
-                        ntile({nb}) OVER (ORDER BY {hr}) AS row_qbin
-                    FROM _analyzer_view
-                )
-                ON x_qbin USING count(*) GROUP BY row_qbin
-            """).df().set_index("row_qbin")
-
     def _is_mass_qbin(self, qbin: int) -> bool:
         """True iff ``qbin`` is the sentinel for a dedicated zero/edge point-mass
         (0 for the zero_inflated lump, > n_bins for an edge_mass clause — see
@@ -443,8 +383,6 @@ class Analyzer:
     def _ply_tertile_legend_label(self, tertile_id: int) -> str:
         """Fixed legend label from the a-priori (whole-dataset) tertile cutpoints, prefixed
         with ``segment_label`` (e.g. 'ply < 28' for ply, 'GSS 2–31' for a GSS segmentation)."""
-        if self.segment_range_labels is not None:  # caller-supplied explicit labels
-            return self.segment_range_labels.get(tertile_id, f"{self.segment_label} tertile {tertile_id}")
         c1, c2 = self.ply_cuts
         lab = self.segment_label
         if isinstance(c1, int):  # integer segment (e.g. ply): clean "< n" boundaries
@@ -532,35 +470,6 @@ class Analyzer:
             handlelength=1.2,
         )
 
-    def plot_quantile_heatmap(self, ax, *, alpha_mode: str = "log"):
-        """
-        Joint quantile bins of ``x`` and ``quantile_heatmap_row``: cell color = mean transformed Y;
-        alpha = cell frequency (see ``plot_heatmap_with_alpha``).
-        """
-        if not self.quantile_heatmap_row:
-            raise ValueError(
-                "Quantile heatmap requires Analyzer(..., quantile_heatmap_row='<column>', ...), "
-                "e.g. quantile_heatmap_row='move_ply' for clock vs ply."
-            )
-        mean_df = self.quantile_heatmap_mean_df
-        count_df = self.quantile_heatmap_count_df
-        if mean_df is None or mean_df.empty:
-            return
-
-        y_disp = (r"$\log(" + self.y.label + ")$") if self.y.is_log else self.y.label
-        plot_heatmap_with_alpha(
-            ax,
-            mean_df,
-            count_df,
-            get_isoluminant_cmap(),
-            alpha_mode=alpha_mode,
-            value_label=f"Mean {y_disp}",
-            imshow_aspect="equal",
-        )
-        ax.set_xlabel(f"{self.x.label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=36)
-        ax.set_ylabel(f"{self._quantile_heatmap_row_label} quantile bin", fontsize=FONT_SIZE_LABEL, labelpad=48)
-        ax.set_title("Quantile × quantile heatmap", fontsize=FONT_SIZE_LABEL, pad=12)
-
     def plot_quantile_bins(self, ax):
         """Plots the trend across equal-sized quantile bins."""
         y_label = "Response time (s)" if self.y.is_log else self.y.label
@@ -581,206 +490,3 @@ class Analyzer:
             _seconds_from_log(ax.yaxis)  # log-spaced positions, second-valued tick labels
         if self.x.is_log and len(df) and (df["mean_x"] > 0).any():
             ax.set_xscale("log")  # mean_x is raw units; log-scale the axis (skip empty/no-positive panels)
-
-    # --- Binning-free estimator (LOWESS + curve-level bootstrap band) ----------
-    # For a CONTINUOUS predictor, a fixed-K binned staircase does not converge to the
-    # smooth regression function as n grows (its resolution is frozen by K); a bandwidth
-    # smoother does. We isolate any value point-mass (e.g. Gain's 55% at exactly 0, which
-    # violates local smoothness) as its own labeled point and LOWESS only the continuous
-    # remainder. See diagnose_gain.md "Gain binning (K-vs-n)".
-
-    def _fetch_xy(self, tertile: int | None = None):
-        """Raw (x, _y_transformed) arrays from the analyzer view, optionally one ply tertile."""
-        where = "" if tertile is None else f" WHERE _ply_tertile = {int(tertile)}"
-        cols = self.conn.execute(
-            f"SELECT {self.x.column} AS x, _y_transformed AS y FROM _analyzer_view{where}"
-        ).fetchnumpy()
-        x = np.asarray(cols["x"], dtype=float)
-        y = np.asarray(cols["y"], dtype=float)
-        finite = np.isfinite(x) & np.isfinite(y)
-        return x[finite], y[finite]
-
-    def plot_lowess(self, ax, *, mass_values=(), frac: float = 0.3, n_boot: int = 120,
-                    grid_n: int = 120, color=None, tertile: int | None = None,
-                    show_band: bool = True, band_alpha: float = 0.22, show_mass: bool = True,
-                    overlay_binned: bool = False, label_prefix: str = "", max_fit_n: int = 500_000):
-        """LOWESS fit of (transformed) Y on X + curve-level bootstrap band, with value
-        point-masses in ``mass_values`` isolated (always excluded from the fit; drawn as
-        their own SEM point when ``show_mass``)."""
-        from analysis.utils.jaggedness import lowess_bootstrap
-        color = color or MAIN_COLOR
-        x, y = self._fetch_xy(tertile=tertile)
-        if x.size == 0:
-            return
-        keep = np.ones(x.size, dtype=bool)
-        mass_points = []
-        for v in mass_values:
-            at = np.isclose(x, v, atol=1e-9)
-            if at.sum() >= max(self.min_bin_count, 1):
-                yc = y[at]
-                mass_points.append((float(v), float(yc.mean()),
-                                    float(1.96 * yc.std() / np.sqrt(yc.size)), int(at.sum())))
-                keep &= ~at
-        # Fit in the DISPLAYED x-coordinate: log(x) when the x-axis is log (e.g. RT), raw
-        # otherwise, so the smoother's bandwidth matches what the eye sees.
-        xc_fit = np.log(x[keep]) if self.x.is_log else x[keep]
-        yc = y[keep]
-        good = np.isfinite(xc_fit) & np.isfinite(yc)
-        xc_fit, yc = xc_fit[good], yc[good]
-        if xc_fit.size > max_fit_n:
-            # The LOWESS curve + (already very tight) band are unchanged by capping the fit
-            # sample; this just keeps the bootstrap tractable on the multi-million-row panels.
-            sel = np.random.default_rng(0).choice(xc_fit.size, max_fit_n, replace=False)
-            xc_fit, yc = xc_fit[sel], yc[sel]
-        if xc_fit.size >= 50:
-            lo_x, hi_x = np.quantile(xc_fit, [0.002, 0.998])  # trim sparse extremes for a stable band
-            grid = np.linspace(lo_x, hi_x, grid_n)
-            delta = 0.01 * float(xc_fit.max() - xc_fit.min() + 1e-12)  # statsmodels large-n speedup
-            res = lowess_bootstrap(xc_fit, yc, grid, frac=frac, n_boot=n_boot, delta=delta)
-            grid_plot = np.exp(grid) if self.x.is_log else grid  # back to raw units for a log-scaled axis
-            # Method (LOWESS + band) is stated in the figure title, not the legend.
-            # Only the per-tertile curve carries a (tertile-name) label; the global curve
-            # and the band carry none, to keep the legend minimal.
-            curve_label = label_prefix.rstrip(": ") or None
-            if show_band:
-                ax.fill_between(grid_plot, res["lo"], res["hi"], color=color, alpha=band_alpha,
-                                lw=0)
-            ax.plot(grid_plot, res["fit"], color=color, lw=3.5, label=curve_label)
-        if show_mass:
-            for v, c, half, n in mass_points:
-                ax.errorbar([v], [c], yerr=[half], marker="x", ms=11, color=_MASS_COLOR,
-                            mew=2.5, ecolor=_MASS_COLOR, elinewidth=1.8,
-                            capsize=3, zorder=5, label=f"x={v:g} mass (n={n:,})")
-        if overlay_binned and tertile is None:
-            df = self.quantile_df
-            if self.min_bin_count:
-                df = df[df["n"] >= self.min_bin_count]
-            ax.scatter(df["mean_x"], df["mean_y"], s=16, color="0.5", alpha=0.5, zorder=1,
-                       label="binned means (sanity)")
-        ax.set_xlabel(self.x.label)  # raw label — LOWESS is binning-free, so no "(qbin)" suffix
-        ax.set_ylabel("Response time (s)" if self.y.is_log else self.y.label)
-        if self.y.is_log:
-            _seconds_from_log(ax.yaxis)
-        if self.x.is_log:
-            ax.set_xscale("log")
-
-    def plot_lowess_tertile_segmented(self, ax, *, mass_values=(), frac: float = 0.3,
-                                      n_boot: int = 60, grid_n: int = 120):
-        """One LOWESS curve per fixed ply tertile (thin bands), colors/labels matching the
-        binned tertile panel. Masses are isolated from each fit but not drawn (global feature)."""
-        for t in (1, 2, 3):
-            self.plot_lowess(ax, mass_values=mass_values, frac=frac, n_boot=n_boot,
-                             grid_n=grid_n, color=PHASE_COLORS.get(t, MAIN_COLOR), tertile=t,
-                             show_band=True, band_alpha=0.12, show_mass=False,
-                             label_prefix=self._ply_tertile_legend_label(t) + ": ")
-        # Same right-docked placement as plot_quantile_bins_tertile_segmented's
-        # ply-tertile legend (below-axes stacking crowds a narrow panel's x-label).
-        ax.legend(fontsize=LEGEND_FONTSIZE, loc="center left",
-                  bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False, handlelength=1.2)
-
-    def save_quantile_heatmap_figure(
-        self,
-        output_path,
-        *,
-        heatmap_alpha_mode: str = "log",
-    ):
-        """Save a single-panel quantile×quantile heatmap (not embedded in the 2×2 dashboard)."""
-        if not self.quantile_heatmap_row:
-            raise ValueError(
-                "save_quantile_heatmap_figure requires Analyzer(..., quantile_heatmap_row='<column>')."
-            )
-        apply_poster_style()
-        fig, ax = plt.subplots(figsize=(22, 18))
-        self.plot_quantile_heatmap(ax, alpha_mode=heatmap_alpha_mode)
-        fig.suptitle(f"{self.title}\nn = {self.n_moves:,} moves", fontsize=FONT_SIZE_LABEL + 10, y=0.98)
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        out_dir = os.path.dirname(output_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-        plt.savefig(output_path, dpi=300, bbox_inches="tight")
-        plt.close()
-        print(f"✅ Quantile heatmap saved to {output_path}")
-
-    def save_dashboard(
-        self,
-        output_path,
-        *,
-        include_quantile_heatmap: bool = False,
-        heatmap_alpha_mode: str = "log",
-        heatmap_output_path: str | None = None,
-        estimator: str = "binned",
-        mass_values=(),
-        lowess_frac: float = 0.3,
-    ):
-        """Generates and saves a publication-ready dashboard.
-
-        Fixed 1×2 layout: **Quantile bins** (global ranks, left) and **Quantile bins
-        (by ply tertile)** (ntile recomputed within each fixed, a-priori ply tertile, right).
-        Raw-trend and scatter panels were removed — quantile binning is the canonical view.
-
-        Set ``include_quantile_heatmap=True`` (with ``quantile_heatmap_row='...'`` on
-        construction) to also write the quantile×quantile heatmap as a **separate** PNG
-        next to the dashboard (default ``<stem>_quantile_heatmap<ext>``). Pass
-        ``heatmap_output_path`` to override the heatmap destination.
-        """
-        apply_poster_style()
-
-        if include_quantile_heatmap and not self.quantile_heatmap_row:
-            raise ValueError(
-                "include_quantile_heatmap requires Analyzer(..., quantile_heatmap_row='<column>')."
-            )
-
-        fig, axes = plt.subplots(1, 2, figsize=(30, 13.72))
-        if estimator == "lowess":
-            # CONTINUOUS predictor: binning-free LOWESS + bootstrap band (left = global,
-            # right = by ply tertile). Value masses isolated as their own points. Method
-            # named in the title; legend minimal (mass point only, when present).
-            self.plot_lowess(axes[0], mass_values=mass_values, frac=lowess_frac)
-            if axes[0].get_legend_handles_labels()[1]:
-                axes[0].legend(fontsize=LEGEND_FONTSIZE, loc="upper center",
-                               bbox_to_anchor=(0.5, -0.16), ncol=1, frameon=False)  # below the panel
-            self.plot_lowess_tertile_segmented(axes[1], mass_values=mass_values, frac=lowess_frac)
-        else:
-            self.plot_quantile_bins(axes[0])
-            self.plot_quantile_bins_tertile_segmented(axes[1])
-        # Panel titles omitted — left = global, right = by ply tertile (implied by
-        # the legend + the "(qbin)" x-axis).
-
-        # Push the panels down so the suptitle clears them with a comfortable gap.
-        fig.subplots_adjust(top=0.80)
-        # Name the estimator in the title (not the legend): LOWESS for the smoother,
-        # "quantile bins" only when it is actually qbin'd; native-integer panels say nothing.
-        method = (" — LOWESS + 95% bootstrap band" if estimator == "lowess"
-                  else " — quantile bins" if self.bin_mode == "ntile" else "")
-        suptitle = fig.suptitle(f"{self.title}{method}\nn = {self.n_moves:,} moves",
-                                fontsize=FONT_SIZE_LABEL + 10, y=1.0)
-
-        # Crop tightly on save and explicitly include the below-axes legend +
-        # suptitle as extra artists so they aren't clipped (bbox_inches='tight'
-        # alone misses the legend placed outside the axes via bbox_to_anchor).
-        extra_artists = [suptitle]
-        for _ax in axes:  # capture every below-panel legend (both panels can have one now)
-            _lg = _ax.get_legend()
-            if _lg is not None:
-                extra_artists.append(_lg)
-        out_dir = os.path.dirname(output_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-        plt.savefig(
-            output_path,
-            dpi=300,
-            bbox_inches="tight",
-            bbox_extra_artists=extra_artists,
-            pad_inches=0.3,
-        )
-        plt.close()
-        print(f"✅ Dashboard saved to {output_path}")
-
-        if include_quantile_heatmap:
-            if heatmap_output_path is None:
-                root, ext = os.path.splitext(output_path)
-                heatmap_output_path = f"{root}_quantile_heatmap{ext}"
-            self.save_quantile_heatmap_figure(
-                heatmap_output_path,
-                heatmap_alpha_mode=heatmap_alpha_mode,
-            )

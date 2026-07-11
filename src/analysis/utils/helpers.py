@@ -76,13 +76,35 @@ PHASE_COLORS = {
     3: "#0c2197",  # Dark indigo-blue (Late)
 }
 
+_HELVETICA_FAMILY = None
+
+
+def _register_bundled_helvetica() -> str:
+    """Register the repo's bundled Helvetica Neue OTF (fonts/) so matplotlib can find it by
+    name -- listing "Helvetica" in font.sans-serif alone does nothing on a system that has no
+    font of that name, and silently falls through to a lookalike (Nimbus Sans)."""
+    global _HELVETICA_FAMILY
+    if _HELVETICA_FAMILY is None:
+        from matplotlib import font_manager
+        reg = _REPO_ROOT / "fonts" / "HelveticaNeue-Roman.otf"
+        if reg.is_file():
+            for otf in (reg, reg.with_name("HelveticaNeue-Bold.otf")):
+                if otf.is_file():
+                    font_manager.fontManager.addfont(str(otf))
+            _HELVETICA_FAMILY = font_manager.FontProperties(fname=str(reg)).get_name()
+        else:
+            _HELVETICA_FAMILY = ""
+    return _HELVETICA_FAMILY
+
+
 def apply_poster_style():
     """Apply global matplotlib settings for Poster Style."""
-    # Helvetica by name, falling back to "Nimbus Sans" (a free Helvetica-metric-
-    # compatible clone present on this system) or Arial, then the matplotlib default —
-    # without this, matplotlib silently falls back to DejaVu Sans everywhere.
+    # Bundled Helvetica Neue OTF (same house font as analysis.evaluate's plots) by name,
+    # falling back to "Nimbus Sans" (a free Helvetica-metric-compatible clone present on this
+    # system) or Arial, then the matplotlib default.
+    family = _register_bundled_helvetica()
     plt.rcParams['font.family'] = 'sans-serif'
-    plt.rcParams['font.sans-serif'] = ['Helvetica', 'Nimbus Sans', 'Arial', 'DejaVu Sans']
+    plt.rcParams['font.sans-serif'] = ([family] if family else []) + ['Helvetica Neue', 'Nimbus Sans', 'Arial', 'DejaVu Sans']
     plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICKS
     plt.rcParams['ytick.labelsize'] = FONT_SIZE_TICKS
     plt.rcParams['axes.spines.top'] = False

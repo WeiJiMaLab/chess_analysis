@@ -146,13 +146,11 @@ class ControllerBatch:
     tree_sizes: torch.Tensor  # [num_snapshots] N_t scalar fed into the advantage head
     time_budgets: torch.Tensor  # [num_snapshots] T_t scalar fed into the advantage head
     paths: List[str]  # episode keys (one per episode in this batch)
-    source_paths: List[str]  # underlying trajectory source paths (one per episode)
     path_lengths: List[int]  # number of snapshots per episode; used to repeat per-episode scalars to per-snapshot
     halt_rewards: List[List[float]]  # per-episode halt reward sequence
     oracle_stop_steps: List[int]  # per-episode oracle-optimal stop step (eval / loss weighting)
     oracle_values: List[float]  # per-episode oracle-optimal return (eval baseline for regret)
     starting_budgets: List[int]  # per-episode initial time budget T_0
-    budget_bucket_names: List[str]  # per-episode bucket label (scramble / medium-small / ...)
 
 
 @dataclass(frozen=True)
@@ -1056,13 +1054,11 @@ def collate_controller_episodes(episodes: Sequence[ControllerEpisode]) -> Contro
     tree_sizes_list = []
     time_budgets_list = []
     paths = []
-    source_paths = []
     path_lengths = []
     halt_rewards = []
     oracle_stop_steps = []
     oracle_values = []
     starting_budgets = []
-    budget_bucket_names = []
 
     # node_offset is the running base index for the next tree's nodes.
     # tree_idx counts trees-in-the-packed-batch (== number of snapshots
@@ -1106,13 +1102,11 @@ def collate_controller_episodes(episodes: Sequence[ControllerEpisode]) -> Contro
         tree_sizes_list.append(episode.tree_sizes)
         time_budgets_list.append(episode.time_budgets)
         paths.append(episode.path)
-        source_paths.append(episode.source_path)
         path_lengths.append(len(episode.step_node_features))
         halt_rewards.append(episode.halt_rewards)
         oracle_stop_steps.append(episode.oracle_stop_step)
         oracle_values.append(episode.oracle_value)
         starting_budgets.append(episode.starting_budget)
-        budget_bucket_names.append(episode.budget_bucket_name)
 
     node_features = torch.cat(all_node_features, dim=0)
     parent_index = torch.cat(all_parent_index, dim=0)
@@ -1162,13 +1156,11 @@ def collate_controller_episodes(episodes: Sequence[ControllerEpisode]) -> Contro
         tree_sizes=torch.cat(tree_sizes_list, dim=0),
         time_budgets=torch.cat(time_budgets_list, dim=0),
         paths=paths,
-        source_paths=source_paths,
         path_lengths=path_lengths,
         halt_rewards=halt_rewards,
         oracle_stop_steps=oracle_stop_steps,
         oracle_values=oracle_values,
         starting_budgets=starting_budgets,
-        budget_bucket_names=budget_bucket_names,
     )
 
 
