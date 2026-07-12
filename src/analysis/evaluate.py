@@ -326,25 +326,29 @@ def _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, d_embe
     function still works unchanged for callers that don't need it.
 
     ``ev_curves``/``curves_out_dir`` are optional: when given, the PG fits track per-epoch held-out
-    regret and save it (CSV + PNG) under ``<curves_out_dir>/{stats,zt,ag}_training_curve.*``.
+    regret and save it (CSV + PNG) under ``<curves_out_dir>/eval/{stats,zt,ag}_training_curve.*`` --
+    its own "eval" subfolder, sibling to the encoder pretrain's own ``curves_out_dir/encoder/``
+    (``cts.data.build_tree._save_encoder_training_curves``), so an eval-only rerun (this function)
+    can never collide with or orphan the encoder's curves, and vice versa.
     """
+    eval_curves_dir = Path(curves_out_dir) / "eval" if curves_out_dir else None
     out = {
         "k_singlehalt": (kf := fit_singlehalt_stop(fit_curves)),
         "singlehalt": np.full(len(ev_idx), kf, dtype=int),
         "stats": _train_readout([_steps_stats_tensor(episodes[i]) for i in fit_idx],
                                 [_steps_stats_tensor(episodes[i]) for i in ev_idx], fit_curves,
                                 in_dim=4, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
-                                out_path=(Path(curves_out_dir) / "stats") if curves_out_dir else None),
+                                out_path=(eval_curves_dir / "stats") if eval_curves_dir else None),
         "zt": _train_readout([_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in fit_idx],
                              [_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in ev_idx], fit_curves,
                              in_dim=d_embed + 1, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
-                             out_path=(Path(curves_out_dir) / "zt") if curves_out_dir else None),
+                             out_path=(eval_curves_dir / "zt") if eval_curves_dir else None),
     }
     if episodes and "action_gaps" in episodes[fit_idx[0]]:
         out["ag"] = _train_readout([_steps_ag_tensor(episodes[i]) for i in fit_idx],
                                    [_steps_ag_tensor(episodes[i]) for i in ev_idx], fit_curves,
                                    in_dim=2, epochs=200, lr=1e-3, seed=seed, ev_curves=ev_curves,
-                                   out_path=(Path(curves_out_dir) / "ag") if curves_out_dir else None)
+                                   out_path=(eval_curves_dir / "ag") if eval_curves_dir else None)
     return out
 
 
@@ -627,9 +631,9 @@ def plot_regret_effort_frontier(packed_root: Path, cache_path: str | Path, out_d
     Saves the computed data to ``<out_dir>/frontier_data.json`` so the figure can be re-rendered later
     (different padding/styling/candidates) without redoing the expensive model fitting -- see
     ``replot_saved`` / ``--replot``. Also saves the Stats-/Zt-Controller PG training curves (train loss
-    + held-out regret per epoch) to ``<out_dir>/curves/{stats,zt}_training_curve.{csv,png}`` -- the one
-    place per run these controllers are fit at the headline regime, so this is where the curves are
-    captured (not the delta-regret sweep's many extra regime fits, or the decodability probe, which
+    + held-out regret per epoch) to ``<out_dir>/curves/eval/{stats,zt}_training_curve.{csv,png}`` --
+    the one place per run these controllers are fit at the headline regime, so this is where the curves
+    are captured (not the delta-regret sweep's many extra regime fits, or the decodability probe, which
     trains different, non-PG models).
     """
     data = _compute_frontier_data(packed_root, cache_path, d_embed=d_embed, time_mode=time_mode,
@@ -756,6 +760,103 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
     data = _compute_decodability_data(packed_root, cache_path, d_embed=d_embed, max_episodes=max_episodes, seed=seed)
     _save_json(data, Path(out_dir) / "decodability_data.json")
     return _render_decodability(data, out_dir)
+
+
+# One entry per baseline stop rule the scatter plot pairs against z_t -- name must be a key `ctrl`
+# (returned by `_fit_stop_controllers`) can produce.
+_SCATTER_BASELINES = [("singlehalt", "SingleHalt* (Fixed Stop)"), ("stats", "Tree-Stats Controller"),
+                      ("ag", "Action-Gap Controller")]
+
+
+def _compute_regret_scatter_data(packed_root: Path, cache_path: str | Path, *, d_embed: int = 32,
+                                 time_mode: str = "linear", time_lambda: float = 10.0,
+                                 maintenance_scale: float = 0.0, maintenance_exponent: float = 1.0,
+                                 max_episodes: int = 15000, seed: int = 0, train_frac: float = 0.7) -> dict:
+    """Per-episode paired regret, {SingleHalt*, Tree-Stats, Action-Gap} vs the z_t Meta-Controller, at
+    one cost regime -- fits the SAME controllers ``_compute_frontier_data`` does (same helper,
+    ``_fit_stop_controllers``), so this is a disaggregated read of that fit rather than a separate
+    one. ``ag`` is included only if ``episodes`` carry ``action_gaps`` (see ``_fit_stop_controllers``)
+    — silently omitted otherwise."""
+    config = replace(_oracle_config(packed_root), time_mode=time_mode, time_lambda=time_lambda,
+                     maintenance_scale=maintenance_scale, maintenance_exponent=maintenance_exponent)
+    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
+                                                                train_frac=train_frac, load_action_gaps=True)
+    curves = _return_curves(episodes, config)
+    ev = [curves[i] for i in ev_idx]
+    ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
+    zt_regret = _regret_at(ev, ctrl["zt"])
+    baselines = {name: _regret_at(ev, ctrl[name]).tolist() for name, _ in _SCATTER_BASELINES if name in ctrl}
+    return {"zt_regret": zt_regret.tolist(), "baselines": baselines, "time_mode": time_mode,
+            "time_lambda": time_lambda, "maintenance_scale": maintenance_scale,
+            "maintenance_exponent": maintenance_exponent}
+
+
+def _render_regret_scatter(data: dict, out_dir: str | Path) -> dict:
+    """One panel per baseline: x = z_t (Meta Controller) per-episode regret, y = the baseline's, plus
+    a y=x reference line. A point STRICTLY above the line is an episode where the baseline's regret
+    exceeds z_t's (z_t strictly did better); a point ON the line is a tie (same regret, often both
+    exactly 0 on an easy episode) -- so if z_t genuinely helps, most points should sit at-or-above the
+    line, but ties should be read as ties, not silently folded into "z_t wins" (see the printed
+    strict_win/tie/strict_loss breakdown, not a single tie-inclusive win rate). This is the raw,
+    per-episode picture behind the frontier plot's aggregate paired ``d_zs`` CI and the delta-regret
+    sweep's mean Δ (both signed the same way: baseline − z_t, positive = z_t wins)."""
+    _rcparams()
+    zt = np.asarray(data["zt_regret"])
+    names = [name for name, _ in _SCATTER_BASELINES if name in data["baselines"]]
+    fig, axes = plt.subplots(1, len(names), figsize=(0.6 * 4.6 * len(names), 0.6 * 4.6), squeeze=False)
+    axes = axes[0]
+    hi = float(zt.max())
+    for name in names:
+        hi = max(hi, float(np.asarray(data["baselines"][name]).max()))
+    hi *= 1.03
+    breakdown = {}
+    for ax, name in zip(axes, names):
+        label = dict(_SCATTER_BASELINES)[name]
+        y = np.asarray(data["baselines"][name])
+        # Strict win/tie/loss, not a single tie-inclusive ">=" figure: a naive win_frac = mean(y >=
+        # zt) silently counts ties as wins, which is fine when ties are rare (singlehalt) but VERY
+        # misleading when they're not -- e.g. AG ties z_t on ~2/3 of episodes here (both landing on
+        # the same trivial, exactly-zero-regret stop), so its tie-inclusive win_frac reads as a
+        # comfortable z_t win while the strict picture is a near-even split with a real loss rate.
+        strict_win = float(np.mean(y > zt))
+        tie = float(np.mean(np.isclose(y, zt)))
+        strict_loss = float(np.mean(y < zt))
+        breakdown[name] = {"strict_win": strict_win, "tie": tie, "strict_loss": strict_loss}
+        ax.plot([0, hi], [0, hi], color=_MUTED, lw=1.2, ls="--", zorder=1, label="y = x")
+        # Own (smaller) size + (lower) alpha than _PT_SIZE/_PT_ALPHA: those are tuned for the
+        # frontier/delta plots' single summary markers per series, not a several-hundred-point cloud
+        # like this one, where the default size/0.88 alpha just saturates to a solid blob near the
+        # origin and hides which side of the line most points actually fall on.
+        ax.scatter(zt, y, s=_PT_SIZE, alpha=0.55, color=_C[name], edgecolors="none", zorder=3)
+        ax.set_xlim(0, hi); ax.set_ylim(0, hi)
+        ax.set_aspect("equal")
+        ax.set_xlabel("$z_t$ (Meta Controller) regret", fontsize=11)
+        ax.set_ylabel(f"{label} regret", fontsize=11)
+        ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
+        ax.grid(color=_GRID, lw=1)
+    fig.tight_layout()
+    path = save_pdf_png(fig, str(out_dir), "regret_scatter", dpi=200)
+    print("[assess] regret scatter vs z_t: " +
+          "  ".join(f"{dict(_SCATTER_BASELINES)[name]}: {b['strict_win']:.0%} win, {b['tie']:.0%} tie, "
+                    f"{b['strict_loss']:.0%} loss" for name, b in breakdown.items()), flush=True)
+    print(f"Saved regret scatter figure: {path}", flush=True)
+    return {"breakdown": breakdown}
+
+
+def plot_regret_scatter(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                        d_embed: int = 32, time_mode: str = "linear", time_lambda: float = 10.0,
+                        maintenance_scale: float = 0.0, maintenance_exponent: float = 1.0,
+                        max_episodes: int = 15000, seed: int = 0):
+    """(3) Per-episode regret scatter, {SingleHalt*, Tree-Stats, Action-Gap} vs the z_t
+    Meta-Controller -- see ``_render_regret_scatter`` for the full docstring. Saves computed data to
+    ``<out_dir>/regret_scatter_data.json`` for cheap re-rendering -- see ``replot_saved``/``--replot``."""
+    data = _compute_regret_scatter_data(packed_root, cache_path, d_embed=d_embed, time_mode=time_mode,
+                                        time_lambda=time_lambda, maintenance_scale=maintenance_scale,
+                                        maintenance_exponent=maintenance_exponent, max_episodes=max_episodes,
+                                        seed=seed)
+    _save_json(data, Path(out_dir) / "regret_scatter_data.json")
+    return _render_regret_scatter(data, out_dir)
 
 
 _DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "Fixed Stop"), ("stats", _C["stats"], "Tree Stats"),
@@ -951,6 +1052,17 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     _delta_ci_panel(axB, labels_b, deltas_b)
     _finish(figB, axB, "delta_mean_regret_maintenance")
 
+    # Figures no longer carry an in-image title (removed 2026-07-11) -- the regime each
+    # panel was generated under (in particular the maintenance panel's fixed λ, not
+    # otherwise visible anywhere on that figure) is recorded here instead.
+    _save_json(
+        {
+            "delta_mean_regret_lambda": "varying linear cost λ (maintenance = 0)",
+            "delta_mean_regret_maintenance": f"varying maintenance scale (linear λ={data['maint_lambda']:g})",
+        },
+        Path(out_dir) / "delta_regret_manifest.json",
+    )
+
     for group_label, labels, deltas in [("lambda", labels_a, deltas_a), ("maintenance", labels_b, deltas_b)]:
         for lbl, d in zip(labels, deltas):
             summary = "  ".join(f"{k}={_mean_ci(d[k])[0]:+.1f}" for k, _, _ in _DELTA_CANDIDATES)
@@ -1003,6 +1115,8 @@ def replot_saved(out_dir: str | Path, which: str = "all") -> None:
         _render_frontier(_load_json(out_dir / "frontier_data.json"), out_dir)
     if which in ("decodability", "all"):
         _render_decodability(_load_json(out_dir / "decodability_data.json"), out_dir)
+    if which in ("regret-scatter", "all"):
+        _render_regret_scatter(_load_json(out_dir / "regret_scatter_data.json"), out_dir)
     if which in ("separation", "all"):
         _render_delta_regret(_load_json(out_dir / "delta_regret_data.json"), out_dir)
 
@@ -1017,8 +1131,8 @@ def main() -> None:
     ap.add_argument("--cache", help="validation materialized cache (.pt); MUST be shuffle=False "
                     "(not needed with --replot)")
     ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/normative")
-    ap.add_argument("--which", choices=["frontier", "decodability", "separation", "regime-fit",
-                                        "regime-collect", "all"], default="all")
+    ap.add_argument("--which", choices=["frontier", "decodability", "regret-scatter", "separation",
+                                        "regime-fit", "regime-collect", "all"], default="all")
     ap.add_argument("--replot", action="store_true",
                     help="re-render from --out-dir's saved *_data.json instead of recomputing -- "
                     "skips data loading + model fitting entirely, use after changing plotting-only code")
@@ -1068,6 +1182,10 @@ def main() -> None:
                                     maintenance_exponent=args.maintenance_exponent, max_episodes=args.max_episodes)
     if args.which in ("decodability", "all"):
         plot_r_decodability(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=min(args.max_episodes, 12000))
+    if args.which in ("regret-scatter", "all"):
+        plot_regret_scatter(packed_root, args.cache, out, d_embed=args.d_embed, time_mode=args.time_mode,
+                            time_lambda=args.time_lambda, maintenance_scale=args.maintenance_scale,
+                            maintenance_exponent=args.maintenance_exponent, max_episodes=args.max_episodes)
     if args.which in ("separation", "all"):
         plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes,
                                 lambda_grid=lambda_grid, maint_lambda=args.maint_lambda, maint_grid=maint_grid,

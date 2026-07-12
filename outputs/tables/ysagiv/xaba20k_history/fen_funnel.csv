@@ -1,0 +1,6 @@
+stage,description,n_fens,pct_of_previous_stage,pct_of_raw_pool
+source_corpus,ysagiv human_trees read-only source corpus (all root FENs),1078585,100.00,100.00
+tree_subsample,seeded random subsample of the source corpus (split.source_root),200000,18.54,18.54
+xaba_exclusion_filter,subsample survivors of the xaba-exclusion filter (split.include_list),132062,66.03,12.24
+train_split,training-set episodes (train_manifest.txt),105650,80.00,9.80
+validation_split,validation-set episodes (validation_manifest.txt),26412,25.00,2.45

@@ -99,44 +99,38 @@ both real configs currently in use.
 
 ## Validated results
 
-- **Mechanism**: replayed root-child Q vs. the tree's own stored
-  `oracle_root_q_trace` — mean error 3.3e-5, 0.16% of (tree, step, root-child)
-  comparisons exceed 1e-3 on `human_trees` (residual traced to unrecoverable
-  terminal-leaf-revisit backprop mass, not a bug).
-- **Fix takes effect**: diff test vs. the old frozen-value `mc_packed/` output —
-  structure and root oracle values byte-identical, per-step node features now
-  genuinely differ at every step, confirmed at full production scale.
-- **Pipeline runs end-to-end**: `xaba20k` and `xaba100k_minply15_maxply75` both
-  completed all 5 stages cleanly (`packhistory_trees` →
-  `packhistory_GNNpretrain` → `train_encoder` → `packhistory_MCmaterialize` →
-  `train_readout_pg`).
-- **The fix is a real improvement, not just mechanically correct**: matched-
-  procedure comparison (same PG training loop, same cost regimes) — `z_t` beats
-  a simple root-action-gap stopping heuristic in **10/10 cost regimes tested,
-  all statistically significant** (paired bootstrap CI excludes 0).
-  R-decodability (can the feature predict the value of continuing?): `z_t`
-  R²=0.619 vs. action-gap R²=0.289. Frontier regret: `z_t`=0.0247 vs.
-  action-gap=0.0307 (non-overlapping CIs). One open, partial finding:
-  `z_t → action-gap` recoverability is real but lossy (R²=0.58–0.68, not ~1.0)
-  — a 32-dim embedding compressing a whole tree plausibly can't preserve every
-  derived scalar losslessly; not further explained.
-- **Same head-to-head repeated on `xaba100k_minply15_maxply75`** (2026-07-11),
-  after the topology-mismatch and `root_rank` bugfixes above, confirming the
-  `xaba20k` result isn't a one-dataset fluke. Frontier (linear cost,
-  `λ=0.005`, maintenance=0, 4097 episodes): `z_t`-Controller regret=**0.0359**
-  `[0.0330, 0.0388]` vs. AG-Controller=**0.0414** `[0.0383, 0.0446]` vs.
-  Stats-Controller=0.0699 vs. SingleHalt\*(fixed, k=4)=0.0830 — `z_t` lowest of
-  all four. Paired bootstrap (`AG − z_t` regret, same 4097 episodes,
-  `cts.stats.bootstrap_ci`, matching this repo's percentile-bootstrap-always
-  convention): mean=+0.0058, 95% CI `[+0.0031, +0.0091]`, excludes 0 — `z_t`
-  significantly beats the hand-crafted action-gap baseline here too, not just
-  tree-stats/fixed-stop (the unpaired frontier CIs above only barely overlap;
-  the paired test is the one that actually resolves it). R-decodability: `z_t`
-  R²=0.474/0.567 (linear/MLP) vs. action-gap=0.112/0.351 vs. steps=0.069/0.136
-  vs. all-features=0.501/0.729 — same "R lives in `z_t`, not tree structure"
-  pattern as `xaba20k`. `z_t → action-gap` recoverability: R²=0.539/0.566,
-  same lossy-but-real range as `xaba20k`. Figures:
-  `outputs/figures/ysagiv/xaba100k_minply15_maxply75_history/{frontier,decodability,delta_regret}_data.json`.
+Figure/legend naming (`src/analysis/evaluate.py`, current as of 2026-07-11): the readout this
+whole fix is about is labeled **Meta Controller** (code/config name `z_t`); baselines are
+**Tree Stats**, **Action Gap** (hand-crafted, zero-training root top1-minus-top2 backed-up
+Q-gap), and **Fixed Stop** (best single fixed stop step, argmin over the fit split). Δ-regret
+plots read `Model − Meta Controller`; positive = Meta Controller wins. These are the exact
+strings rendered in the frontier and delta-regret figures — older labels like `z_t-Controller`/
+`SingleHalt*`/`AG-Controller` in prior notes refer to the same things.
+
+- **Mechanism**: replayed root-child Q vs. the tree's own stored `oracle_root_q_trace` — mean
+  error 3.3e-5, 0.16% of comparisons exceed 1e-3 on `human_trees` (residual traced to
+  unrecoverable terminal-leaf-revisit backprop mass, not a bug).
+- **Fix takes effect**: diff vs. the old frozen-value `mc_packed/` output — structure and root
+  oracle values byte-identical, per-step node features now genuinely differ at every step,
+  confirmed at full production scale.
+- **Pipeline runs end-to-end**: `xaba20k` and `xaba100k_minply15_maxply75` both completed all 5
+  stages cleanly (`packhistory_trees` → `packhistory_GNNpretrain` → `train_encoder` →
+  `packhistory_MCmaterialize` → `train_readout_pg`).
+- **Meta Controller beats both baselines, confirmed on two independent datasets** — matched-
+  procedure comparison (same PG training loop, same cost regimes) each time. `xaba100k` runs
+  post the topology-mismatch and `root_rank` bugfixes (see Known issues) and repeats the
+  `xaba20k` pattern, which rules out either bug as the source of the edge:
+
+  | | `xaba20k` (2026-07-10) | `xaba100k_minply15_maxply75` (2026-07-11, post-bugfix) |
+  |---|---|---|
+  | vs. Action Gap | wins **10/10** cost regimes, all significant (paired bootstrap CI excl. 0) | linear λ=0.005: paired `Action Gap − Meta Controller` = +0.0058, 95% CI `[+0.0031, +0.0091]` (excl. 0) |
+  | Frontier regret | Meta Controller=0.0247 vs. Action Gap=0.0307 (non-overlapping CI) | Meta Controller=**0.0359** `[0.0330,0.0388]` vs. Action Gap=0.0414 `[0.0383,0.0446]` vs. Tree Stats=0.0699 vs. Fixed Stop(k=4)=0.0830 |
+  | R-decodability (R² for value-of-continuing) | Meta Controller=0.619 vs. Action Gap=0.289 | Meta Controller=0.474/0.567 (linear/MLP) vs. Action Gap=0.112/0.351 vs. steps=0.069/0.136 vs. all-features=0.501/0.729 |
+  | Meta Controller → Action Gap recoverability | R²=0.58–0.68 (lossy, real) | R²=0.539/0.566 (same lossy-but-real range) |
+
+  Recoverability lossiness (both datasets) is unexplained beyond the plausible "a 32-dim
+  embedding can't losslessly preserve every derived scalar of the tree it compresses." Figures:
+  `outputs/figures/ysagiv/{xaba20k_history,xaba100k_minply15_maxply75_history}/{frontier,decodability,delta_regret}_data.json`.
 
 ## Test coverage (current, all passing against real data)
 

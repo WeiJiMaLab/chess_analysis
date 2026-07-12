@@ -1,10 +1,10 @@
 #!/bin/bash
 # Pipeline step — eval (CPU). Writes the meta-controller ASSESSMENT figures
-# (frontier / R-decodability / delta-mean-regret lambda+maintenance sweeps) via
-# `analysis.evaluate` — the mechanism behind outputs/reports/normative.md. Reads
-# paths from the `eval:` section of config.yaml. Refits the tree-stats + z_t
-# readouts (budget-out / steps-in) on the validation 70/30 split, so it needs the
-# z_t cache in RAM.
+# (frontier / R-decodability / per-episode regret scatter / delta-mean-regret
+# lambda+maintenance sweeps) via `analysis.evaluate` — the mechanism behind
+# outputs/reports/normative.md. Reads paths from the `eval:` section of config.yaml.
+# Refits the tree-stats + z_t readouts (budget-out / steps-in) on the validation
+# 70/30 split, so it needs the z_t cache in RAM.
 #
 # The delta-regret separation sweep (independent cost regimes, see
 # analysis.evaluate._regime_grid) used to run sequentially in-process here: each
@@ -31,17 +31,20 @@
 #SBATCH --output=/home/hl4291/chess_analysis/slurm/logs/%x_%j.out
 #SBATCH --error=/home/hl4291/chess_analysis/slurm/logs/%x_%j.err
 #SBATCH --partition=cpu
-#SBATCH --qos=test
+#SBATCH --qos=short
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --time=00:55:00
-# Now covers only the frontier fit + decodability probe + submitting the array/collector
-# (no longer blocks on either) -- the historical 10-regime in-process run needed 01:30:00
-# total, almost all of which was the sequential regime sweep now split out entirely. Was
-# 00:30:00 (2026-07-11 first cut, "generous headroom" for these two fits) but job 10989543
-# hit that limit mid-decodability: frontier+decodability took ~24min on della-h14n7 but
-# >30min on della-h12n16 -- node-speed variance on top of an already-thin margin.
-# 55min keeps real headroom while staying under qos=test's <=1h cutoff (della-qos-time-routing).
+#SBATCH --time=01:30:00
+# Covers the frontier fit + decodability probe + regret-scatter fit + submitting the
+# array/collector (no longer blocks on either) -- the historical 10-regime in-process run
+# needed 01:30:00 total, almost all of which was the sequential regime sweep now split out
+# entirely. frontier+decodability alone took ~24min on della-h14n7 but >30min on
+# della-h12n16 (node-speed variance); regret-scatter (2026-07-12) refits the same
+# {singlehalt, stats, ag} vs z_t controllers frontier does (no fit-result sharing across
+# separate `python -m` invocations), roughly doubling that cost. 55min --time (qos=test)
+# was already thin for frontier+decodability alone; bumped past the 1h qos=test/short
+# boundary rather than trim closer -- see della-qos-time-routing (TimeLimit is only a
+# ceiling, so this costs no resources, only slightly worse backfill priority).
 
 set -euo pipefail
 TINY=/home/hl4291/chess_analysis
@@ -74,6 +77,13 @@ python -m analysis.evaluate --which decodability \
   --packed-root "$PACKED" --cache "$MATVAL" --out-dir "$OUT" \
   --max-episodes "$MAX_EPISODES"
 
+echo "=== regret scatter ==="
+python -m analysis.evaluate --which regret-scatter \
+  --packed-root "$PACKED" --cache "$MATVAL" --out-dir "$OUT" \
+  --time-mode "$TIME_MODE" --time-lambda "$TIME_LAMBDA" \
+  --maintenance-scale "$MAINTENANCE_SCALE" --maintenance-exponent "$MAINTENANCE_EXPONENT" \
+  --max-episodes "$MAX_EPISODES"
+
 echo "=== separation: submitting regime-fit array + collector ==="
 # Grid size read straight off analysis.evaluate's own constants so the array bound can never drift
 # out of sync with what compute_regime_task/collect_regime_results actually index against.
@@ -87,4 +97,4 @@ COLLECT_JOBID=$(sbatch --parsable --dependency=afterok:$ARRAY_JOBID --export=ALL
   "$TINY/slurm/pipeline/eval_collect.slurm")
 echo "regime collect job (afterok:$ARRAY_JOBID): $COLLECT_JOBID"
 
-echo "EVAL SUBMIT DONE (frontier+decodability done here; separation continues as $ARRAY_JOBID -> $COLLECT_JOBID) -> $OUT"; date
+echo "EVAL SUBMIT DONE (frontier+decodability+regret-scatter done here; separation continues as $ARRAY_JOBID -> $COLLECT_JOBID) -> $OUT"; date
