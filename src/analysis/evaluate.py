@@ -548,7 +548,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # Left column stacks histogram (top) over the full-range frontier panel (bottom), sharing the
     # "Stop Step" x-axis since both are on the same scale; right column is the zoom panel, spanning
     # both rows and forced square via set_box_aspect regardless of its (non-square) cell.
-    fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.8))
+    fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.68))
     gs = fig.add_gridspec(2, 2, width_ratios=[1.5, 2], height_ratios=[0.55, 1], left=0.09, right=0.98,
                           top=0.95, bottom=0.20, hspace=0.4, wspace=0.28)
     axH = fig.add_subplot(gs[0, 0])
@@ -758,8 +758,8 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
     return _render_decodability(data, out_dir)
 
 
-_DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "SingleHalt*"), ("stats", _C["stats"], "Stats-Controller"),
-                    ("ag", _C["ag"], "AG-Controller"),
+_DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "Fixed Stop"), ("stats", _C["stats"], "Tree Stats"),
+                    ("ag", _C["ag"], "Action Gap"),
                     ("always_stop", _C["always"], "Always Stop"), ("always_continue", _C["never"], "Always Continue")]
 # Plotted subset for _delta_ci_panel: always_stop/always_continue are frequently degenerate (huge or
 # exactly-zero delta) and, since SingleHalt* is fit by argmin over EVERY fixed stop step (including
@@ -790,25 +790,27 @@ def _regime_deltas_vs_zt(episodes, z_by_ep, fit_idx, ev_idx, base_cfg, mode, lam
 
 
 def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDIDATES_DISPLAY):
-    """Horizontal dot-and-whisker: one row per regime, one 95% CI point per candidate (offset within
-    the row) — mean Δ regret vs z_t, same marker/size convention as the frontier plot's points.
+    """Horizontal dot-and-whisker: one row per regime, every candidate's 95% CI point drawn on that
+    SAME row (no vertical dodge) — mean Δ regret vs z_t, same marker/size convention as the frontier
+    plot's points. Candidates are distinguished by x-position/color only, so a row's dots always line
+    up with its regime's tick label (a per-candidate vertical offset here previously made rows look
+    like they belonged to the regime above/below them).
 
     Does NOT draw its own legend -- an axes-fraction ``bbox_to_anchor`` legend scales its absolute gap
     with the axes' height, which blows up on the many-row (maintenance) panel and cramps the few-row
     (lambda) panel. The caller (``_render_delta_regret``) builds one shared ``fig.legend`` per figure
     instead, matching the frontier plot's figure-level legend convention (gap sized off the whole
     figure, not the axes)."""
-    n, m = len(regime_labels), len(candidates)
-    step = 0.68 / m
-    for ci, (key, color, lbl) in enumerate(candidates):
-        positions = np.arange(n) + (ci - (m - 1) / 2) * step
+    n = len(regime_labels)
+    positions = np.arange(n)
+    for key, color, lbl in candidates:
         data = [deltas_by_regime[i][key] for i in range(n)]
         means, los, his = zip(*(_mean_ci(d) for d in data))
         xerr = [[me - lo for me, lo in zip(means, los)], [hi - me for me, hi in zip(means, his)]]
         ax.errorbar(means, positions, xerr=xerr, fmt="o", ms=_PT_SIZE, color=color, ecolor=color,
                     elinewidth=1.6, capsize=3.5, mec="none", alpha=_PT_ALPHA, zorder=6, label=lbl)
     ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
-    ax.set_yticks(np.arange(n)); ax.set_yticklabels(regime_labels, fontsize=10)
+    ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=10)
     ax.invert_yaxis()
     ax.set_xlabel("Δ regret  (model − $z_t$)", fontsize=11)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
