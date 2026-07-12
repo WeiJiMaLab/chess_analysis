@@ -120,6 +120,23 @@ both real configs currently in use.
   `z_t → action-gap` recoverability is real but lossy (R²=0.58–0.68, not ~1.0)
   — a 32-dim embedding compressing a whole tree plausibly can't preserve every
   derived scalar losslessly; not further explained.
+- **Same head-to-head repeated on `xaba100k_minply15_maxply75`** (2026-07-11),
+  after the topology-mismatch and `root_rank` bugfixes above, confirming the
+  `xaba20k` result isn't a one-dataset fluke. Frontier (linear cost,
+  `λ=0.005`, maintenance=0, 4097 episodes): `z_t`-Controller regret=**0.0359**
+  `[0.0330, 0.0388]` vs. AG-Controller=**0.0414** `[0.0383, 0.0446]` vs.
+  Stats-Controller=0.0699 vs. SingleHalt\*(fixed, k=4)=0.0830 — `z_t` lowest of
+  all four. Paired bootstrap (`AG − z_t` regret, same 4097 episodes,
+  `cts.stats.bootstrap_ci`, matching this repo's percentile-bootstrap-always
+  convention): mean=+0.0058, 95% CI `[+0.0031, +0.0091]`, excludes 0 — `z_t`
+  significantly beats the hand-crafted action-gap baseline here too, not just
+  tree-stats/fixed-stop (the unpaired frontier CIs above only barely overlap;
+  the paired test is the one that actually resolves it). R-decodability: `z_t`
+  R²=0.474/0.567 (linear/MLP) vs. action-gap=0.112/0.351 vs. steps=0.069/0.136
+  vs. all-features=0.501/0.729 — same "R lives in `z_t`, not tree structure"
+  pattern as `xaba20k`. `z_t → action-gap` recoverability: R²=0.539/0.566,
+  same lossy-but-real range as `xaba20k`. Figures:
+  `outputs/figures/ysagiv/xaba100k_minply15_maxply75_history/{frontier,decodability,delta_regret}_data.json`.
 
 ## Test coverage (current, all passing against real data)
 
@@ -162,6 +179,18 @@ Fixed, kept here only as a pointer for anyone reading old code/PRs:
 - Future-leakage: unvisited nodes/edges read their final end-of-search value
   instead of zero — fixed (zero-init, not clone-from-final-value), in both
   `wdl_var` and the general case.
+- **Versioning landmine**: `preprocess_mc/pack.py` serves both the old
+  `mc_pack` stage and the new `packhistory_trees` stage from one module and
+  unconditionally emits the new shard format (`CURRENT_SHARD_FORMAT`). Fixed
+  via `_assert_output_format_compatible`, called at the top of `main()` before
+  `--clear` or any write: if `output_root` already contains shards in a
+  different format (in practice, `LEGACY_SHARD_FORMAT`, the frozen
+  `mc_packed/` baseline's format) the run raises `RuntimeError` instead of
+  overwriting, unless `allow_format_migration=true` is passed explicitly. The
+  check runs even when `--clear` is set, since `--clear` is exactly the
+  destructive path this guards against. Tests:
+  `test_format_guard_*` in `test_packhistory_trees.py` (4, self-contained,
+  no real-data dependency).
 
 Still open:
 - **Cross-sibling leakage in `ChildWdlHead`**: perturbing one sibling's subtree
@@ -173,17 +202,8 @@ Still open:
   the final concat), not proven `T_n`-specific — **deferred by explicit user
   call**, not re-verified against a complete-tree fixture. Revisit if
   `train_readout_pg`'s halt decisions ever look sensitive to it.
-- **Versioning landmine**: `preprocess_mc/pack.py` serves both the old
-  `mc_pack` stage and the new `packhistory_trees` stage from one module,
-  unconditionally emitting the new shard format. The frozen `mc_packed/`
-  regression baseline is frozen only because nobody has re-run `mc_pack` since
-  the rewrite — a stray re-run would silently overwrite it with no error. No
-  guard implemented.
 - **Coverage skew**: late-born nodes (small `search_budget − n` window) get
   fewer valid `(n, n+k)` pairs. Monitor via `packhistory_GNNpretrain`'s
   diagnostics if late-tree calibration looks off.
-- `xaba100k_minply15_maxply75`'s `z_t`-vs-action-gap head-to-head (the Wave 3
-  sub-investigation done for `xaba20k`) hasn't been run yet — deliberate
-  follow-up, not run unattended alongside the main chain.
 - Raising `snapshots_per_tree` above 1, or smarter/sparser `n`-sampling than
   uniform-random, is a real lever not yet exercised.

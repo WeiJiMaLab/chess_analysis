@@ -34,6 +34,17 @@ from cts.data.preprocess_mc.oracle import (
 )
 
 
+# Shard-payload ``format`` strings. This module unconditionally writes
+# CURRENT_SHARD_FORMAT (the packhistory_trees rewrite's format); LEGACY_SHARD_FORMAT
+# is the pre-rewrite mc_pack format still carried by the frozen mc_packed/ regression
+# baseline (see history.md's "Versioning landmine" and _assert_output_format_compatible
+# below). Both configs' YAML sections are still named ``mc_pack:``, so nothing about the
+# CLI invocation itself distinguishes "pack fresh data" from "accidentally repoint
+# output_root at the frozen baseline and overwrite it" -- the format check is the guard.
+CURRENT_SHARD_FORMAT = "cts_packhistory_trees_shard_v1"
+LEGACY_SHARD_FORMAT = "cts_budgeted_controller_episode_shard_v4"
+
+
 class PackControllerEpisodesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -77,6 +88,11 @@ class PackControllerEpisodesConfig(BaseModel):
     very_large_max_time: int = 120
     downsample_trivial: float = 1.0
     clear: bool = False
+    # Must be set explicitly to pack into a directory that already holds shards in a
+    # different format (see CURRENT_SHARD_FORMAT/LEGACY_SHARD_FORMAT and
+    # _assert_output_format_compatible) -- the default False protects frozen baselines
+    # like mc_packed/ from a stray re-run silently overwriting them.
+    allow_format_migration: bool = False
 
 # Per-tree keep probability under budget-sensitivity sampling is linearly
 # interpolated from this floor (at score=0) up to 1.0 (at score=max). The
@@ -1393,10 +1409,11 @@ def _serialize_shard_payload(
     payload = {
         # New format for the packhistory_trees stage (rewrite of mc_pack): adds the
         # sparse per-edge backprop update log fields below. Bumped from
-        # "cts_budgeted_controller_episode_shard_v4" (the old mc_pack format, still
-        # used by pre-existing mc_packed/ shards, untouched by this stage) so
-        # consumers can tell the two apart.
-        "format": "cts_packhistory_trees_shard_v1",
+        # LEGACY_SHARD_FORMAT (the old mc_pack format, still used by pre-existing
+        # mc_packed/ shards, untouched by this stage) so consumers can tell the two
+        # apart -- and so _assert_output_format_compatible can detect a stray re-run
+        # pointed at an old-format directory before it overwrites anything.
+        "format": CURRENT_SHARD_FORMAT,
         "num_trajectories": len(buffers["trajectory_source_paths"]),
         "num_episodes": shard_episodes,
         "feature_names": list(schema.feature_names),
@@ -1887,6 +1904,42 @@ def _numpy_to_torch(result: dict) -> dict:
     return converted
 
 
+def _existing_shard_format(output_root: Path) -> Optional[str]:
+    """Return the ``format`` string of an arbitrary existing shard under ``output_root``, if any.
+
+    Every shard under a given ``output_root`` is written by the same pack.py run and
+    therefore shares one format, so sampling the first one found (train or validation,
+    whichever sorts first) is enough to detect a format mismatch before writing.
+    """
+    for shard_path in sorted(output_root.glob("*/shard_*.pt")):
+        payload = torch.load(shard_path, map_location="cpu", weights_only=False)
+        return payload.get("format")
+    return None
+
+
+def _assert_output_format_compatible(output_root: Path, allow_format_migration: bool) -> None:
+    """Refuse to pack into a directory that already holds shards in a different format.
+
+    This module unconditionally writes ``CURRENT_SHARD_FORMAT``. Without this check,
+    pointing ``output_root`` at an old-format directory -- most importantly the frozen
+    ``mc_packed/`` regression baseline (``LEGACY_SHARD_FORMAT``), which every real config
+    file still names identically (``mc_pack:``) -- would silently overwrite it with no
+    error, whether or not ``--clear`` is set. See history.md's "Versioning landmine".
+    """
+    if output_root.exists():
+        existing_format = _existing_shard_format(output_root)
+        if existing_format is not None and existing_format != CURRENT_SHARD_FORMAT and not allow_format_migration:
+            raise RuntimeError(
+                f"output_root={output_root} already contains shards in format "
+                f"{existing_format!r}, but this run would write {CURRENT_SHARD_FORMAT!r}. "
+                "Refusing to touch a directory in a different format -- this is very "
+                "likely a frozen regression baseline (e.g. mc_packed/) rather than a "
+                "directory safe to regenerate. Point output_root at a new directory, or "
+                "pass allow_format_migration=true if you are deliberately migrating this "
+                "directory's format and have already preserved anything worth keeping."
+            )
+
+
 def main(config: PackControllerEpisodesConfig) -> None:
     """CLI entry point: parse args, pack the train and validation splits, print summary stats."""
     if config.shard_size <= 0:
@@ -1896,6 +1949,8 @@ def main(config: PackControllerEpisodesConfig) -> None:
     output_root = Path(config.output_root)
     train_manifest = split_root / "train_manifest.txt"
     validation_manifest = split_root / "validation_manifest.txt"
+
+    _assert_output_format_compatible(output_root, config.allow_format_migration)
 
     # ``--clear`` wipes the output tree before packing. Files first, then
     # the now-empty directories in reverse-sorted order so children come

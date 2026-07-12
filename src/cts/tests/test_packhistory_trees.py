@@ -27,7 +27,12 @@ import torch
 
 from cts.core.schema import tree_encoder_feature_schema
 from cts.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
-from cts.data.preprocess_mc.pack import build_compact_trajectory
+from cts.data.preprocess_mc.pack import (
+    CURRENT_SHARD_FORMAT,
+    LEGACY_SHARD_FORMAT,
+    _assert_output_format_compatible,
+    build_compact_trajectory,
+)
 
 # ---------------------------------------------------------------------------
 # Real data locations (read-only source data -- see history.md "Directory
@@ -655,3 +660,43 @@ def test_diff_vs_old_mc_packed():
             continue
         checked_pairs.add(key)
         diff_old_new_shards(old_shard, new_shard)
+
+
+# ---------------------------------------------------------------------------
+# Versioning-landmine guard (history.md's "Versioning landmine" -- pack.py
+# unconditionally writes CURRENT_SHARD_FORMAT, so a stray re-run pointed at an
+# old-format directory like the frozen mc_packed/ baseline must be refused).
+# Self-contained: builds fake shard files, no real data dependency.
+# ---------------------------------------------------------------------------
+def _write_fake_shard(split_dir: Path, fmt: str) -> None:
+    split_dir.mkdir(parents=True, exist_ok=True)
+    torch.save({"format": fmt}, split_dir / "shard_00000.pt")
+
+
+def test_format_guard_allows_empty_output_root(tmp_path):
+    """A directory with nothing packed yet (or that doesn't exist) is always fine."""
+    _assert_output_format_compatible(tmp_path / "does_not_exist_yet", allow_format_migration=False)
+    (tmp_path / "empty").mkdir()
+    _assert_output_format_compatible(tmp_path / "empty", allow_format_migration=False)
+
+
+def test_format_guard_allows_matching_format(tmp_path):
+    """Re-running into a directory already in the current format (e.g. resuming
+    a partial run) is fine -- this is the common, safe case."""
+    _write_fake_shard(tmp_path / "train", CURRENT_SHARD_FORMAT)
+    _assert_output_format_compatible(tmp_path, allow_format_migration=False)
+
+
+def test_format_guard_blocks_legacy_format_by_default(tmp_path):
+    """The scenario this guard exists for: output_root already holds the old
+    mc_pack format (i.e. it's the frozen mc_packed/ baseline), and the caller
+    did not explicitly opt into overwriting it."""
+    _write_fake_shard(tmp_path / "train", LEGACY_SHARD_FORMAT)
+    with pytest.raises(RuntimeError, match="already contains shards in format"):
+        _assert_output_format_compatible(tmp_path, allow_format_migration=False)
+
+
+def test_format_guard_bypassed_with_explicit_opt_in(tmp_path):
+    """``allow_format_migration=True`` is the one sanctioned way past the guard."""
+    _write_fake_shard(tmp_path / "train", LEGACY_SHARD_FORMAT)
+    _assert_output_format_compatible(tmp_path, allow_format_migration=True)
