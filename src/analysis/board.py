@@ -223,15 +223,14 @@ _PLY_LEGEND_KW = dict(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=LE
                       handlelength=1.2)
 
 
-def move_time_summary(conn, table, *, ply_table: str | None = None, filename: str = "rt_distribution.pdf",
+def move_time_summary(conn, table, *, filename: str = "rt_distribution.pdf",
                       smoke: bool = False):
-    """log(RT) distribution histogram + normal QQ + mean-RT-vs-ply arc (whole game).
-
-    ``ply_table`` overrides the whole-game (unwindowed) table the ply-arc panel
-    reads from — defaults to ``table_processed_moves_nonzero``, but ``--smoke``
-    passes its own sampled view so this panel stays fast too. ``smoke=True`` skips
-    the pgfvals registration (see ``analysis.utils.pgfvals``) — a small sample must
-    never overwrite the canonical numbers a report cites."""
+    """log(RT) distribution histogram + normal QQ + mean-RT-vs-ply arc — all three
+    panels read the SAME whole-dataset, unwindowed ``table`` (``processed_moves_nonzero``,
+    or its ``--smoke`` sample), not the ply-windowed analysis population every other
+    board plot uses — this is the one panel meant to characterize RT collection-wide.
+    ``smoke=True`` skips the pgfvals registration (see ``analysis.utils.pgfvals``) —
+    a small sample must never overwrite the canonical numbers a report cites."""
     n_bins = CONFIG["response_time_histogram_bins"]
     n_qq = CONFIG["qq_plot_quantile_probes"]
 
@@ -271,12 +270,9 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     ).fetchone()[0], dtype=float)
     theoretical = stats.norm.ppf(probs, loc=mean, scale=std)  # QQ plot: theoretical Normal(mean, std) quantiles
 
-    def _weighted_median(df):
-        cumsum = df["n"].cumsum()
-        idx = (cumsum >= df["n"].sum() / 2).idxmax()
-        return float((df["bin_left"].iloc[idx] + df["bin_right"].iloc[idx]) / 2)
-
-    med_log = _weighted_median(lmt_bins)
+    # Exact median (not a histogram-bin-midpoint approximation): median commutes
+    # with the monotonic ln() transform, so this equals the true median(move_time).
+    med_log = conn.execute("SELECT median(ln_move_time) FROM _summary_view").fetchone()[0]
 
     apply_poster_style()
     # Extra figure height (10 -> 11.5): at FONT_SIZE_LABEL=52, ax_q's rotated
@@ -317,7 +313,7 @@ def move_time_summary(conn, table, *, ply_table: str | None = None, filename: st
     # Panel 3: RT vs ply over the WHOLE game (unwindowed) — same quantile-binned
     # trend machinery as every other panel, so it reads with identical visual weight.
     ply_analyzer = Analyzer(
-        db_conn=conn, table_name=ply_table or CONFIG["table_processed_moves_nonzero"],
+        db_conn=conn, table_name=table,
         x_var=Variable(column="move_ply", is_log=False, name="Ply (whole game)"),
         y_var=Variable(column="move_time", is_log=True, name="RT"),
         n_bins=20, tie_safe=True, min_bin_count=200,
@@ -1107,7 +1103,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
             f"       b.n_captures_avail, b.n_checks_avail "
             f"FROM {CONFIG['table_filtered']} m LEFT JOIN {CONFIG['table_board_features']} b USING (fen)"
         )
-        table, ply_table, prefix = "board_view", None, ""
+        table, rt_table, prefix = "board_view", CONFIG["table_processed_moves_nonzero"], ""
         if smoke:
             # Materialize as a TABLE, not a VIEW: a view would re-run the (expensive,
             # full-table-scanning) reservoir sample on EVERY downstream query — 9
@@ -1122,12 +1118,14 @@ def run_plot(db: str, smoke: bool = False) -> None:
                 "CREATE OR REPLACE TEMP TABLE processed_moves_nonzero_smoke AS "
                 f"SELECT * FROM {CONFIG['table_processed_moves_nonzero']} USING SAMPLE 50000 ROWS"
             )
-            table, ply_table, prefix = "board_view_smoke", "processed_moves_nonzero_smoke", "smoke_"
+            table, rt_table, prefix = "board_view_smoke", "processed_moves_nonzero_smoke", "smoke_"
             n_smoke = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
             print(f"board analysis: --smoke sampled {n_smoke:,} rows (requested 50,000) from board_view")
 
         print("board analysis: RT distribution summary...")
-        move_time_summary(conn, table, ply_table=ply_table, filename=f"{prefix}rt_distribution.pdf", smoke=smoke)
+        # rt_table is the whole (unwindowed) processed_moves_nonzero — this is the one
+        # panel meant to characterize RT collection-wide, not just the ply-analysis window.
+        move_time_summary(conn, rt_table, filename=f"{prefix}rt_distribution.pdf", smoke=smoke)
 
         print("board analysis: bivariate RT-vs-covariate dashboards...")
         for col, (label, kind, clip) in features.items():
