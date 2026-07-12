@@ -552,7 +552,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # Left column stacks histogram (top) over the full-range frontier panel (bottom), sharing the
     # "Stop Step" x-axis since both are on the same scale; right column is the zoom panel, spanning
     # both rows and forced square via set_box_aspect regardless of its (non-square) cell.
-    fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.68))
+    fig = plt.figure(figsize=(9.2 * 0.8, 6.4 * 0.68 * 0.8))
     gs = fig.add_gridspec(2, 2, width_ratios=[1.5, 2], height_ratios=[0.55, 1], left=0.09, right=0.98,
                           top=0.95, bottom=0.20, hspace=0.4, wspace=0.28)
     axH = fig.add_subplot(gs[0, 0])
@@ -579,7 +579,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     # 4 columns (not 3): with AG-Controller present this is 7 entries -- ncol=3 makes a 3rd row that
     # collides with the frontier panels' "Stop Step" xlabel just above it. ncol=4 keeps it to 2 rows
     # for both the 6-entry (no AG) and 7-entry (with AG) case.
-    fig.legend(handles, labels, loc="center", bbox_to_anchor=(0.5, 0.03), ncol=4,
+    fig.legend(handles, labels, loc="center", bbox_to_anchor=(0.5, -0.02), ncol=4,
               fontsize=10, frameon=False)
 
     # Secondary panel: the ACTUAL per-episode stop-step distribution for each controller (MC/TS/AG/
