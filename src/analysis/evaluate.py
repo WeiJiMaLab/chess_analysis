@@ -764,8 +764,7 @@ def plot_r_decodability(packed_root: Path, cache_path: str | Path, out_dir: str 
 
 # One entry per baseline stop rule the scatter plot pairs against z_t -- name must be a key `ctrl`
 # (returned by `_fit_stop_controllers`) can produce.
-_SCATTER_BASELINES = [("singlehalt", "SingleHalt* (Fixed Stop)"), ("stats", "Tree-Stats Controller"),
-                      ("ag", "Action-Gap Controller")]
+_SCATTER_BASELINES = [("singlehalt", "Fixed Stop"), ("stats", "Tree Stats"), ("ag", "Action Gap")]
 
 
 def _compute_regret_scatter_data(packed_root: Path, cache_path: str | Path, *, d_embed: int = 32,
@@ -792,7 +791,7 @@ def _compute_regret_scatter_data(packed_root: Path, cache_path: str | Path, *, d
 
 
 def _render_regret_scatter(data: dict, out_dir: str | Path) -> dict:
-    """One panel per baseline: x = z_t (Meta Controller) per-episode regret, y = the baseline's, plus
+    """One panel per baseline: x = z_t (Metacontroller) per-episode regret, y = the baseline's, plus
     a y=x reference line. A point STRICTLY above the line is an episode where the baseline's regret
     exceeds z_t's (z_t strictly did better); a point ON the line is a tie (same regret, often both
     exactly 0 on an easy episode) -- so if z_t genuinely helps, most points should sit at-or-above the
@@ -830,7 +829,7 @@ def _render_regret_scatter(data: dict, out_dir: str | Path) -> dict:
         ax.scatter(zt, y, s=_PT_SIZE, alpha=0.55, color=_C[name], edgecolors="none", zorder=3)
         ax.set_xlim(0, hi); ax.set_ylim(0, hi)
         ax.set_aspect("equal")
-        ax.set_xlabel("$z_t$ (Meta Controller) regret", fontsize=11)
+        ax.set_xlabel("Metacontroller regret", fontsize=11)
         ax.set_ylabel(f"{label} regret", fontsize=11)
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
         ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
@@ -913,7 +912,7 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
     ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=10)
     ax.invert_yaxis()
-    ax.set_xlabel("Δ regret  (Model − Meta Controller)", fontsize=11)
+    ax.set_xlabel("Δ regret  (Model − Metacontroller)", fontsize=11)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.grid(axis="both", color=_GRID, lw=1)
 
