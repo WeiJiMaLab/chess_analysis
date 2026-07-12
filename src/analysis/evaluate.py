@@ -812,7 +812,7 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
     ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=10)
     ax.invert_yaxis()
-    ax.set_xlabel("Δ regret  (model − $z_t$)", fontsize=11)
+    ax.set_xlabel("Δ regret  (Model − Meta Controller)", fontsize=11)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.grid(axis="both", color=_GRID, lw=1)
 
@@ -928,7 +928,7 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     deltas_a = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_a"]]
     deltas_b = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_b"]]
 
-    def _finish(fig, ax, title, base):
+    def _finish(fig, ax, base):
         # A fixed bbox_to_anchor fraction scales its gap with figure height, which
         # overlaps the x-axis label on short figures but looks fine on tall ones.
         # Target a constant ~0.5in gap by dividing that inch target by this
@@ -937,7 +937,6 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -gap_frac), ncol=len(handles),
                   fontsize=9.5, frameon=False)
-        ax.set_title(title, fontsize=12, loc="left")
         save_pdf_png(fig, str(out_dir), base, dpi=200, bbox_extra_artists=(fig.legends[0],))
 
     _rcparams()
@@ -946,12 +945,11 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     # relative to the short lambda panel.
     figA, axA = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_a)))
     _delta_ci_panel(axA, labels_a, deltas_a)
-    _finish(figA, axA, "varying linear cost λ  (maintenance = 0)", "delta_mean_regret_lambda")
+    _finish(figA, axA, "delta_mean_regret_lambda")
 
     figB, axB = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_b)))
     _delta_ci_panel(axB, labels_b, deltas_b)
-    _finish(figB, axB, f"varying maintenance scale  (linear λ={data['maint_lambda']:g})",
-           "delta_mean_regret_maintenance")
+    _finish(figB, axB, "delta_mean_regret_maintenance")
 
     for group_label, labels, deltas in [("lambda", labels_a, deltas_a), ("maintenance", labels_b, deltas_b)]:
         for lbl, d in zip(labels, deltas):
