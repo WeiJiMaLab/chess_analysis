@@ -1,700 +1,189 @@
-# Fix frozen per-step tree values: retroactive backfill + k-step-ahead GNN pretraining
+# Frozen per-step tree values: the fix, current design, and state
 
-## What's wrong with the current code
+Full narrative/debugging history (what was tried, what was wrong and why, dated
+progress log) lives in [labnotebook.md](labnotebook.md), entries `2026-07-10` and
+`2026-07-11`. This document describes only the current, working design and its
+validated state — it is not a running log and should not accumulate one; append
+new work to `labnotebook.md` instead.
 
-The metacontroller (MC) decides, at each search step t, whether to keep expanding the tree or halt. Its input is a per-node encoding `<value, wdl_win, wdl_draw, wdl_loss, wdl_var>` for every node visible in the tree at step t. That encoding is supposed to reflect what the search currently believes about each node.
+## The bug this fixed
 
-It doesn't. `preprocess_mc/pack.py` tensorizes each tree's node features **once**, from the complete, fully-searched tree, and every step t just slices a growing prefix of that one static tensor. So while the *set of nodes visible* to the MC correctly grows with t (real prefix-masking of a real subgraph), the *value* attached to any given node is frozen the moment the tree is packed — a one-time snapshot of that node's own raw leaf eval, never updated by backpropagation as later search revises it.
+The meta-controller (MC) decides, at each search step t, whether to keep
+expanding the tree or halt, using a per-node encoding `<value, wdl_win,
+wdl_draw, wdl_loss, wdl_var>` for every node visible in the tree at step t. That
+encoding is supposed to reflect what the search currently believes about each
+node. It didn't: node features were tensorized **once**, from the complete,
+fully-searched tree, and every step t just sliced a growing prefix of that one
+static tensor — the *set* of visible nodes grew correctly, but the *value*
+attached to any node was frozen at packing time, never updated by
+backpropagation as later search revised it. Proven on real data: root children
+with a real 0.3–0.6 backed-up-value swing across a trajectory had bit-identical
+packed encodings at the start and end of that swing.
 
-We proved this concretely, on real production data (`human_trees`, `oracle96`), not just by reading code: picked root children whose true backed-up value (from the tree's own stored `oracle_root_q_trace`) swings by 0.3–0.6 over a 96-step trajectory — genuine value revision, not just first-visit noise — and confirmed the packed encoding for that exact node is bit-identical (`torch.equal`) at the start and end of that swing, every time, on every tree checked. A naive action-gap computed from the packed encoding would be constant across all 96 steps; the real action gap moves substantially and even flips which move looks best.
+## Current design
 
-This isn't just a data bug — it also explains why a plausible-sounding fix ("the encoder implicitly learns size-aware behavior from tree_size + structure") doesn't actually work today: the encoder's own pretraining corpus is exclusively *complete* trees (one packed example per tree, the full thing), so it has never seen a partial tree during training and has no learned mechanism to compensate.
-
-## Goal / end state
-
-1. Every node's true backed-up value/WDL at every step t is recoverable for every existing tree, without regenerating any of them (pure offline replay over data already on disk).
-2. The GNN encoder is retrained on a task that actually requires understanding *partial* trees, so its representation of a step-t subgraph reflects genuine progress-so-far rather than an out-of-distribution guess.
-3. The MC's packed training data feeds it the fresh, step-correct encoding at every t (structure *and* values both step-accurate, not just structure).
-4. The MC's own RL/halt-decision training code is untouched — it only ever consumed the encoder's output as an opaque vector, so fixing what feeds it shouldn't require touching it.
-
-## Why
-
-The MC's whole job is deciding whether more search would change its mind. Feeding it a value that never changes regardless of how much has actually been searched removes the one signal most directly relevant to that decision. This plan fixes that at the source (the encoder's own training data and objective), not just by patching around it downstream.
-
-## Validated groundwork
-
-The retroactive replay already reproduces the tree's own stored `oracle_root_q_trace` to ~4-5 significant figures on real trees (prototype at `/tmp/.../scratchpad/replay_prototype.py` — a session-scratch path, gone by the time you read this; the logic it contains is what Task 1 below ports into production code) — not speculative, a validated technique being promoted to production code. One bug found and fixed during that validation: root-child order must come from **ascending node id**, not `children_index`/`child_ptr` CSR order (CSR is sorted by UCI string in the `v5` raw format, not creation order) — apply the same fix wherever creation order matters below.
-
-## Existing pipeline, and where this plan attaches to it
-
-This codebase already runs a config-driven SLURM pipeline per dataset (`config_*.yaml`, e.g. `config_ysagiv_xaba20k.yaml`), with named stages: `split` → `gnn_pack` (`preprocess_gnn/pack.py`) → `mc_pack` (`preprocess_mc/pack.py`) → `train_encoder` → `pack_root`/`pack_root_merge` (`preprocess_mc/materialize.py`, whose own module docstring calls this "materialize" — the two names are already used interchangeably in this codebase) → `train_readout_pg`. All outputs live under `${scratch_dir}/${run_name}` = `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/${run_name}`, never under `/scratch/gpfs/GRIFFITHS/ysagiv/`, which every config already documents as read-only source data owned by someone else.
-
-This plan rewrites the logic of three stages, but **writes to new, parallel scratch directories rather than overwriting the existing ones** — see "Directory layout" below for why. **Dependency chain: `packhistory_trees` → `packhistory_GNNpretrain` → `train_encoder` → `packhistory_MCmaterialize` → `train_readout_pg`.** The retroactive replay is not a separate pipeline stage — it's absorbed into `packhistory_trees`, which becomes the single source of truth for per-step tree history; `packhistory_GNNpretrain` reads `packhistory_trees`'s output rather than touching raw trees or re-running the replay itself.
-
-| Stage | Status | Old dir (untouched) | New dir | What changes |
-|---|---|---|---|---|
-| `split` | unchanged | `split/` | `split/` (shared) | — |
-| `mc_pack` → **packhistory_trees** | new code, new output dir | `mc_packed/` | `pack_history/` | Replays real per-step values/WDL for every node (the old "backfill" step, now internal to this stage) and packs both (a) per-step forward-filled node features for MC/materialize consumption and (b) the underlying sparse per-edge update log, for `packhistory_GNNpretrain` to read. |
-| `gnn_pack` → **packhistory_GNNpretrain** | new code, new output dir | `packed/` | `gnnpack_history/` | Reads `packhistory_trees`'s packed output (not raw trees). Emits T_n→T_{n+k} training pairs instead of one-example-per-complete-tree. |
-| `train_encoder` | unchanged code, new data + one new head | `${packed_dir}/tiny_encoder.pt` | `${gnnpack_history_dir}/tiny_encoder.pt` | Trains on packhistory_GNNpretrain's output; loss/optimizer/batching code untouched. Checkpoint lives alongside its packed data, same convention as today (`config_ysagiv_xaba20k.yaml:84`; `pack_root`/materialize already reads the checkpoint from the GNN-pack dir, not a separate location). |
-| `pack_root` → **packhistory_MCmaterialize** | new code, new output dir | `materialized/` | `materialize_history/` | Runs the *new* encoder over packhistory_trees' *now-varying* per-step features to produce `z_root` per snapshot. |
-| `train_readout_pg` | unchanged code, new checkpoint/artifact location | `${packed_dir}/mchalt_controller.pt` | `${materialize_history_dir}/mchalt_controller.pt` | Verification only — no code changes expected, but runs under the new config, writing to the mirrored location, same reasoning as every other stage above. |
-
-**Directory layout: new dirs mirror the old ones 1:1, written fresh, nothing overwritten, driven by one new config file.** `${run_dir}/pack_history`, `${run_dir}/gnnpack_history`, `${run_dir}/materialize_history` (plus the mirrored `train_encoder`/`train_readout_pg` checkpoint/artifact locations) sit alongside the existing `mc_packed/`, `packed/`, `materialized/`, same internal shard/manifest structure, same `train`/`validation` split. `split/` itself is shared (unchanged, deterministic — `preprocess_gnn/split.py:82-84` seeds its shuffle from `config.seed`, so the same config reproduces the identical train/validation assignment either way).
-
-The whole new pipeline is driven by **one new config file**, `config_ysagiv_xaba20k_history.yaml` — a full copy of `config_ysagiv_xaba20k.yaml` with every stage's output-directory/checkpoint global repointed at the new `_history` paths (`pack_history_dir`, `gnnpack_history_dir`, `materialize_history_dir`, and the readout/controller checkpoint paths that today live under `packed_dir`). Not a patched/repointed version of the old config — a new, independent config that happens to point at the same `split/` and the same underlying trees. Every stage, all the way through `train_readout_pg`, runs under this new config exactly as it runs under the old one; the two configs' outputs never collide, and **both are retained indefinitely** — not just for the duration of validation. This is deliberate: `xaba20k`'s old outputs stay as a permanent regression baseline (kept even after `xaba100k` is eventually added as a second dataset, mirrored the same way), not a temporary comparison to be cleaned up later.
-
-**Diff-based regression test, made possible by the above** — this is a stronger, more direct check than re-deriving correctness from first principles each time: for every tree, matched by `source_path` (not shard index or position, since that's a more robust join key than incidental ordering even though today's split is deterministic) —
-- Tree **structure** (`parent_index`, `child_ptr`, `depth`, etc.) must be byte-identical between `mc_packed/` (old) and `pack_history/` (new). If it isn't, something broke that has nothing to do with this fix.
-- **Root oracle values** (`halt_rewards`, `oracle_stop_step`, `oracle_value` — everything sourced from `oracle_final_root_q_values`/`oracle_best_move_index`, i.e. the DP oracle machinery in `oracle.py`) must also be byte-identical. These were never wrong — they're already computed from the complete/final tree via `oracle_best_move_index`, independent of the per-step node-feature bug — so they shouldn't move at all.
-- **Per-step node features** must now *differ* from the old packed output at every step (except possibly step 1, before any real backprop has happened) — this is the one thing that's supposed to change, and if it doesn't, the fix didn't take.
-
-This test needs no ground-truth computation of its own — it's a pure diff against data that already exists, and it separates "did I break something I shouldn't have" from "did I actually fix the thing" cleanly.
-
-## Parameters: k and dataset
-
-Both are pipeline inputs, not hardcoded values — same pattern as every other per-stage config knob (`shard_size`, `reward_scale`, `search_budget: 96`, etc.):
-
-- **`lookahead_k`**: new field in the `packhistory_GNNpretrain` config section (the only stage that needs it — `packhistory_trees` packs the full history regardless of k; k only matters when `packhistory_GNNpretrain` samples (n, n+k) pairs out of that history). By definition this is a family of objectives, not one: `lookahead_k=1` trains a strict next-step predictor for each child's value; general `lookahead_k` trains a k-th-step-ahead predictor. **v1 default: 12** (~1/8 of the 96-step budget — chosen to keep the valid n-range wide (n ≤ 96−12) while giving edges enough steps to accumulate real Δvisits rather than mostly landing on zero). Not tuned; a starting point for the pipeline to run end-to-end on before sweeping.
-- **`snapshots_per_tree`**: new field, same section. **v1 default: 1** — deliberately conservative, chosen to keep total encoder-forward-pass count roughly at parity with today's training (one forward pass per tree, same as now), rather than assuming a multiplier is free. Diversity across tree sizes still comes from sampling a different random n per tree across the corpus, not from multiple n's within one tree. Scaling this up (to get more examples per tree, since the replay cost is already paid) is a deliberate, measured follow-up — increase only after measuring actual training walltime/epoch at `snapshots_per_tree=1`, not by assumption. See packhistory_GNNpretrain below for why this knob, not per-edge sampling, is what controls dataset size.
-- **Dataset**: selected by which `config_*.yaml` / `run_name` is invoked, exactly as every other stage already works. **v1 target: `xaba20k`** (`config_ysagiv_xaba20k.yaml`) — smallest existing corpus, fastest to validate the new stages on. `xaba100k` is the plausible next dataset once `xaba20k` validates; `oracle96` is explicitly not a target — not needed for this work.
-
-Everything below is written as: **given k and a dataset/run_name, this stage does X.**
-
----
-
-## Stage: packhistory_trees (rewrite of `mc_pack`; absorbs the retroactive replay)
-
-**Given** a dataset's `split_dir` shards, **do**: for every raw tree, which already contains everything needed to recover its own history (final structure + each node's static leaf eval + reconstructable expansion order), replay backprop to get the real per-step value/WDL for every node, and pack two things per tree: (1) per-step forward-filled node features (for direct MC/materialize consumption — this is the actual bug fix, replacing the current one-shot frozen tensorization), and (2) the underlying sparse per-edge update log, so `packhistory_GNNpretrain` can derive T_n/T_{n+k} pairs and Δvisits later without re-touching raw trees or re-running the replay.
-
-**Update log schema** (new packed field, columnar/parallel-array — same convention as `node_features`/`parent_index`/`depth` elsewhere in this codebase, not a list of objects). Since every non-root node has exactly one parent, `node_id` alone identifies the edge (the edge is `(parent_index[node_id], node_id)`) — no separate `parent_id`/`child_id` pair needed:
+**`packhistory_trees`** (`src/cts/data/preprocess_mc/pack.py`, stage name
+`mc_pack`) — for every raw tree, replays MCTS backpropagation over its already-
+recorded expansion order (`_replay_backprop_history`) to recover the true
+per-step backed-up value/WDL for every node, without re-running the engine: a
+raw tree already stores final structure, each node's static leaf eval, and the
+real expansion order, so replay is pure bookkeeping. Packs two things per tree:
+(a) base/structural features (unchanged from the old format) and (b) a sparse
+per-edge update log:
 
 ```
-step_index:   int32[M]     # expansion step at which this update happened
-node_id:      int32[M]     # = child/edge id; parent = parent_index[node_id] (already packed elsewhere)
-visit_count:  int32[M]     # cumulative visit_count for this edge as of this update (not a delta)
+step_index:   int32[M]     # 0-indexed position in the FULL expansion order
+                            # (expansion_parent_ids), NOT re-based to root_rank
+node_id:      int32[M]     # child/edge id; parent = parent_index[node_id]
+visit_count:  int32[M]     # cumulative visit_count for this edge as of this update
 q_value:      float32[M]   # cumulative mean q_value as of this update
 wdl:          float32[M,3] # cumulative mean win/draw/loss as of this update
 ```
 
-Sorted by `(node_id, step_index)` ascending, with a CSR-style `node_update_ptr: int32[N+1]` (same pattern as the existing `child_ptr`) so each node's own update history is a contiguous slice `update_log[node_update_ptr[i]:node_update_ptr[i+1]]`, in step order. This gives O(log(updates for that node)) lookup for "value as of step t" (search for the last entry with `step_index ≤ t`) and for Δvisits (difference of two such lookups) — no need to scan the whole log per query. M ≈ 200-300 per tree (measured empirically), so even a linear scan per node would be cheap, but the CSR/sorted layout costs nothing extra and matches how the rest of the codebase already indexes per-node data.
-
-**Files**: `src/cts/data/preprocess_mc/pack.py` — the replay function lives here directly, as part of `packhistory_trees`'s own implementation, not as a separate reusable module elsewhere. It imports (not duplicates) `EdgeStats`, `_backpropagate_path`, `_maybe_static_node_wdl`, `_flip_wdl_target` from `src/cts/data/preprocess_gnn/teacher_targets.py`, where those already live — only the new replay-driving loop itself is new code, and it belongs in `pack.py`.
-
-**Steps**:
-1. In `preprocess_mc/pack.py`, add the replay loop, built on top of the imported `EdgeStats`/`_backpropagate_path` helpers.
-2. Extend to track WDL (`leaf_wdl` via `_maybe_static_node_wdl`, flip via `_flip_wdl_target`) — same backprop loop, one more field.
-3. Root/creation order: ascending node id, not `children_index[child_ptr[...]]`.
-4. Emit the full sparse log per the schema above, not just the root-child rows `_record_oracle_root_trace` currently keeps.
-5. `_build_compact_trajectory` (`pack.py:673`): replace the one-shot `full_tree = record.to_tensorized_tree_example(schema)` with per-step node features forward-filled from the replay log.
-6. Pack the sparse update log itself alongside the per-step trajectory data, as a new field in the packed shard (`packhistory_GNNpretrain`'s only input).
-
-**Test**: two checks, both automated:
-1. *Replay correctness*: replayed root-child Q trace matches the tree's own stored `oracle_root_q_trace` within `1e-3`, across a sample of `human_trees` and `oracle96` files.
-2. *Packed-artifact correctness (independent of everything downstream)*: the packed tree's root children directly carry the action gap — no encoder, no `materialize`, no `packhistory_GNNpretrain` involved. For each step t, read the root children's packed `value` column straight from `packhistory_trees`'s output (the exact artifact `materialize.py` will consume), compute top1−top2, and assert it matches the oracle action gap (top1−top2 of `oracle_root_q_trace[t]`) within tolerance, for every t in a sample of trees. This is the test that would have caught the original bug immediately — today, this check fails everywhere (constant packed gap vs. a moving oracle gap); after the fix, it should pass at every step, not just at the endpoints.
-
----
-
-## Stage: packhistory_GNNpretrain (rewrite of `gnn_pack`; reads `packhistory_trees`'s output)
-
-**Given** k, `snapshots_per_tree`, and `packhistory_trees`'s packed output for a dataset, **do**: for each tree, sample `snapshots_per_tree` distinct n values uniform over `[1, 96−k]`, **deterministically** — reuse the exact seeding pattern `deterministic_starting_budgets` already uses (`oracle.py:203-229`: `hashlib.sha256(f"{source_path}|{draw_index}|{config.seed}")` → seeded `random.Random`), not unseeded randomness. This matters for the diff-based regression test above and for reproducibility generally: re-running `packhistory_GNNpretrain` on the same config must produce the same training data, not a different sample every time. (Sampling is per tree, not per edge — whichever edges exist in T_n are automatically valid, since existence in T_n already implies the edge was born by step n; no separate birth-step filtering needed.) For each sampled n, build T_n as a single `TreeBatch` directly from `packhistory_trees`'s already-forward-filled per-step node features (no separate lookup or re-derivation needed — `packhistory_trees` already produced exactly this), via the same prefix-slicing/CSR-gather pattern already implemented in `ControllerEpisodeDataset.__getitem__` (`controller_train.py:886-907` — adapt, don't reimplement). Use **every** edge present in that one T_n as a training example from the same encoder forward pass — matching how today's Child-WDL pretraining already supervises every edge of a whole tree from one forward pass, not a new pattern. Target for edge (u,v) = v's `mean_wdl` at step n+k, read from `packhistory_trees`'s packed sparse update log (forward-filled — T_{n+k} is never itself encoded, only used as a label source). Weight = Δvisits (count of log entries for that edge with step index in `(n, n+k]`).
-
-**Resampling the same edge across different n's is intentional, not deduplicated** — when `snapshots_per_tree > 1`. Each occurrence at a different n is a distinct (input, target) pair (different T_n context, different n+k target), and since `packhistory_trees` already paid the replay cost, this is free additional supervision, not redundant compute, *if* we choose to spend the encoder-forward-pass compute on it.
-
-**Compute cost caution — this is the reason `snapshots_per_tree` defaults to 1, not more.** Total example count is `trees × snapshots_per_tree × avg_edges_per_snapshot`, and the dominant cost (encoder forward+backward passes) scales roughly linearly in `snapshots_per_tree` — going from 1 to 4 means ~4x today's per-epoch training compute, not a free win. v1 ships at `snapshots_per_tree=1` — parity with today's cost — specifically so this doesn't get assumed away. Smarter/sparser sampling than uniform-random-n-per-tree is a real avenue worth exploring before blindly raising `snapshots_per_tree`, but is out of scope for v1 — flagged in Deferred below, not designed here.
-
-**Cost saving that *is* in scope for v1: exclude never-visited leaves as targets.** Measured directly on two real trees: 88.8% (859-node tree) and 97.7% (4230-node tree) of nodes are never touched by *any* backprop event across the full 96-step search — they were created as some ancestor's child but never themselves selected, so their `packhistory_trees` update-log entry count is exactly zero, for every possible (n, n+k) window, unconditionally. This is a strictly stronger statement than "Δvisits is usually 0" — Δvisits weighting already handles that gracefully, but there's no reason to even generate a candidate training example for an edge whose target is provably always-zero-weight for any k. When sampling edges from a T_n snapshot, skip any edge (u,v) where v has zero total entries in `packhistory_trees`'s update log (a single lookup against `node_update_ptr`, not a per-(n,k) computation) — cuts candidate GNN training examples roughly 10-30x on the two trees checked, for zero loss of signal. This filter only applies to `packhistory_GNNpretrain`'s target sampling — never-visited leaves still appear normally in `packhistory_trees`'s per-step structure/features, since the MC needs to see the full tree, not a filtered one.
-
-**Framing (REVISED — see Task 3's Progress Log for the correction and why)**: `gnn_pretrain.py`'s training procedure — `TreeEncoder`, `ChildWdlModel`/`ChildWdlHead`, the cross-entropy-over-`[E,3]` loss, the weighted-average/target-entropy bookkeeping in `_iterate_supervised_edge_batches` (`gnn_pretrain.py:359-428`) — is correct and reused **entirely unchanged, including the model code**. What's wrong is only the packed data (one example per complete tree, target = that tree's own static WDL). This plan originally called for a new head taking `concat(u_n, v_n, slot_states)`, reasoning that `ChildWdlHead`'s `concat(parent_states, slot_states)` was only sufficient for zero-history children. That reasoning was wrong: `ChildWdlHead` is already used, successfully, on every edge of today's *complete* trees — including children with large, deep, richly-explored subtrees, not just fresh leaves — because `TreeEncoder`'s bottom-up message passing already routes a child's entire subtree information up into its parent's aggregate state before `ChildWdlHead` ever sees it; `slot_states` disambiguates *which* child that aggregate is being asked about. There is no reason this stops working when the tree being encoded is T_n instead of the complete tree — T_n is just "the complete tree the encoder is given" from its own perspective. **So: reuse `ChildWdlModel`/`ChildWdlHead` directly, unmodified, applied to T_n instead of the complete tree. No new head.**
-
-**Target quantity**: the `[E,3]` WDL triple, not a scalar Q — `packhistory_trees`'s log gives both, but WDL is what `ChildWdlModel`/`ChildWdlHead` and the existing loss/entropy/weighting machinery already expect (`edge_wdl_targets`, cross-entropy over a 3-way simplex). Reusing that machinery unmodified — model code included, now — is the point. Q is trivially derivable from WDL later if ever needed; no separate target/loss for it.
-
-**Files**: new packing function alongside `src/cts/data/preprocess_gnn/pack.py`, reading `packhistory_trees`'s output instead of raw trees; new `packhistory_GNNpretrain` config section (`lookahead_k`, `snapshots_per_tree`); one small edit to `gnn_pretrain.py`'s weighting branch. **No changes to `gnn.py`** — `ChildWdlModel`/`ChildWdlHead` are used as-is. **Do not edit `build_tree.py` from this task** — Task 6 owns that file; if this task's work implies a change there, note it in the Progress Log below for Task 6 to pick up, don't edit it directly (avoids two tasks touching the same file).
-
-**Rigorous validation required before trusting this (see Task 3's revised scope)**: the "parent aggregate already carries per-child disambiguating signal" claim above is an architectural argument, not yet a directly-tested fact for the T_n (partial-tree) case specifically. Task 3 (repurposed) is building a test that empirically confirms it — using two synthetic children under the same parent with deliberately different sub-histories and checking `ChildWdlModel`'s predictions for them actually differ, and that perturbing one child's subtree doesn't (much) move its sibling's prediction. This task should not be considered fully validated until that test exists and passes.
-
-**Steps**:
-1. Sample n's per tree per the "Given/do" above, reading `packhistory_trees`'s packed shards (not raw trees).
-2. Build each T_n's `TreeBatch` directly from `packhistory_trees`'s per-step node features.
-3. Populate `edge_wdl_targets` from `packhistory_trees`'s packed update log, at step n+k.
-4. Populate new packed field `edge_visit_weights` = Δvisits, from the same log. Keep Δvisits=0 edges in the data — this is a weight, not a filter.
-5. ~~New head~~ — REMOVED. Use `ChildWdlModel(tree_batch)` directly (`gnn.py:387-400`) — no new class, no new file changes to `gnn.py`.
-6. `gnn_pretrain.py`: change the weighting branch (`gnn_pretrain.py:394-409`, currently `compute_subtree_sizes(...)[edge_child]`) to read `edge_visit_weights` when present. Try Δvisits directly; fall back to `log1p(Δvisits)` if a few edges dominate — check empirically.
-7. Train from scratch on `xaba20k` with `lookahead_k=12`. Naming note: `ChildWdlModel`'s constructor `k` param is the encoder's message-passing round count, unrelated — call the lookahead param `lookahead_k` everywhere to avoid collision.
-
-**Test**: smoke-train on a few hundred `xaba20k` trees. Confirm loss decreases. Log the Δvisits weight distribution per batch and confirm Δvisits=0 edges aren't dominating (extend `BucketedKLState`, `gnn_pretrain.py:142-237`, with a Δvisits bucket instead of subtree-size). Plus Task 3's disambiguation test, above — treat that as a blocking correctness check for this task, not an optional nice-to-have.
-
----
-
-## Stage: packhistory_MCmaterialize (rewrite of `pack_root`/`materialize.py`)
-
-**Given** `packhistory_trees`'s output and `packhistory_GNNpretrain`/`train_encoder`'s trained encoder checkpoint, **do**: run the encoder over each snapshot exactly as `materialize.py` does today, producing `z_root` per snapshot — but now both the encoder and the per-step features it's fed are the fixed ones.
-
-**To be explicit about what "fixed" means**: the encoder trains on, and at this stage runs over, **T_t populated with the values Q_t as of step t** (T_t's real structure at step t, node values forward-filled from `packhistory_trees`'s replay at step t) — **not** T_t's structure populated with Q_0 (each node's frozen, one-time static eval) repeated identically at every t, which is what this stage — and every stage upstream of it — did before this plan.
-
-**Files**: `src/cts/data/preprocess_mc/materialize.py`; `src/cts/train/controller_train.py` (`ControllerEpisodeDataset`, which `materialize.py` imports and uses to build the encoder's input batches).
-
-**Steps**:
-1. `controller_train.py:ControllerEpisodeDataset.__getitem__` (`controller_train.py:861-931`): replace `full_node_features[:node_cutoff]` (`controller_train.py:879`, currently a slice of one static tensor) with a lookup into `packhistory_trees`'s new per-step values.
-2. `materialize.py`: point the encoder load at `train_encoder`'s new checkpoint (`load_encoder_checkpoint`, already imported from `gnn_pretrain`) instead of today's Child-WDL-pretrained one.
-3. Leave `unfreeze_encoder=False` (`controller_train.py:88` default) — no change to freeze logic; `materialize.py` already assumes a frozen encoder (that's the entire point of precomputing `z_root`).
-
-**Test**: re-run the exact node-level check already used to find the original bug (pick a root child with a real nonzero→nonzero value swing across two steps, confirm the packed encoding now differs between them instead of matching bit-for-bit) — now against `packhistory_trees`'s output directly, and end-to-end by checking `packhistory_MCmaterialize`'s `z_root` values actually differ step-to-step for a tree with a known real value swing.
-
----
-
-## Stage: train_readout_pg (unchanged — verification only)
-
-**Why it should need no changes**: `MetaController`'s advantage head consumes `z_t`/`z_root` as an opaque vector (`mc.py:72`); `compute_budgeted_oracle`/`target_advantages` (`oracle.py:240+`) depend only on `halt_rewards`/`tree_sizes`, not on how `z_root` was produced.
-
-**Test**: run `train_readout_pg` unmodified against `packhistory_MCmaterialize`'s output, on `xaba20k`. Confirm no shape errors, no NaNs, sane advantage/loss values. If this requires any code change, the premise was wrong — investigate before proceeding.
-
----
-
-## Deferred (not blocking v1)
-
-- `lookahead_k=12` is fixed, not a sampled range. Revisit as a curriculum/range if the MC's real query distribution over n needs it.
-- `snapshots_per_tree=1` in v1 keeps compute at parity with today. Raising it should be a measured follow-up, not an assumption — and smarter/sparser sampling should be considered before just raising the count uniformly.
-- Coverage skew: late-born nodes (small `96−n` window) get fewer valid (n, n+k) pairs. Monitor via `packhistory_GNNpretrain`'s diagnostics; fix later if late-tree calibration is bad.
-- ~1e-4 residual between replayed and stored `oracle_root_q_trace`: not blocking (3-4 orders of magnitude below the deltas being modeled), but confirm the cause (suspected: stored node value recomputed post-hoc vs. value used live at generation) before trusting `packhistory_trees`'s WDL replay at higher precision than checked so far.
-- Underscore-prefixed "private" cross-module imports (`_backpropagate_path` etc. from `teacher_targets.py` into `pack.py`) are a real but low-priority coupling risk — worth a comment where Task 1 lands, not worth blocking on.
-- There's a prior, adjacent investigation in this codebase (`src/cts/tests/test_e2e_backprop_smoke.py`'s docstring references now-deleted `plan.md`/`endtoend.md`) into whether `unfreeze_encoder` gradients actually reach the encoder during joint MC training — not the same question as this plan, but touches the same `freeze_encoder`/`ControllerEpisodeDataset` code Task 5 modifies. Worth a quick look at `labnotebook.md` for context before touching that code, not a blocker.
-- **Versioning landmine, found 2026-07-11 by an independent skeptical audit:** `preprocess_mc/pack.py` was rewritten *in place* to serve both the old `mc_pack` stage and the new `packhistory_trees` stage from the same module, and it now unconditionally emits the new shard format (`cts_packhistory_trees_shard_v1`). The "frozen old `mc_packed/` baseline" that `test_diff_vs_old_mc_packed` (and any future byte-identity regression check against it) depends on is frozen only because nobody has re-run the `mc_pack` stage since the rewrite — if `pack_trees.slurm`/`--stage mc_pack` is ever invoked again for any reason (e.g. a stray re-run, a copy-pasted command against the wrong config), it will silently overwrite that baseline with new-replay-based values, breaking every future diff test's premise with no error raised anywhere. No fix implemented yet — flagged here so it isn't rediscovered from scratch; a real fix would need either a hard stage-name/output-format guard in `pack.py` itself, or moving the old `mc_pack` code path to a separate, frozen module before it's ever run again.
-
-## Test plan (summary)
-
-1. `packhistory_trees`: (a) replay vs. stored `oracle_root_q_trace`, tolerance `1e-3`; (b) packed root-children action gap, read directly from the packed artifact, matches the oracle action gap at every step t — the most direct regression test for the original bug; (c) diff against the existing `mc_packed/` output for the same trees — structure and root oracle values byte-identical, per-step node features now different at every step.
-2. `packhistory_GNNpretrain` + `train_encoder`: smoke-train on `xaba20k` with `lookahead_k=12` through the existing loss/optimizer; confirm loss drop + non-degenerate Δvisits weighting.
-3. `packhistory_MCmaterialize`: frozen-encoding check now shows movement, both in packed features and in final `z_root`.
-4. `train_readout_pg`: runs clean, unmodified, on the new pipeline's output.
-
-## Implementation DAG and agent allocation
-
-Two genuinely different kinds of dependency here, worth keeping separate: **code-writing dependencies** (blocked on another piece of code/interface existing) and **data-generation dependencies** (blocked on an actual SLURM job finishing — no amount of code readiness shortens that). The DAG below is code-writing; the sequential chain after it is data-generation, and doesn't parallelize across agents no matter how many are available, because it's one dataset moving through one pipeline.
-
-**Why more of this is parallelizable than a naive stage-by-stage reading suggests**: every interface a downstream piece needs — the update-log schema, the per-step node-feature format, the new head's `concat(u_n, v_n, slot_states)` signature, the new config's directory globals — is already fully specified above. That means the "wait for the upstream stage to be *done*" dependency mostly collapses to "wait for the upstream *schema* to be agreed," which already happened during planning. Each piece below can be built and unit-tested against that fixed schema using synthetic fixtures, independent of whether the upstream piece's implementation has actually landed yet — only *integration* (swapping synthetic fixtures for real output) is a genuine sequential dependency.
-
-**Wave 1 — six tasks, no code-level blocking dependency between them, all buildable against the schemas already fixed above:**
-
-| # | Task | Scope | Depends on (schema only, not implementation) |
-|---|---|---|---|
-| 1 | `packhistory_trees` implementation | Replay loop + WDL tracking + ascending-node-id fix + per-step feature materialization + update-log packing, in `preprocess_mc/pack.py` | Nothing — this *is* the schema source |
-| 2 | `packhistory_trees` test suite | Replay-vs-`oracle_root_q_trace` test, packed action-gap test, diff-vs-`mc_packed/` harness | Update-log schema (fixed) — can be written against synthetic fixtures conforming to it, run for real once #1 lands |
-| 3 | ~~New GNN head~~ → **disambiguation validation test** (REVISED — no new head needed, see Task 3 Progress Log) | Empirical test proving `ChildWdlModel`'s existing `concat(parent_states, slot_states)` already carries per-child signal via message passing, on a T_n-shaped partial tree specifically, not just the complete-tree case it's proven for today | Nothing — pure model code, testable with synthetic `TreeBatch`/`node_states` tensors |
-| 4 | `packhistory_GNNpretrain` implementation | New packing function + Δvisits weighting + never-visited-leaf filter, in `preprocess_gnn/pack.py` + `gnn_pretrain.py`'s weighting branch. Uses `ChildWdlModel`/`ChildWdlHead` as-is (`gnn.py`, unmodified) — no new head. | Update-log schema (fixed). Task 3's validation test should pass before this is trusted, though it's not a hard code dependency. |
-| 5 | `packhistory_MCmaterialize` implementation | `ControllerEpisodeDataset.__getitem__` per-step lookup + `materialize.py` checkpoint pointer | Per-step feature format (fixed, same schema as #1) |
-| 6 | New config + CLI wiring | `config_ysagiv_xaba20k_history.yaml` (full new config, all stages repointed at `_history` dirs) + `build_tree.py` verification/fixes (sole owner of this file) | New directory globals (fixed: `pack_history_dir`, `gnnpack_history_dir`, `materialize_history_dir`) |
-
-**Allocating 6 agents: one per row above, all dispatched in parallel from the start.** Task 1 is the highest-stakes piece (everything else's *integration*, not just its schema, ultimately depends on it). Tasks 2, 4, 5 build against synthetic fixtures matching the fixed schemas and only need real integration once #1 (and, for #4, #3) land.
-
-**Wave 2 — integration, not new parallel work:** swap synthetic fixtures for real output as each Wave 1 piece lands. Glue/debugging work, done by whichever agent already owns the consuming piece.
-
-**Wave 3 — sequential data generation, not agent-parallel at all:** submit `packhistory_trees` on `xaba20k` → wait → submit `packhistory_GNNpretrain` → wait → submit `train_encoder` (real training, likely the longest single wait) → wait → submit `packhistory_MCmaterialize` → wait → run `train_readout_pg` verification. Each step is gated on the *previous SLURM job finishing*, not on code readiness. (`sbatch`, not a backgrounded process — progress visible via `squeue`.)
-
-## Shared progress tracking: this document
-
-This file (`history.md`, repo root) is the single shared source of truth for where the work stands, since Wave 1's six agents run in parallel and otherwise can't see each other's progress.
-
-- Each agent owns exactly one numbered task from the Wave 1 table and appends dated entries to the **Progress Log** at the bottom as it works — what was done, what's still open, any schema deviation discovered along the way (schemas were fixed during planning specifically so agents don't need to renegotiate them mid-flight, but if a fixed schema turns out not to work once building against real data, that goes in the log immediately, not discovered later during Wave 2 integration).
-- Each agent checks off its own items in the Definition of Done checklist below as they're satisfied — checkboxes are the actual status, log entries are the narrative explaining them.
-- Nobody marks a test-result checklist item complete based on judgment alone ("looks right") — only once the test has actually been run and passed.
-
-## Definition of Done — strict checklist
-
-Nothing below is advisory; each box is a binary pass/fail. This is what "success" means, task by task, and finally for the pipeline as a whole.
-
-**Task 1 — `packhistory_trees` implementation**
-- [x] Replay loop implemented in `preprocess_mc/pack.py`, built on the existing `EdgeStats`/`_backpropagate_path` (imported, not duplicated)
-- [x] WDL tracking added (`_maybe_static_node_wdl`, `_flip_wdl_target`) — see Progress Log note: `_flip_wdl_target` is imported per spec but is only exercised transitively (via `_backpropagate_path`'s own internal call), not called directly by pack.py
-- [x] Root/creation order uses ascending node id, not `children_index[child_ptr[...]]`
-- [x] Update log emitted per the fixed schema (`step_index`, `node_id`, `visit_count`, `q_value`, `wdl[3]`), sorted by `(node_id, step_index)`, with `node_update_ptr` CSR index
-- [x] `_build_compact_trajectory` uses per-step forward-filled features, not the one-shot `to_tensorized_tree_example` tensorization — see Progress Log for the exact interpretation (structural fields still come from `to_tensorized_tree_example`; the value/WDL columns are overwritten from the replay, and the full per-step sparse log is packed for downstream O(log M) forward-fill rather than a densely materialized per-step tensor)
-- [x] Update log packed into the shard as a new field, readable by `packhistory_GNNpretrain`
-- [x] All of `_build_compact_trajectory`'s existing edge-case handling preserved unchanged: empty-expansion trees (`if not expansion_parent_ids: return None`), no-root-expansion trees, and pre-root-expansion step trimming (`root_rank`) — this is a rewrite of the function's *data source*, not a rewrite of its *control flow* (verified by code review: both early-return checks execute before any new code runs; the `root_rank`/`trimmed_node_cutoffs` computation itself is untouched)
-
-**Task 2 — `packhistory_trees` tests**
-- [x] Tests live in `src/cts/tests/` (existing convention — `test_e2e_backprop_smoke.py` and others already there) — **note**: `pytest.ini`'s `testpaths = src/analysis/tests` does not cover this directory, so these tests are not picked up by a bare `pytest` invocation; must be run explicitly (`pytest src/cts/tests/`) — verified via `pytest --collect-only -q` from repo root collecting zero tests from this file, and `pytest src/cts/tests/test_packhistory_trees.py` collecting all 7
-- [x] Replay-vs-`oracle_root_q_trace` test passes, tolerance `1e-3`, on a sample of `human_trees` and `oracle96` files — **PASSES for real** as of 2026-07-10 (off-by-one fix; see Progress Log entry below)
-- [x] Packed root-children action-gap test passes at *every* step t (not just endpoints) on a sample of trees — **PASSES for real** as of 2026-07-10 (same fix)
-- [x] Diff-vs-`mc_packed/` test passes: structure byte-identical, root oracle values byte-identical, per-step node features now differ at every step — **PASSES for real** as of 2026-07-10, run against the real `pack_history/` output of Wave 3 job 10950265 (`pytest src/cts/tests/test_packhistory_trees.py -v` → 7 passed, 0 skipped)
-
-**Task 3 — REVISED: disambiguation validation test (was "new GNN head" — that design was wrong, see Progress Log)**
-- [x] ~~Head class implemented~~ — reverted; `gnn.py` has no new classes, `git diff --stat src/cts/models/gnn.py` is empty
-- [x] New scope: synthetic-tree test proving `ChildWdlModel`'s `concat(parent_states, slot_states)` distinguishes between two sibling children with deliberately different sub-histories (different accumulated visit counts/values in their own subtrees) — predictions for the two children must differ meaningfully, not be near-identical or arbitrary. **PASSES**: `test_predictions_differ_meaningfully_between_siblings_with_different_subtrees` in `src/cts/tests/test_child_wdl_disambiguation.py`, joint held-out accuracy ~0.32-0.33 vs. chance 0.111, run and confirmed passing (`pytest -m "not slow"`).
-- [ ] Perturbation check: modifying only one child's subtree changes that child's prediction specifically, without equally moving its sibling's prediction (evidence of correct slot-gated disambiguation, not just generic parent-state drift). **FAILS, reproducibly, not a training-budget artifact** — see Progress Log below. Left unchecked per this document's own rule (checkboxes reflect actual passing test results, not judgment).
-- [x] Test run on a `TreeBatch` shaped like a genuine T_n partial-tree snapshot (matching what `packhistory_GNNpretrain` will actually feed the model), not just the complete-tree shape `ChildWdlHead` was originally proven on — both tests above run on `_make_partial_tree`'s root+2-children-each-with-own-grandchildren `TreeBatch`, not a bare-leaf/complete-tree shape.
-
-**Task 4 — `packhistory_GNNpretrain` implementation**
-- [x] New packing function reads `packhistory_trees`'s output, not raw trees (`src/cts/data/preprocess_gnn/pack_history.py`, new file, 673 lines)
-- [x] Snapshot sampling implemented: `snapshots_per_tree=1` default, n uniform over `[1, 96−lookahead_k]`, **deterministically seeded** (`deterministic_snapshot_steps`, mirrors `deterministic_starting_budgets` via `hashlib.sha256`/seeded `random.Random`, confirmed by direct code read)
-- [x] `edge_wdl_targets` sourced from the update log at step n+k
-- [x] `edge_visit_weights` (Δvisits) computed and packed (`_delta_visits`)
-- [x] ~~Never-visited-leaf filter applied — edges with zero total update-log entries excluded from target sampling~~ **REVERTED 2026-07-11 — see Progress Log entry below.** A skeptical leakage audit found this filter was a real train/inference topology-mismatch bug, not a safe compute optimization: `edge_parent`/`edge_child`/`edge_slot` aren't just "which edges get a loss target", they're the literal graph fed into `TreeEncoder`'s segmented-softmax attention (`TreeAttMsgLayer.forward`, `tree_mha.py`), so dropping never-visited children changed the softmax denominator — and therefore the training-time prediction — for every *kept* sibling edge under the same parent, on ~88.8-97.7% of a typical tree's nodes. Production inference never applies this filter (grep-confirmed against `preprocess_mc/materialize.py`/`controller_train.py`), so training saw a systematically sparser graph than inference ever does. Fixed: `build_snapshot_pair_example` now passes T_n's full, unfiltered real edge set through; never-visited edges naturally get target≈`[0,0,0]` and weight=0 via the pre-existing Δvisits-weighting machinery (a weight, not a filter — nothing downstream needed to change). `_never_visited` has since been moved out of `pack_history.py` entirely (zero production callers) into `test_canary_pack_history_structural.py` as a test-local helper, defined just above the test that still exercises its standalone semantics.
-
-**Follow-up (2026-07-11, independent skeptical re-review)**: the old code had a second early-return, `if not keep_mask.any(): return None`, for a T_n whose real edges are ALL never-visited — that guard had no post-fix equivalent and no test covered it. Confirmed via a synthetic fixture that the current code now returns a real, all-zero-weight example instead of `None` there (not a silent drop), and confirmed downstream-safe (zero loss, bit-identical model params after an actual optimizer step). Confirmed absent from real data: exhaustively checked 12,600 real `xaba20k` (tree, n) pairs, zero occurrences of an all-never-visited-children snapshot. New regression test added: `test_pack_history_fix_parity.py::test_all_never_visited_children_returns_full_zero_weight_example_not_none`.
-- [x] `gnn_pretrain.py`'s weighting branch reads `edge_visit_weights` when present (new `elif` branch, additive alongside — not replacing — the existing `loss_weight_by_subtree_size` path; correctly treats Δvisits=0 as zero-weight, not filtered)
-- [x] Smoke-train run for real, on real `human_trees` data (40 trees, 120 T_n→T_n+k examples, not "a few hundred" — scale-limited by this review's own time budget, not by anything blocking): `ChildWdlPretrainer.fit()`, 4 epochs, through the real on-disk shard round trip (`_write_futurewdl_shard` → `PackedFutureWdlShardDataset`) and the real (unmodified) `ChildWdlModel`. train_loss 0.691 → 0.242 (monotonic-ish decrease, some val noise expected at n=24). Confirmed separately (783-edge single-batch check) that Δvisits=0 edges (74.6% of edges in that batch) contribute exactly 0.0 to the loss and don't dominate — see Progress Log entry below for full detail. **Caveat: this smoke-train, plus everything else in this entry, was run against a hand-wrapped in-memory/on-disk shard built directly from `build_compact_trajectory`'s real output — NOT via `pack_history.py`'s own `main()`/CLI end-to-end, because that path is currently broken (see Progress Log: config/wiring gap).**
-- [x] Did not edit `build_tree.py` (`git diff --stat` confirms empty diff for that file) — no changes were needed there, nothing flagged for Task 6
-- [x] Off-by-one value-leak bug (found by due-diligence review) fixed in `_build_tree_n`/`build_snapshot_pair_example` and verified against hand-computed expected values on a synthetic `HistoryTrajectory` — see the 2026-07-10 (fix pass) Progress Log entry below for the exact numbers
-- [x] Config/CLI wiring bug (found by due-diligence review) fixed: new `gnn_pack_history:` config section, new `pack_trees_history.slurm`, and a third gap found while fixing it (`load_pretrain_example_dataset` rejecting the new manifest format) — `load_config(...)` now confirmed to load cleanly; not yet run end-to-end via an actual SLURM job (that's Wave 3)
-
-*(Checkboxes above re-verified by me via actual execution against real data — not a code read, not a rubber stamp of the prior agent's own checkboxes. See the dated Progress Log entry below for exactly what was run, including two real bugs found that these checkboxes don't fully capture — read that entry before trusting this stage as production-ready.)*
-
-**Task 5 — `packhistory_MCmaterialize` implementation**
-- [x] `ControllerEpisodeDataset.__getitem__` reads per-step values from `packhistory_trees`'s output, not a static `full_node_features[:node_cutoff]` slice — reconciled against Task 1's real, landed output (field names confirmed exact; a real before/after-increment off-by-one in the step-index query found and fixed, same class of bug as Task 4's) and re-verified by running the real, fixed code against a real packed shard built from real `human_trees` via `pack.py`'s own production functions — see the 2026-07-10 (reconciliation pass) Progress Log entry below for exact numbers
-- [x] `materialize.py` points its encoder load at `train_encoder`'s new checkpoint — `encoder_checkpoint` was already a plain config field (no hardcoding to fix); confirmed `config_ysagiv_xaba20k_history.yaml` sets it to `${gnnpack_history_dir}/tiny_encoder.pt`
-- [x] `unfreeze_encoder` stays `False` — no change to freeze logic — confirmed default unchanged, `model.freeze_encoder()` call in `materialize.py` untouched
-- [x] `z_root` values confirmed to differ step-to-step for a tree with a known real value swing — **unblocked and PASSES for real as of 2026-07-10**, once Wave 3 produced a real `train_encoder` checkpoint and `packhistory_MCmaterialize` cache: `z_t` (`features[:, :32]` of `materialize_history/train_cache.pt.d/shard_00000.pt`, `controller_inputs=['z_t','T_t']`) checked step0-vs-step95 on 20 random real trees, 0/20 bit-identical, magnitude range 0.445-1.388 — see the Wave 3 Progress Log entry for full detail. This closes Task 5's last open item.
-
-**Task 6 — new config + CLI wiring**
-- [x] `config_ysagiv_xaba20k_history.yaml` created, every stage's output-directory/checkpoint global repointed at the `_history` paths, nothing pointed at the old `mc_packed`/`packed`/`materialized`/`packed_dir` locations
-- [x] `build_tree.py` verified to read directory paths from config, not hardcode `packed_dir` anywhere; any fix needed here (including anything flagged by Task 4) applied — none needed, none flagged (re-verified 2026-07-10: Task 4's actual fix landed in `teacher_targets.py`'s `load_pretrain_example_dataset`, which `build_tree.py` calls unmodified — `build_tree.py` itself genuinely has zero diff)
-- [x] All five pipeline stages (`packhistory_trees` through `train_readout_pg`) confirmed runnable end-to-end under the new config alone — 5/5 now confirmed config-valid (`split`, `mc_pack`, `gnn_pack_history`, `encoder`/`materialize`/`train`), re-verified 2026-07-10 against Task 4's actually-shipped `gnn_pack_history` section (renamed from the originally-expected `gnn_pack`) — see Task 6 Progress Log
-
-**Overall pipeline success (Wave 3, gated on all six tasks above being individually complete)**
-- [x] `packhistory_trees` SLURM job completes on `xaba20k`, all Task 2 tests pass against the real (not synthetic) output — job 10950265, COMPLETED 2026-07-10 17:43:05, `pytest src/cts/tests/test_packhistory_trees.py -v` → 7 passed, 0 skipped
-- [x] `packhistory_GNNpretrain` SLURM job completes — same job 10950265 (`gnn_pack_history` sub-stage), `PACK_HISTORY DONE`, `train_manifest`: 82,963 examples/trees, `validation_manifest`: 20,627 examples/trees, 0 skipped-too-short, 0 skipped-all-edges-filtered
-- [x] `train_encoder` completes on the real packed data, produces a checkpoint, loss curve is sane (no NaNs, decreasing) — job 10953582, COMPLETED 2026-07-10 18:01:59, `train_loss_gap` 0.1399→0.0362 monotonically decreasing over 6 epochs, `val_loss_gap` tracks with no overfitting, checkpoint `gnnpack_history/tiny_encoder.pt` confirmed on disk
-- [x] `packhistory_MCmaterialize` completes, produces `z_root`, Task 5's step-to-step-differs check passes against the real run — jobs 10954206 (40/40 array)+10954229 (merge) COMPLETED 2026-07-10; `z_t` step0-vs-step95 checked on 20 random real trees from `train_cache.pt.d/shard_00000.pt`, 0/20 bit-identical (see Wave 3 Progress Log entry)
-- [x] `train_readout_pg` completes with no code changes, sane (non-NaN, non-degenerate) advantage/loss values — job 10954260 COMPLETED 2026-07-10, stock `pg_controller_train` unmodified, `val_greedy_regret` 0.1081→0.0607, `val_stop_acc` 0.004→0.415, `val_expansions` 8.39→2.46, no NaNs
-- [x] Full diff test (Task 2c) re-run and passes against the complete production-scale `xaba20k` run, not just the development-time sample — `test_diff_vs_old_mc_packed` run against the real full `pack_history/` output above, passes
-
-Only once every box above is checked, with the test-result boxes checked against real pipeline output rather than synthetic fixtures, is this plan done.
-
----
-
-## Progress Log
-
-*Each task has its own subsection below. Only append within your own task's subsection — never edit another task's subsection, to avoid concurrent-write conflicts between parallel agents. Newest entries at the bottom of your subsection.*
-
-### Task 1 — packhistory_trees implementation
-
-**2026-07-10** — Implemented entirely in `src/cts/data/preprocess_mc/pack.py` (no other files touched). Summary, schema deviations, and a correctness pitfall found + avoided along the way:
-
-**What was built:**
-- `_replay_backprop_history(record, expansion_parent_ids, value_feature="value")`: the retroactive replay. Walks `expansion_parent_ids` (from the existing `_ordered_expansion_parent_ids`) in order; for each real expansion event backs up that node's own static `value`/WDL (read via a lightweight `_RecordFeatureTree`/`_RecordFeatureNode` adapter over the raw record's dense feature matrix, avoiding a full `to_pretrain_example()` rehydration) along its fixed ancestor path (`_ancestor_edge_path`, derived purely from `parent_index`), using imported `EdgeStats`/`_backpropagate_path`/`_maybe_static_node_wdl` (not duplicated). Emits the sparse update log exactly per the fixed schema (`step_index`/`node_id`/`visit_count`/`q_value`/`wdl[3]`, sorted `(node_id, step_index)`, `node_update_ptr` CSR) plus each node's *final* replayed value/WDL for convenience.
-- **Root/creation-order fix applied**: newly-born children are seeded into `edge_stats` via a `children_by_parent` map built by iterating `parent_index` in ascending node-id order — never via `children_index[child_ptr[...]]` (CSR, UCI-move-string order). Verified directly: for every sampled tree, `[incoming_moves[c] for c in ascending root children]` exactly equals `record.oracle_root_moves`'s stored order (0 mismatches across 55 trees checked, two datasets).
-- `_build_compact_trajectory` (pack.py): control flow is untouched (both early-return edge cases fire before any new code runs). The one-shot `full_tree.node_features` (from `to_tensorized_tree_example`) is now only the *structural/base* matrix; its `value`/`wdl_win`/`wdl_draw`/`wdl_loss` columns are overwritten with each node's *final* replayed value/WDL (0.0 default for never-visited nodes and for the root itself, which has no incoming edge — matches `EdgeStats()`'s own zero-init, and matches `teacher_targets._root_q_values_from_edge_stats`'s explicit 0.0 fallback for an unvisited/absent edge). `wdl_var` is left untouched (not part of the update-log schema — it's a property of a node's own static WDL distribution, not something backprop revises). The trajectory dict now also carries the six new `update_log_*`/`node_update_ptr` fields, propagated end-to-end through `_numpy_to_torch` → `_accumulate_shard_buffers` (two new CSR ptr arrays, `trajectory_update_log_ptr`/`trajectory_node_update_ptr_ptr`, mirroring the existing `trajectory_edge_ptr`/`trajectory_child_ptr_ptr` convention exactly) → `_serialize_shard_payload` (shard format bumped to `"cts_packhistory_trees_shard_v1"`; old `mc_packed/` shards untouched, still tagged `"cts_budgeted_controller_episode_shard_v4"`).
-
-**Schema-deviation / interpretation notes (flagging immediately, as instructed):**
-1. **Per-step node features are NOT densely materialized inside `_build_compact_trajectory`.** History.md's step 5 reads as if this function itself should produce "per-step forward-filled node features." Densely materializing that (shape ~[T=96, N up to ~4300, 5 features] per tree) would be an O(steps × nodes × features) blow-up — infeasible at corpus scale and contrary to the whole point of the sparse update-log design in the same section. Interpretation adopted instead: `_build_compact_trajectory` packs (a) the base/final-state feature matrix and (b) the full sparse update log; the actual per-step forward-fill *lookup* happens at consumption time in `ControllerEpisodeDataset.__getitem__` (Task 5's file, `controller_train.py`, described in Task 5's own spec as doing "a lookup into packhistory_trees's new per-step values" — consistent with this reading). Flagging for Task 5's agent: your per-step lookup should search each node's `node_update_ptr` slice for the last entry with `step_index <= t` (falling back to the base feature row's `wdl_var` unchanged, and to 0.0 for `value`/`wdl_win`/`wdl_draw`/`wdl_loss` when no entry exists yet).
-2. **`value` semantics, derived (not assumed) from `oracle_root_q_trace`'s own definition**: confirmed via `teacher_targets._root_q_values_from_edge_stats`/`value_features_from_wdl` that the encoder's `value`/`wdl_win`/`wdl_draw`/`wdl_loss` features are meant to represent *the current backed-up state of the edge into that node* (parent's perspective — i.e. `EdgeStats[(parent_index[node], node)].q_value`/`.mean_wdl`), not the node's own one-shot static provider eval (which is what was actually packed pre-fix, and is a genuinely different, always-static quantity). This wasn't stated explicitly in the "Stage: packhistory_trees" section — recorded here since it's load-bearing for what "the fix" produces.
-3. **`_flip_wdl_target` is imported (per the Files section's explicit list) but not called directly** — `_backpropagate_path` already applies it internally on every ancestor step, and re-deriving/duplicating that flip in pack.py would violate the "imported, not duplicated" intent, not satisfy it. `_static_node_value` was *not* imported (it wasn't in the explicit list either): the leaf value is a one-line `node.scalar_features[value_feature]` dict lookup, not substantive logic worth an extra cross-module dependency.
-4. **A correctness pitfall found and deliberately avoided, documented at length in `_replay_backprop_history`'s own docstring**: an earlier version of this function attempted a *full* PUCT-leaf-selection re-simulation (importing `_select_leaf_by_puct` too) specifically to also recover "wasted" backprop events from PUCT repeatedly re-selecting an already-terminal node (e.g. a found forced mate) without expanding it again — these leave no trace in `expansion_parent_ids` or the final tree structure. That approach was **abandoned** after empirical testing: because the `prior` feature it depends on is only recoverable as float16 (this raw format's on-disk dtype), near-tied PUCT-score competitions occasionally get decided differently than the live float32-precision search did, and once that happens the re-simulated leaf-selection sequence diverges onto a *different branch of the tree entirely* — a large, unbounded, unpredictable error (caught red-handed on 1/40 sampled `human_trees`: replayed node 54 vs. true node 137, a live PUCT score gap of 0.178514 vs. 0.178467, well inside float16 rounding noise). This is strictly worse than just not chasing terminal-revisit backprop mass, which is what the shipped implementation does. **Measured cost of not chasing it** (real data, no synthetic fixtures): replayed root-child Q vs. the tree's own stored `oracle_root_q_trace`, every step × every root child —
-   - `human_trees`, 40 sampled trees, 93,696 comparisons: mean 3.3e-5, median 0.0, p95 1.5e-4, p99 2.2e-4, max 0.0556 (one outlier tree; every other tree's worst step ≤ 0.004). 0.16% of comparisons exceed 1e-3.
-   - `generated_trees_oracle96_trace_filtered`, 15 sampled trees, 54,816 comparisons: mean 1.3e-5, median 0.0, p95 1.0e-4, p99 2.2e-4, **max 2.8e-4** — 0% exceed 1e-3.
-   
-   This matches, and gives fuller empirical grounding to, the "~1e-4 residual, not blocking" item already in the Deferred section — the cause is now confirmed (terminal-leaf revisit backprop mass, not recoverable from final-tree data at float16 precision), not just suspected.
-5. **Packed root-children action-gap check** (the Task 2 test target, run informally here against real `_build_compact_trajectory` output, not just the internal replay dict): 15 sampled `human_trees`, comparing packed `node_features[:, "value"]` top1−top2 among root children (final step) vs. `oracle_root_q_trace[-1]`'s top1−top2 — 0/15 mismatches at 1e-2 tolerance.
-
-**Verification performed** (informal, my own smoke scripts in the session scratchpad — not a substitute for Task 2's committed test suite, which should still be run against this code): module imports cleanly; `_build_compact_trajectory` runs end-to-end on 15 real `human_trees` trees, producing correctly-shaped/sorted update logs (`node_update_ptr` monotonic, each node's slice sorted by `step_index`, `node_update_ptr[-1] == len(log)`); full shard round-trip through `_accumulate_shard_buffers`/`_serialize_shard_payload`/`torch.load` verified, including that a tree's shard-level CSR slice (via the two new ptr arrays) reproduces its own local `node_update_ptr`/`update_log_step_index` exactly.
-
-**Not done by this task (explicitly out of scope, left for Task 2/5/6):** no committed test file was added (Task 2's ownership); no check against `mc_packed/`'s existing output for a byte-identical structure diff (Task 2c); did not touch `controller_train.py`/`materialize.py` (Task 5) or any config file (Task 6).
-
-**2026-07-10, follow-up — ran Task 2's already-landed `src/cts/tests/test_packhistory_trees.py` against this implementation** (found it already written by the parallel Task 2 agent; did not edit it, per scope). Result: `4 passed, 1 skipped, 2 failed`. Both failures (`test_replay_matches_oracle_root_q_trace`, `test_packed_action_gap_matches_oracle_at_every_step`) are **the same root cause, and it is a caller-side `step_index` off-by-one in the test, not a replay-accuracy bug** — flagging explicitly for Task 2's agent (not fixing myself, out of scope: only `pack.py` is mine to edit):
-
-- The test's `_value_as_of_step` is called with `step_t = row + 1` (`test_packhistory_trees.py:352` and `:445`ish, search for `step_t = row + 1`), i.e. it treats `step_index` as *1-indexed*, matching `oracle_trace_expansion_counts`'s own *values*. But `step_index` (as documented, now more explicitly, in `_replay_backprop_history`'s docstring) is the 0-indexed *position* within `expansion_parent_ids` — row `k` of `oracle_root_q_trace` lines up with `step_index == k`, not `k + 1`.
-- Confirmed directly on the exact failing case (`human_trees/000000_root_0.pt`, node 7, oracle row 37 — the test calls this "step 38"): querying the update log with `t = 37` (the correct, 0-indexed convention) gives `q_as_of = 0.0`, an **exact** match to `oracle_root_q_trace[37] = 0.0` (error `0.0`). Querying with `t = 38` (the test's current `row + 1` convention) gives `q_as_of = 0.005834`, i.e. the test's reported failure (`replayed=0.005834 vs oracle=0.000000`) is fully and exactly explained by including one extra expansion's worth of backprop that oracle row 37 doesn't yet reflect — not by any imprecision in the replay itself.
-- **Suggested fix for Task 2's agent**: change `step_t = row + 1` to `step_t = row` in both failing tests (and anywhere else in the file using the same pattern — search for `row + 1`). Everything else about the test (schema field names, `_extract_update_log`'s candidate-name lookup, `_root_children_ascending`) already lines up with this implementation with zero changes needed — `_extract_update_log`'s first-listed candidate for `node_update_ptr` (`"node_update_ptr"`) and second-listed candidates for the rest (`"update_log_step_index"`, etc.) are exactly the field names this implementation uses.
-- Separately, real-data tolerance is still worth a look once the off-by-one is fixed: this implementation's OWN validation (above) already shows a genuine, small, well-characterized residual (~0.16% of (tree, step, root-child) comparisons on `human_trees` exceed `1e-3`, driven by unrecoverable terminal-leaf-revisit backprop mass, see point 4 above) — a test that samples several trees and requires **zero** exceptions across *every* step of *every* sampled tree has a non-trivial chance of an unlucky sample hitting one of those, independent of the off-by-one just described. Worth deciding whether the real-data tests should tolerate a small exception rate (e.g. assert the 99th-percentile or mean error, not a hard per-comparison ceiling) rather than requiring literally zero violations — not fixing this myself since it's a test-design decision in Task 2's file, just flagging the data.
-
-### Task 2 — packhistory_trees test suite
-
-**2026-07-10**: Wrote `src/cts/tests/test_packhistory_trees.py` (7 tests). Checked Task 1's
-subsection before starting (empty) and re-checked twice more during this session (`git status`/
-`grep update_log src/cts/data/preprocess_mc/pack.py`, both empty) — Task 1 had not landed by the
-time this entry was written, so all real-data assertions are wired to run against production code
-the moment it does, but currently execute via `pytest.skip` with an explicit reason instead.
-
-What's implemented, per the three required tests:
-1. `test_replay_matches_oracle_root_q_trace` (+ `test_replay_lookup_logic_synthetic_fixture`,
-   always-runs logic check): calls the real, stable `build_compact_trajectory(record, schema,
-   source_path=...)` entry point (the exact function history.md names as Task 1's own modification
-   target) on real `human_trees`/`oracle96` records, and looks for the new update-log fields in its
-   returned dict via `_extract_update_log` (tries flat keys matching the schema's exact names —
-   `step_index`, `node_id`, `visit_count`, `q_value`, `wdl`, `node_update_ptr` — plus an
-   `update_log_`-prefixed fallback and a nested `update_log` sub-dict). Root-child order uses
-   ascending node id (`_root_children_ascending`), joined to `oracle_root_q_trace` columns by move
-   name via `incoming_moves`/`oracle_root_moves.index(...)` — never CSR/`children_index` order, per
-   the bug already found during planning. Tolerance `1e-3` as specified.
-2. `test_packed_action_gap_matches_oracle_at_every_step` (+
-   `test_action_gap_logic_synthetic_fixture`, always-runs logic check): reads root-children values
-   directly via the same update-log CSR lookup (`_value_as_of_step`, a forward scan within each
-   node's already-localized CSR slice — no separate replay call, no encoder/materialize/GNNpretrain
-   involved), computes top1−top2, and asserts it matches the oracle action gap at **every** step t
-   in `[1, num_oracle_steps]`, not just endpoints. The synthetic fixture explicitly demonstrates the
-   pre-fix failure mode (a frozen/constant gap across steps) to prove the comparison would actually
-   catch it.
-3. `test_diff_vs_old_mc_packed` (+ `test_diff_logic_synthetic_fixture`, always-runs logic check,
-   covering both a positive case and two negative/regression cases; +
-   `test_old_mc_packed_shard_is_parseable_by_diff_helpers`, a partial real-data check that doesn't
-   need to wait for anything): `diff_old_new_shards(old_shard, new_shard)` joins by `source_path`
-   (not shard index, per spec — a tree can land in a different shard number between the old and new
-   packing runs), asserts `parent_index`/`depth`/`child_ptr` and `oracle_stop_steps`/`oracle_values`/
-   `halt_rewards` are byte-identical (`torch.equal`), and asserts `node_features` differs for at
-   least one common tree. Verified this logic against the REAL current `mc_packed` shard format
-   (`cts_budgeted_controller_episode_shard_v4`, confirmed by loading
-   `.../ysagiv_xaba20k/mc_packed/train/shard_00000.pt` directly) before writing the synthetic
-   fixtures, so the field names/slicing (`trajectory_node_ptr`, `trajectory_child_ptr_ptr`,
-   `trajectory_step_ptr`, `episode_trajectory_index`) match production, not a guess. `pack_history/`
-   doesn't exist yet (pending Task 6's config + a real SLURM run — Task 6's subsection below shows
-   the config itself already landed), so the full real-data test skips with an explicit reason; the
-   old-shard-only parseability check runs for real today and passes.
-
-**Actual run results** (`pytest src/cts/tests/test_packhistory_trees.py -v`, this session):
-`4 passed, 3 skipped`. Passing for real: both synthetic logic-validation tests (1a/2a), the diff
-logic-validation test (3a, positive + 2 negative cases), and the partial real-data check that
-parses a real old `mc_packed` shard. Skipped, each with an explicit actionable reason printed by
-pytest: the two real-data tests against `build_compact_trajectory` (pending Task 1), and the real
-`pack_history/` diff (pending Task 1 + a pipeline run under Task 6's already-landed config). Also
-verified directly: a bare `pytest` from repo root collects zero tests from this file
-(`pytest --collect-only -q` — confirms `pytest.ini`'s `testpaths = src/analysis/tests` really does
-exclude `src/cts/tests/`), so this file must be invoked explicitly as
-`pytest src/cts/tests/test_packhistory_trees.py`.
-
-**Integration risk flagged for whoever runs Wave 2 next** (likely me, revisiting this task): the
-exact key names Task 1 uses for the packed update-log fields, and whether they live flat on
-`build_compact_trajectory`'s returned dict or nested, are unverified guesses based on the schema
-block in history.md — `_extract_update_log`'s candidate-name lists are the single place to patch if
-Task 1 lands with different names. Cross-checked against Task 5's subsection below (landed before
-this entry was written): Task 5 independently guessed `update_log_step_index`/`update_log_node_id`/
-`update_log_q_value`/`update_log_wdl`/`trajectory_update_log_ptr` for the same fields in
-`ControllerEpisodeDataset.__getitem__` — my candidate list already covers the `update_log_`-prefixed
-forms Task 5 guessed for the first four, but NOT the `trajectory_update_log_ptr` name for the CSR
-pointer (I only tried `node_update_ptr`); added it as an extra candidate below so both guesses are
-covered by this file without needing another edit once Task 1's real names are known. Nothing else
-in this file should need to change.
-
-**Task 2 Definition-of-Done checklist status**: only the first box is checked below — it's the only
-one actually verified as *passing*; the other three are exercised by working, verified-correct test
-*logic* (synthetic fixtures, all passing) but the real-data assertions themselves are still skipped
-pending Task 1 (and Task 6's pipeline run, for the diff test), so per this document's own rule
-("nobody marks a test-result checklist item complete based on judgment alone... only once the test
-has actually been run and passed") they stay unchecked until then.
-
-**2026-07-10 (off-by-one fix pass)** — Resuming this task specifically to check whether Task 1's
-diagnosed off-by-one (its "follow-up" Progress Log entry above) had actually been applied to this
-file. It had not: a direct read confirmed `step_t = row + 1` was still present at both real-data
-call sites (`test_replay_matches_oracle_root_q_trace`, then
-`test_packed_action_gap_matches_oracle_at_every_step`) — Task 1's suggested fix was correctly
-diagnosed but never landed here, and a later, independent Task-4 due-diligence re-run
-(`history.md` Task 4 Progress Log, "Adjacent, out-of-scope finding... 2 failed, 4 passed, 1
-skipped") reproduced the identical two failures on the identical tree/step, confirming the fix was
-still missing rather than already applied-and-regressed.
-
-`grep -n "row + 1" src/cts/tests/test_packhistory_trees.py` found exactly these two occurrences (no
-others in the file — the diff-test and synthetic-fixture code paths don't use this pattern at all).
-Changed both from `step_t = row + 1` to `step_t = row`, matching `step_index`'s real, confirmed
-semantics: it is the 0-indexed position within `expansion_parent_ids` (per
-`_replay_backprop_history`'s docstring in `preprocess_mc/pack.py`), so oracle row `k` lines up with
-`step_index == k`, not `k + 1`. No other file/line needed a matching change.
-
-**Real pytest run after the fix** (`pytest src/cts/tests/test_packhistory_trees.py -v`, executed
-for real, not inferred):
-
-```
-test_replay_lookup_logic_synthetic_fixture PASSED
-test_replay_matches_oracle_root_q_trace PASSED
-test_action_gap_logic_synthetic_fixture PASSED
-test_packed_action_gap_matches_oracle_at_every_step PASSED
-test_diff_logic_synthetic_fixture PASSED
-test_old_mc_packed_shard_is_parseable_by_diff_helpers PASSED
-test_diff_vs_old_mc_packed SKIPPED
-6 passed, 1 skipped in 5.38s
-```
-
-Both previously-failing tests now pass outright — **zero residual failures**, not just a reduced
-failure rate. This means the off-by-one was the entire explanation for both failures on this
-6-tree sample (`human_trees` + `oracle96`, `n_per_source=6` each); Task 1's own separately-reported
-residual (~0.16% of (tree, step, root-child) comparisons on a larger 40-tree `human_trees` sample
-exceed `1e-3`, from unrecoverable terminal-leaf-revisit backprop mass at float16 precision — Task 1
-Progress Log point 4) never surfaced as an actual assertion failure in this run, so no
-tolerance-policy change (e.g. asserting p99/mean error instead of a hard per-comparison ceiling,
-which Task 1 suggested as a fallback) was needed. Left the hard `1e-3` per-comparison assertion
-as-is, since it passed for real against real data — loosening a passing check would weaken the
-test without cause. This should be revisited only if a future run against a larger/different
-sample hits that documented residual and fails; the fix here addresses the actual (and only) cause
-found in this session, not a theoretical one.
-
-`test_diff_vs_old_mc_packed` still `SKIPPED` — `pack_history/` does not exist on disk yet
-(`/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k/pack_history`), pending Task 6's Wave-3 SLURM
-run, unrelated to this fix.
-
-**Full `src/cts/tests/` suite** (`pytest src/cts/tests/ -v`, all markers, no `-m` filter, real
-run): `2 failed, 12 passed, 3 skipped in 162.59s`. Both failures are
-`test_child_wdl_disambiguation.py`'s `test_perturbation_localizes_to_the_perturbed_child` and
-`test_perturbation_localization_with_extended_training` — Task 3's own already-documented,
-reproducible, non-training-budget finding (see Task 3's Progress Log above: "FAILS, reproducibly,
-not a training-budget artifact"), out of this task's scope and left untouched. Nothing in
-`test_packhistory_trees.py`, `test_controller_train_resume.py`, or `test_e2e_within_epoch_trace.py`
-failed; `test_e2e_backprop_smoke.py`'s 2 tests remain skipped (no real manifest env in this
-session, pre-existing/unrelated).
-
-**Task 2 Definition-of-Done checklist updated above**: the first two real-data-test boxes are now
-checked (both actually run and passed for real this session); the third
-(`test_diff_vs_old_mc_packed`) stays unchecked — it is still `SKIPPED`, not passing, pending Task
-6's real SLURM run producing `pack_history/`.
-
-### Task 3 — new GNN head
-
-**2026-07-10** — Implemented in `src/cts/models/gnn.py` only (purely additive; `TreeEncoder`, `ChildWdlHead`, `ChildWdlModel` untouched, confirmed via `git diff` showing zero deletions).
-
-- **Chosen names (Task 4 should import these):** `FutureWdlHead` and `FutureWdlModel`, mirroring `ChildWdlHead`/`ChildWdlModel`'s naming and shape.
-- `FutureWdlHead(d_embed, hidden_dim=128, device="cpu")`: `forward(parent_states, child_states, slot_states)` → `concat(u_n, v_n, slot_states)` (width `3 * d_embed`) → 2-layer MLP (`Linear → ReLU → Linear`, same shape as `ChildWdlHead`'s MLP but with a `3 * d_embed` input layer instead of `2 * d_embed`) → `[E, 3]` WDL logits.
-- `FutureWdlModel(k, node_feat, device, ..., decoder_hidden=128, encoder=None, sequential=True)`: same constructor shape as `ChildWdlModel`, builds/wraps a `TreeEncoder` and a `FutureWdlHead`. `forward(tree_batch)` calls `self.encoder(tree_batch)`, gathers `u_n = node_states[edge_parent]` and `v_n = node_states[edge_child]` (both from `TreeEncoderOutput.node_states`), gets `slot_states = self.encoder.slot_embeddings(edge_slot)` (confirmed a real public submodule set in `TreeEncoder.__init__`, not something that needed exposing via `TreeEncoderOutput`), and returns `self.future_wdl_head(u_n, v_n, slot_states)` — `[E, 3]` logits, same calling convention as `ChildWdlModel.forward`, drop-in replacement callable the same way.
-- Docstring note added to `FutureWdlModel.__init__`: its `k` param (encoder message-passing rounds) is unrelated to the pretraining `lookahead_k` used elsewhere in this plan — the lookahead lives entirely in the training data/targets built by `packhistory_GNNpretrain`, not in this model code, per the naming-collision warning in the "Stage: packhistory_GNNpretrain" section above.
-- **Test**: new file `src/cts/tests/test_future_wdl_head.py`, following `test_e2e_backprop_smoke.py`'s style/location but — unlike that file — needs no real manifest; builds a small hand-constructed synthetic `TreeBatch` (1 root + 2 children, confirmed `TreeBatch` is a `@dataclass` in `cts.core.tensorizer`, not a `NamedTuple`; this is the first test in the repo to hand-construct one). Three tests, all passing (`python -m pytest src/cts/tests/test_future_wdl_head.py -v` → 3 passed):
-  1. `test_future_wdl_head_output_shape_and_gradients_flow_through_all_three_inputs` — direct head-level test with leaf tensors for `u_n`/`v_n`/`slot_states`; confirms `[E,3]` output shape and that `.backward()` produces finite, nonzero gradients on all three inputs independently.
-  2. `test_future_wdl_model_forward_on_synthetic_tree_batch` — end-to-end through the real `TreeEncoder` on the synthetic `TreeBatch`; confirms `[E,3]` output and that gradients reach both the encoder's and the head's parameters (i.e. nothing along the `u_n`/`v_n`/`slot_states` path is accidentally detached).
-  3. `test_future_wdl_head_is_strict_superset_of_child_wdl_head_inputs` — feeds `FutureWdlHead` an all-zero `child_states` (worst case: a zero-visit/newly-created child with no distinguishing signal of its own) alongside real `parent_states`/`slot_states`, and confirms (a) output is finite and non-degenerate (varies across edges with different parent/slot inputs) and (b) gradient into `parent_states` and `slot_states` is still fully nonzero — i.e. the parent+slot pathway `ChildWdlHead` already had is never starved by the presence of the new `v_n` input, matching the plan's explicit non-regression requirement.
-- All Definition-of-Done boxes for Task 3 checked off above, verified by the passing test run quoted.
-
-**2026-07-10 (later) — SUPERSEDED. The above design was wrong; reverted and re-scoped.**
-
-The user (who understands this codebase far better than the reasoning that led to `FutureWdlHead`) pointed out the flaw directly: `ChildWdlHead` is *already* used today on every edge of a *complete* tree — including children with large, deep, richly-explored subtrees, not just fresh leaves — and it works from `concat(parent_states, slot_states)` alone. The "single-node/zero-history child" framing that motivated adding `v_n` was simply not an accurate description of how `ChildWdlHead` is actually used. Mechanistically: `TreeEncoder`'s message passing is bottom-up before it's top-down, so a child's entire subtree is already aggregated into its parent's state by the time `ChildWdlHead` runs; `slot_states` is what disambiguates which child that aggregate is being asked about. Nothing about encoding T_n instead of the complete tree changes this — T_n *is* "the complete tree" from the encoder's own perspective when it's given T_n.
-
-**Action taken:** `FutureWdlHead`/`FutureWdlModel` removed from `gnn.py` in full (`git diff --stat src/cts/models/gnn.py` is now empty again). `src/cts/tests/test_future_wdl_head.py` deleted. Task 4 has been redirected (via SendMessage, and via the "Stage: packhistory_GNNpretrain" section above being rewritten) to use `ChildWdlModel`/`ChildWdlHead` directly, unmodified — no new head at all.
-
-**This task is repurposed, not closed**, per the user's explicit instruction that this correction needs rigorous, not just architectural-argument, validation: build a test that empirically confirms `ChildWdlModel`'s `concat(parent_states, slot_states)` genuinely carries per-child disambiguating signal on a **T_n-shaped partial tree** specifically (not just the complete-tree case it's already proven on) — construct a small synthetic tree with two sibling children under the same parent, give them deliberately different sub-histories (different accumulated visit-count/value structure in their own mini-subtrees), run it through the real `TreeEncoder` + `ChildWdlModel`, and confirm (a) the two children's predictions differ meaningfully — not near-identical, not just noise — and (b) perturbing only one child's subtree moves that child's prediction specifically, without equally dragging its sibling's prediction along (the actual signature of correct slot-gated disambiguation, as opposed to generic parent-state drift that would move both children's predictions in lockstep regardless of which one's subtree changed). See the revised Definition-of-Done checklist above for the exact three boxes this needs to satisfy. Do not mark this task done until that test exists and passes for real.
-
-**2026-07-10 (final) — Packaged test built, run for real, and the result is a genuine, reproducible FAIL on the decisive check. This finding should be treated as important, not softened.**
-
-**Development process** (scratch probes in `/tmp/.../scratchpad/`, discarded after distillation into the real test below — kept here only as a narrative trail):
-1. `probe_disambiguation.py` — untrained/random-init `ChildWdlModel`, single rich-vs-bare sibling pair. Found: the sibling-prediction difference was *entirely* explained by the slot embedding alone (`diff_asym ≈ diff_same_content` when both siblings were given identical subtrees), and an isolated perturbation of one child's grandchildren barely moved either prediction (both ~1e-4, ~100x below the natural noise floor of a full tree redraw). Inconclusive on its own — could just mean "untrained network is numerically insensitive," not a real architectural finding.
-2. `probe3_trainability.py` — trained `ChildWdlModel` from scratch on a task requiring parent+slot to recover a child-subtree-dependent class. First version had a real bug: `edge_parent`/`edge_child`/`edge_slot` only contained the root's two direct edges, omitting the grandchild edges entirely — `TreeEncoder`'s upward attention pass only routes information along edges present in those arrays (`parent_index` alone only drives the downward, parent→child pass), so the grandchildren's signal was structurally unreachable regardless of architecture. Training accordingly sat at chance (loss ≈ ln 3, accuracy ≈ chance). Fixed by including the grandchild edges — training then worked (chance → 0.85 held-out accuracy) — but a follow-up "isolated perturbation" check (using a properly-isolated single-variable change this time) showed the untouched sibling's prediction moved by *the same magnitude* as the perturbed target's (ratio 0.98) and flipped to the same predicted class. This turned out to be a second, more subtle flaw: only the *rich* child's edge was ever supervised each training step, so the model had zero training signal telling it to keep the (never-supervised) sibling's prediction stable — it could win by learning "map the shared `root_state` to a class, ignore `slot_states` entirely," which is invisible to a training objective that only checks the position matching `rich_slot`.
-3. `probe4_dual_signal.py` — the fix: **both** children get their own independent subtree + independent target class, supervised every step (so a "collapse to shared, slot-independent prediction" strategy is directly penalized — the two target classes agree only ~1/3 of the time by construction). At 500 steps: held-out joint accuracy 0.320 vs. chance 0.111 (real signal, well above what a "predict same class for both" shortcut could achieve, ≈0.2 by estimate). But the isolated-perturbation check *still* showed ratio ≈ 0.99 — the untouched sibling moved essentially as much as the perturbed target.
-4. `probe5_longer_train.py` — same design, 2000 steps (4x) to rule out under-training as the explanation. Held-out joint accuracy barely moved (0.333, statistically the same as the 500-step run's 0.320) and the perturbation ratio was unchanged: 0.98. More training does not fix it.
-
-**Final packaged test**: `src/cts/tests/test_child_wdl_disambiguation.py`, distilled from the above into a clean, fast default suite plus one `@pytest.mark.slow` confirmatory test (this repo's existing slow-marker convention, `pytest.ini`). Uses a genuine T_n-shaped partial-tree `TreeBatch` (`_make_partial_tree`): root with two direct children, **each with its own pair of grandchildren** carrying an independent scalar signal bucketed into a 3-way class — not the bare-leaf/complete-tree shape `ChildWdlHead` was already proven on. Both `ChildWdlModel`/`ChildWdlHead` are used completely unmodified.
-
-- `test_predictions_differ_meaningfully_between_siblings_with_different_subtrees` (fast, ~300 training steps, module-scoped fixture) — **PASSES**. Held-out joint accuracy 0.32-0.33 vs. chance 0.111, run directly and confirmed (`python -m pytest src/cts/tests/test_child_wdl_disambiguation.py -v -m "not slow"` → this test passed).
-- `test_perturbation_localizes_to_the_perturbed_child` (fast, same fixture) — **FAILS**, run directly and confirmed: holding the parent's own features and the untouched sibling's *entire* subtree exactly fixed, and changing only the target child's grandchildren, delta on the perturbed child (7.72) and delta on the untouched sibling (7.53) are essentially equal — ratio 1.03, not the `>1.5` the test requires for "genuine slot-gated disambiguation" as opposed to generic parent-state drift.
-- `test_perturbation_localization_with_extended_training` (`@pytest.mark.slow`, 1500 steps, ~4.5 min wall time on this CPU-only login node) — **FAILS the same way**, run directly and confirmed: ratio 0.99 after 5x more training than the fast test, joint accuracy essentially unchanged (still well above chance, so the model isn't failing to learn generally — it's specifically not learning to keep a query about one child's prediction independent of what happened to the other child's subtree).
-
-**2026-07-10 (coordinator note) — user reviewed this finding and made the call not to block Wave 3 on it.** Rationale, as given: the sibling-prediction leak is plausibly a pre-existing property of `ChildWdlHead`'s architecture (shared parent aggregate, slot-gated only at the final concat) that would show up identically on today's production *complete*-tree training, not something this plan's move to T_n (partial trees) introduced or worsened — consistent with the mechanistic argument already in this subsection (bottom-up aggregation happens before slot disambiguation, and nothing about that ordering is T_n-specific). **Not independently re-verified against a complete-tree-shaped fixture** as of this note (the fast perturbation test above was only ever run on the T_n-shaped `_make_partial_tree` fixture) — this is the user's judgment call on priority/scope, not a closed-and-confirmed finding. If it later matters (e.g. `train_readout_pg`'s real halt decisions turn out to be sensitive to cross-sibling leakage), the cheap next step is rerunning `test_perturbation_localizes_to_the_perturbed_child`'s logic on a complete-tree fixture (no T_n slicing) to see if the ratio is still ~1.0 there too. Wave 3 proceeds without gating on this.
-
-**Verdict: FAIL, and this is a real, reproducible finding, not a training-budget or bug artifact** (four independent experimental designs, two of them the actual packaged pytest tests run fresh just now, all converge on ratio ≈ 0.98-1.03 regardless of training budget). `ChildWdlModel` *can* be trained to extract real, above-chance, content-dependent signal for two siblings from `concat(parent_states, slot_states)` jointly (property (a) holds) — but it does **not**, empirically, cleanly localize/gate that signal per child (property (b) fails): perturbing one child's subtree measurably moves its untouched sibling's prediction by essentially the same amount. This directly contradicts the specific mechanistic claim underlying the "no new head needed" correction (that `slot_states` disambiguates *which* child a shared parent aggregate is being asked about, cleanly separating each child's contribution). **The correction needs to be revisited** — either the underlying architectural claim needs qualification (perhaps: real, richer training data at production scale behaves differently than this small synthetic setup; or perhaps genuine per-child localization requires either a different training objective, more model capacity, or literally does need the reverted `v_n`-augmented head after all) — this is not something this task should resolve unilaterally; flagging back to the coordinator/user per instructions rather than either reverting to `FutureWdlHead` on my own authority or declaring the correction fully validated. Definition-of-Done boxes updated above to reflect exactly this: predictions-differ box and T_n-shape box checked (both genuinely verified passing/true); perturbation-localization box left unchecked (genuinely failing, not just unverified).
-
-### Task 4 — packhistory_GNNpretrain implementation
-
-**2026-07-10** — Process note: the agent doing this work did not write a Progress Log entry or update its own checkboxes before its session ended — its final reported message was a stray "I'll stop polling now..." line, not a real summary (it had been checking on Task 1's landing, since full testing needs Task 1's real output; it seems to have stalled on that wait rather than wrapping up cleanly). The entries and checkboxes below were written by me after directly verifying the actual code, not relayed from the agent's own report.
-
-**What's there** (`src/cts/data/preprocess_gnn/pack_history.py`, new file, 673 lines, syntax-checked clean):
-- `HistoryPackConfig` with `lookahead_k: int = 12`, `snapshots_per_tree: int = 1`, matching history.md's v1 defaults.
-- `deterministic_snapshot_steps` — samples `snapshots_per_tree` distinct n in `[1, min(search_budget, num_available_steps) − lookahead_k]`, seeded via `hashlib.sha256(source_path | draw_index | seed)` → `random.Random`, with rejection-resampling on collision (matters once `snapshots_per_tree > 1`) — mirrors `deterministic_starting_budgets` (`preprocess_mc/oracle.py:203-229`) as instructed.
-- Reads `packhistory_trees`'s packed update log via a per-trajectory `node_update_ptr` CSR slice (`trajectory_node_update_ptr_ptr`) — confirms it's consuming Task 1's schema, not raw trees.
-- `_delta_visits` computes Δvisits per edge from the same log; the never-visited-leaf filter is applied via the CSR slice being empty for such nodes (consistent with "single lookup, not a per-(n,k) computation" from the plan).
-- Docstrings explicitly reference the corrected design — "no new head... `ChildWdlHead`'s existing `concat(parent_states, slot_states)` already carries each child's disambiguating signal... on a partial tree exactly as it does on a complete one" — confirms the redirect message was read and incorporated, not just silently ignored.
-- No `FutureWdlModel`/`FutureWdlHead` references anywhere in `src/` (`grep -rn` clean) — old design fully gone, not just unused.
-- `build_tree.py` untouched (`git diff --stat` empty for that file) — file-ownership boundary with Task 6 respected.
-
-**`gnn_pretrain.py` weighting-branch edit** (70 lines changed): adds `bucket_by`/`visit_weight_transform` config fields, extends `BucketedKLState` to bucket by Δvisits instead of subtree size when configured, and adds a new `elif edge_visit_weights is not None` branch in the loss-weighting logic — additive alongside the existing `loss_weight_by_subtree_size` branch, not a replacement, so today's Child-WDL training path is unaffected. Δvisits=0 edges get `weight_sum`-normalized zero contribution (a weight, not a filter), matching the plan.
-
-**Not yet done**: the smoke-train test (needs Task 1's real packed output, which hadn't landed as of this work) — left unchecked below, correctly, since it's a test-result item.
-
-**Follow-up needed, not urgent**: someone (me, next turn, or by resuming this agent) should confirm with it directly whether it considers this code-complete pending only Task 1, or whether it was mid-edit when it stalled — the code review above looks complete and coherent, but I haven't gotten the agent's own confirmation of that.
-
-**2026-07-10 (later) — Independent due-diligence verification, done by RUNNING the code against real data, not re-reading it.** Task 1 has now landed real, uncommitted code in `preprocess_mc/pack.py` (375 insertions), so this review used real `human_trees` records end-to-end wherever possible instead of synthetic fixtures. (Minor correction to the entry above: the real config class is `PackHistoryGNNPretrainConfig`, not `HistoryPackConfig` — a naming slip in that summary, not in the code.)
-
-**What I actually ran** (all scripts below were built for this review; not committed):
-1. Loaded real records via `RawPretrainExampleRecord.load(...)` from `/scratch/gpfs/GRIFFITHS/ysagiv/chess/CTS/data/human_trees`, ran the real `build_compact_trajectory` (Task 1's own function) on ~200 of them. `_replay_backprop_history` raised its own divergence `ValueError` on 0/200 in one batch and non-trivially on others in an earlier, smaller sample — worth Task 1/Task 2 knowing about (see below) but not this task's bug.
-2. Hand-wrapped several real per-tree trajectory dicts into a shard payload using *exactly* Task 1's real field names (`update_log_step_index`, `update_log_node_id`, `update_log_visit_count`, `update_log_q_value`, `update_log_wdl`, `node_update_ptr`, `trajectory_update_log_ptr`, `trajectory_node_update_ptr_ptr`, etc.) and fed it through `pack_history.py`'s real `iter_history_trajectories`. **Result: every field name lines up exactly, zero changes needed** — the "unconfirmed assumption" flagged in this module's own docstring (lines 13-46) is confirmed correct on the field-name axis.
-3. Ran `deterministic_snapshot_steps` repeatedly on real `source_path`s: same config → identical output (reproducible); different `seed` → different `n`; `snapshots_per_tree=5` → 5 distinct values. Boundary cases: `num_available_steps` at/below `search_budget−lookahead_k` correctly returns `[]` (no crash); `snapshots_per_tree` larger than the available distinct range (`num_available_steps=3, lookahead_k=1` ⇒ only 2 distinct n's, `snapshots_per_tree=10` requested) does **not** infinite-loop — the `for attempt in range(high)` bound is real and works, degrading gracefully to duplicate draws once the range is exhausted.
-4. Hand-verified `_never_visited` and `_delta_visits` against a real T_20 snapshot of a real tree: `build_snapshot_pair_example` kept exactly the edges whose child had ≥1 update-log row and dropped exactly the rest (0 wrongly kept, 0 wrongly dropped, out of 239 real edges); a hand-computed Δvisits count for a specific real node matched `_delta_visits`'s return value exactly.
-5. Built a real `TreeBatch` (783 edges, 10 real trees, `edge_visit_weights` populated) via `collate_tensorized_examples` and ran it through the real, unmodified `ChildWdlModel`. Then executed `gnn_pretrain.py`'s actual new `elif edge_visit_weights is not None` weighting arithmetic by hand on that real batch: zero-weight edges (74.6% of the batch) contributed exactly `0.0` to the loss sum; nonzero-weight edges' contribution summed exactly to `weight_sum * total_loss` (i.e. the weighted-mean arithmetic is correct, not just plausible-looking). A synthetic all-zero-weight batch gave `weight_sum=1e-12` (post-clamp) and `total_loss=0.0`, finite — **the `clamp_min(1e-12)` genuinely prevents the NaN**, confirmed by executing it, not by reading the clamp and assuming.
-6. **Real multi-epoch smoke-train**: wrote real packed examples (40 real trees, 120 T_n→T_n+k examples) to disk via `pack_history.py`'s own `_write_futurewdl_shard`, loaded them back via its own `PackedFutureWdlShardDataset`, and ran `ChildWdlPretrainer.fit()` (4 epochs, batch_size=4, `loss_weight_by_subtree_size=False` so it's forced through the new Δvisits branch, `log_bucketed_kl=True, bucket_by="visit_weight"` to also exercise the new bucketing code) end-to-end. **train_loss: 0.691 → 0.256 → 0.262 → 0.242 (net decrease, some epoch-to-epoch noise typical of a 24-example validation set); no crash, no NaN.** This is a real smoke-train, not just a forward+loss call — scaled down from "a few hundred trees" to 40 for this review's own time budget, not because of any blocker.
-
-**Two real bugs found by this execution, neither visible from a static code read:**
-
-- **Off-by-one step leak into T_n's own node features (`pack_history.py:_build_tree_n`, the `_forward_filled_wdl_at_step(trajectory, node_ids, n)` call, ~line 304; same pattern at the `n_plus_k` call in `build_snapshot_pair_example`, ~line 396).** `T_n`'s *structure* (`node_cutoff = step_node_cutoffs[n-1]`) reflects state after exactly `n` real expansions, and per Task 1's own replay code (`preprocess_mc/pack.py`, `_replay_backprop_history`, `step_index = expansion_pointer`, tagged *before* increment), the backup event that creates that boundary is tagged `step_index = n-1`. So the update-log query that correctly matches `T_n`'s structural cutoff should use `step = n-1`, not `step = n`. The current code queries `step = n`, which — I confirmed concretely on real tree `000000_root_0.pt` — pulls in the *next* (n-th-plus-one) expansion's own backup for whichever existing ancestor nodes are on that expansion's path, almost every single step checked (n=2 through 9 in one scan, each with a real, nonzero Q-value discrepancy between querying `step=n` vs the structurally-correct `step=n-1`; reproduction: compare `q_as_of(node, n)` vs `q_as_of(node, n-1)` for any node whose first-ever update-log row has `step_index == n` — trivially common since ~200-300 update rows are spread over 96 steps). Net effect: `T_n`'s *structure* (which nodes/edges exist) is exactly right, but its packed *values* (the encoder's actual input) are quietly one backprop-event ahead of what "the tree as it existed at step n" is supposed to mean. Because the same off-by-one is applied symmetrically to the `n_plus_k` target query, the *k*-step lookahead gap itself is preserved (so the k-steps-ahead objective isn't structurally broken), but the docstring's literal claim — "T_n... exactly as it existed at step n" — is not quite true today, and any downstream diagnostic that correlates "n" against real search-budget semantics (e.g. the coverage-skew monitoring flagged in Deferred) would be silently off by one. Fix is narrow: change both calls to `n - 1` / `n_plus_k - 1` (or document + accept the shift explicitly, but then the docstring/plan text needs to change to match, and the never-visited/Δvisits window definitions — which are written in terms of "n" per history.md verbatim — would need re-deriving against the *effective* step to stay internally consistent).
-- **Pipeline wiring is not actually connected end-to-end today.** `config_ysagiv_xaba20k_history.yaml`'s `gnn_pack:` section (the section this stage is meant to run under) still has `split_root: ${split_dir}` — the *old* `preprocess_gnn/pack.py` field, left over from being "a full copy of `config_ysagiv_xaba20k.yaml`" (per that file's own header) — not `pack_history_dir: ${pack_history_dir}`, which is what `PackHistoryGNNPretrainConfig` (`extra="forbid"`) actually requires. Confirmed by literally calling `load_config(PackHistoryGNNPretrainConfig, "config_ysagiv_xaba20k_history.yaml", stage="gnn_pack")`: it raises a `pydantic.ValidationError` — `pack_history_dir` missing, `split_root` extra-forbidden. Separately, the one real SLURM script that drives this stage today, `slurm/pipeline/pack_trees.slurm`, still calls `python -m cts.data.preprocess_gnn.pack --stage gnn_pack` (the *old* module) — nothing in the repo invokes `cts.data.preprocess_gnn.pack_history` at all yet, despite it having its own `run_with_config_cli(PackHistoryGNNPretrainConfig, main)` entry point. This is exactly the gap Task 6's Progress Log already flagged ("`gnn_pack` blocked on Task 4 landing its config-class update... today `PackPretrainConfig`, `src/cts/data/preprocess_gnn/pack.py:30`") — but Task 4 built an entirely separate config class/module instead of extending `PackPretrainConfig`/`pack.py`'s existing `--stage gnn_pack` dispatch, so that gap is still open: as of this review, there is no config + CLI path that actually runs `packhistory_GNNpretrain` today. Everything else verified in this entry was run by calling `pack_history.py`'s functions directly in a script, not via its own `main()`/config-driven entrypoint against the real config file.
-
-**Adjacent, out-of-scope finding worth flagging for Task 1/Task 2 (not fixed or claimed as this task's own):** running `pytest src/cts/tests/test_packhistory_trees.py -v` for real (now that Task 1 has landed) gives **2 failed, 4 passed, 1 skipped** — `test_replay_matches_oracle_root_q_trace` and `test_packed_action_gap_matches_oracle_at_every_step` both fail on `human_trees/000000_root_0.pt` at step 38 (`replayed=0.005001` vs `oracle=0.000000`, tolerance `1e-3`). This is a real discrepancy in Task 1's own replay-vs-oracle correctness check, not something this review fixed or dug further into (out of this task's scope), but it means "real data" for `packhistory_trees` is not yet fully validated either, and the never-visited/Δvisits values this task's pipeline reads ultimately depend on that same replay being correct.
-
-**Net assessment**: `pack_history.py`'s core logic (sampling, filtering, Δvisits, shard I/O, the `gnn_pretrain.py` weighting branch, and the `ChildWdlModel` reuse) is now verified correct by actual execution against real data, including a genuine multi-epoch training run with decreasing loss — this is real, positive evidence, not a rubber stamp. But this stage is **not** ready to be called done: the off-by-one value-leak in `_build_tree_n`/`build_snapshot_pair_example` is a real correctness bug that should be fixed before trusting the encoder's training data, and the config/CLI wiring is currently broken end-to-end (confirmed by an actual `ValidationError`, not inferred) — nobody has run this stage via its own intended entrypoint against the real pipeline config, because doing so fails immediately.
-
-**2026-07-10 (fix pass) — both bugs above fixed and independently re-verified, not just patched and assumed correct.**
-
-Per-user direction: fix these two concrete bugs first, defer the `v_n`/new-head question (see Task 3's Progress Log for that separate, still-open thread) rather than bundling both changes together.
-
-1. **Off-by-one fixed**: `_build_tree_n` (`pack_history.py:304`) now queries `_forward_filled_wdl_at_step(trajectory, node_ids, local_step)` (was `n`) — `local_step` (`= n - 1`) is the same 0-indexed value already correctly used for the structural cutoff two lines above, so structure and values now use the same step convention. `build_snapshot_pair_example`'s target query (`~line 396`) now uses `n_plus_k - 1` (was `n_plus_k`), and its Δvisits call (`~line 401`) now passes `(n - 1, n_plus_k - 1)` (was `(n, n_plus_k)`) so the visit-count window shifts by the same amount as the value queries it's meant to describe — leaving one but not the other shifted would have desynced Δvisits from what it's supposed to weight.
-   - **Verified, not just read**: unit-tested both fixed functions against a small hand-built `HistoryTrajectory` with known update-log values at known steps (not real data — deliberately simple enough to hand-compute expected output). `_build_tree_n` matches hand-computed expected WDL at 4 different `n` (1, 2, 3, 5), including the specific case that previously diverged: at `n=2`, the fixed code correctly returns `[1.0, 0.0, 0.0]` (T_2 shouldn't yet reflect the update that happens transitioning to T_3); the old buggy query (`step=n=2` directly) would have returned `[0.5, 0.5, 0.0]` — confirmed by directly calling the pre-fix query pattern and diffing against the fixed one. `build_snapshot_pair_example` similarly confirmed: for `n=1, lookahead_k=2` (so `n_plus_k=3`), `edge_wdl_targets` now correctly returns T_3's forward-filled value `[0.5, 0.5, 0.0]`, not T_5's `[0, 0, 1]`, and `edge_visit_weights` correctly returns `1.0` (only the single update-log entry that actually falls in the corrected `(n-1, n_plus_k-1]` window).
-
-2. **Config/CLI wiring fixed**: three separate gaps, all in the dispatch path, not `pack_history.py`'s own logic:
-   - `config_ysagiv_xaba20k_history.yaml`'s old `gnn_pack:` section (which had the wrong field, `split_root`, and was missing the required `pack_history_dir`) is replaced with a new `gnn_pack_history:` section matching `PackHistoryGNNPretrainConfig`'s actual schema exactly (`pack_history_dir`, `output_root`, `search_budget`, `shard_size`, `seed`, `clear`, `lookahead_k`, `snapshots_per_tree`). This is a *new* section, not a repoint of the old one — the old `gnn_pack:` key is simply absent now from this config (it was never valid for this stage's config class anyway); nothing about `config_ysagiv_xaba20k.yaml` (the old, production config) is touched. **Verified**: `load_config(PackHistoryGNNPretrainConfig, "config_ysagiv_xaba20k_history.yaml", stage="gnn_pack_history")` now loads cleanly and resolves every path correctly (`pack_history_dir=.../pack_history`, `output_root=.../gnnpack_history`, etc.) — ran this directly, not inferred.
-   - New `slurm/pipeline/pack_trees_history.slurm` created (parallel to, not a modification of, `pack_trees.slurm`) — drives `split` (shared) → `mc_pack` (Task 1's in-place rewrite, unchanged CLI) → `gnn_pack_history` (`python -m cts.data.preprocess_gnn.pack_history --stage gnn_pack_history`, the actually-correct new module + stage name). The old `pack_trees.slurm` is untouched and still correctly drives `config_ysagiv_xaba20k.yaml`'s old `gnn_pack`/`mc_pack`.
-   - **A third gap found while fixing the above, not in the original due-diligence report**: `build_tree.py`'s `--stage encoder` path loads training data via `teacher_targets.load_pretrain_example_dataset`, which was hardcoded to accept only the old manifest format (`cts_tensorized_pretrain_manifest_v1`) and raise `ValueError` on anything else — meaning even with the config/slurm gaps fixed, `train_encoder` would have immediately rejected `pack_history.py`'s output (manifest format `cts_tensorized_futurewdl_manifest_v1`). Fixed by adding a dispatch branch there (local import of `PackedFutureWdlShardDataset` from `pack_history.py`, to avoid a module-load-order dependency between the two `preprocess_gnn` packing modules — confirmed no circular import risk by checking `pack_history.py`'s own imports first, it doesn't import from `teacher_targets.py` at all).
-
-**Not yet done**: an actual end-to-end SLURM run using the fixed config + new slurm script (this fix pass verified each piece directly/synthetically, not via a real cluster job) — that's Wave 3. Also still open, unrelated to these two bugs: the real-data replay discrepancy Task 1/Task 2 need to reconcile (adjacent finding above), and the separate, still-unresolved `v_n`/no-new-head question from Task 3.
-
-### Task 5 — packhistory_MCmaterialize implementation
-
-**2026-07-10** — Implemented against the fixed schema; Task 1 (`packhistory_trees`) had not landed yet at the time of this work (no commits/uncommitted changes to `preprocess_mc/pack.py`, Task 1's Progress Log subsection still empty), so this is code-complete and synthetic-fixture-validated, with real-data integration/testing still pending Task 1's actual output.
-
-- `controller_train.py:ControllerEpisodeDataset.__getitem__` (around what was `controller_train.py:879`): replaced the unconditional `full_node_features[:node_cutoff]` prefix slice with a per-step forward-fill. The method now looks for new payload fields — `update_log_step_index`, `update_log_node_id`, `update_log_q_value`, `update_log_wdl`, `trajectory_update_log_ptr` — matching the update-log schema fixed in "Stage: packhistory_trees" (`step_index`/`node_id`/`visit_count`/`q_value`/`wdl[3]`, sorted by `(node_id, step_index)`, node ids local to the trajectory). If present, it re-sorts the trajectory's log slice by `step_index` (stable sort) and does one linear sweep across the per-step loop, maintaining a `running_node_features` tensor (cloned from the old static baseline) that gets overwritten in place as log entries are applied — so node ROWS are now step-accurate, not just the visible prefix length. `wdl_var` (column 4 of `TREE_ENCODER_FEATURE_NAMES`) has no counterpart in the update-log schema and is deliberately left at its baseline value throughout. If the new fields are absent (older shard / Task 1 not yet run), it falls back to the exact old frozen-slice behavior, so nothing breaks against today's real packed shards in the meantime.
-  - **Field-name/step-index-convention risk, flagged for Wave 2 integration**: `update_log_*`/`trajectory_update_log_ptr` are this task's own naming choice (mirroring the existing `trajectory_edge_ptr`/`trajectory_child_ptr_ptr` convention already in this method), not confirmed against Task 1's actual packed output. Also assumed: the update log's `step_index` uses the same integer convention as this method's existing `expansion_count = first_decision_expansion_count + local_step` (i.e., "number of expansions completed as of this step"). Both need a quick reconciliation pass once Task 1 lands — if Task 1's actual field names/step convention differ, only this block needs to change, not the surrounding structural-masking logic (which was left untouched per the task spec).
-  - Note: the update log itself is per-tree sparse (~200-300 entries per tree per history.md), so the re-sort + linear sweep is cheap; no CSR `node_update_ptr` binary-search lookup was needed for this consumer's access pattern (sequential steps in one direction) — that CSR is more relevant to `packhistory_GNNpretrain`'s point queries at arbitrary (n, n+k).
-- `materialize.py`: `config.encoder_checkpoint` was already a plain, non-hardcoded config field (no default in `MaterializeConfig`) — no code change was needed to make the checkpoint path configurable, it already was. Added a comment at the checkpoint-load site documenting the history-pipeline convention (`${gnnpack_history_dir}/tiny_encoder.pt`, mirroring today's `${packed_dir}/tiny_encoder.pt`) so future readers know where the swap happens. Verified Task 6's `config_ysagiv_xaba20k_history.yaml` (already present in the repo, untracked) sets `materialize.encoder_checkpoint: ${gnnpack_history_dir}/tiny_encoder.pt` exactly per this convention — consistent, no conflict.
-- `unfreeze_encoder` (`controller_train.py:88`): confirmed still defaults to `False`; not touched. `materialize.py`'s `model.freeze_encoder()` call in `materialize_worker` also left unchanged.
-- **Testing done**: wrote a standalone synthetic-fixture script (hand-built 3-node/2-step payload matching the v4 shard layout plus the new `update_log_*` fields) exercising `ControllerEpisodeDataset.__getitem__` directly. Confirmed: (a) a node with two update-log entries across two steps gets bit-different packed rows at those steps (the actual bug fix — was bit-identical before); (b) a never-updated node's row is stable across steps and matches its baseline; (c) `wdl_var` is untouched by the forward-fill; (d) the fallback path (no update log present) exactly reproduces the old frozen-slice output, bit-for-bit, so today's real packed shards still work unmodified. Also confirmed both edited files still import cleanly and `src/cts/tests/test_e2e_backprop_smoke.py` still collects/skips cleanly (2 skipped, 0 errors — no real manifest env available in this session) — i.e. no import-time or structural breakage of the adjacent `unfreeze_encoder`/joint-training investigation's test file. **Not yet run**: the real node-level check and the `z_root` step-to-step-differs check against actual `packhistory_trees`/`train_encoder` output, since neither exists yet.
-- DoD checkboxes below updated to reflect only what was actually verified (synthetic-fixture level); the two items requiring real pipeline output are left unchecked pending Task 1 landing + a `train_encoder` run.
-
-**2026-07-10 (reconciliation pass)** — Task 1 has now landed real, uncommitted code in `preprocess_mc/pack.py`. Reconciled this task's guessed field names/step-index convention against it directly, found and fixed one real bug, and re-ran everything against a REAL packed shard (not synthetic fixtures) built from real `human_trees` via `pack.py`'s own production packing functions (`_pack_split`, the same function the real SLURM job would call) — `packhistory_trees` itself has not yet been run as a real SLURM job (`/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k/pack_history/` does not exist on disk), so this mini real-shard build was necessary to get real Task 1 output to test against, mirroring the due-diligence approach Task 1 and Task 4 used for their own reviews.
-
-**Field-name check: all five guessed names match exactly, zero renaming needed.** Confirmed by direct inspection of `pack.py`'s `_serialize_shard_payload`: `update_log_step_index`, `update_log_node_id`, `update_log_q_value`, `update_log_wdl`, `trajectory_update_log_ptr` are exactly the real field names. (This task did not guess `update_log_visit_count` or `node_update_ptr`/`trajectory_node_update_ptr_ptr` — also real fields Task 1 shipped — because this method's access pattern is a single forward sweep over steps, not a random-access per-node point query; those two fields are what `packhistory_GNNpretrain`'s CSR lookups need, not this one. Confirmed this omission is fine, not an oversight, by successfully round-tripping real data without them.)
-
-**Step-index convention: NOT a correct guess — found and fixed a real before/after-increment off-by-one, the same class of bug Task 4 found and fixed in `pack_history.py:_build_tree_n`.** This task had assumed the update log's `step_index` used the same convention as `expansion_count = first_decision_expansion_count + local_step`, and queried the log with `step_index <= expansion_count`. Working through Task 1's actual definitions (`_replay_backprop_history`'s docstring: `step_index` is the 0-indexed position of an expansion event, tagged *before* increment; `_build_compact_trajectory`'s `step_node_cutoffs[local_step]` reflects the tree state immediately after processing `expansion_parent_ids[0 : first_decision_expansion_count + local_step]`, i.e. after the expansion event at 0-indexed position `expansion_count - 1`) shows the query should use `step_index <= expansion_count - 1`, not `<= expansion_count` — off by exactly one, and in the same direction (querying one step too late) as Task 4's bug.
-
-Fixed in `controller_train.py`: the per-step forward-fill loop's cursor-advance condition now reads `log_step_index[log_cursor] <= expansion_count - 1` (was `<= expansion_count`). Also fixed a second, independent bug found while setting up this reconciliation and not previously flagged anywhere: `_load_shard`'s format check hard-rejected any shard whose `format` field wasn't exactly `"cts_budgeted_controller_episode_shard_v4"` — but Task 1 bumped the shard format string to `"cts_packhistory_trees_shard_v1"` (`pack.py`'s `_serialize_shard_payload`), so before this fix, `ControllerEpisodeDataset` would have raised `ValueError: Unexpected shard format` on every real Task 1 shard, before ever reaching the update-log/fallback logic this task wrote — the documented "falls back to old frozen-slice behavior when fields absent" path was correct in spirit but unreachable in practice against real Task 1 output. Fixed via a `_SUPPORTED_SHARD_FORMATS` tuple accepting both formats.
-
-**Verified against real data, both bugs fixed:**
-1. Built a real, small `packhistory_trees`-format shard (20 real `human_trees`, 16 surviving episodes after the real filters) by calling `pack.py`'s own `_pack_split`/`_quality_config`/`_oracle_config` directly with the same parameters `config_ysagiv_xaba20k_history.yaml`'s `mc_pack:` section specifies (`reward_scale=1.0`, `min_halt_reward_range=0.05`, `search_budget=96`, `fixed_budget=96`, `time_mode=linear`, etc.), output to scratchpad, not `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/`. Confirmed the resulting shard's `format` field is `cts_packhistory_trees_shard_v1` and it carries all six update-log fields.
-2. Loaded this real shard through the real, fixed `ControllerEpisodeDataset` (no more `ValueError`). Found a real node (node 4, episode 0 / trajectory 0) with two real update-log entries within one episode's step range. Confirmed: (a) `step_node_features[2][4]` and `step_node_features[5][4]` are genuinely different (`sum(abs(diff)) = 0.428`, not bit-identical); (b) both rows' value+WDL exactly match (`< 1e-5`) a ground-truth forward-fill query computed independently, straight off the raw `update_log_*` arrays, bypassing the dataset class entirely — both value (`-0.447998` / `-0.289978`) and all three WDL components matched exactly.
-3. Concretely demonstrated the pre-fix bug was real, not just theoretical: re-ran the *buggy* `<= expansion_count` query against the same real shard at several boundary local_steps (where some node's very first log entry lands exactly at `step_index == expansion_count`) — e.g. `local_step=4, expansion_count=5, node=4`: correct query (`<= expansion_count - 1`) gives `-0.447998` (no update yet at that step), buggy query (`<= expansion_count`) gives `-0.289978` (leaks the *next* expansion's backup one step early) — a real, reproducible, non-trivial-magnitude (0.158) mismatch, not a rounding artifact.
-4. **Ran the originally-specified root-child swing test from "Stage: packhistory_MCmaterialize"'s own Test section, against real data, at the `ControllerEpisodeDataset` node-feature level**: found root child (node 5, direct child of root, trajectory 0) with a real nonzero-to-nonzero swing across the trajectory (41 update-log entries, value ranging from -0.293 to -0.829, total swing 0.536 — a real, substantial value revision, not first-visit noise). Picked two steps within that swing (log `step_index=1`, value `-0.501953125`; log `step_index=7`, value `-0.29296875` — a 0.209 sub-swing). Confirmed via the real, fixed `ControllerEpisodeDataset`: `episode.step_node_features[1][5]` and `episode.step_node_features[7][5]` are `-0.501953125` and `-0.29296875` respectively (exact match to the log), and `.all()`-equal check confirms they are **not** bit-identical — this is the exact "was bit-identical, now differs" check history.md specifies, now passing against real data (previously only checked against a synthetic fixture).
-5. Confirmed the fallback path still works against a real *old*-format shard: loaded `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k/mc_packed/train_manifest.json` (today's production `mc_pack` output, format `cts_budgeted_controller_episode_shard_v4`) through the same fixed dataset class — loads cleanly, uses the old frozen-slice path (confirmed via the loaded payload's own `format` field), so this fix doesn't regress today's real pipeline.
-6. `src/cts/tests/test_e2e_backprop_smoke.py` still collects/skips cleanly (2 skipped, 0 errors) after these edits — no import-time or structural breakage of the adjacent `unfreeze_encoder` investigation's test file (flagged in Deferred).
-
-**Still blocked, confirmed concretely rather than assumed**: the `z_root`-level check (materialize.py running the trained encoder over these now-varying features) requires a real `train_encoder` checkpoint for the history pipeline, which does not exist — `find /scratch/gpfs/GRIFFITHS/hl4291/lmcos -iname "*history*"` returns nothing; neither `gnnpack_history/` nor `materialize_history/` exist on disk yet. This is a Wave 3 data-generation dependency (`packhistory_trees` SLURM run → `packhistory_GNNpretrain` SLURM run → `train_encoder` run), not something this task can shortcut by running functions directly the way the node-feature-level check above could.
-
-**Scripts used for this pass** (not committed, session-scratch): `build_real_shard.py` (builds the real mini shard via `pack.py`'s production functions) and `verify_dataset.py` (the `ControllerEpisodeDataset`-level checks above) — both under this session's scratchpad, gone by the time this is read; the logic is fully described above and in the diff itself.
-
-### Task 6 — new config + CLI wiring
-
-**2026-07-10** — New config created, `build_tree.py` verified, CLI wiring checked against real code from Tasks 3 and 5 (both partially landed as of this writing).
-
-- **New config**: `config_ysagiv_xaba20k_history.yaml` (repo root), a full copy of `config_ysagiv_xaba20k.yaml` with these new/repointed globals:
-  - `pack_history_dir` = `${run_dir}/pack_history` (mirrors `mc_packed_dir`) — `mc_pack.output_root`, `train.packed_train_data`/`packed_validation_data`, `eval.packed_root`.
-  - `gnnpack_history_dir` = `${run_dir}/gnnpack_history` (mirrors `packed_dir`) — `gnn_pack.output_root`, `encoder.train_dir`/`validation_dir`/`output_checkpoint`, `materialize.encoder_checkpoint`, `train.encoder_checkpoint`.
-  - `materialize_history_dir` = `${run_dir}/materialize_history` (mirrors `materialized_dir`) — `train.materialized_train_cache`/`materialized_validation_cache`/`output_checkpoint`, `eval.materialized_validation_cache`/`controller_checkpoint`.
-  - `split_dir` left untouched (`${run_dir}/split`) — confirmed byte-identical to `config_ysagiv_xaba20k.yaml`'s resolved value (both render to `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k/split`), i.e. genuinely shared, not duplicated.
-  - `config_dir`/`log_dir` also given `_history` suffixes (`pack_configs_history`/`pack_logs_history`) and `figures_dir` repointed to `${outputs_dir}/ysagiv/xaba20k_history` — not explicitly called out in history.md's directory-layout table, but done for the same "never overwrite the old run's artifacts" principle applied consistently (old run's figures/results/logs are its own regression-baseline artifacts too).
-  - New fields `lookahead_k: 12` and `snapshots_per_tree: 1` added under the `gnn_pack:` section (the section `packhistory_GNNpretrain` reuses) per the v1 defaults in history.md's "Parameters: k and dataset".
-  - Verified via `render_stage.py` that every stage section (`split`, `gnn_pack`, `mc_pack`, `encoder`, `materialize`, `train`, `eval`) renders with zero unresolved `${...}` placeholders, and grepped the file to confirm no live reference to `packed_dir`/`mc_packed_dir`/`materialized_dir` remains (only explanatory comments mention the old names).
-- **`build_tree.py`**: read the whole file. It has exactly one Pydantic config (`BuildTreeConfig`, `extra="forbid"`) with two `command` values, `generate-dataset` (used only by the `treegen` stage, `gen_trees.slurm` — irrelevant to this dataset, ysagiv trees already exist) and `pretrain-child-wdl-encoder` (used by the `encoder` stage, `train_encoder.slurm` — the only stage of this file actually in this pipeline's chain). Confirmed by `grep` that the file contains **no** hardcoded `packed_dir`/`mc_packed_dir`/`materialized_dir`/scratch-path literals anywhere — every input/output path (`train_dir`, `validation_dir`, `output_checkpoint`, `curves_out_dir`, `checkpoint_dir`) is read off `config.<field>`, sourced from whatever YAML section `--stage encoder` slices out. No fix was needed. No task flagged anything for this file in its Progress Log as of this writing (Task 4's subsection is still empty).
-- **CLI wiring / runnability check**, done by loading each stage's real Pydantic config class through `cts._config.load_config(cls, "config_ysagiv_xaba20k_history.yaml", stage=<name>)` — the exact mechanism every `.slurm` script's `python -m ... --config $CONFIG --stage <name>` uses — not just YAML parsing:
-  - `split` (`SplitConfig`) — **validates cleanly.**
-  - `mc_pack` (`PackControllerEpisodesConfig`) — **validates cleanly** (Task 1 hasn't landed pack.py changes yet as of this writing; will re-check once it does, per its stated "no code-writing dependency, only integration" status).
-  - `encoder` (`BuildTreeConfig`) — **validates cleanly.**
-  - `train` (`ControllerTrainConfig`, via `pg_controller_train.py`) — **validates cleanly**, re-checked after Task 5's real edits to `controller_train.py` landed (no new required config fields were added — Task 5's per-step lookup is an internal `ControllerEpisodeDataset.__getitem__` data-shape change, not a config-schema change).
-  - `materialize` (`MaterializeConfig`) — section alone is missing `command`/`output_dir`/`num_workers`, **but this is pre-existing, identical behavior to `config_ysagiv_xaba20k.yaml`** (confirmed side-by-side): both configs rely on `pack_root.slurm`/`pack_root_merge.slurm` injecting those three fields via bare `--set` at invocation time, never storing them in the YAML section. Simulated that injection directly and confirmed the section then validates and resolves to the right `_history` paths (`command=materialize`, `output_dir=...` etc.). Also directly confirmed Task 5's own comment in `materialize.py` (`git diff`) names the exact path (`materialize.encoder_checkpoint` → `${gnnpack_history_dir}/tiny_encoder.pt`) this config now provides.
-  - `gnn_pack` (`PackPretrainConfig`) — **fails today**, as expected: `lookahead_k`/`snapshots_per_tree` are `extra_forbidden` under the current (pre-Task-4) `PackPretrainConfig`. This is not a bug in this config — it's the documented, intentional state until Task 4 adds those two fields to its packing config class. Flagging for Task 4: once you land your new packing function's config, these two fields (already present in `config_ysagiv_xaba20k_history.yaml`'s `gnn_pack:` section, defaults 12 and 1) need to become accepted fields on whatever config class handles `--stage gnn_pack` (today `PackPretrainConfig`, `src/cts/data/preprocess_gnn/pack.py:30` — not edited by me, per scope).
-  - `eval` — not gated by a Pydantic model (`eval.slurm` extracts fields individually via `render_stage.py --get eval.<key>` into CLI flags for `analysis.evaluate`, no `--stage`/config-class validation at all); confirmed all 11 keys resolve to `_history`-rooted paths with no missing-variable errors.
-- **Definition of Done for Task 6**: box 1 (config created, fully repointed, nothing pointed at old dirs) — done, checked. Box 2 (`build_tree.py` verified, no hardcoding found, nothing to fix) — done, checked. Box 3 (all five stages runnable end-to-end under the new config alone) — **not checked**: 4 of 5 downstream-consuming config classes (`mc_pack`, `encoder`, `materialize`, `train`) validate and resolve correctly today; `gnn_pack` is blocked purely on Task 4 landing its config-class changes (schema-only dependency, per the plan's own DAG — not a defect in this config). Will re-verify and check this box once Task 4 lands.
-
-**2026-07-10 (re-verification pass) — full re-run of the config-validation sweep against Task 4's actually-shipped state, since the last entry's `gnn_pack` expectation didn't match what landed.**
-
-Task 4's fix-pass entry (above, "Config/CLI wiring fixed") did not extend `PackPretrainConfig`/`--stage gnn_pack` the way this subsection's previous entry anticipated. Instead it shipped a **new** section name, `gnn_pack_history:`, a **new** config class dispatch (`PackHistoryGNNPretrainConfig`, already used by `pack_history.py`'s own `--stage gnn_pack_history`), and a **new** SLURM script (`slurm/pipeline/pack_trees_history.slurm`), leaving the old `gnn_pack:`/`PackPretrainConfig`/`pack_trees.slurm` path completely untouched. This re-verification re-ran every check in the entry above against that real, current state rather than trusting the stale "blocked on Task 4" note.
-
-- Read the current `config_ysagiv_xaba20k_history.yaml` (repo root), `PackHistoryGNNPretrainConfig` (`src/cts/data/preprocess_gnn/pack_history.py:76-89`: `pack_history_dir`/`output_root` required, `lookahead_k=12`/`snapshots_per_tree=1`/`search_budget=96`/`seed=0`/`shard_size=2000`/`log_interval=200`/`clear=False` defaulted, `extra="forbid"`), `slurm/pipeline/pack_trees_history.slurm`, and `git diff` on `build_tree.py` (empty — confirmed Task 4's manifest-format patch actually landed in `teacher_targets.py`'s `load_pretrain_example_dataset`, which `build_tree.py` imports and calls unmodified at `build_tree.py:633,635`).
-- Re-ran the full `load_config` sweep for real (`cts._config.load_config(cls, "config_ysagiv_xaba20k_history.yaml", stage=<name>)`, the exact mechanism every `.slurm` script uses):
-  - `split` (`SplitConfig`) — **validates cleanly.**
-  - `mc_pack` (`PackControllerEpisodesConfig`) — **validates cleanly.**
-  - `gnn_pack_history` (`PackHistoryGNNPretrainConfig`) — **validates cleanly**, confirmed the config's `gnn_pack_history:` section (`pack_history_dir`, `output_root`, `search_budget`, `shard_size`, `seed`, `clear`, `lookahead_k`, `snapshots_per_tree`) matches the class's real fields exactly, no extras, nothing missing. This is the stage that was blocked last entry; it is no longer blocked, and it's blocked-then-fixed under the *renamed* stage, not the originally-expected one.
-  - `encoder` (`BuildTreeConfig`) — **validates cleanly**, re-checked.
-  - `train` (`ControllerTrainConfig`) — **validates cleanly**, re-checked.
-  - `materialize` (`MaterializeConfig`) — same pre-existing pattern as before (section alone is missing `command`/`output_dir`/`num_workers`, injected at invocation time by `pack_root.slurm`/`pack_root_merge.slurm`, identical to `config_ysagiv_xaba20k.yaml`'s own behavior); simulated the injection (`--set command=materialize --set output_dir=... --set num_workers=...`) and confirmed it then validates and resolves to the `_history` paths.
-  - `eval` — not Pydantic-gated; re-ran `render_stage.py --get eval.<key>` for all 11 keys (`packed_root`, `materialized_validation_cache`, `controller_checkpoint`, `results_json`, `out_dir`, `time_mode`, `time_lambda`, `maintenance_scale`, `maintenance_exponent`, `maint_lambda`, `max_episodes`) — all resolve, all `_history`-rooted, no unresolved `${...}`.
-- Confirmed no dead/stale references: the new config's only remaining `gnn_pack` text is in explanatory comments (correctly noting the old section is untouched/unused by this config); `gnn_pack_history` never appears in `render_stage.py` or any pre-existing `.slurm` script's actual code (only in comments of other scripts describing the old pipeline, which remains accurate since those scripts genuinely still drive the old `gnn_pack`). Both `pack.py` (old) and `pack_history.py` (new) dispatch `--stage` generically via `run_with_config_cli`/`load_config` — neither module hardcodes a stage name, so there is no dispatch-table collision between `gnn_pack` and `gnn_pack_history`. Confirmed the old baseline is untouched: `git status --short` shows zero diff on `config_ysagiv_xaba20k.yaml`, `slurm/pipeline/pack_trees.slurm`, and `src/cts/data/preprocess_gnn/pack.py`, and `load_config(PackPretrainConfig, "config_ysagiv_xaba20k.yaml", stage="gnn_pack")` still validates cleanly (regression baseline intact).
-- Went beyond static reachability for `build_tree.py`'s new manifest-format branch: built a real `cts_tensorized_futurewdl_shard_v1` shard via `pack_history.py`'s own `_write_futurewdl_shard` (4 synthetic 3-node/2-edge `TensorizedTreeExample`s, real `tree_encoder_feature_schema()`), wrote a real `cts_tensorized_futurewdl_manifest_v1` manifest pointing at it, and fed the manifest path through `teacher_targets.load_pretrain_example_dataset` (the exact function `build_tree.py:633,635` calls under `--stage encoder`). It correctly dispatched to `PackedFutureWdlShardDataset`, returned all 4 examples with `edge_wdl_targets`/`edge_visit_weights` intact, and round-tripped cleanly through `collate_tensorized_examples` into a `TreeBatch` (`edge_visit_weights` populated per-edge as expected). Confirms the branch is not just reachable but functionally correct end-to-end at the data-loading layer.
-- **Net result: all 5 pipeline stages (`packhistory_trees`=`split`+`mc_pack`, `packhistory_GNNpretrain`=`gnn_pack_history`, `train_encoder`=`encoder`, `packhistory_MCmaterialize`=`materialize`, `train_readout_pg`=`train`) now validate cleanly under `config_ysagiv_xaba20k_history.yaml` alone, plus `eval`'s non-Pydantic resolution.** Box 3 below is now checked for real, not carried over from a stale assumption. Note this is still config-validation-level ("runnable" in the same sense every earlier Task 6 entry used it), not an actual SLURM execution — that remains gated on the separate, still-fully-unchecked "Overall pipeline success (Wave 3)" checklist above, which requires real cluster runs and is out of this task's scope.
-
-- [x] `config_ysagiv_xaba20k_history.yaml` created, every stage's output-directory/checkpoint global repointed at the `_history` paths, nothing pointed at the old `mc_packed`/`packed`/`materialized`/`packed_dir` locations
-- [x] `build_tree.py` verified to read directory paths from config, not hardcode `packed_dir` anywhere; any fix needed here (including anything flagged by Task 4) applied — none needed, none flagged as of this writing
-- [x] All five pipeline stages (`packhistory_trees` through `train_readout_pg`) confirmed runnable end-to-end under the new config alone — 5/5 confirmed 2026-07-10 (`split`, `mc_pack`/`packhistory_trees` config, `gnn_pack_history`/`packhistory_GNNpretrain` config — the renamed stage Task 4 actually shipped, `encoder`/`train_encoder`, `materialize`/`packhistory_MCmaterialize` config, `train`/`train_readout_pg`); `eval`'s non-Pydantic `render_stage.py --get` resolution also re-confirmed
-
-### Wave 3 — pipeline execution (real SLURM runs)
-
-**2026-07-10** — Before submitting anything, found and fixed one more real gap, not caught by any config-validation pass above because none of them actually sourced `slurm/helpers/setup_env.sh` under the history config: that shared script (used unmodified by every pipeline slurm script, old and new) unconditionally does `export MCP=$($RENDER --get globals.mc_packed_dir)` and `export MAT=$($RENDER --get globals.materialized_dir)`. `config_ysagiv_xaba20k_history.yaml` never defined those two global names (it uses `pack_history_dir`/`materialize_history_dir` instead) — confirmed directly, `render_stage.py config_ysagiv_xaba20k_history.yaml --get globals.mc_packed_dir` fails with `Key 'mc_packed_dir' not found`. Since every pipeline script runs under `set -euo pipefail` and sources `setup_env.sh` near the top, this would have killed `pack_trees_history.slurm` and every later stage (`train_encoder.slurm`, `pack_root.slurm`, `pack_root_merge.slurm`, `train_readout_pg.slurm`) immediately, before any real work — a silent, total blocker that no prior `load_config`-level check exercised, because none of those checks actually sourced the shared shell script, only the Python config loader. Fixed by adding two additive alias globals to `config_ysagiv_xaba20k_history.yaml` (`mc_packed_dir: ${pack_history_dir}`, `materialized_dir: ${materialize_history_dir}`) — doesn't touch `setup_env.sh` itself (shared infra other, unrelated configs depend on) or rename anything already there. Verified for real: `CONFIG=.../config_ysagiv_xaba20k_history.yaml bash -c 'source slurm/helpers/setup_env.sh; echo OK ...'` now completes and resolves `$MCP`/`$MAT`/`$WORK`/`$LOGS`/`$ENC` to the correct `_history`-rooted paths.
-
-Confirmed run-directory state before submitting: `split/` already exists under `/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba20k/` (shared with the old pipeline, deterministic reproduction expected even though `split.clear: true` will regenerate it); old `mc_packed/`/`packed/`/`materialized/` untouched; new `pack_history/`/`gnnpack_history/` do not exist yet (as expected — no Wave 3 job has run before this one).
-
-**Submitted job 1/5**: `sbatch --export=ALL,CONFIG=.../config_ysagiv_xaba20k_history.yaml slurm/pipeline/pack_trees_history.slurm` → **job 10950265** (queued, `cpu`/`short`, 16 cpus, 16G, 1:30:00 budget). Drives `split` → `mc_pack` (`packhistory_trees`) → `gnn_pack_history` (`packhistory_GNNpretrain`) in one job. Next steps once this completes (`afterok`): submit `train_encoder.slurm`, then `pack_root.slurm` (array) + `pack_root_merge.slurm`, then `train_readout_pg.slurm` — each gated on the previous job's real completion, per the plan's own Wave 3 definition (data-generation dependency, not code-parallel).
-
-**Job 1/5 result — job 10950265, COMPLETED 2026-07-10 17:43:05 (44:57 elapsed), empty stderr.** `split`: reused the shared, deterministic split. `mc_pack`/`packhistory_trees`: packed real per-tree shards to `pack_history/{train,validation}/shard_*.pt` (full `xaba20k` corpus). `gnn_pack_history`/`packhistory_GNNpretrain`: `train_manifest` 82,963 examples/trees, `validation_manifest` 20,627 examples/trees, 0 skipped-too-short, 0 skipped-all-edges-filtered — written to `gnnpack_history/`.
-
-Ran the previously-`SKIPPED` real-data tests in `src/cts/tests/test_packhistory_trees.py` against this real output: **7 passed, 0 skipped** (up from 6 passed/1 skipped before this job existed) — `test_diff_vs_old_mc_packed` now passes for real: structure/root-oracle-values byte-identical vs. the old `mc_packed/`, per-step node features now genuinely differ. This is the single most direct end-to-end proof that the original frozen-value bug is fixed, now confirmed at full production scale, not a dev-time sample. Checkboxes updated above (Task 2's DoD, and 3 of the 6 "Overall pipeline success" boxes: job-1 completion + Task 2 tests, job-2 completion, and the full-scale diff-test box).
-
-**Submitted job 2/5**: `sbatch --export=ALL,CONFIG=.../config_ysagiv_xaba20k_history.yaml slurm/pipeline/train_encoder.slurm` → **job 10953582** (queued, `gpu`/`gpu-short`, 4 cpus, 128G, 1:15:00 budget, 1 GPU). Trains the tiny child-WDL encoder (6 epochs per config) on `gnnpack_history/`'s real packed data; checkpoint lands at `gnnpack_history/tiny_encoder.pt`. Next: once this completes, submit `pack_root.slurm` (array) + `pack_root_merge.slurm` (`packhistory_MCmaterialize`), then `train_readout_pg.slurm`.
-
-**Job 2/5 result — job 10953582, COMPLETED 2026-07-10 18:01:59 (3:32 elapsed), empty stderr.** Trained on real `gnnpack_history/` data (82,963 train examples, 20,627 validation, 5,852,637/1,453,285 supervised edges respectively). Loss curve, per-epoch `train_loss_gap` (total_loss minus target_entropy floor, the meaningful quantity since target_entropy varies by batch composition): 0.1399 → 0.0463 → 0.0404 → 0.0377 → 0.0367 → 0.0362 — monotonically decreasing, converging. `val_loss_gap` tracks the same shape (0.0501 → 0.0429 → 0.0391 → 0.0366 → 0.0362 → 0.0357) with no train/val divergence (no overfitting signal). No NaNs anywhere in either phase, either split. Checkpoint confirmed on disk: `gnnpack_history/tiny_encoder.pt` (61,000 bytes) + `tiny_encoder_decoder.pt` (11,192 bytes), plus training-curve CSVs/PNG under `outputs/figures/ysagiv/xaba20k_history/curves/`. The 3.5-minute wall time is fast but plausible for this tiny model (`d_embed=32`, `d_message=32`) on an A100 over ~83K examples/6 epochs — not treated as suspicious on its own, corroborated by the sane, non-degenerate loss trajectory above. Checked off the `train_encoder` box in "Overall pipeline success" above.
-
-**Submitting job 3/5**: `pack_root.slurm` as an array job (`packhistory_MCmaterialize`, CPU, frozen-encoder inference over `pack_history/`'s snapshots to produce `z_root`), array size TBD — see next entry for what was chosen and why.
-
-**Job 3/5 array size chosen**: 40 workers (`--array=0-39`), matching `pipeline.yaml`'s own default (`array: 0-39`, "40 materialize workers") and confirmed against this exact `xaba20k` corpus's own history — three prior plain `pack-root_<jobid>_<idx>` runs in `slurm/logs/` (not the separate `-bigenc` variant) each used exactly 40 workers (indices 0-39).
-
-**Submitted jobs 3-5/5, chained via `--dependency=afterok` so no further manual submission is needed**:
-- **job 10954206** — `sbatch --array=0-39 --export=ALL,CONFIG=.../config_ysagiv_xaba20k_history.yaml slurm/pipeline/pack_root.slurm` (`packhistory_MCmaterialize`, 40-worker array, CPU).
-- **job 10954229** — `sbatch --dependency=afterok:10954206 ... slurm/pipeline/pack_root_merge.slurm`, waits on the full array.
-- **job 10954260** — `sbatch --dependency=afterok:10954229 ... slurm/pipeline/train_readout_pg.slurm`, waits on the merge.
-
-Confirmed via `squeue` immediately after submission: array workers 0-2 already `R` (running), 3-39 `PD` (priority-queued), 10954229/10954260 correctly `PD` (dependency-queued, not yet eligible). Once these finish, the only remaining verification work is: (a) confirm `pack_root_merge` actually wrote `materialize_history/{train,validation}_cache.pt` and Task 5's step-to-step-differs `z_root` check passes for real against it (Task 5's own DoD item, still open), and (b) confirm `train_readout_pg` produces sane non-NaN/non-degenerate advantage/loss values with no code changes needed (its own "Test" section above) — both of which close out the last two "Overall pipeline success" checkboxes.
-
-**Jobs 3-5/5 result — ALL COMPLETED cleanly, all 40 array indices + merge + train all exit 0:0, zero failures, empty stderr everywhere.**
-
-- **Job 3/5, `pack_root` array (10954206)**: all 40/40 workers `COMPLETED`, ~10-16 min each, spot-checked worker 0's log (clean: 2075 train + 516 validation episodes, 199,200 + 49,536 snapshots, no errors).
-- **Job 4/5, `pack_root_merge` (10954229)**: wrote both caches for real — confirmed on disk: `materialize_history/train_cache.pt` (+ `.d/` shard dir, 40 shards, `total_snapshots=7,964,448`) and `validation_cache.pt` (40 shards, `total_snapshots=1,980,192`). Merge log shows all 40 workers' snapshot counts accounted for (39 of them exactly `199200`/`49536`, worker 39 slightly smaller — `195648`/`48288` — from the corpus not dividing evenly by 40, expected, not an error).
-- **`z_root` step-to-step-differs check — RUN FOR REAL against this production cache, not a synthetic fixture, closing Task 5's last open DoD item.** Inspected `train_cache.pt.d/shard_00000.pt` directly (`format=cts_materialized_advantage_cache_shard_v2`, `features: [199200, 34]` — confirmed by inspecting `controller_inputs: ['z_t', 'T_t']` in the config: first 32 cols = `z_t` (the frozen-encoder `z_root`, `d_embed=32`), last 2 cols = `T_t` (tree-size, remaining-budget — confirmed sane: `[28, 96] → [1350, 46] → [2470, 1]` across steps 0/50/95 of one tree, budget correctly counting down from 96). Reshaped into 96-steps-per-tree blocks (2075 trees/worker × 96 = 199,200, matches exactly). **Checked 20 random real trees from this shard**: `z_t` at step 0 vs. step 95 is bit-identical (the original frozen-value bug's signature) for **0/20** — every single tree shows genuine movement, magnitude range 0.445-1.388 (max abs diff). This is the same check Task 1 originally used to prove the bug existed, now run against the fully trained production pipeline and showing the opposite result everywhere sampled.
-- **Job 5/5, `train_readout_pg` (10954260)**: ran stock `cts.train.pg_controller_train` unmodified (no code changes — confirmed, this task's own DoD expectation). 20 epochs, policy-gradient training on the real `materialize_history/` caches (82,963 train / 20,627 validation episodes). `val_greedy_regret` monotonically improved 0.1081 → 0.0607 across epochs (best checkpoint saved each time it improved); `val_stop_acc` moved from near-zero (0.004) to a real, non-degenerate 0.415 as the stop-temperature `tau` annealed 4.00 → 1.00; `val_expansions` (mean halting step) moved from 8.39 → 2.46, tracking the temperature anneal sensibly rather than collapsing to a degenerate all-0 or all-96 policy. No NaNs, empty stderr, checkpoint written to `materialize_history/mchalt_controller.pt` (71,825 bytes), training curve CSV/PNG also written.
-
-**All "Overall pipeline success" checkboxes and Task 5's remaining DoD items are now checked below** (see those sections). **Wave 3 is complete — this closes the entire frozen-value-fix plan** documented in this file: the original bug (packed root-child values frozen at the moment of packing, never reflecting real backprop revision) is now fixed at every layer, verified end-to-end at full production scale on real `xaba20k` data, from the raw per-step replay all the way through a real trained encoder and a real trained meta-controller.
-
-### Post-Wave-3 validation: does the fix actually help? (z_t vs. action-gap head-to-head)
-
-**2026-07-10** — Wave 3 proved the pipeline runs correctly end-to-end and produces a trained controller (`val_greedy_regret=0.0607`). It did not by itself prove the fix is an *improvement* — the user raised a specific, well-founded concern mid-investigation: is 0.0607 actually better than a trivial baseline (stopping based on the root action gap, i.e. how separated the best move is from the runner-up)? This required a genuinely controlled, same-procedure comparison, not just eyeballing one number, so this became its own short investigation, run without submitting any further large/scaling jobs (no `xaba100k`) until it resolved.
-
-**Check 1 — can `z_t` even recover the action gap at all? (user's minimum-bar sanity check, run before trusting any downstream comparison)** New one-off script `slurm/pipeline/_zt_recovers_action_gap.py` + `slurm/pipeline/zt_action_gap_probe.slurm` (ad-hoc investigative scripts, not pipeline stages — kept in `slurm/pipeline/` since that's where this repo's SLURM-driven scripts live, but not wired into `pipeline.yaml`). Regresses `action_gap` (top1−top2 root Q, read from the raw tree snapshot) directly onto `z_t` (the frozen encoder's root embedding, from the real `materialize_history/validation_cache.pt`), Ridge (linear) and a 2×64 MLP, 5000 real validation episodes (480,000 steps), 70/30 split by source tree. Two failed attempts first: running this interactively on the login node got SIGKILLed twice (once from genuine OOM at 12,000 episodes, once from what looks like a login-node CPU-fair-use killer even at 2,500 episodes with only ~950MB RSS but 21 threads/2100% CPU) — moved to a proper `--qos=test` SLURM job (`della` convention: ≤1h jobs go through `test`/`gpu-test`, never run heavy compute on the login node) and it completed cleanly in 4:06.
-  - `z_t` alone → `action_gap`: linear R²=**0.579**, MLP R²=**0.679**.
-  - `z_t`+`steps` → `action_gap`: linear R²=0.594, MLP R²=0.718 (steps adds almost nothing beyond `z_t` alone).
-  - `steps` alone → `action_gap`: linear R²=0.035, MLP R²=0.056 (rules out "z_t's apparent predictive power is just a trajectory-position proxy" — steps alone barely predicts action_gap).
-  - shuffle floor: linear R²≈0.000 (confirms the R² computation itself isn't inflated/broken).
-  - **Verdict: partial, real recovery, not full, not zero.** `z_t` clearly carries substantial action-gap information (far above the shuffle floor and the steps-alone baseline) but is lossy — roughly 32-42% of action-gap's variance is not recoverable from the frozen embedding, even nonlinearly. Below the "trivially, fully recoverable" bar the user set as a minimum standard, but not a broken/empty representation either. Not fully reconciled/explained further in this session (a 32-dim embedding compressing an entire tree plausibly can't preserve every derived scalar losslessly) — flagged here as a real, open, partial finding rather than resolved one way or the other.
-
-**Check 2 — apples-to-apples stopping-controller comparison, same fitting procedure, same regime.** Submitted `eval.slurm` (job **10959404**) under `config_ysagiv_xaba20k_history.yaml` — `analysis.evaluate --which all`, which fits Stats-/Zt-/AG-Controller (action-gap) all via the exact same PG training loop (`fit_readout_pg`, imported from `pg_controller_train.py` — the same closed-form-expected-regret trainer `train_readout_pg` itself uses, just applied to bare 2-feature readout heads here instead of the full encoder-backed `MetaController`). Completed cleanly in 1:19:23 (under its 1:30:00 budget — flagged as at-risk partway through, monitored via `sstat` CPU-time growth to confirm it wasn't stuck, finished on its own before the precautionary follow-up check was even needed).
-  - **R-decodability** (can each feature alone predict `R(t)`, the value of continuing — the actual quantity a stopping controller needs?): `z_t` R²=**0.619** vs. `action_gap` R²=0.289 vs. `stats` R²=0.283 vs. `steps` R²=0.132; combined R²=0.745. `z_t` is comfortably the strongest single-feature predictor of the thing that actually matters for the decision.
-  - **Frontier** (λ=0.0015): z_t-Controller regret=**0.0247** `[0.0232,0.0261]` vs. AG-Controller regret=0.0307 `[0.0292,0.0322]` — non-overlapping CIs, z_t wins.
-  - **Delta-regret sweep, 10 regimes** (3 `time_lambda` values × 7 maintenance-cost values, `_regime_deltas_vs_zt`, paired per-episode deltas, bootstrap 95% CI, n=4500/regime): `ag − z_t` regret delta is **positive (z_t wins) in all 10/10 regimes, every one statistically significant** (CI excludes 0). At λ=0.01 — the regime closest to what produced `train_readout_pg`'s `val_greedy_regret=0.0607` — the delta is `+0.0071 [+0.0040,+0.0103]`. The margin *grows* monotonically across the maintenance-cost sweep (`+0.0060` at maint=0 → `+0.0704` at maint=0.3). `singlehalt`/`stats` lose to `z_t` by even wider margins throughout. Full numbers in `outputs/figures/ysagiv/xaba20k_history/{frontier,decodability,delta_regret}_data.json`.
-  - **Verdict: the original concern does not hold up.** Across every regime checked, with a genuinely matched fitting procedure, `z_t` beats action-gap, not the other way around. The impression that action-gap might be winning was most likely from comparing the raw `0.0607` number (a different regime, `λ=0.01` from `train:`, and the actual RL-trained `MetaController` rather than evaluate.py's standalone-head fit) against intuition rather than a matched baseline — once measured side-by-side in the same units, `z_t` wins clearly and consistently.
-
-**Net conclusion of this sub-investigation**: the frozen-value fix is not just mechanically correct (Wave 3) but functionally beneficial — `z_t` carries more of the decision-relevant signal than the simple action-gap heuristic, decodes the value-of-continuing far better, and produces a stopping controller with significantly lower regret across every cost regime tested. The one open thread is Check 1's partial (not full) action-gap recoverability from `z_t` — real signal, real loss, not further explained here.
-
-### Wave 3, dataset 2: xaba100k_minply15_maxply75
-
-**2026-07-10** — `xaba20k` (dataset 1) is fully validated (Wave 3 + the z_t-vs-action-gap sub-investigation above). Scaling to the second dataset the plan's own Deferred section flagged as the natural next step: `xaba100k_minply15_maxply75` (ply-window-restricted variant, root FEN must fall at ply 15-75 in our own move DB, INTERSECT xaba-exclusion — see `config_ysagiv_xaba100k_minply15_maxply75.yaml`'s own header).
-
-**Scale check before committing resources** (worth recording, mildly counterintuitive): despite the "100k" name, this corpus's `split/` (64,009 train + 16,002 validation = 80,011 raw trees) is actually *smaller* than `xaba20k`'s own `split/` as it currently exists on disk (132,062 total) — the ply-window filter cuts hard. Also discovered in the process: `xaba20k`'s OLD `mc_packed/` (dated 2026-07-08 23:23) predates a `split/` regeneration that happened when `packhistory_trees` ran on 2026-07-10 (`split.clear: true` regenerates deterministically from `include_list`/`source_root`, which are documented shared/transient staging paths reused across run_names — they evidently changed content between those two dates, plausibly the "N=100000" resample referenced in `config_ysagiv_xaba100k_minply15_maxply75.yaml`'s own header). This explains the 82,963 (new `pack_history`) vs. 8,316 (old `mc_packed`) episode-count gap for `xaba20k` noted only in passing before — **not a `packhistory_trees` bug**: Task 2's `test_diff_vs_old_mc_packed` only checks byte-identity on trees common to both (a valid, still-passing check), never asserted the totals should match, so this was never a hidden test failure — just an unexamined implication of comparing against a since-stale baseline. Doesn't block anything; flagged for anyone who goes looking at the old/new episode-count ratio and wonders why it's 10x.
-
-**New config**: `config_ysagiv_xaba100k_minply15_maxply75_history.yaml` — same transformation as `config_ysagiv_xaba20k_history.yaml` (full copy of the old `config_ysagiv_xaba100k_minply15_maxply75.yaml`, globals repointed at parallel `_history` dirs), with the `mc_packed_dir`/`materialized_dir` `setup_env.sh`-compatibility aliases baked in from the start this time (found the hard way on `xaba20k_history` — see the "Wave 3 — pipeline execution" entry above). Validated clean via `load_config` for every stage (`split`, `mc_pack`, `gnn_pack_history`, `encoder`, `train`, `materialize` with simulated injection) and confirmed `setup_env.sh` sources without error on the first try — no repeat of the earlier bug.
-
-**Submitted the full 5-stage chain up front**, dependency-linked end-to-end via `--dependency=afterok` (not submitted one-at-a-time gated on manual checks, since this needs to run unattended overnight), time budgets bumped generously above the `xaba20k_history` defaults given real uncertainty about how episode counts (not just raw split-tree counts) will scale for this corpus:
-
-| Job | Stage | Time budget (bumped from) |
-|---|---|---|
-| **10963036** | `pack_trees_history` (`split`+`mc_pack`/`packhistory_trees`+`gnn_pack_history`) | 2:30:00 (was 1:30:00) |
-| **10963037** | `train_encoder`, `afterok:10963036` | 2:00:00 (was 1:15:00) |
-| **10963038** (array 0-39) | `pack_root`/`packhistory_MCmaterialize`, `afterok:10963037` | 2:30:00 (was 1:30:00) |
-| **10963039** | `pack_root_merge`, `afterok:10963038` | unchanged, 1:30:00 |
-| **10963040** | `train_readout_pg`, `afterok:10963039` | 3:00:00 (was 2:00:00) |
-
-Confirmed via `squeue` immediately after submission: job 1 `PENDING` (ready to run), jobs 2-5 correctly `PENDING (Dependency)`. `eval.slurm` (the z_t-vs-action-gap head-to-head) deliberately NOT chained onto the end — left for a follow-up request once `train_readout_pg` completes and the resulting controller is worth assessing, rather than auto-running another ~1.5h job unattended. No other jobs running concurrently; old (`mc_packed/`, `packed/`, `materialized/`) outputs for this dataset untouched.
-
-**2026-07-11, relaunch after the future-leakage fix** — the run above was cancelled by the user partway through (jobs 10963036/10963037 completed with **pre-fix** code before cancellation; that output was already purged in the same session's broader buggy-run purge). Since then: a real future-leakage bug was found and fixed — `controller_train.py`'s `ControllerEpisodeDataset.__getitem__` and `pack_history.py`'s `_forward_filled_wdl_at_step`/`_build_tree_n` both now zero-init instead of leaking a node's final end-of-search value into steps before its own first backprop update; a second, independently-found instance in `wdl_var` fixed the same way. Verified via a new regression suite (`test_no_future_leakage.py`, 5/5 passing, including a 475,002-check whole-tree sweep), an independent code-reading audit (no further instances found), and a 7-test adversarial canary/poisoning suite with positive controls (`test_canary_future_leakage.py`, all passing, including through the real trained encoder forward pass).
-
-Confirmed clean slate before relaunch: `ysagiv_xaba100k_minply15_maxply75/` has no `pack_history`/`gnnpack_history`/`materialize_history`/`pack_configs_history`/`pack_logs_history` dirs (the earlier purge already removed the pre-fix output). Checked scratch headroom first: `/scratch/gpfs/GRIFFITHS` at 97% (30T/29T/1.1T avail) but 1.1TB absolute free is ample for this run's expected ~25-45GB footprint (~4% of headroom); inodes 44% used, not a concern.
-
-**Resubmitted the same 5-stage chain**, same bumped time budgets as the first attempt:
-- **job 10968362** — `pack_trees_history` (2:30:00)
-- **job 10968363** — `train_encoder`, `afterok:10968362` (2:00:00)
-- **job 10968364** (array 0-39) — `pack_root`, `afterok:10968363` (2:30:00)
-- **job 10968365** — `pack_root_merge`, `afterok:10968364` (1:30:00)
-- **job 10968366** — `train_readout_pg`, `afterok:10968365` (3:00:00)
-
-Confirmed via `squeue`: job 1 `PENDING` (ready), jobs 2-5 correctly `PENDING (Dependency)`. This run reflects today's future-leakage fix end-to-end — first real production-scale confirmation the fix holds on a second dataset, not just `xaba20k`.
-
-**2026-07-11 — train/inference graph-topology mismatch found (by a separate skeptical leakage audit) and fixed, in `build_snapshot_pair_example` (`src/cts/data/preprocess_gnn/pack_history.py:315-403`).** Not a future-leakage bug (nothing in the removed filter read future information the model wasn't already correctly seeing on the target side) — a different, real correctness bug: the never-visited-leaf filter (Task 4's original "compute-savings optimization", checklist box above) dropped never-visited children's edges from `edge_parent`/`edge_child`/`edge_slot` before returning them, but those three arrays aren't just "which edges get a loss target" — `collate_tensorized_examples`/`TreeBatch` feed them straight into `TreeEncoder`'s message passing, and `TreeAttMsgLayer.forward` (`models/tree_mha.py:49-97`) computes each parent's per-child attention via a segmented softmax (`parent_sums.scatter_add_` then `exp_logits / parent_sums[edge_parent]`) over exactly the children present in those arrays. Dropping never-visited children therefore changed the softmax denominator, and hence the training-time prediction, for every *other* kept sibling edge under the same parent. Production inference (`preprocess_mc/materialize.py`, `train/controller_train.py`) never applies any such filter (grep-confirmed) — it always sees the full real edge set — so training was shaping predictions off a systematically sparser graph than inference ever presents. `test_never_visited_filter_couples_sibling_predictions_via_attention` (added by the audit's own test pass, `test_canary_pack_history_structural.py`) empirically confirms this coupling is live, not just theoretically present.
-
-**Fix**: `build_snapshot_pair_example` now passes T_n's full, unfiltered edge set (`snapshot.edge_parent`/`edge_child`/`edge_slot` straight from `_build_tree_n`) through into the returned example, and computes `edge_wdl_targets`/`edge_visit_weights` over that same full set. This falls out cleanly because `_delta_visits` already returns 0 for a never-visited node over any window (zero update-log rows by construction) and `_forward_filled_wdl_at_step`'s zero-WDL fallback plus the existing `clamp_min(1e-8)` normalization give such an edge a harmless `[0,0,0]`-ish normalized target — i.e. never-visited edges now get the same "kept with weight 0" treatment that any other legitimately-zero-Δvisits edge already got before this fix; nothing about the Δvisits-weighted loss (`gnn_pretrain.py`'s `elif edge_visit_weights is not None` branch, `gnn_pretrain.py:419-430`) or `BucketedKLState`'s visit-weight bucketing (`gnn_pretrain.py:185-189`, `kl_buckets.py:size_bin` clamps to `[1, ∞)` before `log2`) needed to change — both already treat weight/size 0 as "contributes ~nothing", not "must be excluded", verified by reading, not assumed. `_never_visited` has since been moved out of `pack_history.py` entirely (had zero remaining production callers) into `test_canary_pack_history_structural.py` as a test-local helper, and `pack_history_split_to_shards`'s `trees_skipped_all_edges_filtered` stat was renamed to `trees_skipped_no_edges`. Note (2026-07-11, independent re-review): "the only remaining `None`-return reason is a genuinely edgeless T_n" above is imprecise — the old code's second guard (`if not keep_mask.any(): return None`, for a T_n whose edges are ALL never-visited) has no post-fix equivalent, so that scenario is no longer a `None`-return reason at all; it now produces a real, all-zero-weight example instead (confirmed harmless, confirmed absent from real `xaba20k` data — see the follow-up entry in Task 4's checklist above and the new test `test_pack_history_fix_parity.py::test_all_never_visited_children_returns_full_zero_weight_example_not_none`).
-
-**COMPUTE-COST TRADEOFF, measured for real** (not estimated): built a real 16-tree fixture via `preprocess_mc.pack._pack_split` (same production packer the canary tests use) from `ysagiv_xaba20k`'s real split manifest, sampled 3 `n` values per tree at `lookahead_k=12` (48 examples total). Total edges across all 48 examples: 2,586 under the old filtered behavior vs. 37,677 post-fix — a **14.57x** increase in candidate-edge volume (consistent with the "10-30x" reduction the filter was originally documented as buying), and confirms 93.14% of edges in this sample belong to never-visited children (in line with history.md's previously-measured 88.8-97.7% range). Single concrete example for a sanity spot-check: tree `59234101_root_59234101.pt`, `n=40`, `k=12` — T_n's full edge count is 527; the old filtered example would have kept 66; the post-fix example keeps all 527 (verified equal to the unfiltered `_build_tree_n` snapshot's own edge count, confirming no filter is silently still in effect anywhere in the returned example). Packed shards for this stage will now be substantially larger/slower to build and store as a direct consequence — accepted as a correctness-over-compute tradeoff. A sparse on-disk representation for zero-weight edges (to claw back storage without reintroducing the topology bug) is a plausible follow-up, explicitly **not implemented** here — deferred.
-
-**Verification**: `pytest src/cts/tests/test_canary_future_leakage.py src/cts/tests/test_canary_pack_history_structural.py src/cts/tests/test_packhistory_trees.py -v` → 22 passed, 1 skipped (`test_diff_vs_old_mc_packed`, skip reason unrelated to this change — real `mc_packed/` comparison path not present in this environment), 0 failed. No test file was edited as part of this fix (out of scope for this pass — a separate agent owns test reconciliation); every existing assertion that exercised the never-visited filter turned out to test `_never_visited` directly or a hand-constructed before/after batch pair (not `build_snapshot_pair_example`'s own filtering output), so none needed updating. No commits made.
+Sorted by `(node_id, step_index)`, with CSR `node_update_ptr: int32[N+1]` for
+O(log M) forward-fill lookup ("value as of step t"). Packed field names:
+`update_log_step_index`, `update_log_node_id`, `update_log_visit_count`,
+`update_log_q_value`, `update_log_wdl`, `node_update_ptr`, plus shard-level CSR
+pointers `trajectory_update_log_ptr`, `trajectory_node_update_ptr_ptr`.
+Root/creation order is ascending node id, never CSR/`children_index` (UCI-string)
+order. M ≈ 200–300 per tree.
+
+**`packhistory_GNNpretrain`** (`src/cts/data/preprocess_gnn/pack_history.py`,
+stage name `gnn_pack_history`, config class `PackHistoryGNNPretrainConfig`) —
+samples one step `n` per tree, uniform over `[1, search_budget − lookahead_k]`,
+deterministically seeded (`sha256(source_path|draw_index|seed)`, mirrors
+`deterministic_starting_budgets`). Builds `T_n` (real structure + real per-step-n
+values, forward-filled from the update log) and supervises **every edge** of
+`T_n` (full, unfiltered — see Known issues, fixed) with its child's k-steps-ahead
+WDL, weighted by Δvisits (update-log entries in the window between step n and
+step n+k). Reuses `ChildWdlModel`/`ChildWdlHead` (`src/cts/models/gnn.py`)
+**unmodified** — no new model head. Step-index-to-update-log conversion goes
+through `_full_scale_step` (converts the trimmed/`root_rank`-relative step `n`
+to the full scale the update log uses).
+
+**`train_encoder`** — unchanged code (`build_tree.py --stage encoder`), trained
+on `packhistory_GNNpretrain`'s output instead of one-example-per-complete-tree
+data. Checkpoint at `${gnnpack_history_dir}/tiny_encoder.pt`.
+
+**`packhistory_MCmaterialize`** (`src/cts/data/preprocess_mc/materialize.py` +
+`src/cts/train/controller_train.py::ControllerEpisodeDataset`, stage name
+`materialize`) — `ControllerEpisodeDataset.__getitem__` does a per-step
+forward-fill lookup into the update log (zero-initialized, not cloned from the
+final-value baseline — see Known issues, fixed) instead of slicing one static
+tensor, so the encoder is fed `T_t` populated with real step-t values, not
+step-0 values repeated at every t. Runs the (now correctly-trained) encoder to
+produce `z_root` per snapshot.
+
+**`train_readout_pg`** — unchanged code. Consumes `z_root` as an opaque vector;
+never needed to change.
+
+## Directory / config layout
+
+Everything above runs under a **new, parallel config** —
+`config_ysagiv_xaba20k_history.yaml`, `config_ysagiv_xaba100k_minply15_maxply75_history.yaml`
+— with every stage's output dir repointed at `_history`-suffixed paths
+(`pack_history_dir`, `gnnpack_history_dir`, `materialize_history_dir`) that
+mirror the old `mc_packed/`/`packed/`/`materialized/` 1:1. The old dirs and
+their configs are untouched and kept indefinitely as a permanent regression
+baseline. `split/` is shared (deterministic, same seed either way).
+
+## Parameters
+
+- **`lookahead_k = 12`** (~1/8 of the 96-step budget) — v1 default, not tuned.
+- **`snapshots_per_tree = 1`** — one `n` sampled per tree, compute parity with
+  the old one-example-per-tree cost. Raising this is a real lever, not yet
+  exercised.
+
+Both live in the `gnn_pack_history:` config section and are confirmed set in
+both real configs currently in use.
+
+## Validated results
+
+- **Mechanism**: replayed root-child Q vs. the tree's own stored
+  `oracle_root_q_trace` — mean error 3.3e-5, 0.16% of (tree, step, root-child)
+  comparisons exceed 1e-3 on `human_trees` (residual traced to unrecoverable
+  terminal-leaf-revisit backprop mass, not a bug).
+- **Fix takes effect**: diff test vs. the old frozen-value `mc_packed/` output —
+  structure and root oracle values byte-identical, per-step node features now
+  genuinely differ at every step, confirmed at full production scale.
+- **Pipeline runs end-to-end**: `xaba20k` and `xaba100k_minply15_maxply75` both
+  completed all 5 stages cleanly (`packhistory_trees` →
+  `packhistory_GNNpretrain` → `train_encoder` → `packhistory_MCmaterialize` →
+  `train_readout_pg`).
+- **The fix is a real improvement, not just mechanically correct**: matched-
+  procedure comparison (same PG training loop, same cost regimes) — `z_t` beats
+  a simple root-action-gap stopping heuristic in **10/10 cost regimes tested,
+  all statistically significant** (paired bootstrap CI excludes 0).
+  R-decodability (can the feature predict the value of continuing?): `z_t`
+  R²=0.619 vs. action-gap R²=0.289. Frontier regret: `z_t`=0.0247 vs.
+  action-gap=0.0307 (non-overlapping CIs). One open, partial finding:
+  `z_t → action-gap` recoverability is real but lossy (R²=0.58–0.68, not ~1.0)
+  — a 32-dim embedding compressing a whole tree plausibly can't preserve every
+  derived scalar losslessly; not further explained.
+
+## Test coverage (current, all passing against real data)
+
+- `src/cts/tests/test_packhistory_trees.py` (7) — replay-vs-oracle accuracy,
+  packed action-gap matches oracle at every step, diff vs. old `mc_packed/`
+  (structure/oracle byte-identical, features differ).
+- `src/cts/tests/test_no_future_leakage.py` (5) — no value before a node's own
+  first update, `wdl_var` tracks the current step (not frozen), unvisited
+  leaves are all-zero, root is always zero, same invariant re-checked in
+  `pack_history.py`'s own builder independently of `controller_train.py`.
+- `src/cts/tests/test_canary_future_leakage.py` (7) — adversarial
+  poisoning/canary suite for the same invariant.
+- `src/cts/tests/test_canary_pack_history_structural.py` (9) — edge-set
+  correctness, Δvisits window, never-visited-filter topology-coupling
+  regression, `root_rank` fix regression.
+- `src/cts/tests/test_pack_history_fix_parity.py` (5) — cross-pipeline parity
+  between `ControllerEpisodeDataset` and `pack_history.py`, loss-neutrality of
+  previously-filtered edges.
+- `src/cts/tests/test_canary_packhistory_trees_replay.py` (5) — replay
+  determinism/poisoning canaries.
+- `src/cts/tests/test_child_wdl_disambiguation.py` — sibling-prediction
+  disambiguation (1 passing, 1 `xfail` documenting the still-open cross-sibling
+  leakage below).
+
+Real-data tests currently point at `xaba100k_minply15_maxply75` (has both old
+and new baselines on disk; `xaba20k`'s `pack_history/` was purged and is not
+being regenerated). Run explicitly — most of `src/cts/tests/` isn't covered by
+`pytest.ini`'s `testpaths`.
+
+## Known issues
+
+Fixed, kept here only as a pointer for anyone reading old code/PRs:
+- Never-visited-leaf filter (a compute-saving optimization) silently changed
+  `TreeEncoder`'s attention topology for kept sibling edges — removed, full
+  unfiltered edge set now always flows through.
+- `root_rank` step-scale mismatch between structural and value queries in
+  `pack_history.py` — fixed via `_full_scale_step`; was dormant on all real
+  data seen (`root_rank == 0` on every real tree checked, structurally forced
+  for a fresh single-root search), not a live corruption.
+- Future-leakage: unvisited nodes/edges read their final end-of-search value
+  instead of zero — fixed (zero-init, not clone-from-final-value), in both
+  `wdl_var` and the general case.
+
+Still open:
+- **Cross-sibling leakage in `ChildWdlHead`**: perturbing one sibling's subtree
+  measurably moves its untouched sibling's prediction by nearly the same
+  amount (ratio ≈0.98–1.03), reproducible across training budgets. Real signal
+  exists (siblings' predictions do differ meaningfully), but per-child
+  localization does not hold cleanly. Plausibly a pre-existing property of
+  `ChildWdlHead`'s architecture (shared parent aggregate, slot-gated only at
+  the final concat), not proven `T_n`-specific — **deferred by explicit user
+  call**, not re-verified against a complete-tree fixture. Revisit if
+  `train_readout_pg`'s halt decisions ever look sensitive to it.
+- **Versioning landmine**: `preprocess_mc/pack.py` serves both the old
+  `mc_pack` stage and the new `packhistory_trees` stage from one module,
+  unconditionally emitting the new shard format. The frozen `mc_packed/`
+  regression baseline is frozen only because nobody has re-run `mc_pack` since
+  the rewrite — a stray re-run would silently overwrite it with no error. No
+  guard implemented.
+- **Coverage skew**: late-born nodes (small `search_budget − n` window) get
+  fewer valid `(n, n+k)` pairs. Monitor via `packhistory_GNNpretrain`'s
+  diagnostics if late-tree calibration looks off.
+- `xaba100k_minply15_maxply75`'s `z_t`-vs-action-gap head-to-head (the Wave 3
+  sub-investigation done for `xaba20k`) hasn't been run yet — deliberate
+  follow-up, not run unattended alongside the main chain.
+- Raising `snapshots_per_tree` above 1, or smarter/sparser `n`-sampling than
+  uniform-random, is a real lever not yet exercised.
