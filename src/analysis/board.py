@@ -291,8 +291,8 @@ def move_time_summary(conn, table, *, filename: str = "rt_distribution.pdf",
     ax_h.set_xscale("log")
     mean_s = pgf_set("board/rt/mean_s", np.exp(mean), "{:.1f}") if not smoke else f"{np.exp(mean):.1f}"
     median_s = pgf_set("board/rt/median_s", np.exp(med_log), "{:.1f}") if not smoke else f"{np.exp(med_log):.1f}"
-    ax_h.axvline(np.exp(mean), color="black", ls="--", lw=2.5, label=f"Mean = {mean_s}s")
-    ax_h.axvline(np.exp(med_log), color="dimgray", ls=":", lw=2.5, label=f"Median = {median_s}s")
+    ax_h.axvline(np.exp(mean), color="black", ls="--", lw=2.5, label="Mean")
+    ax_h.axvline(np.exp(med_log), color="dimgray", ls=":", lw=2.5, label="Median")
     ax_h.set(xlabel="RT (s, log axis)", ylabel="Count")
     ax_h.legend(**_RT_LEGEND_KW)
 
