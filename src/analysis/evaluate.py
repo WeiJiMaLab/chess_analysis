@@ -912,7 +912,7 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
     ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
     ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=13)
     ax.invert_yaxis()
-    ax.set_xlabel("Delta Regret  (Model - Metacontrol)\n($\\leftarrow$ better)", fontsize=11)
+    ax.set_xlabel("Delta Regret  (Model - Metacontrol)\n($\\leftarrow$ better)", fontsize=14)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.grid(axis="both", color=_GRID, lw=1)
 
@@ -1037,18 +1037,18 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
         gap_frac = 0.9 / fig.get_size_inches()[1]
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -gap_frac), ncol=len(handles),
-                  fontsize=9.5, frameon=False)
+                  fontsize=13, frameon=False)
         save_pdf_png(fig, str(out_dir), base, dpi=200, bbox_extra_artists=(fig.legends[0],))
 
     _rcparams()
     # Fixed per-figure legend (not axes-fraction) below, so the many-row
     # maintenance sweep doesn't render with a huge empty gap before the legend
     # relative to the short lambda panel.
-    figA, axA = plt.subplots(figsize=(8.2 * 0.8, (1.1 + 0.62 * len(labels_a)) * 0.8 * 0.85))
+    figA, axA = plt.subplots(figsize=(8.2 * 1.05, (1.1 + 0.62 * len(labels_a)) * 0.8 * 0.85))
     _delta_ci_panel(axA, labels_a, deltas_a)
     _finish(figA, axA, "delta_mean_regret_lambda")
 
-    figB, axB = plt.subplots(figsize=(8.2 * 0.8, (1.1 + 0.62 * len(labels_b)) * 0.8 * 0.85))
+    figB, axB = plt.subplots(figsize=(8.2 * 1.05, (1.1 + 0.62 * len(labels_b)) * 0.8 * 0.85))
     _delta_ci_panel(axB, labels_b, deltas_b)
     _finish(figB, axB, "delta_mean_regret_maintenance")
 
