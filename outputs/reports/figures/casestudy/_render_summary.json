@@ -1,0 +1,45 @@
+{
+ "case_a_knife_edge": {
+  "san_ag": "h4",
+  "san_zt": "Nd4+",
+  "san_or": "Nd4+",
+  "side": "White",
+  "fig_path": "figures/casestudy/case_a_knife_edge.png",
+  "changes": [
+   0,
+   20,
+   21,
+   34
+  ],
+  "move_ag_uci": "h2h4",
+  "move_zt_uci": "f3d4"
+ },
+ "case_b_patient_search": {
+  "san_ag": "Qe2",
+  "san_zt": "c5",
+  "san_or": "c5",
+  "side": "White",
+  "fig_path": "figures/casestudy/case_b_patient_search.png",
+  "changes": [
+   0,
+   10,
+   17,
+   30
+  ],
+  "move_ag_uci": "c2e2",
+  "move_zt_uci": "c4c5"
+ },
+ "case_c_premature_stop": {
+  "san_ag": "gxh6",
+  "san_zt": "Rg4",
+  "san_or": "gxh6",
+  "side": "Black",
+  "fig_path": "figures/casestudy/case_c_premature_stop.png",
+  "changes": [
+   0,
+   83
+  ],
+  "move_ag_uci": "g7h6",
+  "move_zt_uci": "b4g4"
+ }
+}

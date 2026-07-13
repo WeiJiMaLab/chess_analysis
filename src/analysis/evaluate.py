@@ -223,7 +223,7 @@ def _regret_at(curves: list[np.ndarray], stops) -> np.ndarray:
 
 def _mean_ci(values: np.ndarray) -> tuple[float, float, float]:
     """(mean, lo, hi) 95% percentile-bootstrap CI on the mean (cts.stats.bootstrap_ci; shared seed)."""
-    return bootstrap_ci(lambda v: float(v.mean()), values, n_boot=2000)
+    return bootstrap_ci(lambda v: float(v.mean()), values, n_boot=10000)
 
 
 def _steps_stats_tensor(ep: dict[str, Any]) -> torch.Tensor:
@@ -537,7 +537,7 @@ def _render_frontier(data: dict, out_dir: str | Path) -> dict:
     _legend_info = {
         "SingleHalt* (fixed stop)": ("Fixed Stop", "singlehalt", 4),
         "Stats-Controller": ("Tree Stats", "stats", 2),
-        "$z_t$-Controller": ("Meta-Control (Ours)", "zt", 1),
+        "$z_t$-Controller": ("Metacontrol (Ours)", "zt", 1),
         "AG-Controller": ("Action Gap", "ag", 3),
         "Always Stop (k=0)": ("Always Stop", "always", 5),
         "Always Continue (k=max)": ("Always Continue", "never", 6),
@@ -829,8 +829,8 @@ def _render_regret_scatter(data: dict, out_dir: str | Path) -> dict:
         ax.scatter(zt, y, s=_PT_SIZE, alpha=0.55, color=_C[name], edgecolors="none", zorder=3)
         ax.set_xlim(0, hi); ax.set_ylim(0, hi)
         ax.set_aspect("equal")
-        ax.set_xlabel("Metacontroller regret", fontsize=11)
-        ax.set_ylabel(f"{label} regret", fontsize=11)
+        ax.set_xlabel("Metacontrol Regret", fontsize=11)
+        ax.set_ylabel(f"{label} Regret", fontsize=11)
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
         ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=5))
         ax.grid(color=_GRID, lw=1)
@@ -910,9 +910,9 @@ def _delta_ci_panel(ax, regime_labels, deltas_by_regime, candidates=_DELTA_CANDI
         ax.errorbar(means, positions, xerr=xerr, fmt="o", ms=_PT_SIZE, color=color, ecolor=color,
                     elinewidth=1.6, capsize=3.5, mec="none", alpha=_PT_ALPHA, zorder=6, label=lbl)
     ax.axvline(0, color=_MUTED, lw=1.2, ls="--")
-    ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=10)
+    ax.set_yticks(positions); ax.set_yticklabels(regime_labels, fontsize=13)
     ax.invert_yaxis()
-    ax.set_xlabel("Δ regret  (Model − Metacontroller)", fontsize=11)
+    ax.set_xlabel("Delta Regret  (Model - Metacontrol)\n($\\leftarrow$ better)", fontsize=11)
     ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5))
     ax.grid(axis="both", color=_GRID, lw=1)
 
@@ -1023,7 +1023,8 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     at maintenance=0 (isolates the C-step/R edge); (B) sweep maintenance_scale at a fixed λ (isolates
     the weaker C-maint edge).
     """
-    labels_a, labels_b = data["labels_a"], data["labels_b"]
+    labels_a = [lbl.replace("linear ", "") for lbl in data["labels_a"]]
+    labels_b = [lbl.replace("linear ", "") for lbl in data["labels_b"]]
     # After a JSON round-trip, deltas are lists of dicts of LISTS -- convert back to arrays.
     deltas_a = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_a"]]
     deltas_b = [{k: np.asarray(v) for k, v in d.items()} for d in data["deltas_b"]]
@@ -1031,9 +1032,9 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     def _finish(fig, ax, base):
         # A fixed bbox_to_anchor fraction scales its gap with figure height, which
         # overlaps the x-axis label on short figures but looks fine on tall ones.
-        # Target a constant ~0.5in gap by dividing that inch target by this
+        # Target a constant ~0.9in gap by dividing that inch target by this
         # figure's height.
-        gap_frac = 0.5 / fig.get_size_inches()[1]
+        gap_frac = 0.9 / fig.get_size_inches()[1]
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -gap_frac), ncol=len(handles),
                   fontsize=9.5, frameon=False)
@@ -1043,11 +1044,11 @@ def _render_delta_regret(data: dict, out_dir: str | Path) -> dict:
     # Fixed per-figure legend (not axes-fraction) below, so the many-row
     # maintenance sweep doesn't render with a huge empty gap before the legend
     # relative to the short lambda panel.
-    figA, axA = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_a)))
+    figA, axA = plt.subplots(figsize=(8.2 * 0.8, (1.1 + 0.62 * len(labels_a)) * 0.8 * 0.85))
     _delta_ci_panel(axA, labels_a, deltas_a)
     _finish(figA, axA, "delta_mean_regret_lambda")
 
-    figB, axB = plt.subplots(figsize=(8.2, 1.1 + 0.62 * len(labels_b)))
+    figB, axB = plt.subplots(figsize=(8.2 * 0.8, (1.1 + 0.62 * len(labels_b)) * 0.8 * 0.85))
     _delta_ci_panel(axB, labels_b, deltas_b)
     _finish(figB, axB, "delta_mean_regret_maintenance")
 
