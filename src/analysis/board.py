@@ -237,6 +237,11 @@ def move_time_summary(conn, table, *, filename: str = "rt_distribution.pdf",
     n_moves = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
     print(f"Running response time summary: n = {n_moves:,} moves")
 
+    min_rt, max_rt = conn.execute(f"SELECT min(move_time), max(move_time) FROM {table}").fetchone()
+    if not smoke:
+        pgf_set("board/rt/min_s", min_rt, "{:d}")
+        pgf_set("board/rt/max_s", max_rt, "{:d}")
+
     conn.execute(
         "CREATE OR REPLACE TEMPORARY VIEW _summary_view AS "
         f"SELECT ln(move_time) AS ln_move_time FROM {table}"
