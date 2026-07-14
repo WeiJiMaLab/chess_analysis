@@ -365,10 +365,13 @@ def _binning_opts(col: str, kind: str, clip) -> dict:
     A negative ``clip[0]`` (a genuinely SIGNED covariate, e.g. signed material
     imbalance) merges the sparse low tail into its own point too (``integer_floor_cut``),
     mirroring the upper-tail merge, instead of excluding rows below it — dropping real
-    "mover is way behind" rows would bias a signed variable, unlike a naturally
-    nonnegative one's sparse floor (self_material below 14 is display-excluded, not
-    merged, since that's a display choice about the near-empty-board tail, not about
-    preserving symmetry).
+    "mover is way behind" rows would bias a signed variable. A POSITIVE ``clip[0]``
+    instead excludes rows below it outright (``filter_query``) rather than merging them
+    — only appropriate for a genuinely sparse, uninformative floor; verified NOT to hold
+    for self_material (0-13 is 7.7% of rows with a real 3.5s->8.5s RT climb, so its
+    clip[0] was reset to 0 -- see labnotebook), so no current feature exercises this
+    branch. Keep it clip[0]=0 (or negative, merged) for any nonnegative covariate unless
+    the excluded floor is independently confirmed to be both sparse and flat.
     """
     if kind == "cont":
         return dict(bin_mode="ntile", tie_safe=False)
@@ -1029,7 +1032,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
         "game_fraction":         ("Game Fraction", "cont", (0.0, 1.0)),
         "n_captures_avail":      ("Captures Available", "disc", (0, 10)),
         "n_checks_avail":        ("Checks Available", "disc", (0, 8)),
-        "self_material":         ("Player Material", "disc", (14, 40)),
+        "self_material":         ("Player Material", "disc", (0, 40)),
         "material_imbalance":    ("Material Imbalance", "disc", (-15, 15)),
         "abs_material_imbalance": ("Material Imbalance (Absolute)", "disc", (0, 15)),
     }

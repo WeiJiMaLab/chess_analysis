@@ -14,7 +14,12 @@ controllers' regret differs by roughly 1.0-1.9 — each episode's own return cur
 end to end (min to max over its 96 steps), so in each case the losing controller landed close to that
 episode's worst possible stop while the other landed close to its best — and reconstructs exactly what
 each controller "believed" at the moment it stopped, which move that produced, and how that compares to
-the oracle-optimal stop under the same cost model.
+the oracle-optimal stop under the same cost model. Each figure's second panel shows the ground-truth
+return curve; its third panel shows something different and more direct — each controller's own
+**predicted advantage** (the actual quantity its trained readout head outputs at every step). Both
+controllers share one universal stop rule, "continue iff predicted advantage `> 0`"
+(`cts.models.readout.stop_step_from_advantages`), so a controller's stop step is not a separate
+annotation on that panel — it is *exactly* the step where its own curve first crosses zero.
 
 **Population:** `ysagiv_xaba100k_minply15_maxply75` history run, `pack_history/validation` (13,658
 episodes; 9,561 fit / 4,097 eval, 70/30 split by source tree, seed 0). **Cost regime:** linear,
@@ -55,12 +60,15 @@ discovery. Meta Controller halted at step 35, one expansion after it. The two co
 stop-time gap is 2 steps; the entire regret difference between them is attributable to which side of
 this single expansion each one landed on.
 
-> **◆ Observed, not explained.** The data shows precisely *when* the discovery happened and which side
-> of it each controller fell on. It does not show *why* Action Gap's top1-top2 gap statistic or Meta
-> Controller's learned `z_t` embedding triggered a halt at step 33 vs. 35 specifically — both are
-> reacting to some evolving read of the search, not to foreknowledge of the step-34 jump. Treat "Meta
-> Controller understood the position better" as unverified for this case; what's verified is where each
-> one happened to land relative to a sharp, single-expansion swing.
+> **◆ Observed, not explained.** The predicted-advantage panel shows precisely *when* each controller's
+> own belief crossed zero, and the leader-timeline shows *when* the discovery happened — both controllers'
+> curves are trending down for several steps before the flip and only Meta Controller's crosses after it.
+> What isn't shown is *why* the underlying trained function — a small MLP over `[steps_taken, action_gap]`
+> or `[steps_taken, z_t]` — produces that particular declining shape from that particular input in the
+> first place; that would mean inspecting the MLP's learned weights/training dynamics, not just its
+> output, which this note doesn't do. Treat "Meta Controller understood the position better" as
+> unverified for this case; what's verified is where each one's own belief happened to cross zero relative
+> to a sharp, single-expansion swing.
 
 ## Case B — patience pays off
 
@@ -84,10 +92,11 @@ the full discovery.
 
 > **◆ Observed, not explained.** Unlike Case A, this is not a photo-finish: Meta Controller's stop step
 > (30) is a full 19 steps later than Action Gap's (11), landing exactly on the oracle-optimal step rather
-> than merely on the right side of a close call. What's verified is that Action Gap's own statistic
-> (the root's top1-minus-top2 Q gap) evidently looked "settled enough" as early as step 11 to trigger a
-> stop, well before the position actually was settled; what's not verified is why — that would need
-> inspecting the actual action-gap trace at each of those steps, which this note doesn't do.
+> than merely on the right side of a close call. The predicted-advantage panel shows Action Gap's belief
+> diving toward zero right around step 10-11 (matching the leader slipping to the mediocre Qe2) and never
+> recovering, while Meta Controller's belief stays well above zero until the step-30 discovery. What's not
+> verified is why the trained function reads that particular action-gap/steps input as "stop now" at step
+> 11 rather than continuing to wait — that would mean inspecting the MLP's weights, not just its output.
 
 ## Case C — Meta Controller stops too early
 
@@ -128,6 +137,13 @@ exactly; in Case C, the roles are reversed — Meta Controller stops 4 steps bef
 search" in any broad sense — it simply committed before the one expansion that mattered, and the winning
 controller happened to still be running when it landed.
 
+One more thing visible in the "predicted advantage" panels themselves: Action Gap's own belief curve is
+*bit-identical* across all three cases (and, checked directly, across every episode) for the first several
+steps — because its input feature (`action_gap`, the root's top1-minus-top2 backed-up Q) is itself exactly
+`0.0` at those steps in every episode (too few expansions yet for the top two candidate moves to have
+been meaningfully distinguished), so its readout head's output over that window is a function of
+`steps_taken` alone, identical regardless of which position it's looking at.
+
 > **◆ Modeling result.** The large-regret-gap episodes in this eval slice are dominated by single-expansion
 > discoveries relative to a controller's stop time, not by one controller systematically searching
 > "smarter" or "deeper" than the other — the same mechanism produces both a Meta-Controller win (Cases A,
@@ -150,7 +166,13 @@ controller happened to still be running when it landed.
    `trajectory_source_paths`) to pull `root_position_spec`, `oracle_root_moves`,
    `oracle_root_q_trace`, `oracle_best_move_index`, and the packed return curve — dumped to
    `case_study_candidates.json`. `N_CANDIDATES=40` (widened from an initial 8 — the top 8 clustered
-   around degenerate oracle-optimal stops near step 0, see point 2).
+   around degenerate oracle-optimal stops near step 0, see point 2). Also independently re-fits the
+   "zt"/"ag" readout heads standalone (`_train_readout_with_head`, same seed, same fit data as
+   `_fit_stop_controllers` uses internally) so the raw per-step **predicted advantage** — not just the
+   resulting stop step — can be read off for any episode. This re-fit is verified, not assumed,
+   reproducible: before trusting it, the script recomputes every eval-split episode's stop step from
+   the standalone heads' own zero-crossing and checks it against `_fit_stop_controllers`' `ctrl["zt"]`/
+   `ctrl["ag"]` — **0/8,194 mismatches** on the run this report uses (`slurm/logs/casestudy-extract_11138274.out`).
 2. **Case selection**: of the top 40, the 3 largest-magnitude were all Meta-Controller wins, but two of
    those three had a near-immediate oracle-optimal stop (step 0-3) — not representative of a real search
    unfolding. Case A is the one of those three with a non-trivial pivot (step 34). Case B was picked
@@ -167,7 +189,10 @@ controller happened to still be running when it landed.
    hardcode the `ysagiv_xaba100k_minply15_maxply75` history-run paths and are one-off (not wired into
    `submit_all.sh`).
 
-**Caveat on the callouts throughout:** everything reported as a step number, a move, or a value is
-read directly off the packed/raw tree data. Any statement about *why* a controller's own internal
-statistic (action gap, `z_t`) triggered a halt at the step it did is explicitly out of scope here — that
-would require probing the trained readout heads directly, which this note does not do.
+**Caveat on the callouts throughout:** everything reported as a step number, a move, a value, or a
+predicted-advantage trace is read directly off the packed/raw tree data or a verified (0/8,194-mismatch)
+replay of the actual trained readout heads — including *what* each controller's internal belief was doing
+at every step, not just when it happened to cross zero. What's still out of scope is *why* — the trained
+MLP's learned weights and what about its training produced that particular response to that particular
+input trajectory. That's a different, harder question (interpretability of the trained function itself)
+that this note doesn't attempt.

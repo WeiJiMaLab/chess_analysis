@@ -85,8 +85,8 @@ def render_case(cand: dict, tag: str, title: str) -> dict:
     board0 = chess.Board(root_fen)
     side = "White" if board0.turn else "Black"
 
-    fig = plt.figure(figsize=(15, 9))
-    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1], hspace=0.6, wspace=0.35)
+    fig = plt.figure(figsize=(22, 9))
+    gs = fig.add_gridspec(2, 4, height_ratios=[1, 1], hspace=0.6, wspace=0.55)
 
     ax_root = fig.add_subplot(gs[0, 0])
     draw_board(ax_root, root_fen, title=f"Root position ({side} to move)")
@@ -115,10 +115,25 @@ def render_case(cand: dict, tag: str, title: str) -> dict:
     ax_curve.margins(y=0.2)  # headroom so top-anchored annotate() labels never collide with the title
     ax_curve.set_xlabel("Search step (of 96-step budget)")
     ax_curve.set_ylabel("Cost-adjusted return")
-    ax_curve.set_title("Return curve, with each leader-move change labeled")
+    ax_curve.set_title("Return curve, with each leader-move change labeled", fontsize=10)
     ax_curve.legend(fontsize=7, loc="lower right")
 
-    ax_tree = fig.add_subplot(gs[0, 2])
+    ax_adv = fig.add_subplot(gs[0, 2])
+    adv_zt, adv_ag = np.array(cand["advantage_zt"]), np.array(cand["advantage_ag"])
+    ax_adv.axhline(0, color="#999", lw=1, zorder=1)
+    ax_adv.plot(steps, adv_ag, color=_AG_COLOR, lw=1.6, label="Action Gap's predicted advantage")
+    ax_adv.plot(steps, adv_zt, color=_ZT_COLOR, lw=1.6, label="Meta Controller's predicted advantage")
+    # The controller's OWN stop rule is literally "first step with advantage <= 0" (see
+    # cts.models.readout.stop_step_from_advantages) -- so these markers are not independent
+    # annotations, they are exactly where each curve crosses zero, by construction.
+    ax_adv.scatter([stop_ag], [adv_ag[stop_ag]], color=_AG_COLOR, s=50, zorder=4, edgecolors="white")
+    ax_adv.scatter([stop_zt], [adv_zt[stop_zt]], color=_ZT_COLOR, s=50, zorder=4, edgecolors="white")
+    ax_adv.set_xlabel("Search step (of 96-step budget)")
+    ax_adv.set_ylabel("Predicted advantage")
+    ax_adv.set_title("Each controller's own belief — stops where its curve crosses 0", fontsize=10)
+    ax_adv.legend(fontsize=7, loc="best")
+
+    ax_tree = fig.add_subplot(gs[0, 3])
     ax_tree.axis("off")
     involved = sorted(set(best_idx[s] for s in {0, stop_ag, stop_zt, stop_or_clamped, num_steps - 1}))
     ax_tree.text(0.5, 0.95, "Root", ha="center", fontsize=11, fontweight="bold", transform=ax_tree.transAxes)
@@ -160,6 +175,21 @@ def render_case(cand: dict, tag: str, title: str) -> dict:
     draw_board(ax_or, fen_or, title=f"Oracle-optimal plays {san_or}",
               highlight_squares=hl_or,
               subtitle=f"halts step {stop_or_clamped}/95 (regret = 0 by definition)")
+
+    ax_summary = fig.add_subplot(gs[1, 3])
+    ax_summary.axis("off")
+    rows_txt = [
+        ("Action Gap", stop_ag, san_ag, cand["regret_ag"], _AG_COLOR),
+        ("Meta Controller", stop_zt, san_zt, cand["regret_zt"], _ZT_COLOR),
+        ("Oracle-optimal", stop_or_clamped, san_or, 0.0, _OR_COLOR),
+    ]
+    ax_summary.text(0.02, 0.92, "At a glance", fontsize=11, fontweight="bold", transform=ax_summary.transAxes)
+    for k, (label, step, san, regret, color) in enumerate(rows_txt):
+        y = 0.72 - k * 0.22
+        ax_summary.text(0.02, y, f"{label}", fontsize=10, color=color, fontweight="bold",
+                        transform=ax_summary.transAxes)
+        ax_summary.text(0.02, y - 0.09, f"stop step {step}  ·  plays {san}  ·  regret {regret:.3f}",
+                        fontsize=9, color="#333", transform=ax_summary.transAxes)
 
     fig.suptitle(title, fontsize=13, y=1.0)
     FIG_DIR.mkdir(parents=True, exist_ok=True)

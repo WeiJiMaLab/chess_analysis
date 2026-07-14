@@ -2,7 +2,11 @@
 (z_t) stop controllers diverge significantly, on the validated xaba100k_minply15_maxply75_history
 regime (linear time_lambda=0.005 -- see history.md L124-127), and dump enough raw-tree data for a
 handful of top candidates to render board/tree case-study figures offline (no cluster resources
-needed for that second step).
+needed for that second step). Also re-fits the zt/ag readout heads standalone (same seed, verified
+bit-identical to the fit inside _fit_stop_controllers) to expose each controller's raw per-step
+PREDICTED advantage -- the actual signal each stop decision is made from (stop at the first step
+with advantage <= 0, see cts.models.readout.stop_step_from_advantages) -- not just the resulting
+stop step, so the case-study plots can show when each controller's own belief crosses zero.
 
 Run via slurm/pipeline (see submit script) -- reuses analysis.evaluate's private fit/load helpers
 verbatim so the numbers here are exactly what regret-scatter/frontier compute, not a re-derivation.
@@ -18,8 +22,11 @@ import torch
 
 from analysis.evaluate import (
     _load_assessment_data, _return_curves, _fit_stop_controllers, _regret_at, _oracle_config,
+    _steps_zt_tensor, _steps_ag_tensor,
 )
 from cts.data.preprocess_gnn.teacher_targets import RawPretrainExampleRecord
+from cts.models.readout import build_advantage_head, stop_step_from_advantages
+from cts.train.pg_controller_train import fit_readout_pg
 
 PACKED_ROOT = Path("/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba100k_minply15_maxply75/pack_history")
 CACHE_PATH = "/scratch/gpfs/GRIFFITHS/hl4291/lmcos/ysagiv_xaba100k_minply15_maxply75/materialize_history/validation_cache.pt"
@@ -36,6 +43,28 @@ def _raw_row(first_decision_expansion_count: int, packed_step: int) -> int:
     return first_decision_expansion_count - 1 + packed_step
 
 
+def _train_readout_with_head(fit_feats, fit_curves, *, in_dim, epochs, lr, seed):
+    """Verbatim copy of ``analysis.evaluate._train_readout``'s training procedure, except it returns
+    the trained head + normalization stats instead of only greedy eval stop steps -- so the SAME
+    fitted controller can be replayed on arbitrary episodes afterward to get raw per-step predicted
+    advantages, not just the final stop-step decision. Every argument matches what
+    ``_fit_stop_controllers`` passes for the "zt"/"ag" controllers exactly, so with the same `seed`
+    this reproduces bit-identical weights (`torch.manual_seed(seed)` is called fresh at the same two
+    points -- once here, once inside `fit_readout_pg` -- regardless of what was fit before it)."""
+    full = torch.cat(fit_feats, 0)
+    mean, std = full.mean(0), full.std(0).clamp_min(1e-6)
+    torch.manual_seed(seed)
+    head = build_advantage_head(in_dim, 64, 2)
+    fit_readout_pg(head, [(f - mean) / std for f in fit_feats], fit_curves, epochs=epochs, lr=lr, seed=seed)
+    head.eval()
+    return head, mean, std
+
+
+def _advantage_trace(head, mean, std, feat: torch.Tensor) -> list[float]:
+    with torch.no_grad():
+        return head((feat - mean) / std).reshape(-1).tolist()
+
+
 def main() -> None:
     config = replace(_oracle_config(PACKED_ROOT), time_mode=TIME_MODE, time_lambda=TIME_LAMBDA,
                      maintenance_scale=0.0, maintenance_exponent=1.0)
@@ -49,6 +78,30 @@ def main() -> None:
     print("[2/4] fitting stop controllers (singlehalt / stats / zt / ag)...", flush=True)
     ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, fit_curves, D_EMBED, SEED)
     print(f"  k_singlehalt={ctrl['k_singlehalt']}", flush=True)
+
+    print("[2b/4] re-fitting zt/ag heads standalone (same seed) to expose raw per-step advantages...",
+          flush=True)
+    fit_feats_zt = [_steps_zt_tensor(episodes[i], z_by_ep[i]) for i in fit_idx]
+    fit_feats_ag = [_steps_ag_tensor(episodes[i]) for i in fit_idx]
+    head_zt, mean_zt, std_zt = _train_readout_with_head(
+        fit_feats_zt, fit_curves, in_dim=D_EMBED + 1, epochs=200, lr=1e-3, seed=SEED)
+    head_ag, mean_ag, std_ag = _train_readout_with_head(
+        fit_feats_ag, fit_curves, in_dim=2, epochs=200, lr=1e-3, seed=SEED)
+    # Sanity check: this standalone re-fit must reproduce _fit_stop_controllers' own ctrl["zt"]/
+    # ctrl["ag"] stop steps EXACTLY (same seed, same data -> bit-identical weights) -- if it doesn't,
+    # the advantage traces below are not actually what determined those stop decisions and must not
+    # be trusted or reported.
+    mismatches = 0
+    for j, i in enumerate(ev_idx):
+        adv_zt = _advantage_trace(head_zt, mean_zt, std_zt, _steps_zt_tensor(episodes[i], z_by_ep[i]))
+        adv_ag = _advantage_trace(head_ag, mean_ag, std_ag, _steps_ag_tensor(episodes[i]))
+        if stop_step_from_advantages(torch.tensor(adv_zt)) != int(ctrl["zt"][j]):
+            mismatches += 1
+        if stop_step_from_advantages(torch.tensor(adv_ag)) != int(ctrl["ag"][j]):
+            mismatches += 1
+    print(f"  reproducibility check: {mismatches}/{2 * len(ev_idx)} stop-step mismatches "
+          f"(must be 0 to trust the advantage traces below)", flush=True)
+    assert mismatches == 0, "standalone re-fit did not reproduce _fit_stop_controllers -- aborting"
 
     print("[3/4] ranking eval episodes by |Action-Gap regret - Meta-Controller regret|...", flush=True)
     rows = []
@@ -64,6 +117,8 @@ def main() -> None:
             delta_ag_minus_zt=regret_ag - regret_zt, oracle_stop_step=ep["oracle_stop_step"],
             tree_sizes=ep["tree_sizes"], return_curve=curves[i].tolist(),
             halt_rewards=ep["halt_rewards"],
+            advantage_zt=_advantage_trace(head_zt, mean_zt, std_zt, _steps_zt_tensor(ep, z_by_ep[i])),
+            advantage_ag=_advantage_trace(head_ag, mean_ag, std_ag, _steps_ag_tensor(ep)),
         ))
     # num_steps is constant (96, the fixed search budget every episode shares -- confirmed by a
     # dry run, so it carries no filtering signal); "short/simple" instead means a small explored

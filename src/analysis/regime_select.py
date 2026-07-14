@@ -44,8 +44,8 @@ MAINT_GRID: tuple[float, ...] = (0.0, 0.00025, 0.0005, 0.00075, 0.001, 0.0015, 0
 # reason to keep `np.geomspace`'s ugly fractional output (5.83265, 0.743254, ...) around just to
 # round it for display -- the grid VALUES themselves are just clean round numbers in x1e-4 units
 # (whole numbers at >=1, one decimal place below 1), still roughly log-spaced.
-ZOOM_LAMBDA_GRID: tuple[float, ...] = tuple(x * 1e-4 for x in (5, 6, 7, 8, 9, 11, 13, 15, 17, 20))
-ZOOM_MAINT_GRID: tuple[float, ...] = tuple(x * 1e-4 for x in (0, 0.1, 0.2, 0.3, 0.5, 0.7, 1, 1.5, 2, 2.5))
+ZOOM_LAMBDA_GRID: tuple[float, ...] = tuple(x * 1e-4 for x in (0, 5, 10, 30, 50, 80, 100, 500))
+ZOOM_MAINT_GRID: tuple[float, ...] = tuple(x * 1e-4 for x in (0, 1, 10, 50, 100))
 
 
 def _sweep_grid(episodes, base_cfg, *, lambda_grid: tuple[float, ...],
@@ -145,8 +145,8 @@ def _render_heatmap(results: list[dict[str, Any]], out_dir: str | Path,
     ax.set_xticklabels([f"{m * scale:g}" for m in maint_grid], fontsize=tick_fs, rotation=45, ha="right")
     ax.set_yticks(range(nrow))
     ax.set_yticklabels([f"{l * scale:g}" for l in lambda_grid], fontsize=tick_fs)
-    ax.set_xlabel("maintenance_scale", fontsize=tick_fs + 1.5)
-    ax.set_ylabel("time_lambda", fontsize=tick_fs + 1.5)
+    ax.set_xlabel("Tree Size Cost", fontsize=tick_fs + 1.5)
+    ax.set_ylabel(r"$\lambda$ Cost", fontsize=tick_fs + 1.5)
     if scale_label:
         # A small unit tag anchored ON each axis (not folded into the axis title text, and not a
         # figure title) -- mirrors matplotlib's own scientific-notation offset-text convention: the

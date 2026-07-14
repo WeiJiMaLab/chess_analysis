@@ -56,10 +56,12 @@ histogram panel to match).
   the raw DB column), and `abs_material_imbalance` is its explicit absolute-value twin — each gets
   its own bivariate dashboard. Weighting is assumed everywhere now, so neither label spells it out:
   just `"Material Imbalance"` and `"Material Imbalance (Absolute)"` (and `self_material`'s is just
-  `"Self Material"`) — no "(Weighted)" suffix. The signed feature's sparse tails at BOTH ends are
-  merged (`integer_floor_cut` mirrors `integer_tail_cut` — see `Analyzer`), not display-excluded like
-  a naturally-nonnegative covariate's sparse floor (`self_material` below 14) — dropping "mover is
-  way behind" rows would bias a signed variable.
+  `"Player Material"`) — no "(Weighted)" suffix. The signed feature's sparse tails at BOTH ends are
+  merged (`integer_floor_cut` mirrors `integer_tail_cut` — see `Analyzer`) rather than
+  display-excluded — dropping "mover is way behind" rows would bias a signed variable.
+  `self_material`'s clip was briefly `(14, 40)` (floor-excluded, not merged) but that turned out to
+  drop 7.7% of rows with a real 3.5s->8.5s RT climb, not a sparse/flat tail — reset to full range
+  `(0, 40)`, matching its nonnegative "disc" siblings (`n_possible_moves` etc., all `clip[0]=0`).
 - **Supplementary confound-removed dashboards (`supp_*`).** When a wrinkle in a covariate's curve is
   explained by a compositional confound (e.g. legal-moves' 9–10 dip being an in-check artifact —
   see `board.md`), prefer re-running the SAME `bivariate_analysis` on a filtered sub-population and
