@@ -858,6 +858,69 @@ def plot_regret_scatter(packed_root: Path, cache_path: str | Path, out_dir: str 
     return _render_regret_scatter(data, out_dir)
 
 
+DEFAULT_STOP_STEP_LAMBDA_GRID: tuple[float, ...] = (0.005, 0.01)
+
+
+def _compute_stop_step_by_lambda_data(packed_root: Path, cache_path: str | Path, *, d_embed: int = 32,
+                                      lambda_grid: tuple[float, ...] = DEFAULT_STOP_STEP_LAMBDA_GRID,
+                                      max_episodes: int = 15000, seed: int = 0,
+                                      train_frac: float = 0.7) -> dict:
+    """Per-episode z_t Meta-Controller stop step, refit independently at each ``lambda_grid`` value
+    (a linear time-cost sweep, maintenance=0) — shows the stop-step distribution shift as the
+    per-step cost rises. Data (episodes/z_t) loads once; the readout head is refit per lambda since
+    the PG training target (``_return_curves``) is itself lambda-dependent — see
+    ``_fit_stop_controllers``/``_regime_deltas_vs_zt`` for the same per-regime-refit pattern."""
+    base_cfg = _oracle_config(packed_root)
+    episodes, z_by_ep, fit_idx, ev_idx = _load_assessment_data(packed_root, cache_path, d_embed, max_episodes, seed,
+                                                                train_frac=train_frac)
+    stop_steps_by_lambda = {}
+    for lam in lambda_grid:
+        config = replace(base_cfg, time_mode="linear", time_lambda=lam, maintenance_scale=0.0)
+        curves = _return_curves(episodes, config)
+        ev = [curves[i] for i in ev_idx]
+        ctrl = _fit_stop_controllers(episodes, z_by_ep, fit_idx, ev_idx, [curves[i] for i in fit_idx], d_embed, seed)
+        stop_steps_by_lambda[f"{lam:g}"] = np.array(
+            [min(int(s), len(c) - 1) for s, c in zip(ctrl["zt"], ev)], dtype=float).tolist()
+    return {"lambda_grid": list(lambda_grid), "stop_steps_by_lambda": stop_steps_by_lambda}
+
+
+def _render_stop_step_by_lambda(data: dict, out_dir: str | Path) -> None:
+    """One panel per lambda, same x/y scale, z_t's per-episode stop-step histogram — the leftward
+    shift as lambda rises is the "optimal stopping point falls as cost rises" picture."""
+    _rcparams()
+    lambda_grid = data["lambda_grid"]
+    by_lam = data["stop_steps_by_lambda"]
+    series = [np.asarray(by_lam[f"{lam:g}"]) for lam in lambda_grid]
+    kmax = max(int(s.max()) for s in series) + 1
+    bins = np.arange(kmax + 1) - 0.5
+    ymax = max(np.histogram(s, bins=bins)[0].max() for s in series) * 1.05
+    fig, axes = plt.subplots(1, len(lambda_grid), figsize=(4.6 * len(lambda_grid), 4.0), squeeze=False, sharey=True)
+    for ax, lam, s in zip(axes[0], lambda_grid, series):
+        ax.hist(s, bins=bins, color=_C["zt"], alpha=0.75, edgecolor=_C["zt"])
+        ax.axvline(s.mean(), color=_INK, lw=1.5, ls="--", label=f"mean={s.mean():.1f}")
+        ax.set_xlabel("Stop Step")
+        ax.set_title(f"$\\lambda$ = {lam:g}", fontsize=12)
+        ax.set_ylim(0, ymax)
+        ax.grid(axis="y", color=_GRID, lw=1)
+        ax.legend(fontsize=9, frameon=False)
+    axes[0][0].set_ylabel("Count")
+    fig.tight_layout()
+    path = save_pdf_png(fig, str(out_dir), "stop_step_by_lambda", dpi=200)
+    print(f"Saved stop-step-by-lambda figure: {path}", flush=True)
+
+
+def plot_stop_step_by_lambda(packed_root: Path, cache_path: str | Path, out_dir: str | Path, *,
+                             d_embed: int = 32, lambda_grid: tuple[float, ...] = DEFAULT_STOP_STEP_LAMBDA_GRID,
+                             max_episodes: int = 15000, seed: int = 0):
+    """(5) z_t Meta-Controller stop-step histogram, one panel per lambda in ``lambda_grid`` -- see
+    ``_render_stop_step_by_lambda``. Saves computed data to
+    ``<out_dir>/stop_step_by_lambda_data.json`` for cheap re-rendering -- see ``replot_saved``/``--replot``."""
+    data = _compute_stop_step_by_lambda_data(packed_root, cache_path, d_embed=d_embed, lambda_grid=lambda_grid,
+                                             max_episodes=max_episodes, seed=seed)
+    _save_json(data, Path(out_dir) / "stop_step_by_lambda_data.json")
+    return _render_stop_step_by_lambda(data, out_dir)
+
+
 _DELTA_CANDIDATES = [("singlehalt", _C["singlehalt"], "Fixed Stop"), ("stats", _C["stats"], "Tree Stats"),
                     ("ag", _C["ag"], "Action Gap"),
                     ("always_stop", _C["always"], "Always Stop"), ("always_continue", _C["never"], "Always Continue")]
@@ -1119,6 +1182,8 @@ def replot_saved(out_dir: str | Path, which: str = "all") -> None:
         _render_regret_scatter(_load_json(out_dir / "regret_scatter_data.json"), out_dir)
     if which in ("separation", "all"):
         _render_delta_regret(_load_json(out_dir / "delta_regret_data.json"), out_dir)
+    if which in ("stop-step-by-lambda", "all"):
+        _render_stop_step_by_lambda(_load_json(out_dir / "stop_step_by_lambda_data.json"), out_dir)
 
 
 # ===========================================================================
@@ -1132,7 +1197,8 @@ def main() -> None:
                     "(not needed with --replot)")
     ap.add_argument("--out-dir", default="outputs/figures/minply15_maxply75/normative")
     ap.add_argument("--which", choices=["frontier", "decodability", "regret-scatter", "separation",
-                                        "regime-fit", "regime-collect", "all"], default="all")
+                                        "stop-step-by-lambda", "regime-fit", "regime-collect", "all"],
+                    default="all")
     ap.add_argument("--replot", action="store_true",
                     help="re-render from --out-dir's saved *_data.json instead of recomputing -- "
                     "skips data loading + model fitting entirely, use after changing plotting-only code")
@@ -1153,9 +1219,13 @@ def main() -> None:
     ap.add_argument("--maint-grid", default=",".join(str(x) for x in DEFAULT_MAINT_GRID),
                     help="comma-separated maintenance-scale sweep at --maint-lambda fixed "
                     "(regime-fit/regime-collect/separation)")
+    ap.add_argument("--stop-step-lambda-grid",
+                    default=",".join(str(x) for x in DEFAULT_STOP_STEP_LAMBDA_GRID),
+                    help="comma-separated linear time-cost values for --which stop-step-by-lambda")
     args = ap.parse_args()
     lambda_grid = tuple(float(x) for x in args.lambda_grid.split(","))
     maint_grid = tuple(float(x) for x in args.maint_grid.split(","))
+    stop_step_lambda_grid = tuple(float(x) for x in args.stop_step_lambda_grid.split(","))
 
     if args.replot:
         replot_saved(args.out_dir, which=args.which)
@@ -1190,6 +1260,9 @@ def main() -> None:
         plot_delta_regret_vs_zt(packed_root, args.cache, out, d_embed=args.d_embed, max_episodes=args.max_episodes,
                                 lambda_grid=lambda_grid, maint_lambda=args.maint_lambda, maint_grid=maint_grid,
                                 maintenance_exponent=args.maintenance_exponent)
+    if args.which in ("stop-step-by-lambda", "all"):
+        plot_stop_step_by_lambda(packed_root, args.cache, out, d_embed=args.d_embed,
+                                 lambda_grid=stop_step_lambda_grid, max_episodes=args.max_episodes)
 
 
 if __name__ == "__main__":

@@ -301,6 +301,18 @@ def move_time_summary(conn, table, *, filename: str = "rt_distribution.pdf",
     ax_h.axvline(np.exp(med_log), color="dimgray", ls=":", lw=2.5, label="Median")
     ax_h.set(xlabel="RT (s, log axis)", ylabel="Count")
     ax_h.legend(**_RT_LEGEND_KW)
+    if not smoke:
+        json_dir = os.path.join(CONFIG["figures_dir"], "board", "json")
+        os.makedirs(json_dir, exist_ok=True)
+        _save_json({
+            "left_s": sec["left_s"].to_numpy(),
+            "right_s": sec["right_s"].to_numpy(),
+            "n": sec["n"].to_numpy(),
+            "mean_s": float(np.exp(mean)),
+            "median_s": float(np.exp(med_log)),
+            "x_label": "RT (s, log axis)",
+            "y_label": "Count",
+        }, os.path.join(json_dir, "rt_histogram_data.json"))
 
     # Panel 2: QQ plot — theoretical Normal(mean, std) quantile vs. empirical quantile
     # of RT, both in SECONDS on a log-log scale (RT spans orders of magnitude, same
@@ -437,15 +449,15 @@ def _plot_boolean_by_tertile(analyzer, ax):
 
 
 def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, *,
-                       kind: str, clip, reverse_x: bool = False, export_json: bool = False):
+                       kind: str, clip, reverse_x: bool = False, export_json: bool = True):
     """RT-vs-covariate 1x3 dashboard: marginal histogram (left), overall trend
     (middle), trend by ply tertile (right) — see ``_binning_opts`` for the binning
     scheme and ``_draw_feature_histogram`` for the left panel. Boolean covariates
     (``kind == "bin"``) render the trend panels as bar charts + 95% CI instead of a
     quantile trend line (a line over 2 categories reads as a spurious trend).
     ``export_json`` additionally dumps the overall/by-ply-tertile trend dataframes
-    to ``<filename base>_data.json`` — opt-in since this function is generic over
-    8+ covariates and only one needs a portable JSON export today."""
+    to ``board/json/<filename base>_data.json`` — on by default; callers pass
+    ``export_json=False`` only for a smoke run (see ``run_plot``)."""
     apply_poster_style()
     kw = dict(
         db_conn=conn,
@@ -1195,15 +1207,14 @@ def run_plot(db: str, smoke: bool = False) -> None:
         print("board analysis: bivariate RT-vs-covariate dashboards...")
         for col, (label, kind, clip) in features.items():
             bivariate_analysis(conn, column=col, name=label, filename=f"{prefix}bivariate_{col}.pdf",
-                               table=table, kind=kind, clip=clip,
-                               export_json=(col == "n_captures_avail" and not smoke))
+                               table=table, kind=kind, clip=clip, export_json=not smoke)
 
         print("board analysis: supplementary confound-removed dashboards...")
         for key, cfg in supplements.items():
             filt_view = f"{table}_{key}_src"
             conn.execute(f"CREATE OR REPLACE TEMP VIEW {filt_view} AS SELECT * FROM {table} WHERE {cfg['filter_sql']}")
             bivariate_analysis(conn, column=cfg["column"], name=cfg["name"], filename=f"{prefix}{key}.pdf",
-                               table=filt_view, kind=cfg["kind"], clip=cfg["clip"])
+                               table=filt_view, kind=cfg["kind"], clip=cfg["clip"], export_json=not smoke)
 
         print("board analysis: checks-available x material-imbalance interaction views...")
         checks_material_interaction_heatmap(conn, table, filename=f"{prefix}checks_material_interaction_heatmap.pdf")
@@ -1217,7 +1228,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
         bivariate_analysis(conn, column="opponent_king_edge_distance",
                            name="Opponent King Edge Distance (Way Ahead)",
                            filename=f"{prefix}bivariate_opponent_king_edge_distance.pdf",
-                           table=ahead_view, kind="disc", clip=(0, 3))
+                           table=ahead_view, kind="disc", clip=(0, 3), export_json=not smoke)
 
         print("board analysis: checks-available decomposition (hanging-check test)...")
         checks_real_view, n_checks_real = _build_checks_real_view(conn, table, view_name=f"_{table}_checks_real")
@@ -1225,7 +1236,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
         bivariate_analysis(conn, column="n_checks_real",
                            name="Checks Available, Non-Hanging (n_checks_avail ≥ 1)",
                            filename=f"{prefix}bivariate_n_checks_real.pdf",
-                           table=checks_real_view, kind="disc", clip=(0, 10))
+                           table=checks_real_view, kind="disc", clip=(0, 10), export_json=not smoke)
 
         print("board analysis: checks-available redundancy test (concentrated-vs-diverse checking pieces)...")
         diversity_view, n_diversity = _build_checks_diversity_view(
@@ -1235,7 +1246,7 @@ def run_plot(db: str, smoke: bool = False) -> None:
         bivariate_analysis(conn, column="n_distinct_checking_pieces",
                            name="Distinct Checking Pieces (n_checks_avail ≥ 1)",
                            filename=f"{prefix}bivariate_n_distinct_checking_pieces.pdf",
-                           table=diversity_view, kind="disc", clip=(1, 5))
+                           table=diversity_view, kind="disc", clip=(1, 5), export_json=not smoke)
 
         print("board analysis: correlation matrix...")
         correlation_matrix(conn, features, table, filename=f"{prefix}board_feature_corr.pdf", smoke=smoke)
