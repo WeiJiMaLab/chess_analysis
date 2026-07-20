@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from pathlib import Path
 
 import duckdb
 import matplotlib.pyplot as plt
+import numpy as np
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -163,4 +165,30 @@ def partial_spearman(df, x: str, y: str, controls: list[str]) -> float:
         beta, *_ = np.linalg.lstsq(A, R[col].to_numpy(), rcond=None)
         return R[col].to_numpy() - A @ beta
     return float(np.corrcoef(resid(x), resid(y))[0, 1])
+
+
+def _to_jsonable(obj):
+    """Recursively convert numpy scalars/arrays (and tuples) to plain JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    return obj
+
+
+def _save_json(data: dict, path: Path) -> None:
+    """Save a plot's precomputed (expensive: data load + model fit) intermediate data so the figure
+    can be re-rendered later -- different padding, styling, which candidates to show -- without
+    redoing that work. See ``replot_saved``/``--replot``."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(data), f)
+
+
+def _load_json(path: Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 

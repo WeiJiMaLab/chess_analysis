@@ -17,6 +17,7 @@ from analysis.utils.analysis import _seconds_from_log
 from analysis.utils.helpers import (
     apply_poster_style, db_connection, sql_str,
     MAIN_COLOR, PHASE_COLORS, LEGEND_FONTSIZE, CONFIG,
+    _to_jsonable, _save_json, _load_json,
 )
 from analysis.utils.plots import (
     highlight_corr_row, save_figure, _annotate_n, _draw_feature_histogram,
@@ -324,6 +325,25 @@ def move_time_summary(conn, table, *, filename: str = "rt_distribution.pdf",
         n_bins=20, tie_safe=True, min_bin_count=200,
     )
     ply_analyzer.plot_quantile_bins(ax_p)
+    if not smoke:
+        # Same min_bin_count filter plot_quantile_bins applies internally, so the
+        # JSON matches exactly what's rendered.
+        df = ply_analyzer.quantile_df
+        if ply_analyzer.min_bin_count:
+            df = df[df["n"] >= ply_analyzer.min_bin_count]
+        json_dir = os.path.join(CONFIG["figures_dir"], "board", "json")
+        os.makedirs(json_dir, exist_ok=True)
+        _save_json({
+            "x": df["mean_x"].to_numpy(),
+            "mean": df["mean_y"].to_numpy(),
+            "sem": (df["std_y"] / np.sqrt(df["n"])).to_numpy(),
+            "n": df["n"].to_numpy(),
+            "is_mass": df["is_mass"].to_numpy(),
+            "x_label": "Ply (whole game)",
+            "y_label": "RT",
+            "y_is_log": True,
+            "analysis_window": [int(CONFIG["min_ply"]), int(CONFIG["max_ply"])],
+        }, os.path.join(json_dir, "rt_distribution_data.json"))
     ax_p.axvspan(int(CONFIG["min_ply"]), int(CONFIG["max_ply"]), color="gray", alpha=0.12,
                  label=f"Analysis window [{CONFIG['min_ply']},{CONFIG['max_ply']}]")
     ax_p.legend(**_RT_LEGEND_KW)
@@ -417,12 +437,15 @@ def _plot_boolean_by_tertile(analyzer, ax):
 
 
 def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, *,
-                       kind: str, clip, reverse_x: bool = False):
+                       kind: str, clip, reverse_x: bool = False, export_json: bool = False):
     """RT-vs-covariate 1x3 dashboard: marginal histogram (left), overall trend
     (middle), trend by ply tertile (right) — see ``_binning_opts`` for the binning
     scheme and ``_draw_feature_histogram`` for the left panel. Boolean covariates
     (``kind == "bin"``) render the trend panels as bar charts + 95% CI instead of a
-    quantile trend line (a line over 2 categories reads as a spurious trend)."""
+    quantile trend line (a line over 2 categories reads as a spurious trend).
+    ``export_json`` additionally dumps the overall/by-ply-tertile trend dataframes
+    to ``<filename base>_data.json`` — opt-in since this function is generic over
+    8+ covariates and only one needs a portable JSON export today."""
     apply_poster_style()
     kw = dict(
         db_conn=conn,
@@ -461,6 +484,40 @@ def bivariate_analysis(conn, column: str, name: str, filename: str, table: str, 
         for ax in (ax0, ax1, ax2):
             ax.invert_xaxis()
     _annotate_n(fig, analyzer.n_moves)
+    if export_json:
+        # Same min_bin_count filters plot_quantile_bins/
+        # plot_quantile_bins_tertile_segmented apply internally, so the JSON
+        # matches exactly what's rendered.
+        overall = analyzer.quantile_df
+        if analyzer.min_bin_count:
+            overall = overall[overall["n"] >= analyzer.min_bin_count]
+        tertile = analyzer.quantile_tertile_df
+        if analyzer.min_bin_count:
+            tertile = tertile.groupby("tertile_id", group_keys=False).apply(
+                lambda g: g[g["n"] >= analyzer.min_bin_count])
+        json_dir = os.path.join(CONFIG["figures_dir"], "board", "json")
+        os.makedirs(json_dir, exist_ok=True)
+        base, _ = os.path.splitext(filename)
+        _save_json({
+            "overall": {
+                "x": overall["mean_x"].to_numpy(),
+                "mean": overall["mean_y"].to_numpy(),
+                "sem": (overall["std_y"] / np.sqrt(overall["n"])).to_numpy(),
+                "n": overall["n"].to_numpy(),
+                "is_mass": overall["is_mass"].to_numpy(),
+            },
+            "by_ply_tertile": {
+                "tertile_id": tertile["tertile_id"].to_numpy(),
+                "x": tertile["mean_x"].to_numpy(),
+                "mean": tertile["mean_y"].to_numpy(),
+                "sem": (tertile["std_y"] / np.sqrt(tertile["n"])).to_numpy(),
+                "n": tertile["n"].to_numpy(),
+                "is_mass": tertile["is_mass"].to_numpy(),
+            },
+            "x_label": name,
+            "y_label": "RT",
+            "y_is_log": True,
+        }, os.path.join(json_dir, f"{base}_data.json"))
     save_figure(fig, "board", filename)
 
 
@@ -1138,7 +1195,8 @@ def run_plot(db: str, smoke: bool = False) -> None:
         print("board analysis: bivariate RT-vs-covariate dashboards...")
         for col, (label, kind, clip) in features.items():
             bivariate_analysis(conn, column=col, name=label, filename=f"{prefix}bivariate_{col}.pdf",
-                               table=table, kind=kind, clip=clip)
+                               table=table, kind=kind, clip=clip,
+                               export_json=(col == "n_captures_avail" and not smoke))
 
         print("board analysis: supplementary confound-removed dashboards...")
         for key, cfg in supplements.items():
